@@ -14,4 +14,6 @@ def pytest_collection_modifyitems(config, items):
         if "test_video_record" in item.nodeid and not (have_tap and have_docker):
             item.add_marker(pytest.mark.skip(reason="needs tape fixture + docker"))
         elif not have_img:
-            item.add_marker(pytest.mark.skip(reason="needs out/sentinel_stage2.bin fixture"))
+            item.add_marker(
+                pytest.mark.skip(reason="needs out/sentinel_stage2.bin fixture")
+            )
