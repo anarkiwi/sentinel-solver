@@ -1,0 +1,103 @@
+{
+  "landscape": 0,
+  "start": [
+    8,
+    17
+  ],
+  "platform": [
+    12,
+    4
+  ],
+  "platform_ground": 8,
+  "won": false,
+  "steps": [
+    {
+      "verb": "create",
+      "otype": 0,
+      "target": [
+        10,
+        15
+      ],
+      "view": {
+        "h_angle": 216,
+        "v_angle": 144,
+        "cursor": [
+          80,
+          95
+        ]
+      },
+      "player_tile": [
+        8,
+        17
+      ],
+      "eye_z": 5,
+      "ok": true,
+      "note": "hop create robot -> (10, 15) ()"
+    },
+    {
+      "verb": "transfer",
+      "otype": null,
+      "target": [
+        10,
+        15
+      ],
+      "view": null,
+      "player_tile": [
+        10,
+        15
+      ],
+      "eye_z": 4,
+      "ok": true,
+      "note": "transfer into hop robot @ (10, 15)"
+    },
+    {
+      "verb": "create",
+      "otype": 0,
+      "target": [
+        9,
+        14
+      ],
+      "view": {
+        "h_angle": 160,
+        "v_angle": 204,
+        "cursor": [
+          80,
+          95
+        ]
+      },
+      "player_tile": [
+        10,
+        15
+      ],
+      "eye_z": 4,
+      "ok": true,
+      "note": "hop create robot -> (9, 14) ()"
+    },
+    {
+      "verb": "transfer",
+      "otype": null,
+      "target": [
+        9,
+        14
+      ],
+      "view": null,
+      "player_tile": [
+        9,
+        14
+      ],
+      "eye_z": 4,
+      "ok": true,
+      "note": "transfer into hop robot @ (9, 14)"
+    }
+  ],
+  "notes": [],
+  "route": [
+    [
+      "hop",
+      [
+        10,
+        15
+      ]
+    ]
+  ]
+}

@@ -1,0 +1,509 @@
+{
+"landscape": 9999,
+"native_won": true,
+"final_player": [
+19,
+16
+],
+"eye": 0.5,
+"energy": 24,
+"steps": [
+{
+"verb": "create",
+"otype": 0,
+"target": [
+3,
+6
+],
+"view": {
+"h_angle": 48,
+"v_angle": 132,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+6,
+7
+],
+"eye_z": 4.0,
+"note": "hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+3,
+6
+],
+"view": null,
+"player_tile": [
+3,
+6
+],
+"eye_z": 4.5,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+4,
+6
+],
+"view": {
+"h_angle": 36,
+"v_angle": 204,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+3,
+6
+],
+"eye_z": 4.5,
+"note": "climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+4,
+6
+],
+"view": null,
+"player_tile": [
+3,
+6
+],
+"eye_z": 4.5,
+"note": "climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+4,
+6
+],
+"view": null,
+"player_tile": [
+4,
+6
+],
+"eye_z": 5.375,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+8,
+6
+],
+"view": {
+"h_angle": 188,
+"v_angle": 128,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+4,
+6
+],
+"eye_z": 5.375,
+"note": "hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+8,
+6
+],
+"view": null,
+"player_tile": [
+8,
+6
+],
+"eye_z": 5.5,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+9,
+6
+],
+"view": {
+"h_angle": 36,
+"v_angle": 204,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+8,
+6
+],
+"eye_z": 5.5,
+"note": "climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+9,
+6
+],
+"view": null,
+"player_tile": [
+8,
+6
+],
+"eye_z": 5.5,
+"note": "climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+9,
+6
+],
+"view": null,
+"player_tile": [
+9,
+6
+],
+"eye_z": 6.375,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+14,
+12
+],
+"view": {
+"h_angle": 156,
+"v_angle": 124,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+9,
+6
+],
+"eye_z": 6.375,
+"note": "hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+14,
+12
+],
+"view": null,
+"player_tile": [
+14,
+12
+],
+"eye_z": 6.5,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+15,
+12
+],
+"view": {
+"h_angle": 36,
+"v_angle": 204,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+14,
+12
+],
+"eye_z": 6.5,
+"note": "climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+15,
+12
+],
+"view": null,
+"player_tile": [
+14,
+12
+],
+"eye_z": 6.5,
+"note": "climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+15,
+12
+],
+"view": null,
+"player_tile": [
+15,
+12
+],
+"eye_z": 7.375,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+17,
+16
+],
+"view": {
+"h_angle": 16,
+"v_angle": 240,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+15,
+12
+],
+"eye_z": 7.375,
+"note": "hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+17,
+16
+],
+"view": null,
+"player_tile": [
+17,
+16
+],
+"eye_z": 7.5,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+17,
+15
+],
+"view": {
+"h_angle": 0,
+"v_angle": 144,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+17,
+16
+],
+"eye_z": 7.5,
+"note": "climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+17,
+15
+],
+"view": null,
+"player_tile": [
+17,
+16
+],
+"eye_z": 7.5,
+"note": "climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+17,
+15
+],
+"view": null,
+"player_tile": [
+17,
+15
+],
+"eye_z": 8.375,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+20,
+16
+],
+"view": {
+"h_angle": 56,
+"v_angle": 236,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+17,
+15
+],
+"eye_z": 8.375,
+"note": "hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+20,
+16
+],
+"view": null,
+"player_tile": [
+20,
+16
+],
+"eye_z": 8.5,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+20,
+15
+],
+"view": {
+"h_angle": 0,
+"v_angle": 144,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+20,
+16
+],
+"eye_z": 8.5,
+"note": "climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+20,
+15
+],
+"view": null,
+"player_tile": [
+20,
+16
+],
+"eye_z": 8.5,
+"note": "climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+20,
+15
+],
+"view": null,
+"player_tile": [
+20,
+15
+],
+"eye_z": 9.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 5,
+"target": [
+19,
+16
+],
+"view": {
+"h_angle": 84,
+"v_angle": 120,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+20,
+15
+],
+"eye_z": 9.375,
+"note": "absorb Sentinel"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+19,
+16
+],
+"view": null,
+"player_tile": [
+20,
+15
+],
+"eye_z": 9.375,
+"note": "platform synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+19,
+16
+],
+"view": null,
+"player_tile": [
+19,
+16
+],
+"eye_z": 0.5,
+"note": "hyperspace onto platform (WIN)"
+}
+]
+}

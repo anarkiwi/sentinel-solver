@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Precise KEYBOARD aim for the live VICE Sentinel replay, built on the EXPERIMENTALLY
+VERIFIED pan primitive (scripts/_pan_probe.py):
+
+  * D (sight right): cursor_x cycles 80,89,98,...,143 then WRAPS to 80 and h_angle += 8.
+  * S (sight left) : cursor_x cycles down 80,71,...,17 then WRAPS to 79 and h_angle -= 8.
+  * L (sight down) : cursor_y cycles 95,104,...,158 then WRAPS to 96 and v_angle += 4.
+  * COMMA (up)     : cursor_y cycles 95,86,...,32  then WRAPS to 95 and v_angle -= 4.
+  * U (u-turn)     : h_angle EOR $80.
+
+So h_angle is a +-8 keyboard grid (reachable = h0 + 8k), v_angle a +-4 grid, and the
+cursor moves on a 9px grid (cx in {17..143}, cy in {32..158}). The aim that the action
+fires on is computed by the ROM's prepare_vector_from_player_sights ($1C10):
+h_eff = h + cur_x>>3, v_eff = v + (cur_y-5)>>4 -- which native_los models exactly.
+
+We (1) search the keyboard grid NATIVELY (native_los.aim_target_native, bit-exact vs
+the ROM) for a (h, v, cursor) that lands the ray on the target tile with LOS (and a
+small tile-centre fraction when needed), then (2) drive the real keys to that exact
+(h, v, cursor) -- verified from memory reads -- and (3) the caller probes the live ROM
+LOS to confirm before pressing the action key. No pixels, no angle pokes.
+"""
+
+from native_los import NativeState, aim_target_native
+
+A_SLOT = 0x000B
+A_H = 0x09C0
+A_V = 0x0140
+A_CX = 0x0CC6
+A_CY = 0x0CC7
+A_SFLAG = 0x0C5F
+A_PLOT = 0x0CE4
+A_ZH = 0x0940
+
+# verified cursor cycles (one key press each)
+CX_GRID = [80, 89, 98, 107, 116, 125, 134, 143]  # D cycles up; S cycles down
+CY_GRID_UP = [95, 86, 77, 68, 59, 50, 41, 32]  # COMMA
+CY_GRID_DN = [95, 104, 113, 122, 131, 140, 149, 158]  # L
+CX_CENTRE, CY_CENTRE = 80, 95
+
+K_RIGHT, K_LEFT, K_DOWN, K_UP, K_UTURN = "D", "S", "L", "COMMA", "U"
+
+# the game's action latch $0CE9 = action-table byte >> 2 (re-armed to $80 each pass at
+# check_for_player_input $1363); poll it to confirm an action key was consumed (C8).
+ACTION_CODE = {
+    "R": 0x00,
+    "T": 0x02,
+    "B": 0x03,
+    "A": 0x20,
+    "Q": 0x21,
+    "H": 0x22,
+    "U": 0x23,
+}
+
+
+def _cursor_x_choices():
+    # a scan-consumed press moves the cursor +-1px, so ANY pixel clear of the wrap
+    # bands is reachable; step 3 keeps the search cheap.
+    return list(range(20, 141, 3))
+
+
+def _cursor_y_choices():
+    return list(range(36, 153, 3))
+
+
+def snap_keyboard_view(mem4k, tile, want_centre):
+    """Search the keyboard grid (h0+8k, v0+4j, cursor on its 9px cycle) for a view
+    whose NATIVE ray hits `tile` with LOS (and centre fraction < $40 if want_centre).
+    Returns (view, info) where view = {h_angle, v_angle, cursor:[cx,cy]} or (None,..).
+    """
+    import math
+
+    ps = mem4k[A_SLOT]
+    eye_z = mem4k[A_ZH + ps]
+    st = NativeState.from_mem(bytes(mem4k))
+    h0 = mem4k[A_H + ps]
+    v0 = mem4k[A_V + ps]
+    px, py = mem4k[0x0900 + ps], mem4k[0x0980 + ps]
+    hbase, vbase = h0 % 8, v0 % 4
+    # h grid: full circle on the 8-step lattice (u-turn keeps us on it), but ordered by
+    # proximity to the analytic compass bearing to the target so a hit is found early.
+    est = (
+        int(
+            round(
+                (math.atan2(_ty := tile[1] - py, _tx := tile[0] - px) / (2 * math.pi))
+                * 256
+            )
+        )
+        & 0xFF
+    )
+    full = [(hbase + 8 * k) & 0xFF for k in range(32)]
+    hgrid = sorted(full, key=lambda h: abs(((h - est + 128) % 256) - 128))
+    # v grid: real pan clamp is $CD..$35 ($1149), lattice v ≡ v0 (mod 4). The band is
+    # [$CD..$FF]∪[$00..$35]; anything outside is physically unreachable by the keyboard.
+    band = list(range(0xCD, 0x100)) + list(range(0x00, 0x36))
+    vgrid = [v for v in band if v % 4 == vbase]
+    cxs = _cursor_x_choices()
+    cys = _cursor_y_choices()
+
+    # v candidates ordered by proximity to current v0 (fewest pan steps first).
+    vord = sorted(vgrid, key=lambda v: abs(((v - v0 + 128) % 256) - 128))
+
+    def search(cx_list, cy_list, accept_thresh):
+        """Return the first view found with centre <= accept_thresh (good enough; the
+        live probe confirms), else the best seen. Bearing-ordered h + v-near-current
+        ordering makes the first hit a low-pan, near-centre view."""
+        best = None
+        for h in hgrid:
+            for v in vord:
+                for cx in cx_list:
+                    for cy in cy_list:
+                        rx, ry, los, centre = aim_target_native(
+                            st,
+                            h,
+                            v,
+                            cx,
+                            cy,
+                            ps,
+                            eye_z=eye_z,
+                            max_steps=640,
+                            return_centre=True,
+                        )
+                        if (rx, ry) != tile or not los:
+                            continue
+                        if want_centre and centre >= 0x40:
+                            continue
+                        cur_pen = (cx != CX_CENTRE) + (cy != CY_CENTRE)
+                        hsteps = min((h - h0) % 256, (h0 - h) % 256) // 8
+                        vsteps = abs(((v - v0 + 128) % 256) - 128) // 4
+                        key = (cur_pen, centre, hsteps + vsteps)
+                        view = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+                        if best is None or key < best[0]:
+                            best = (key, view)
+                        if centre <= accept_thresh:
+                            return best  # good enough; stop early
+        return best
+
+    # phase 1: centre cursor only (the common, robust case).
+    best = search([CX_CENTRE], [CY_CENTRE], 0x20)
+    if best is not None:
+        return best[1], {"centre": best[0][1], "cursor_used": False}
+    # phase 2: open the cursor grid.
+    best = search(cxs, cys, 0x20)
+    if best is not None:
+        return best[1], {"centre": best[0][1], "cursor_used": True}
+    return None, {"reason": "no keyboard view hits tile with LOS"}
+
+
+class KbdDriver:
+    """Drive the real keys to an exact (h_angle, v_angle, cursor) using the verified
+    pan cycles. All gating/feedback is from memory reads."""
+
+    def __init__(self, bm, log):
+        self.bm = bm
+        self.log = log
+
+    def rd(self, a):
+        return self.bm.mem_get(a, a)[0]
+
+    def slot(self):
+        return self.rd(A_SLOT)
+
+    def hang(self):
+        return self.rd(A_H + self.slot())
+
+    def vang(self):
+        return self.rd(A_V + self.slot())
+
+    def cur(self):
+        return self.rd(A_CX), self.rd(A_CY)
+
+    # ---- checkpoint-driven primitives (no wall-clock timing) ----
+    # PCs from the game's ROM routines.
+    # Angle COMMIT PCs: a pan's settled STA ($10EB/$110B/$1132) can be UNDONE later in the
+    # same frame ($10E1/$1126 BCS -> undo_*_pan when plot_world returns carry set). So we
+    # checkpoint where the pan is COMMITTED (only reached on the non-undo branch) and read
+    # the settled value straight from MEMORY there -- not the A register at the STA.
+    PC_H_COMMIT = (
+        0x10EE  # is_panning_left: both left+right committed horizontal pans reach here
+    )
+    PC_V_COMMIT = (
+        0x1135  # committed vertical pans (up branch + down-correction) reach here
+    )
+    # Cursor STA PCs (move_sights; no undo path) -- run_until_pc halts BEFORE the STA, so the
+    # value about to be stored is read from A.
+    PC_CX_INC = 0x997C  # STA $0CC6 (move_sights right, cx+1)
+    PC_CX_DEC = 0x9990  # STA $0CC6 (move_sights left,  cx-1)
+    PC_CY_INC = 0x99B8  # STA $0CC7 (move_sights down,  cy+1)
+    PC_CY_DEC = 0x99D2  # STA $0CC7 (move_sights up,    cy-1)
+    PC_IRQ_SCAN = 0x9678  # IRQ: JSR check_for_full_player_input (gated full scan)
+    PC_IRQ_SCAN_DONE = 0x967B  # return address of that JSR: the scan has completed
+
+    def _cursor_step(self, key, sta_pc):
+        """One checkpoint-confirmed cursor move (exactly 1px). SIGHTS-ON cursor movement is
+        auto-repeat gated ($11F6 ASL $0CC8, init $6B): a HELD key moves in an accelerating
+        burst, so we press (WHILE HALTED, so the checkpoint is armed before any resume), run
+        to the move_sights write ($997C/$9990/$99B8/$99D2), execute it (1px committed), then
+        RELEASE -- one clean pixel per call, no burst overshoot."""
+        r, c = _k(key)
+        with self.bm.halted():
+            try:
+                self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
+                self.bm.run_until_pc(sta_pc, timeout=6.0)
+                self.bm.advance_instructions(1)  # execute the STA -> 1px stored
+            except Exception:
+                pass
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+
+    def _pan_angle(self, addr, want, key, commit_pc, max_steps=200):
+        """Hold `key`; step the view ONE COMMITTED pan at a time by halting at `commit_pc`
+        (reached only on the non-undo branch of pan_viewpoint). Read the SETTLED angle from
+        MEMORY there (the STA already ran and was not undone). Release the instant it equals
+        `want` (CPU frozen at the commit, so no overshoot and no later undo)."""
+        want &= 0xFF
+        if self.rd(addr) == want:
+            return True
+        r, c = _k(key)
+        with self.bm.halted():
+            try:
+                self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
+                self.bm.run_until_pc(commit_pc, timeout=6.0)
+                for _ in range(max_steps):
+                    if self.rd(addr) == want:
+                        break
+                    self.bm.advance_instructions(1)  # leave commit_pc
+                    self.bm.run_until_pc(commit_pc, timeout=6.0)  # next committed pan
+            except Exception as e:  # clamp reached / pan stalled
+                self.log(f"    pan_angle ${commit_pc:04x} stop: {type(e).__name__}")
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+        return self.rd(addr) == want
+
+    def _one_scan_press(self, key, timeout=10.0):
+        """Hold `key` for EXACTLY ONE gated full input scan ($9678->$967B). Anchor at the
+        gated scan CALL site (it fires only when a scan will actually run), press WHILE
+        HALTED, run to the return address, release -- the scan that consumed the key already
+        latched, and the next scan sees it released."""
+        r, c = _k(key)
+        with self.bm.halted():
+            try:
+                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=timeout)
+                self.bm.keymatrix_set([(r, c, 1)])
+                self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=timeout)
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+
+    def sights_set(self, on):
+        """Toggle SPACE (edge-latched $1236) until the sights flag ($0C5F bit7) matches.
+        One gated full scan == exactly one toggle."""
+        for _ in range(6):
+            if bool(self.rd(A_SFLAG) & 0x80) == on:
+                return True
+            self._one_scan_press("SPACE")
+        return bool(self.rd(A_SFLAG) & 0x80) == on
+
+    def sights_on(self):
+        return self.sights_set(True)
+
+    def coarse_h(self, want):
+        """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). Pick the
+        shorter direction (D pans right +8, S pans left -8); both commit at $10EE."""
+        addr = A_H + self.slot()
+        want &= 0xFF
+        key = K_RIGHT if ((want - self.rd(addr)) & 0xFF) <= 0x80 else K_LEFT
+        return self._pan_angle(addr, want, key, self.PC_H_COMMIT)
+
+    @staticmethod
+    def _pitch_lin(v):
+        """Linearise clamped pitch. The keyboard-reachable band is [$CD..$FF]U[$00..$35],
+        contiguous through the $FF->$00 wrap; L (up, +4) advances it, COMMA (down, -4)
+        retreats. Map to a monotonic 0..104 coordinate so direction is a plain compare
+        (a raw signed/unsigned compare is wrong across the $00 wrap)."""
+        v &= 0xFF
+        return v - 0xCD if v >= 0xCD else v + 0x33
+
+    def coarse_v(self, want):
+        """SIGHTS OFF: pitch v to `want` (±4 lattice, clamped band wraps through $00).
+        L raises pitch (+4), COMMA lowers it (-4); both commit at $1135."""
+        addr = A_V + self.slot()
+        want &= 0xFF
+        key = K_DOWN if self._pitch_lin(want) > self._pitch_lin(self.rd(addr)) else K_UP
+        return self._pan_angle(addr, want, key, self.PC_V_COMMIT)
+
+    def fine_to_tile(self, target, probe_fn, want_centre=False, budget=24):
+        """SIGHTS ON. Land the sights ray on `target` (with LOS, and centre fraction
+        < $40 when want_centre) by an ABSOLUTE-position ring search around the snapped
+        cursor: drive the cursor to each candidate pixel (fine_cursor, closed-loop) and
+        probe. Every position is reached absolutely, so it never walks OFF a hit like the
+        old greedy nudger; a cursor wrap aborts (caller re-aims)."""
+
+        def good():
+            r = probe_fn()
+            rx, ry, los = r[0], r[1], r[2]
+            centre = r[3] if len(r) > 3 else 0
+            return (rx, ry) == target and los and (not want_centre or centre < 0x40)
+
+        if good():
+            return True
+        cx0, cy0 = self.cur()
+        offs = sorted(
+            (
+                (dx, dy)
+                for dx in range(-12, 13, 3)
+                for dy in range(-12, 13, 3)
+                if (dx, dy) != (0, 0)
+            ),
+            key=lambda d: (abs(d[0]) + abs(d[1]), d),
+        )
+        tried = 0
+        for dx, dy in offs:
+            cx, cy = cx0 + dx, cy0 + dy
+            if not (20 <= cx <= 140 and 36 <= cy <= 152):  # clear of wrap pixels
+                continue
+            if not self.fine_cursor(cx, cy):
+                return False  # a wrap/pan happened; caller re-aims
+            if good():
+                return True
+            tried += 1
+            if tried >= budget:
+                break
+        return good()
+
+    def aim_at_tile(self, target, want_centre, probe_fn):
+        """Full keyboard aim onto `target`: COARSE rotate (sights off) to the snapped
+        view's angles, then FINE cursor (sights on) closed-loop on the tile. Every
+        sub-step result is checked; sights-on re-centres the cursor ($134C) so the snapped
+        cursor must be driven explicitly."""
+        m4k = bytearray(self.bm.mem_get(0x0000, 0x0FFF))
+        view, _info = snap_keyboard_view(m4k, target, want_centre)
+        if view is None:
+            return None
+        if not self.sights_set(False):
+            self.log(f"    ABORT {target}: sights would not turn OFF")
+            return None
+        okh = self.coarse_h(view["h_angle"])
+        okv = self.coarse_v(view["v_angle"])
+        if not (okh and okv):
+            okh = self.coarse_h(view["h_angle"])
+            okv = self.coarse_v(view["v_angle"])
+        self.log(
+            f"    coarse {target}: h=${self.hang():02x}/want ${view['h_angle']:02x} "
+            f"ok={okh}  v=${self.vang():02x}/want ${view['v_angle']:02x} ok={okv}"
+        )
+        if not (okh and okv):
+            return None
+        if not self.sights_set(True):
+            return None
+        self.fine_cursor(*view["cursor"])  # sights-on just re-centred it
+        self.fine_to_tile(target, probe_fn, want_centre)
+        return probe_fn()
+
+    def _cursor_axis(self, addr, want, key_inc, key_dec, inc_pc, dec_pc, max_moves=160):
+        """SIGHTS ON: drive one cursor axis to the exact pixel `want` one checkpoint-confirmed
+        pixel at a time, re-reading the coordinate and re-choosing direction each step (so a
+        stray move self-corrects and can never run away to the wrap band). Targets are
+        interior, so no wrap/pan is triggered."""
+        want &= 0xFF
+        for _ in range(max_moves):
+            cur = self.rd(addr)
+            if cur == want:
+                return True
+            if want > cur:
+                self._cursor_step(key_inc, inc_pc)
+            else:
+                self._cursor_step(key_dec, dec_pc)
+        return self.rd(addr) == want
+
+    def fine_cursor(self, cx, cy):
+        """SIGHTS ON: drive the sights cursor to (cx, cy) checkpoint-driven (x then y).
+        D/S move cx +/- ($997C/$9990), L/COMMA move cy +/- ($99B8/$99D2)."""
+        okx = self._cursor_axis(
+            A_CX, cx, K_RIGHT, K_LEFT, self.PC_CX_INC, self.PC_CX_DEC
+        )
+        oky = self._cursor_axis(A_CY, cy, K_DOWN, K_UP, self.PC_CY_INC, self.PC_CY_DEC)
+        return okx and oky
+
+    def tap_action(self, name, max_passes=45):
+        """Fire an action key EXACTLY ONCE. One full IDLE scan first: update_game
+        zeroes $0C51 ($1281) and only an idle full scan re-arms $40 ($11EA); without it
+        a u-turn latch is DROPPED at $1B2F (ASL $0C51 / BPL). Anchor at the gated full-scan
+        call site $9678 (NOT $1363, which has three callers), press WHILE HALTED, run to
+        $967B, snapshot the want-flags, release before the next scan. The caller MUST verify
+        the action's memory effect and retry on a miss -- at-most-once by the single-scan
+        press, at-least-once by the verify-retry loop."""
+        want = ACTION_CODE[name]
+        r, c = _k(name)
+        latched = False
+        with self.bm.halted():
+            try:
+                for _ in range(max_passes):
+                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
+                    self.bm.advance_instructions(1)  # off the anchor
+                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)  # idle scan ran
+                    self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
+                    self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=6.0)
+                    flags = self.bm.mem_get(0x0CE8, 0x0CEB)
+                    self.bm.keymatrix_release_all()  # before the next scan
+                    if want in flags:
+                        latched = True
+                        # scans reopen only after $12D0 consumed the action:
+                        self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
+                        break
+            except Exception as e:
+                self.log(f"    tap_action {name} stop: {type(e).__name__}")
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+        return latched
+
+    def drive_to(self, view):
+        """Drive to the snapped (h, v, cursor). COARSE with sights OFF, then FINE with
+        sights ON (cursor). Every sub-step result is checked (mirrors aim_at_tile);
+        returns the achieved dict."""
+        if not self.sights_set(False):  # coarse: fast rotate
+            return {"h": self.hang(), "v": self.vang(), "cur": self.cur(), "ok": False}
+        okh = self.coarse_h(view["h_angle"])
+        okv = self.coarse_v(view["v_angle"])
+        if not (okh and okv):
+            okh = self.coarse_h(view["h_angle"])
+            okv = self.coarse_v(view["v_angle"])
+        oks = self.sights_set(True)  # fine: cursor selection
+        cx, cy = view["cursor"]
+        okc = self.fine_cursor(cx, cy)
+        return {
+            "h": self.hang(),
+            "v": self.vang(),
+            "cur": self.cur(),
+            "ok": bool(okh and okv and oks and okc),
+        }
+
+
+def _k(name):
+    from vice_driver import keys
+
+    return keys.lookup(name)
