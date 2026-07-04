@@ -400,8 +400,17 @@ class KbdDriver:
                     self.bm.keymatrix_release_all()  # before the next scan
                     if want in flags:
                         latched = True
-                        # scans reopen only after $12D0 consumed the action:
-                        self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
+                        # scans reopen only after $12D0 consumed the action. This is a
+                        # CONFIRMATION wait (latch already observed); a transfer rebuilds
+                        # the view from the new POV and the gated scan PC may not recur for
+                        # seconds -- at true gameplay speed (warp off during recording)
+                        # that is seconds of live dwell in which the Sentinel spawns a
+                        # meanie. Cap it short: the caller resyncs+halts before the next
+                        # action, so consumption always completes before it matters.
+                        try:
+                            self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=1.0)
+                        except Exception:
+                            pass
                         break
             except Exception as e:
                 self.log(f"    tap_action {name} stop: {type(e).__name__}")
