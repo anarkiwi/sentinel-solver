@@ -696,9 +696,22 @@ def execute_live(
     drv = kbd_aim.KbdDriver(ex.bm, log)
     blocked = set()
     label = 0
+    # The lookahead search spends several real SECONDS per decision. Under warp the
+    # emulator would run millions of cycles in that gap -- enemies rotate, a meanie can
+    # arm/spawn, the player can be drained -- so the state the search read is stale by the
+    # time it acts, and the idle monitor socket goes flaky (the observed aim TimeoutErrors).
+    # FREEZE the CPU across resync+decide (bm.halted() leaves it stopped after the mem read,
+    # and the search issues no monitor I/O, so it stays frozen), then resume before driving
+    # keystrokes. Now meanie_safe decides against the true state at action time. The greedy
+    # picker is sub-second, so it doesn't need the freeze.
+    halt_during_decide = use_search
 
-    def resync(seed_built_columns=True):
-        mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+    def resync(seed_built_columns=True, keep_halted=False):
+        if keep_halted:
+            with ex.bm.halted():  # read with the CPU LEFT stopped (no auto-resume)
+                mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+        else:
+            mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
         return native_game.Game.from_mem(
             mem, landscape, seed_built_columns=seed_built_columns
         )
@@ -726,9 +739,15 @@ def execute_live(
             )
             result["divergence"] = f"timeout at live iteration {it}"
             return False
-        g = resync(seed_built_columns=built_anything)
+        g = resync(seed_built_columns=built_anything, keep_halted=halt_during_decide)
         before_n = len(g.steps)
-        status = decide(g, ctx, blocked, log)
+        status = decide(g, ctx, blocked, log)  # CPU frozen here if halt_during_decide
+        if halt_during_decide:
+            try:
+                ex.bm.exit()  # resume the CPU (frozen during the search) for the keystrokes
+            except Exception as e:
+                log(f"    (resume after search failed: {e}; reconnecting)")
+                _reconnect(ex.bm, log)
         new_steps = g.steps[before_n:]
         blocked_this_round = False
         built_tiles_this_batch = set()
