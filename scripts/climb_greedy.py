@@ -672,17 +672,23 @@ def climb_iterate(g, ctx, blocked, log):
 def endgame(g, plat, log):
     """Attempt the win sequence (absorb the Sentinel, build a platform synthoid,
     transfer) from g's CURRENT state. Returns True iff the transfer onto the
-    platform (the win condition) was applied."""
-    cur = g.player_xy()
+    platform (the win condition) was applied.
+
+    The win is a LONG-RANGE hop: a synthoid can be created on any tile in line of sight
+    (the sweep supplies the aim), so the endgame needs the eye above the platform ground
+    and LOS to the platform tile -- NOT adjacency. This lets the climb top out on the
+    highest ground it can find and fire the win from afar (the human ls0 win was cheb-10),
+    instead of creeping into the platform ring."""
     eye = int(g.eye)
     if not (
         g.plat_ground is not None
         and eye > g.plat_ground
-        and cheb(cur, plat) <= 1
         and g.sentinel_slot is not None
     ):
         return False
     sw = visibility_sweep(g.mem, g.player, eye, max_steps=200, coarse=True)
+    if plat not in sw:  # need LOS to the platform to absorb the Sentinel + build on it
+        return False
     g.absorb(g.sentinel_slot, sw.get(plat), "absorb Sentinel")
     log(f"  absorbed Sentinel from eye {g.eye}, energy {g.energy}")
     if g.feasible(0, plat):

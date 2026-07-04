@@ -37,7 +37,7 @@ from climb_greedy import (
     EXPOSURE_RESERVE,
     _enemy_exposed_tiles,
 )
-from native_game import Game, cheb
+from native_game import Game, cheb, visibility_sweep
 import enemy_dynamics as ED
 import game_state as GS
 
@@ -115,14 +115,24 @@ def _advance_phase(state, phase, c):
 
 
 def _reached_approach(g, ctx):
-    """Terminal check: the eye is above the platform ground and adjacent, and the
-    Sentinel is still present -- i.e. endgame (absorb Sentinel + platform synthoid +
-    transfer) can launch from here (SEARCH_REDESIGN.md sec.8). This is `won(g)` in the
-    sec.7 pseudocode; the endgame itself stays a separate terminal step, not something
-    the lookahead re-derives."""
+    """Terminal check ('won(g)' in the sec.7 pseudocode): can the endgame (absorb Sentinel
+    + platform synthoid + transfer) launch from HERE? That needs the eye above the platform
+    ground, the Sentinel present, and LINE OF SIGHT to the platform tile -- NOT adjacency.
+    A synthoid hop lands on any LOS tile, so the win is a long-range hop onto the platform
+    from wherever the climb topped out (the human ls0 win fired from cheb-10). This is the
+    key to 'gain height as fast as possible': the climb never has to creep to the platform
+    ring (where the meanie spawns); it just gets high with LOS, then hops on."""
     if g.plat_ground is None or g.sentinel_slot is None:
         return False
-    return int(g.eye) > g.plat_ground and cheb(g.player_xy(), ctx["plat"]) <= 1
+    if int(g.eye) <= g.plat_ground:
+        return False
+    plat = ctx["plat"]
+    if cheb(g.player_xy(), plat) <= 1:
+        return True
+    # far win: check LOS to the platform. Only reached once the eye is already above the
+    # platform (late climb), so this sweep runs on very few nodes.
+    sw = visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200, coarse=True)
+    return plat in sw
 
 
 def _gen_candidates(g, ctx, blocked, state, phase, beam):
@@ -183,12 +193,11 @@ def _gen_candidates(g, ctx, blocked, state, phase, beam):
     # the full pool only when nothing is meanie-safe (better a risky climb than none).
     safe = [c for c in pool if ED.meanie_safe(state, tuple(c[0]))]
     pool = safe or pool
-    # cheap height-then-platform order, then compute the enemy safety margin only for the
-    # top shortlist and re-rank those. Mirrors _evaluate's priority (height gain, platform
-    # proximity, safety margin, edge distance) so the beam keeps the goal-directed lines.
-    # cheap goal-potential order (mirrors _evaluate: climb while low, approach once high),
-    # then compute the enemy safety margin only for the top shortlist and re-rank those.
-    pool.sort(key=lambda c: (-_goal_h(c[0], c[2], ctx), edge_dist(c[0])), reverse=True)
+    # cheap HEIGHT-first order (biggest eye gain wins; platform proximity only breaks
+    # equal-height ties), then compute the enemy safety margin for the top shortlist and
+    # re-rank those. Mirrors _evaluate so the beam keeps the highest-climbing lines.
+    plat = ctx["plat"]
+    pool.sort(key=lambda c: (c[2], -cheb(c[0], plat), edge_dist(c[0])), reverse=True)
     head = pool[: beam + _SHORTLIST]
     safety = {
         tuple(c[0]): ED.ticks_until_seen(
@@ -197,46 +206,37 @@ def _gen_candidates(g, ctx, blocked, state, phase, beam):
         for c in head
     }
     head.sort(
-        key=lambda c: (
-            -_goal_h(c[0], c[2], ctx),
-            safety[tuple(c[0])],
-            edge_dist(c[0]),
-        ),
+        key=lambda c: (c[2], -cheb(c[0], plat), safety[tuple(c[0])], edge_dist(c[0])),
         reverse=True,
     )
     return head + pool[beam + _SHORTLIST :]
 
 
-# leaf-eval weights, chosen so the ordering is strictly lexicographic. The GOAL potential
-# dominates -- a 0.5 step of progress (5e5) swamps every lower term's whole span.
-_W_GOAL = 1_000_000.0  # goal potential (see _goal_h): dominant
+# leaf-eval weights, strictly lexicographic. HEIGHT is dominant, by orders of magnitude:
+# the one rule is GAIN HEIGHT AS FAST AS POSSIBLE, so a 0.5-eye step (5e8) must swamp every
+# lower term's whole span. Platform-proximity is only a FAR-BELOW tie-break (span 62*1e3 =
+# 6.2e4 << 5e8) among EQUAL-height leaves -- just enough to drift toward a high tile that
+# can see the platform for the endgame hop, never enough to trade a height gain for it.
+# (An earlier version weighted cheb-to-plat == height and produced timid +0.5 creeping
+# moves through the meanie ring -- exactly the failure the user called out.)
+_W_EYE = 1_000_000_000.0  # height reached: strictly dominant
+_W_PLAT = 1_000.0  # platform proximity: equal-height tie-break only (max span 6.2e4)
 _W_SAFETY = 100.0  # max span 255*1e2 = 2.55e4
 _W_EDGE = 1.0  # max span ~62
 _W_ENERGY = 0.01
 
 
-def _goal_h(tile, eye, ctx):
-    """Distance-to-WIN potential, native_game._astar_terrain's validated A* heuristic:
-    cheb-to-platform + remaining height deficit (target_z - eye, floored at 0). LOWER is
-    closer to the win. Because non-regression is enforced at candidate generation (a
-    down-move is never a candidate), this can safely be the dominant term without risking a
-    height regression: while low, the deficit dominates so the search CLIMBS; once high
-    enough (deficit 0), cheb dominates so it APPROACHES the platform (the phase greedy
-    handled separately). This is what converges the climb onto the win instead of the
-    nearest peak (ls9999/ls66 sit below surrounding terrain, so pure height-max walks past
-    the platform)."""
-    return cheb(tile, ctx["plat"]) + max(0.0, ctx["target_z"] - eye)
-
-
 def _evaluate(g, ctx, phase):
-    """Score a cut leaf (depth exhausted, not yet won): the goal potential (dominant --
-    climb while low, approach once high), then ticks_until_seen (safety margin), edge
-    distance and remaining energy as tie-breaks (SEARCH_REDESIGN.md sec.7)."""
+    """Score a cut leaf (depth exhausted, not yet won): height reached DOMINATES (gain
+    height as fast as possible), then platform proximity / ticks_until_seen (safety) / edge
+    / energy purely as tie-breaks among equal-height leaves (SEARCH_REDESIGN.md sec.7).
+    """
     cur = g.player_xy()
     state = _read_state(g)
     safety = ED.ticks_until_seen(state, phase, cur[0], cur[1], horizon=_SAFETY_HORIZON)
     return (
-        -_goal_h(cur, g.eye, ctx) * _W_GOAL
+        g.eye * _W_EYE
+        - cheb(cur, ctx["plat"]) * _W_PLAT
         + min(safety, 255) * _W_SAFETY
         + edge_dist(cur) * _W_EDGE
         + g.energy * _W_ENERGY
@@ -305,7 +305,7 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
     Returns: 'retry' (refuel-only pass; call again), 'stepped' (a foothold move was
     applied), 'no_gain' (no height/fuel progress in 16 iterations), 'approach' (reached
     the platform approach; hand to endgame), 'stuck' (no feasible line)."""
-    plat, plat_ground = ctx["plat"], ctx["plat_ground"]
+    plat = ctx["plat"]
     cur = g.player_xy()
     eye = int(g.eye)
     # bank fuel first (same as greedy): a deliberate absorb streak counts as progress.
@@ -320,8 +320,11 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
     if ctx["no_gain"] > 16:
         log(f"  no height/fuel progress in 16 steps (peak {ctx['peak_eye']:.2f}); stop")
         return "no_gain"
-    if eye > plat_ground and cheb(cur, plat) <= 1:
-        log(f"  reached platform approach: {cur} eye {eye} (d=0/1)")
+    if _reached_approach(g, ctx):
+        log(
+            f"  reached win-launch state: {cur} eye {eye} "
+            f"(d={cheb(cur, plat)}, LOS to platform); hand to endgame"
+        )
         return "approach"
 
     state = _read_state(g)
