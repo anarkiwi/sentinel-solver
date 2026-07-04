@@ -499,22 +499,43 @@ def perform_step(ex, drv, label, stp, log, result):
     aim_info = None
     if verb in ("create", "absorb") and plan_view is not None:
         view = plan_view
-        if not drv.sights_set(False):
-            log(f"[{label}] {verb} {tile}: sights would not turn OFF")
+        # AIM is pre-action and idempotent (drives the cursor to ABSOLUTE angles, reads
+        # probes -- no game action fires). A best-effort fuel absorb at an extreme angle
+        # can leave the monitor checkpoint desynced (CPU stopped / PC never recurs), and
+        # the raw driver calls do not catch that -- an unhandled socket TimeoutError would
+        # otherwise crash the whole run into the boot-retry. Reconnect + re-aim instead.
+        okh = okv = okc = False
+        rx = ry = centre = 0
+        los = False
+        ach = {"h": 0, "v": 0, "cur": (0, 0)}
+        for _aim_try in range(3):
+            try:
+                if not drv.sights_set(False):
+                    log(f"[{label}] {verb} {tile}: sights would not turn OFF")
+                    return "fail"
+                okh = drv.coarse_h(view["h_angle"])
+                okv = drv.coarse_v(view["v_angle"])
+                if not (okh and okv):
+                    okh = drv.coarse_h(view["h_angle"])
+                    okv = drv.coarse_v(view["v_angle"])
+                if not drv.sights_on():
+                    log(f"[{label}] {verb} {tile}: sights would not turn ON")
+                    return "fail"
+                okc = drv.fine_cursor(
+                    *view["cursor"]
+                )  # sights-on re-centred it; drive persisted
+                rx, ry, los, centre = probe_tile(ex.bm)
+                ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
+                break
+            except (TimeoutError, OSError, ConnectionError) as e:
+                log(
+                    f"[{label}] {verb} {tile}: aim monitor drop "
+                    f"({type(e).__name__}); reconnecting + re-aiming"
+                )
+                _reconnect(ex.bm, log)
+        else:
+            log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
             return "fail"
-        okh = drv.coarse_h(view["h_angle"])
-        okv = drv.coarse_v(view["v_angle"])
-        if not (okh and okv):
-            okh = drv.coarse_h(view["h_angle"])
-            okv = drv.coarse_v(view["v_angle"])
-        if not drv.sights_on():
-            log(f"[{label}] {verb} {tile}: sights would not turn ON")
-            return "fail"
-        okc = drv.fine_cursor(
-            *view["cursor"]
-        )  # sights-on re-centred it; drive persisted
-        rx, ry, los, centre = probe_tile(ex.bm)
-        ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
         aim_info = {
             "ach": ach,
             "want": view,
@@ -529,11 +550,12 @@ def perform_step(ex, drv, label, stp, log, result):
         )
         # The native_los probe is ADVISORY only: the arbiter is the real ROM's
         # object-count/energy delta (verify() below). Drive the view and let the game
-        # decide; only note a probe miss.
+        # decide; only note a probe miss. drove_ok comes from the already-read ach (no
+        # extra monitor round-trips -- fewer socket ops = fewer flaky-idle drops).
         drove_ok = (
-            drv.hang() == view["h_angle"]
-            and drv.vang() == view["v_angle"]
-            and drv.cur() == tuple(view["cursor"])
+            ach["h"] == view["h_angle"]
+            and ach["v"] == view["v_angle"]
+            and ach["cur"] == tuple(view["cursor"])
         )
         if (rx, ry) != tile or not los or not drove_ok:
             log(
@@ -556,7 +578,16 @@ def perform_step(ex, drv, label, stp, log, result):
     # false-negative latch -- a second create/absorb would stack an extra object). The
     # object-count/energy/slot delta in verify() is the real arbiter of success.
     if verb in ("create", "absorb", "transfer"):
-        drv.sights_on()
+        for _s_try in range(3):
+            try:
+                drv.sights_on()
+                break
+            except (TimeoutError, OSError, ConnectionError) as e:
+                log(
+                    f"[{label}] {verb} {tile}: sights-on monitor drop "
+                    f"({type(e).__name__}); reconnecting"
+                )
+                _reconnect(ex.bm, log)
     latched = drv.tap_action(key)
     if not latched:
         log(
