@@ -92,6 +92,18 @@ def _read_state(g):
     return GS.read_game_state(GS.Py65Source(g.mem))
 
 
+def _init_phase(g, state):
+    """Build the enemy phase for a real decision. init_phase_from_ram reads the exact ROM
+    rotation-speed table at $9D37, which only exists in a FULL 64K image (offline
+    Game(landscape)); the LIVE resync snapshots just $0000-$0FFF (native_game reads no
+    higher), so fall back to init_phase (conservative CW-rotation default, per
+    enemy_dynamics) when the buffer can't reach $9D37. The cooldown arrays ($0C20-$0C30)
+    are within the live snapshot either way."""
+    if len(g.mem) > ED.ROTATION_SPEED_TABLE + 63:
+        return ED.init_phase_from_ram(state, g.mem)
+    return ED.init_phase(state)
+
+
 def _advance_phase(state, phase, c):
     """Advance the EnemyPhase by the estimated tick-cost of applying candidate `c`
     (SEARCH_REDESIGN.md sec.6). Enemies are fixed-rate automata, so rotation/cooldown
@@ -313,7 +325,7 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
         return "approach"
 
     state = _read_state(g)
-    phase = ED.init_phase_from_ram(state, g.mem)
+    phase = _init_phase(g, state)
     stats = {"nodes": 0}
     t0 = time.time()
     score, move = _lookahead(g, ctx, blocked, phase, depth, beam, stats)

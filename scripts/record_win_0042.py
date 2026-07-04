@@ -16,7 +16,7 @@ Plan: out/kbd_greedy_0066.json -- ROM-validated steps (count == len(steps)). The
 TYPES "0042" (BCD 0x42 = internal seed 66).
 """
 
-import os, sys, time, json, argparse
+import os, sys, time, json, struct, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
@@ -78,9 +78,45 @@ def robust(bm, log, fn, tries=4):
     return fn()
 
 
-def navigate(bm, typed_digits, log):
+# VICE binary-monitor snapshot commands (vice.texi 22378/22416): a snapshot (.vsf) is
+# the complete machine state (CPU+RAM+chips). Saving one at the code-entry screen and
+# restoring it lets a re-run skip the ~50s tape boot entirely.
+SNAP_SAVE_OPCODE = 0x41  # MON_CMD_DUMP:   body SR|SD|FL|FN  -> empty response
+SNAP_LOAD_OPCODE = 0x42  # MON_CMD_UNDUMP: body FL|FN        -> response = restored PC
+
+
+def save_snapshot(bm, container_path, log, save_roms=False, save_disks=False):
+    """MON_CMD_DUMP (0x41): SR|SD|FL|FN. `container_path` is a path INSIDE the emulator
+    process -- point it at the mounted /renders volume so the .vsf persists on the host
+    across container runs. ROMs/disks are omitted (SR=SD=0): the RAM+CPU+chip state is all
+    that is needed to resume at the code-entry screen (ROMs reload from config on boot).
+    """
+    fn = container_path.encode()
+    body = (
+        struct.pack("<BBB", int(bool(save_roms)), int(bool(save_disks)), len(fn)) + fn
+    )
+    robust(bm, log, lambda: bm.call(SNAP_SAVE_OPCODE, body, timeout=30.0))
+
+
+def load_snapshot(bm, container_path, log):
+    """MON_CMD_UNDUMP (0x42): FL|FN, response = the restored PC (2 bytes LE). Restores the
+    full machine state saved by save_snapshot -- skipping the tape boot."""
+    fn = container_path.encode()
+    body = struct.pack("<B", len(fn)) + fn
+    resp = robust(bm, log, lambda: bm.call(SNAP_LOAD_OPCODE, body, timeout=30.0))
+    if resp is not None and len(resp.body) >= 2:
+        return struct.unpack("<H", resp.body[:2])[0]
+    return None
+
+
+def navigate(bm, typed_digits, log, snapshot_container=None, snapshot_host=None):
     """Boot under WARP to LANDSCAPE NUMBER, patch the code-checks, type the digits +
-    dummy secret code, dismiss the preview, enter play."""
+    dummy secret code, dismiss the preview, enter play.
+
+    If snapshot_host exists, RESTORE the machine state saved there (skipping the ~50s tape
+    boot) instead of booting; otherwise boot, then SAVE a snapshot at the code-entry screen
+    (after the code-check patches, before the landscape digits) so the NEXT run is fast.
+    The snapshot is landscape-agnostic -- the digits are always typed after restore."""
 
     def tap(name, hold=20, settle=0.4):
         robust(
@@ -102,15 +138,36 @@ def navigate(bm, typed_digits, log):
             )
             time.sleep(0.4)
 
-    log("booting + loading (warp)...")
-    for _ in range(50):
-        time.sleep(1.0)
-        robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
-    for _ in range(3):
-        tap("SPACE", hold=30, settle=1.5)
-    log("patching secret-code checks ($14DF/$2565/$2570)")
-    for addr, data in PATCHES:
-        robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
+    restored = False
+    if snapshot_container and snapshot_host and os.path.exists(snapshot_host):
+        try:
+            log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
+            load_snapshot(bm, snapshot_container, log)
+            try:
+                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
+            except Exception:
+                pass
+            time.sleep(1.0)
+            restored = True
+        except Exception as e:
+            log(f"  snapshot restore failed ({e}); falling back to full boot")
+
+    if not restored:
+        log("booting + loading (warp)...")
+        for _ in range(50):
+            time.sleep(1.0)
+            robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
+        for _ in range(3):
+            tap("SPACE", hold=30, settle=1.5)
+        log("patching secret-code checks ($14DF/$2565/$2570)")
+        for addr, data in PATCHES:
+            robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
+        if snapshot_container and snapshot_host:
+            log(f"saving VICE snapshot -> {snapshot_host} (reuse to skip next boot)")
+            try:
+                save_snapshot(bm, snapshot_container, log)
+            except Exception as e:
+                log(f"  snapshot save failed ({e}); continuing without it")
     log(f"typing landscape digits {typed_digits!r}")
     tap_text(typed_digits)
     tap("RETURN", hold=30, settle=3.0)
@@ -204,6 +261,7 @@ def run(
     video_name="solver_run_0042.avi",
     live=False,
     use_search=False,
+    use_snapshot=False,
 ):
     if not os.path.exists(TAP):
         raise FileNotFoundError(
@@ -225,6 +283,12 @@ def run(
     renders_host = os.path.join(ROOT, "renders")
     os.makedirs(renders_host, exist_ok=True)
     video_host = os.path.join(renders_host, video_name)
+    # code-entry snapshot lives on the mounted /renders volume, so it persists on the host
+    # across container runs and can be restored to skip the ~50s tape boot (landscape-
+    # agnostic: the digits are typed after restore). None disables the snapshot path.
+    snap_name = "vice_code_entry.vsf"
+    snapshot_host = os.path.join(renders_host, snap_name) if use_snapshot else None
+    snapshot_container = f"/renders/{snap_name}" if use_snapshot else None
     if os.path.exists(video_host):
         try:
             os.remove(video_host)
@@ -278,7 +342,7 @@ def run(
                     raise
                 bm.exit()
 
-                navigate(bm, typed_digits, log)
+                navigate(bm, typed_digits, log, snapshot_container, snapshot_host)
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
@@ -842,6 +906,12 @@ def main():
         help="with --live, use the receding-horizon best-first lookahead "
         "(climb_search) as the per-step decision instead of greedy climb_iterate",
     )
+    ap.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="restore a VICE snapshot at the code-entry screen (renders/"
+        "vice_code_entry.vsf) to skip the ~50s tape boot; the first run saves it",
+    )
     args = ap.parse_args()
     video_name = args.video_name or f"solver_run_{args.digits}.avi"
 
@@ -860,6 +930,7 @@ def main():
         video_name=video_name,
         live=args.live,
         use_search=args.search,
+        use_snapshot=args.snapshot,
     )
 
     vid = result.get("video")
