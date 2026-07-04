@@ -256,7 +256,38 @@ class Game:
 
     def __init__(self, landscape):
         mem, _ = _emu.generate(landscape)  # the ONLY py65 use (PRNG generation)
-        self.mem = bytearray(mem)
+        self._init_from_mem(bytearray(mem), landscape, seed_built_columns=False)
+
+    @classmethod
+    def from_mem(cls, mem, landscape=None, seed_built_columns=True):
+        """Build a Game from a live memory snapshot (e.g. a VICE mem_get(0,0xFFF))
+        instead of generating a fresh landscape -- lets a live driver resync the
+        native model to the REAL current state (including enemy/meanie activity)
+        and replan from truth rather than from a stale forward simulation. Unlike
+        __init__, this seeds self.col for every already-occupied tile (columns built
+        earlier in the same live climb, whose in-memory Game was discarded on resync),
+        so top_of() recognises them as stacking targets.
+
+        Pass seed_built_columns=False for the FIRST resync of a live session, before
+        any create() has happened: at that point the player's own tile is occupied
+        only by the landscape generator's original spawn placement, which (like every
+        first-level object) carries the fixed z_fraction=$E0 render offset in ROM
+        memory. __init__'s formula deliberately drops that offset for the start tile
+        (self.eye = plain ground height) -- seeding it back in here would silently
+        raise the live start eye by 0.875 above the ROM-validated offline baseline,
+        steering the live climb onto different (and, empirically, worse) footholds
+        than plan_greedy finds for the same landscape. Once real create()s have
+        happened, any object the player stands on WAS placed by this model's own
+        create() (which stores col[tile]=z+zf/256 itself), so seeding from raw
+        OBJ_Z/OBJ_ZF then correctly reconstructs the true accumulated climb height."""
+        g = cls.__new__(cls)
+        g._init_from_mem(
+            bytearray(mem), landscape, seed_built_columns=seed_built_columns
+        )
+        return g
+
+    def _init_from_mem(self, mem, landscape, seed_built_columns):
+        self.mem = mem
         self.landscape = landscape
         self.player = self.mem[PLAYER_OBJ]
         self.energy = self.mem[PLAYER_ENERGY]
@@ -264,9 +295,41 @@ class Game:
         self.col = {}  # tile -> top height (float) of its object stack
         self._tiles0 = bytes(self.mem[0x0400:0x0800])  # pristine terrain byte snapshot
         self.free = [s for s in range(64) if self.mem[OBJ_FLAGS + s] & 0x80]
-        # player eye = its tile's terrain height (a robot standing on the ground)
+        if seed_built_columns:
+            for ty in range(N):
+                for tx in range(N):
+                    b = self.mem[0x0400 + TIDX(tx, ty)]
+                    if b >= 0xC0:
+                        top_slot = b & 0x3F
+                        self.col[(tx, ty)] = (
+                            self.mem[OBJ_Z + top_slot]
+                            + self.mem[OBJ_ZF + top_slot] / 256.0
+                        )
         px, py = self.mem[OBJ_X + self.player], self.mem[OBJ_Y + self.player]
-        self.eye = float(terrain_z(self.mem, px, py) or self.mem[OBJ_Z + self.player])
+        if seed_built_columns:
+            # LIVE RESYNC: the player may stand on a built column (object-occupied
+            # tile, mid-climb) -- use its FULL float height (z_height + z_frac/256),
+            # not just the truncated integer z, which would silently drop the climb's
+            # fractional gain and desync every later height comparison.
+            if (px, py) in self.col:
+                self.eye = self.col[(px, py)]
+            else:
+                ground = terrain_z(self.mem, px, py)
+                if ground is not None:
+                    self.eye = float(ground)
+                else:
+                    self.eye = (
+                        self.mem[OBJ_Z + self.player]
+                        + self.mem[OBJ_ZF + self.player] / 256.0
+                    )
+                    self.col[(px, py)] = self.eye
+        else:
+            # fresh landscape (unchanged from the original __init__ formula, byte-for-
+            # byte, to keep the ROM-validated offline planner's output identical): a
+            # robot standing on the ground = its tile's terrain height.
+            self.eye = float(
+                terrain_z(self.mem, px, py) or self.mem[OBJ_Z + self.player]
+            )
         # sentinel + platform-ground for the win test
         self.sentinel_slot = next(
             (
@@ -290,6 +353,30 @@ class Game:
             if pslot is not None:
                 self.plat_ground = self.mem[OBJ_Z + pslot]
         self.steps = []
+        self.native_won = False
+
+    def clone(self):
+        """Cheap branch copy for lookahead search: duplicate every MUTABLE piece of
+        state (mem bytearray, col/free/steps containers, scalars) so a simulated line
+        can call create/transfer/absorb without disturbing the sibling branches still
+        holding the parent state. `_tiles0` is an immutable snapshot and `landscape`/
+        scalars are value types, so they are shared. `steps` entries are dicts that are
+        appended and never mutated after the fact, so a shallow list copy is safe."""
+        g = Game.__new__(Game)
+        g.mem = bytearray(self.mem)
+        g.landscape = self.landscape
+        g.player = self.player
+        g.energy = self.energy
+        g.plat = self.plat
+        g.col = dict(self.col)
+        g._tiles0 = self._tiles0
+        g.free = list(self.free)
+        g.eye = self.eye
+        g.sentinel_slot = self.sentinel_slot
+        g.plat_ground = self.plat_ground
+        g.steps = list(self.steps)
+        g.native_won = self.native_won
+        return g
 
     # --- queries ---
     def player_xy(self):
