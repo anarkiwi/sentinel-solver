@@ -12,5 +12,14 @@ same addresses the original does and the line-of-sight stays bit-exact.
 """
 
 from sentinel.prng import Prng, seed_state
+from sentinel.state import State
+from sentinel import los, terrain, memmap
 
-__all__ = ["Prng", "seed_state"]
+__all__ = [
+    "Prng",
+    "seed_state",
+    "State",
+    "los",
+    "terrain",
+    "memmap",
+]
