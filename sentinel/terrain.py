@@ -29,6 +29,16 @@ def tile_byte(state, x, y):
     return state.mem[page * 256 + lo]
 
 
+def set_tile_byte(state, x, y, value):
+    """Write the tiles_table byte for tile (x, y), via the same ROM addressing as
+    :func:`tile_byte` (put_object_in_tile / remove_object write through it)."""
+    x &= 0xFF
+    y &= 0xFF
+    lo = ((x << 3) & 0xE0) | (y & 0x1F)
+    page = (x & 3) + 4
+    state.mem[page * 256 + lo] = value & 0xFF
+
+
 def terrain_z(state, x, y):
     """Bare-terrain height nibble at (x, y), or None if the tile holds an object."""
     if not (0 <= x < mm.N and 0 <= y < mm.N):
