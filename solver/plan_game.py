@@ -2,7 +2,7 @@
 """Adapter presenting the legacy ``native_game.Game`` surface on a bit-exact
 ``sentinel.State``.
 
-``PlanGame`` is a drop-in for the climb planners (climb_greedy / climb_search):
+``PlanGame`` is a drop-in for the climb planner (climb_search):
 same attributes (``mem``, ``player``, ``energy``, ``free``, ``eye``, ``col``,
 ``plat``, ``plat_ground``, ``sentinel_slot``, ``steps``, ``native_won``) and the
 same methods (``player_xy``, ``top_of``, ``feasible``, ``create``, ``transfer``,

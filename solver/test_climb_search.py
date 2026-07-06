@@ -119,11 +119,10 @@ def test_advance_enemies_rotation_forecast_pure_on_energy():
 def test_reached_approach_flags_endgame_state():
     """_reached_approach is False from the start tile (eye not yet above the platform)."""
     from solver import climb_search as CS
-    from solver import climb_greedy as cg
     from solver import plan_game
 
     g = plan_game.PlanGame(0)
-    ctx = cg.climb_ctx(g, toward_plat=False)
+    ctx = CS.climb_ctx(g, toward_plat=False)
     assert CS._reached_approach(g, ctx) is False
 
 
@@ -133,11 +132,10 @@ def test_search_climbs_without_height_regression():
     assert the eye is monotonically non-decreasing across committed steps -- the exact
     invariant the old greedy 'reposition to a lower tile' fallback violated."""
     from solver import climb_search as CS
-    from solver import climb_greedy as cg
     from solver import plan_game
 
     g = plan_game.PlanGame(0)
-    ctx = cg.climb_ctx(g, toward_plat=False)
+    ctx = CS.climb_ctx(g, toward_plat=False)
     eyes = [g.eye]
     steps_taken = 0
     for _ in range(20):

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""The live plan runner: drive a solver plan for a landscape in the REAL game (asid-vice)
-by keyboard, verified by the ROM's own win flag ($0CDE bit6), optionally recorded to an
-AVI. This is the glue that wires a solver (solver/) to the driver (driver/); it plans and
-verifies nothing itself beyond executing steps.
+"""The live plan runner: drive the solver in the REAL game (asid-vice) by keyboard,
+verified by the ROM's own win flag ($0CDE bit6), optionally recorded to an AVI. This is
+the glue that wires the solver (solver/) to the driver (driver/); it plans and verifies
+nothing itself beyond executing steps.
 
-Two modes:
-  * a fixed precomputed --plan (a won plan JSON), replayed step by step; or
-  * --live replanning, which resyncs the simulator from live memory each iteration and
-    asks the solver (greedy climb_iterate, or --search climb_search lookahead) for the
-    next move, so real timing/enemy divergence self-heals on the next resync.
+It runs ONE mode: live replanning. Each iteration resyncs the simulator from live memory
+and asks the solver (climb_search's receding-horizon lookahead) for the next move, so
+real timing/enemy divergence self-heals on the next resync.
 
 NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the driver's
 keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles sights-off
@@ -22,7 +20,7 @@ helpers and the full 64 KB live-image read all live in driver/core (+ driver/boo
 file is just the plan-execution loop and CLI.
 """
 
-import os, sys, time, json, argparse
+import os, sys, time, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
@@ -78,12 +76,9 @@ def verify_entry(bm, log, landscape=66):
 
 def run(
     typed_digits,
-    plan_path,
     max_seconds,
     log,
     video_name="solver_run_0042.avi",
-    live=False,
-    use_search=False,
     use_snapshot=False,
 ):
     if not os.path.exists(TAP):
@@ -91,17 +86,7 @@ def run(
             f"{TAP} missing: place the game tape image there (not distributed)"
         )
     landscape = core.landscape_from_digits(typed_digits)
-    steps, plan = None, {"landscape": landscape}
-    if not live:
-        with open(plan_path) as f:
-            plan = json.load(f)
-        if not plan.get("won"):
-            log(f"REFUSING: plan {plan_path} is not a win (won={plan.get('won')})")
-            return {"won": False, "note": "plan not validated"}
-        steps = plan["steps"]
-        log(f"loaded {len(steps)} steps from {plan_path}")
-    else:
-        log(f"LIVE replanning mode: landscape {landscape} (no precomputed plan)")
+    log(f"LIVE replanning mode: landscape {landscape}")
 
     renders_host = os.path.join(ROOT, "renders")
     os.makedirs(renders_host, exist_ok=True)
@@ -170,7 +155,7 @@ def run(
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
                     continue
-                result["entry_match"] = verify_entry(bm, log, plan.get("landscape", 66))
+                result["entry_match"] = verify_entry(bm, log, landscape)
                 ex = Executor(bm, log)
                 plat = (ex.rd(A_PLAT_X), ex.rd(A_PLAT_Y))
                 log(
@@ -189,23 +174,19 @@ def run(
                 else:
                     log("-- NO_RECORD=1: skipping AVI (warp stays on) --")
 
-                if live:
-                    won = execute_live(
-                        ex,
-                        log,
-                        result,
-                        t_start,
-                        max_seconds,
-                        landscape,
-                        plat,
-                        toward_plat=os.environ.get("TOWARD_PLAT", "1") == "1",
-                        near_plat_radius=int(os.environ.get("NEAR_PLAT_RADIUS", "2")),
-                        use_search=use_search,
-                        search_depth=int(os.environ.get("SEARCH_DEPTH", "2")),
-                        search_beam=int(os.environ.get("SEARCH_BEAM", "2")),
-                    )
-                else:
-                    won = execute(ex, steps, plat, log, result, t_start, max_seconds)
+                won = execute_live(
+                    ex,
+                    log,
+                    result,
+                    t_start,
+                    max_seconds,
+                    landscape,
+                    plat,
+                    toward_plat=os.environ.get("TOWARD_PLAT", "1") == "1",
+                    near_plat_radius=int(os.environ.get("NEAR_PLAT_RADIUS", "2")),
+                    search_depth=int(os.environ.get("SEARCH_DEPTH", "2")),
+                    search_beam=int(os.environ.get("SEARCH_BEAM", "2")),
+                )
                 result["won"] = won
                 time.sleep(1.5)
 
@@ -272,8 +253,8 @@ def probe_tile(bm):
 
 def perform_step(ex, drv, label, stp, log, result):
     """Fire ONE plan step (verb/otype/target/view) against the live game via a real
-    keystroke, verify the memory delta, and report the outcome. Shared by the fixed-
-    plan executor and the live replanning loop. Returns one of:
+    keystroke, verify the memory delta, and report the outcome. Used by the live
+    replanning loop. Returns one of:
       "ok"               -- verified success
       "best_effort_miss" -- a non-Sentinel absorb missed (fuel recovery; non-fatal)
       "drained"          -- energy already below a create's cost before firing (no keys sent)
@@ -306,10 +287,8 @@ def perform_step(ex, drv, label, stp, log, result):
 
     # A view of None means the planner deferred the aim (an on-boulder synthoid re-
     # aims after the boulder just landed; an absorb whose coarse candidate sweep
-    # didn't resolve one). The fixed-plan JSON has these filled in by the offline
-    # ROM-validation pass (plan_game.centre_view_for against
-    # the real engine); the live path has no such pass, so resolve a live centre-
-    # aimed view here, against CURRENT memory (e.g. post-boulder), before firing.
+    # didn't resolve one). Resolve a live centre-aimed view here (plan_game.
+    # centre_view_for against CURRENT memory, e.g. post-boulder) before firing.
     if verb in ("create", "absorb") and plan_view is None:
         mem = core.live_image(ex.bm)
         ps = mem[0x000B]
@@ -502,29 +481,6 @@ def fire_hyperspace(ex, drv, plat, log, result):
     return won
 
 
-def execute(ex, steps, plat, log, result, t_start, max_seconds):
-    """Walk a fixed precomputed plan with the authentic keyboard sights-cursor aim
-    (kbd_aim.KbdDriver) + real action keys, verifying each step's memory delta."""
-    drv = kbd_aim.KbdDriver(ex.bm, log)
-
-    for i, stp in enumerate(steps):
-        if time.time() - t_start > max_seconds:
-            log(f"TIME BUDGET ({max_seconds}s) exceeded at step {i}; aborting")
-            result["divergence"] = f"timeout at step {i}"
-            return False
-        outcome = perform_step(ex, drv, f"{i:2}", stp, log, result)
-        if outcome in ("ok", "best_effort_miss"):
-            continue
-        tile = tuple(stp["target"])
-        if outcome == "drained":
-            result["divergence"] = f"step {i} create {tile}: drained (energy)"
-        else:
-            result["divergence"] = f"step {i} {stp['verb']} {tile}: {outcome}"
-        return False
-
-    return fire_hyperspace(ex, drv, plat, log, result)
-
-
 # Approach-timing (gaze-safe advance). The platform ring is the most enemy-exposed
 # region: while the driver spends real seconds aiming there, a Sentinel facing the
 # player drains its energy and downgrades its just-built fuel objects, starving the
@@ -598,36 +554,29 @@ def execute_live(
     toward_plat=True,
     near_plat_radius=2,
     max_iterations=200,
-    use_search=False,
     search_depth=2,
     search_beam=2,
 ):
     """Closed-loop climb: at each iteration, RESYNC the native climb model from live
     memory (ground truth, including any real enemy/meanie activity since the last
-    look), compute the next foothold move fresh (climb_greedy.climb_iterate), and
+    look), compute the next foothold move fresh (climb_search.search_iterate), and
     drive it via real keystrokes immediately -- so a step that a stale precomputed
     plan assumed would land cleanly, but which real timing/enemies made infeasible,
     self-heals on the NEXT iteration (a fresh resync never has the failed object,
     so the planner routes around it) instead of cascading into a run-ending
     divergence."""
     from solver import plan_game
-    from solver import climb_greedy as cg
+    from solver import climb_search as csearch
 
-    # decision function: the greedy single-step picker, or the receding-horizon best-first
-    # lookahead (climb_search, SEARCH_REDESIGN.md) which won't commit a move without a
-    # continuation within the horizon (fixes the greedy dead-end/reposition failure).
-    if use_search:
-        from solver import climb_search as csearch
+    # decision function: the receding-horizon best-first lookahead (climb_search,
+    # SEARCH_REDESIGN.md) which won't commit a move without a continuation within the
+    # horizon (fixes the dead-end/reposition failure of a purely greedy picker).
+    def decide(g, ctx, blocked_set, lg):
+        return csearch.search_iterate(
+            g, ctx, blocked_set, lg, depth=search_depth, beam=search_beam
+        )
 
-        def decide(g, ctx, blocked_set, lg):
-            return csearch.search_iterate(
-                g, ctx, blocked_set, lg, depth=search_depth, beam=search_beam
-            )
-
-        log(f"LIVE decision: lookahead search D{search_depth} B{search_beam}")
-    else:
-        decide = cg.climb_iterate
-        log("LIVE decision: greedy climb_iterate")
+    log(f"LIVE decision: lookahead search D{search_depth} B{search_beam}")
 
     drv = kbd_aim.KbdDriver(ex.bm, log)
     blocked = set()
@@ -638,9 +587,8 @@ def execute_live(
     # time it acts, and the idle monitor socket goes flaky (the observed aim TimeoutErrors).
     # FREEZE the CPU across resync+decide (bm.halted() leaves it stopped after the mem read,
     # and the search issues no monitor I/O, so it stays frozen), then resume before driving
-    # keystrokes. Now meanie_safe decides against the true state at action time. The greedy
-    # picker is sub-second, so it doesn't need the freeze.
-    halt_during_decide = use_search
+    # keystrokes. Now meanie_safe decides against the true state at action time.
+    halt_during_decide = True
 
     def resync(seed_built_columns=True, keep_halted=False):
         if keep_halted:
@@ -662,7 +610,7 @@ def execute_live(
     # built, so the full z+zf/256 reconstruction becomes correct.
     built_anything = False
     g = resync(seed_built_columns=False)
-    ctx = cg.climb_ctx(g, toward_plat, near_plat_radius)
+    ctx = csearch.climb_ctx(g, toward_plat, near_plat_radius)
     log(
         f"LIVE climb start: {g.player_xy()} eye {g.eye} plat {ctx['plat']} energy {g.energy}"
     )
@@ -749,7 +697,7 @@ def execute_live(
     # ---- ENDGAME: resync once more, then absorb Sentinel + platform synthoid ----
     g = resync()
     before_n = len(g.steps)
-    won_native = cg.endgame(g, ctx["plat"], log)
+    won_native = csearch.endgame(g, ctx["plat"], log)
     for stp in g.steps[before_n:]:
         label += 1
         outcome = perform_step(ex, drv, f"E{label}", stp, log, result)
@@ -860,21 +808,8 @@ def validate_avi(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--digits", default="0042")
-    ap.add_argument("--plan", default=os.path.join(ROOT, "out", "kbd_greedy_0066.json"))
     ap.add_argument("--max-seconds", type=int, default=1500)
     ap.add_argument("--video-name", default=None)
-    ap.add_argument(
-        "--live",
-        action="store_true",
-        help="replan the climb live from real memory each step instead of "
-        "following a fixed precomputed --plan",
-    )
-    ap.add_argument(
-        "--search",
-        action="store_true",
-        help="with --live, use the receding-horizon best-first lookahead "
-        "(climb_search) as the per-step decision instead of greedy climb_iterate",
-    )
     ap.add_argument(
         "--snapshot",
         action="store_true",
@@ -887,18 +822,12 @@ def main():
     def log(m):
         print(m, flush=True)
 
-    log(
-        f"=== VICE keyboard record: type {args.digits!r} "
-        f"{'LIVE replanning' if args.live else f'plan={args.plan}'} ==="
-    )
+    log(f"=== VICE keyboard record: type {args.digits!r} LIVE replanning ===")
     result = run(
         args.digits,
-        args.plan,
         args.max_seconds,
         log,
         video_name=video_name,
-        live=args.live,
-        use_search=args.search,
         use_snapshot=args.snapshot,
     )
 
