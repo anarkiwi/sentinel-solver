@@ -575,7 +575,7 @@ def plan_search(
     decision (search_iterate) in place of climb_iterate. Same endgame.
 
     Defaults to the LIVE executor's config (toward_plat=True, near_plat_radius=2, see
-    record_win_0042.execute_live) rather than plan_greedy's legacy toward_plat=False:
+    run_plan_live.execute_live) rather than plan_greedy's legacy toward_plat=False:
     the lookahead already drives toward the platform via _evaluate's proximity term, and
     toward_plat gates the ROM-infeasible on-distant-boulder synthoid in the steep
     platform ring (climb_greedy._candidates)."""

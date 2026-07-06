@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
-"""Keyboard-driven REAL-ROM replay of the ROM-validated ls42 (internal seed 66) win
-inside asid-vice, recorded to a real AVI via the native ZMBV video opcode, with the
-genuine ROM win flag $0CDE bit6 verified.
+"""The live plan runner: drive a solver plan for a landscape in the REAL game (asid-vice)
+by keyboard, verified by the ROM's own win flag ($0CDE bit6), optionally recorded to an
+AVI. This is the glue that wires a solver (solver/) to the driver (driver/); it plans and
+verifies nothing itself beyond executing steps.
 
-NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the
-authentic keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles
-sights-off (S/D/L/COMMA + U-turn) then the sights cursor sights-on, closed-loop on
-the live native-LOS probe (sentinel.los on a RAM snapshot) until the target tile is hit
-with LOS. The action is then a real keystroke (R/B robot/boulder, Q transfer, A absorb,
-H hyperspace), fired via tap_action which polls the game's own $0CE9 action latch.
-Every state-changing input is a real key; reads never change state. The AVI is captured
-by the native video_record/video_stop opcode.
+Two modes:
+  * a fixed precomputed --plan (a won plan JSON), replayed step by step; or
+  * --live replanning, which resyncs the simulator from live memory each iteration and
+    asks the solver (greedy climb_iterate, or --search climb_search lookahead) for the
+    next move, so real timing/enemy divergence self-heals on the next resync.
 
-Plan: out/kbd_greedy_0066.json -- ROM-validated steps (count == len(steps)). The player
-TYPES "0042" (BCD 0x42 = internal seed 66).
+NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the driver's
+keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles sights-off
+(S/D/L/COMMA + U-turn) then the sights cursor sights-on, closed-loop on the live native-LOS
+probe (sentinel.los on a RAM snapshot) until the target tile is hit with LOS. The action is
+a real keystroke (R/B robot/boulder, Q transfer, A absorb, H hyperspace) fired via
+tap_action, which polls the game's own $0CE9 action latch. Reads never change state.
+
+Boot, landscape entry (menu navigation + code-entry snapshot), the monitor-resilience
+helpers and the full 64 KB live-image read all live in driver/core (+ driver/boot); this
+file is just the plan-execution loop and CLI.
 """
 
-import os, sys, time, json, struct, argparse
+import os, sys, time, json, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from vice_driver import BinMon, DiskMount, ViceContainer, keys
-from vice_driver.binmon import TAP_MODE_FIXED
+from vice_driver import BinMon, DiskMount, ViceContainer
 
 from driver import sentinel_state as gs
 from driver.sentinel_execute import (
@@ -48,166 +53,9 @@ A_LANDSCAPE_DONE = 0x0CDE
 A_PLAT_X = 0x0C19
 A_PLAT_Y = 0x0C1A
 
-# secret-code-check patches (accept any code)
-PATCHES = [
-    (0x14DF, bytes([0xA9, 0x1E])),
-    (0x2565, bytes([0xEA, 0xEA])),
-    (0x2570, bytes([0xEA, 0xEA])),
-]
-
-
-def _reconnect(bm, log):
-    try:
-        bm.close()
-    except Exception:
-        pass
-    bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
-    try:
-        bm.exit()
-    except Exception:
-        pass
-    log("   (reconnected monitor socket)")
-
-
-def robust(bm, log, fn, tries=4):
-    from vice_driver.binmon import BinmonError
-
-    for _ in range(tries):
-        try:
-            return fn()
-        except (
-            BinmonError,
-            BrokenPipeError,
-            ConnectionError,
-            OSError,
-            TimeoutError,
-        ) as e:
-            log(f"   monitor op dropped ({type(e).__name__}); reconnecting")
-            _reconnect(bm, log)
-    return fn()
-
-
-# VICE binary-monitor snapshot commands (vice.texi 22378/22416): a snapshot (.vsf) is
-# the complete machine state (CPU+RAM+chips). Saving one at the code-entry screen and
-# restoring it lets a re-run skip the ~50s tape boot entirely.
-SNAP_SAVE_OPCODE = 0x41  # MON_CMD_DUMP:   body SR|SD|FL|FN  -> empty response
-SNAP_LOAD_OPCODE = 0x42  # MON_CMD_UNDUMP: body FL|FN        -> response = restored PC
-
-
-def save_snapshot(bm, container_path, log, save_roms=False, save_disks=False):
-    """MON_CMD_DUMP (0x41): SR|SD|FL|FN. `container_path` is a path INSIDE the emulator
-    process -- point it at the mounted /renders volume so the .vsf persists on the host
-    across container runs. ROMs/disks are omitted (SR=SD=0): the RAM+CPU+chip state is all
-    that is needed to resume at the code-entry screen (ROMs reload from config on boot).
-    """
-    fn = container_path.encode()
-    body = (
-        struct.pack("<BBB", int(bool(save_roms)), int(bool(save_disks)), len(fn)) + fn
-    )
-    robust(bm, log, lambda: bm.call(SNAP_SAVE_OPCODE, body, timeout=30.0))
-
-
-def load_snapshot(bm, container_path, log):
-    """MON_CMD_UNDUMP (0x42): FL|FN, response = the restored PC (2 bytes LE). Restores the
-    full machine state saved by save_snapshot -- skipping the tape boot."""
-    fn = container_path.encode()
-    body = struct.pack("<B", len(fn)) + fn
-    resp = robust(bm, log, lambda: bm.call(SNAP_LOAD_OPCODE, body, timeout=30.0))
-    if resp is not None and len(resp.body) >= 2:
-        return struct.unpack("<H", resp.body[:2])[0]
-    return None
-
-
-def navigate(bm, typed_digits, log, snapshot_container=None, snapshot_host=None):
-    """Boot under WARP to LANDSCAPE NUMBER, patch the code-checks, type the digits +
-    dummy secret code, dismiss the preview, enter play.
-
-    If snapshot_host exists, RESTORE the machine state saved there (skipping the ~50s tape
-    boot) instead of booting; otherwise boot, then SAVE a snapshot at the code-entry screen
-    (after the code-check patches, before the landscape digits) so the NEXT run is fast.
-    The snapshot is landscape-agnostic -- the digits are always typed after restore."""
-
-    def tap(name, hold=20, settle=0.4):
-        robust(
-            bm,
-            log,
-            lambda: bm.keymatrix_tap(
-                [keys.lookup(name)], mode=TAP_MODE_FIXED, frames=hold
-            ),
-        )
-        time.sleep(settle)
-
-    def tap_text(t):
-        for chord in keys.text_to_chords(t):
-            ks = [keys.lookup(n) for n in chord]
-            robust(
-                bm,
-                log,
-                lambda ks=ks: bm.keymatrix_tap(ks, mode=TAP_MODE_FIXED, frames=20),
-            )
-            time.sleep(0.4)
-
-    restored = False
-    if snapshot_container and snapshot_host and os.path.exists(snapshot_host):
-        try:
-            log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
-            load_snapshot(bm, snapshot_container, log)
-            try:
-                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
-            except Exception:
-                pass
-            time.sleep(1.0)
-            restored = True
-        except Exception as e:
-            log(f"  snapshot restore failed ({e}); falling back to full boot")
-
-    if not restored:
-        log("booting + loading (warp)...")
-        for _ in range(50):
-            time.sleep(1.0)
-            robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
-        for _ in range(3):
-            tap("SPACE", hold=30, settle=1.5)
-        log("patching secret-code checks ($14DF/$2565/$2570)")
-        for addr, data in PATCHES:
-            robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
-        if snapshot_container and snapshot_host:
-            log(f"saving VICE snapshot -> {snapshot_host} (reuse to skip next boot)")
-            try:
-                save_snapshot(bm, snapshot_container, log)
-            except Exception as e:
-                log(f"  snapshot save failed ({e}); continuing without it")
-    log(f"typing landscape digits {typed_digits!r}")
-    tap_text(typed_digits)
-    tap("RETURN", hold=30, settle=3.0)
-    tap_text("00000000")
-    tap("RETURN", hold=30, settle=8.0)
-    time.sleep(3)
-    tap("SPACE", hold=25, settle=1.2)  # dismiss the isometric preview
-    time.sleep(4)
-
 
 def objects_at(state, x, y):
     return [o for o in state.objects if o.x == x and o.y == y]
-
-
-def _free_port_6502(log):
-    import subprocess
-
-    try:
-        ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=asid-vice:latest"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.split()
-        if ids:
-            subprocess.run(
-                ["docker", "rm", "-f", *ids], capture_output=True, text=True, timeout=30
-            )
-            time.sleep(2)
-    except Exception as e:
-        log(f"  port-cleanup warning: {e}")
 
 
 def verify_entry(bm, log, landscape=66):
@@ -228,14 +76,6 @@ def verify_entry(bm, log, landscape=66):
     return matched, len(ref_objs)
 
 
-def landscape_from_digits(typed_digits):
-    """The player types a 4-digit landscape number; the game reads the last two
-    digits as a single BCD byte, whose value IS the internal seed (e.g. "0042" ->
-    byte 0x42 -> seed 66). Decimal digits are numerically identical to hex nibbles,
-    so parsing the last 2 characters as hex reproduces the BCD-to-binary step."""
-    return int(typed_digits[-2:], 16)
-
-
 def run(
     typed_digits,
     plan_path,
@@ -250,7 +90,7 @@ def run(
         raise FileNotFoundError(
             f"{TAP} missing: place the game tape image there (not distributed)"
         )
-    landscape = landscape_from_digits(typed_digits)
+    landscape = core.landscape_from_digits(typed_digits)
     steps, plan = None, {"landscape": landscape}
     if not live:
         with open(plan_path) as f:
@@ -287,7 +127,7 @@ def run(
     }
     BOOT_TRIES = 8
     for boot_try in range(BOOT_TRIES):
-        _free_port_6502(log)
+        core.free_stale_containers(log)
         container = ViceContainer(
             autostart="/work/sentinel.tap",
             mounts=[
@@ -325,7 +165,7 @@ def run(
                     raise
                 bm.exit()
 
-                navigate(bm, typed_digits, log, snapshot_container, snapshot_host)
+                core.navigate(bm, typed_digits, log, snapshot_container, snapshot_host)
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
@@ -394,7 +234,7 @@ def run(
 
 
 def _probe_once(bm):
-    m = bytearray(bm.mem_get(0x0000, 0x0FFF))
+    m = core.live_image(bm)
     ps = m[0x000B]
     st = State.from_mem(bytes(m))
     rx, ry, los_hit, centre = los.aim_target(
@@ -471,7 +311,7 @@ def perform_step(ex, drv, label, stp, log, result):
     # the real engine); the live path has no such pass, so resolve a live centre-
     # aimed view here, against CURRENT memory (e.g. post-boulder), before firing.
     if verb in ("create", "absorb") and plan_view is None:
-        mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+        mem = core.live_image(ex.bm)
         ps = mem[0x000B]
         eye_z = mem[plan_game.OBJ_Z + ps]
         plan_view = plan_game.centre_view_for(bytes(mem), tile, ps, eye_z)
@@ -520,7 +360,7 @@ def perform_step(ex, drv, label, stp, log, result):
                     f"[{label}] {verb} {tile}: aim monitor drop "
                     f"({type(e).__name__}); reconnecting + re-aiming"
                 )
-                _reconnect(ex.bm, log)
+                core.reconnect(ex.bm, log)
         else:
             log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
             return "fail"
@@ -590,7 +430,7 @@ def perform_step(ex, drv, label, stp, log, result):
                     f"[{label}] {verb} {tile}: sights-on monitor drop "
                     f"({type(e).__name__}); reconnecting"
                 )
-                _reconnect(ex.bm, log)
+                core.reconnect(ex.bm, log)
     latched = drv.tap_action(key)
     if not latched:
         log(
@@ -805,9 +645,9 @@ def execute_live(
     def resync(seed_built_columns=True, keep_halted=False):
         if keep_halted:
             with ex.bm.halted():  # read with the CPU LEFT stopped (no auto-resume)
-                mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+                mem = core.live_image(ex.bm)
         else:
-            mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+            mem = core.live_image(ex.bm)
         return plan_game.Game.from_mem(
             mem, landscape, seed_built_columns=seed_built_columns
         )
@@ -843,7 +683,7 @@ def execute_live(
                 ex.bm.exit()  # resume the CPU (frozen during the search) for the keystrokes
             except Exception as e:
                 log(f"    (resume after search failed: {e}; reconnecting)")
-                _reconnect(ex.bm, log)
+                core.reconnect(ex.bm, log)
         new_steps = g.steps[before_n:]
         blocked_this_round = False
         built_tiles_this_batch = set()

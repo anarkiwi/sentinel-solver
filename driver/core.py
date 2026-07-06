@@ -9,8 +9,8 @@ already-canonical pieces rather than re-deriving them, so there is ONE driver:
 
   * boot to title      -- :mod:`driver.boot` (ret/retry container + tape load,
                           reusable boot.vsf snapshot);
-  * enter landscape N  -- :func:`generate_and_enter` (the ROM's own generate + enter,
-                          bypassing the secret-code gate);
+  * enter landscape N  -- :func:`navigate` (drive the real title menu by keyboard;
+                          restores a code-entry snapshot to skip the tape boot);
   * keyboard aim/fire  -- :class:`driver.kbd_aim.KbdDriver` (the checkpoint-driven,
                           U-turn-aware sights driver);
   * state reads        -- :mod:`driver.sentinel_state` (live BinMon -> GameState).
@@ -28,7 +28,8 @@ import subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from vice_driver import BinMon
+from vice_driver import BinMon, keys
+from vice_driver.binmon import TAP_MODE_FIXED
 from sentinel.state import State
 from sentinel import los
 from driver import boot, kbd_aim
@@ -55,115 +56,149 @@ K_TRANSFER, K_ABSORB, K_HYPERSPACE = "Q", "A", "H"
 
 
 # ============================================================================
-# ROM-native landscape entry (bypassing the obfuscated "SECRET ENTRY CODE?" gate)
+# monitor resilience + full-image reads (shared by the entry nav and plan runner)
+# ============================================================================
+def reconnect(bm, log=print):
+    """Re-open a dropped monitor socket (a warp/AVI stall can close it mid-op)."""
+    try:
+        bm.close()
+    except Exception:
+        pass
+    bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
+    try:
+        bm.exit()
+    except Exception:
+        pass
+    log("   (reconnected monitor socket)")
+
+
+def robust(bm, log, fn, tries=4):
+    """Run a monitor op, reconnecting + retrying on a dropped socket."""
+    from vice_driver.binmon import BinmonError
+
+    for _ in range(tries):
+        try:
+            return fn()
+        except (
+            BinmonError,
+            BrokenPipeError,
+            ConnectionError,
+            OSError,
+            TimeoutError,
+        ) as e:
+            log(f"   monitor op dropped ({type(e).__name__}); reconnecting")
+            reconnect(bm, log)
+    return fn()
+
+
+def live_image(bm):
+    """The full 64 KB live memory image the simulator (``State``/``Game``) is defined
+    over. It reads ROM tables such as ROTATION_SPEED_TABLE ($9D37) during enemy stepping
+    (threat.ticks_until_seen -> enemies.step), so a 4 KB slice throws IndexError.
+
+    Read in two 32 KB halves: mem_get's response length is a u16, so a single
+    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty."""
+    return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(bm.mem_get(0x8000, 0xFFFF))
+
+
+# ============================================================================
+# landscape entry -- drive the real title menu by keyboard (the proven live path)
 #
-# The code-check at $14DC-$14F2 computes the jump to play_landscape ($35A4) from the
-# validation result + objects_flags, so naive patching crashes. Instead we mirror
-# play_setup ($1A97) exactly, minus the preview/title plotting and minus the code gate:
-#   $1149 reset_game_state
-#   $33ED seed_prnd_from_landscape_number (X=lo, Y=hi)  -> stores $0CFD/$0CFE/$0C52
-#   $2ACC generate_landscape, STOP at $2B21 (terrain-build end; the render tail desyncs
-#         the prnd and changes the tree count)
-#   $1420 set_palette_and_initialise_enemies (Sentinel + sentries + landscape palette)
-#   $1450 initialise_player_and_trees -- called with $0C71 bit7 CLEAR so its $14AF
-#         `BIT $0C71; BPL` takes the PREVIEW path (build validation table, clean RTS)
-#         instead of the obfuscated leave-to-play jump. Byte-for-byte the same
-#         object/prnd path the simulator uses, so the board matches.
-#   set $141F = $7F (viewpoint_perspective; REQUIRED for in-play LOS geometry $13FF)
-#   set $0C71 bit7 (play_game_after_generation -> in-play semantics)
-#   ensure $0CDE = 0 (player_has_hyperspaced clear; play_landscape entry checks it)
-#   JMP $35A4 (play_landscape) -- the real interactive loop.
-# Each ROM routine is invoked JSR-style via a tiny `JSR addr ; JMP self` stub planted in
-# free RAM; generate's early stop ($2B21) uses run_until_pc on $2B21 directly.
+# The ROM's "SECRET ENTRY CODE?" gate ($14DC-$14F2) computes the jump to play from the
+# code-validation result, so it can't simply be bypassed; instead patch the three
+# code-check sites to accept any code and navigate the menu as a player would. A
+# code-entry-screen snapshot (renders/vice_code_entry.vsf) is restored when present to
+# skip the ~50s tape load.
 # ============================================================================
-R_RESET = 0x1149  # reset_game_state
-R_SEED = 0x33ED  # seed_prnd_from_landscape_number (X=lo, Y=hi)
-R_GENERATE = 0x2ACC  # generate_landscape
-GENERATE_END = 0x2B21  # terrain-build end (stop before preview-render tail)
-R_INIT_ENEMIES = (
-    0x1420  # set_palette_and_initialise_enemies (Sentinel/sentries+palette)
-)
-R_INIT_PLAYER = 0x1450  # initialise_player_and_trees
-PLAY_LANDSCAPE = 0x35A4  # play_landscape (real first-person loop)
+CODE_ENTRY_SNAP = "vice_code_entry.vsf"  # under the mounted /renders volume
 
-A_PLAY_FLAG = 0x0C71  # play_game_after_generation (bit7)
-A_VIEWPOINT = 0x141F  # viewpoint_perspective: 0=preview, $7F=in-play ($13FF)
-A_HYPERSPACED = 0x0CDE  # player_has_hyperspaced (bit7) / landscape-complete (bit6)
-
-# scratch RAM for the JSR stub. The tape buffer / free zp-area $0334 is unused at the
-# title/code screen; clear of the LOS stub ($02A0) so nothing live is clobbered.
-STUB = 0x0334
-
-# While the Sentinel waits for input at the "LANDSCAPE NUMBER?" / code screen it spins
-# in its keyboard-matrix scanner ($8CF9, scan_keyboard_matrix) -- a reliable place to
-# STOP the CPU before injecting (live PC samples sit in $8CF9-$8D68).
-TITLE_HALT = 0x8CF9
+# secret-code-check patches (accept any code)
+CODE_PATCHES = [
+    (0x14DF, bytes([0xA9, 0x1E])),
+    (0x2565, bytes([0xEA, 0xEA])),
+    (0x2570, bytes([0xEA, 0xEA])),
+]
 
 
-def _halt(bm, addr=TITLE_HALT, timeout=8.0):
-    """Bring the CPU to a known HALTED state so a subsequent registers_set(PC) sticks.
-    `bm.halted()` only disables auto-resume -- it does NOT stop a running CPU, so a PC
-    we set would be immediately overwritten by the live game loop. Stop the CPU with an
-    EXEC checkpoint at `addr` (an address the current loop executes every iteration)."""
-    bm.run_until_pc(addr, timeout=timeout)
+def landscape_from_digits(typed_digits):
+    """The player types a 4-digit landscape number; the game reads the last two digits
+    as a single BCD byte, whose value IS the internal seed (e.g. "0042" -> byte 0x42 ->
+    seed 66). Decimal digits are numerically identical to hex nibbles, so parsing the
+    last 2 characters as hex reproduces the BCD-to-binary step."""
+    return int(typed_digits[-2:], 16)
 
 
-def _stub_call(bm, addr, a=0, x=0, y=0, timeout=8.0, stop_pc=None):
-    """JSR-call ROM `addr` (A/X/Y set) and run until it returns. Precondition: the CPU
-    is ALREADY HALTED (the caller halts once via _halt; after each call the CPU sits at
-    the `JMP self` guard, still halted). Plant `JSR addr ; JMP self` at STUB, set PC=STUB
-    and the A/X/Y regs (sticks because the CPU is halted -- done with auto-resume off so
-    no live frame runs between the pokes), then run_until_pc the JMP-self (the routine's
-    RTS lands on it). `stop_pc` halts generate at $2B21 before its preview-render tail.
-    """
-    jsr = bytes([0x20, addr & 0xFF, (addr >> 8) & 0xFF])
-    jmp_self = STUB + len(jsr)
-    code = jsr + bytes([0x4C, jmp_self & 0xFF, (jmp_self >> 8) & 0xFF])
-    with bm.halted():
-        bm.mem_set(STUB, code)
-        # SP near top of stack so the JSR has room; regs A/X/Y; FLAGS=$20 (clear D/I).
-        bm.registers_set(
-            {0: a & 0xFF, 1: x & 0xFF, 2: y & 0xFF, 3: STUB, 4: 0xFD, 5: 0x20}
+def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host=None):
+    """Boot under WARP to LANDSCAPE NUMBER, patch the code-checks, type the digits +
+    dummy secret code, dismiss the preview, enter play -- the proven live-entry path.
+
+    If snapshot_host exists, RESTORE the machine state saved there (skipping the ~50s tape
+    boot) instead of booting; otherwise boot, then SAVE a snapshot at the code-entry screen
+    (after the code-check patches, before the landscape digits) so the NEXT run is fast.
+    The snapshot is landscape-agnostic -- the digits are always typed after restore."""
+
+    def tap(name, hold=20, settle=0.4):
+        robust(
+            bm,
+            log,
+            lambda: bm.keymatrix_tap(
+                [keys.lookup(name)], mode=TAP_MODE_FIXED, frames=hold
+            ),
         )
-    target = stop_pc if stop_pc is not None else jmp_self
-    bm.run_until_pc(target, timeout=timeout)
+        time.sleep(settle)
 
+    def tap_text(t):
+        for chord in keys.text_to_chords(t):
+            ks = [keys.lookup(n) for n in chord]
+            robust(
+                bm,
+                log,
+                lambda ks=ks: bm.keymatrix_tap(ks, mode=TAP_MODE_FIXED, frames=20),
+            )
+            time.sleep(0.4)
 
-def generate_and_enter(bm, landscape, log=print, settle=1.0):
-    """Run the play_setup mirror in live VICE for `landscape`, then JMP into
-    play_landscape ($35A4). Returns when the interactive loop has been entered.
-    Caller is responsible for having booted the tape far enough that the ROM +
-    KERNAL are resident (the title / code screen is fine)."""
-    lo, hi = landscape & 0xFF, (landscape >> 8) & 0xFF
-    log(f"  gen_enter ls{landscape}: reset/seed/generate/enemies/player ...")
-    # HALT the CPU ONCE at the title key-scan loop; thereafter each _stub_call leaves it
-    # halted at the JMP-self guard, so no live frame runs between steps. All pokes use
-    # auto-resume OFF (bm.halted()) so the halted state is preserved throughout.
-    _halt(bm)
-    with bm.halted():
-        _stub_call(bm, R_RESET)
-        _stub_call(bm, R_SEED, x=lo, y=hi)
-        # play flag CLEAR while initialise_player_and_trees runs so $14AF takes the
-        # preview path (build table, clean RTS) -- not the obfuscated leave-to-play jump.
-        bm.mem_set(A_PLAY_FLAG, bytes([bm.mem_get(A_PLAY_FLAG, A_PLAY_FLAG)[0] & 0x7F]))
-        _stub_call(bm, R_GENERATE, stop_pc=GENERATE_END, timeout=20.0)
-        _stub_call(bm, R_INIT_ENEMIES)
-        _stub_call(bm, R_INIT_PLAYER)
-        # in-play state, then JMP into the real play loop.
-        bm.mem_set(A_VIEWPOINT, bytes([0x7F]))  # $141F = $7F (in-play LOS geometry)
-        bm.mem_set(
-            A_PLAY_FLAG, bytes([bm.mem_get(A_PLAY_FLAG, A_PLAY_FLAG)[0] | 0x80])
-        )  # play semantics
-        bm.mem_set(A_HYPERSPACED, bytes([0x00]))  # not hyperspaced / not complete
-        log(f"  gen_enter: JMP play_landscape ${PLAY_LANDSCAPE:04x}")
-        bm.registers_set({3: PLAY_LANDSCAPE, 4: 0xFD, 5: 0x20})
-    bm.exit()  # resume the CPU into the play loop
-    time.sleep(settle)
+    restored = False
+    if snapshot_container and snapshot_host and os.path.exists(snapshot_host):
+        try:
+            log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
+            robust(bm, log, lambda: boot.load_snapshot(bm, snapshot_container))
+            try:
+                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
+            except Exception:
+                pass
+            time.sleep(1.0)
+            restored = True
+        except Exception as e:
+            log(f"  snapshot restore failed ({e}); falling back to full boot")
+
+    if not restored:
+        log("booting + loading (warp)...")
+        for _ in range(50):
+            time.sleep(1.0)
+            robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
+        for _ in range(3):
+            tap("SPACE", hold=30, settle=1.5)
+        log("patching secret-code checks ($14DF/$2565/$2570)")
+        for addr, data in CODE_PATCHES:
+            robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
+        if snapshot_container and snapshot_host:
+            log(f"saving VICE snapshot -> {snapshot_host} (reuse to skip next boot)")
+            try:
+                robust(bm, log, lambda: boot.save_snapshot(bm, snapshot_container))
+            except Exception as e:
+                log(f"  snapshot save failed ({e}); continuing without it")
+    log(f"typing landscape digits {typed_digits!r}")
+    tap_text(typed_digits)
+    tap("RETURN", hold=30, settle=3.0)
+    tap_text("00000000")
+    tap("RETURN", hold=30, settle=8.0)
+    time.sleep(3)
+    tap("SPACE", hold=25, settle=1.2)  # dismiss the isometric preview
+    time.sleep(4)
 
 
 # ============================================================================
-# container / connection (consolidated from the copies in live_climb /
-# sentinel_record_plan / record_win_0042)
+# container / connection (the one home for the asid-vice plumbing the runners share)
 # ============================================================================
 def bridge_ip(container_id, log=print):
     """The docker bridge IP of a started asid-vice container (host -p publishing is
@@ -339,10 +374,11 @@ class SentinelDriver:
     connected VICE monitor. Construct via :meth:`boot` (launch + connect + tape load)
     or directly from an already-connected ``bm``."""
 
-    def __init__(self, bm, container=None, log=print):
+    def __init__(self, bm, container=None, log=print, renders=None):
         self.bm = bm
         self.container = container
         self.log = log
+        self.renders = renders or os.path.join(boot.ROOT, "renders")
         self.kbd = kbd_aim.KbdDriver(bm, log)
 
     @classmethod
@@ -352,12 +388,20 @@ class SentinelDriver:
         container, bm = boot.boot_loaded(
             log=log, attempts=attempts, record_mount=record_mount
         )
-        return cls(bm, container=container, log=log)
+        return cls(bm, container=container, log=log, renders=record_mount)
 
-    def enter_landscape(self, landscape, settle=1.0):
-        """Generate + enter `landscape` via the ROM's own routines (bypasses the
-        secret-code gate); leaves the CPU in the interactive play loop."""
-        generate_and_enter(self.bm, landscape, log=self.log, settle=settle)
+    def enter_landscape(self, landscape):
+        """Enter `landscape` (internal seed) by driving the real title menu (the proven
+        live path); leaves the CPU in the interactive play loop. A code-entry snapshot
+        under the renders dir skips the ~50s tape boot."""
+        snap_host = os.path.join(self.renders, CODE_ENTRY_SNAP)
+        navigate(
+            self.bm,
+            f"{landscape:04x}",
+            log=self.log,
+            snapshot_container="/renders/" + CODE_ENTRY_SNAP,
+            snapshot_host=snap_host,
+        )
 
     # ---- reads -------------------------------------------------------------
     def state(self):
