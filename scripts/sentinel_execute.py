@@ -52,7 +52,7 @@ CONTROL SCHEME (verified live):
     routine landscape_completed ($3603).
 
 Usage:
-    python3 scripts/vice_execute.py [LANDSCAPE]
+    python3 scripts/sentinel_execute.py [LANDSCAPE]
     LANDSCAPE defaults to 0 (0000). Output GIF at renders/solver_run.gif, frames
     under renders/solver_run/.
 """
@@ -70,8 +70,9 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import vice_state as gs
+import sentinel_state as gs
 from sentinel import memmap as mm
+from sentinel import aimcost as ac
 from sentinel.memmap import T_BOULDER, T_ROBOT, T_TREE
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
@@ -273,8 +274,6 @@ class Executor:
             self.thaw()
 
     def _aim_inner(self, tx, ty, require_los=True, v_list=None):
-        import math
-
         key = (tx, ty, require_los)
         # cache hit (re-verify, since terrain/objects are constant during the run)
         if key in self._probe_cache:
@@ -315,8 +314,7 @@ class Executor:
             return abs(r[0] - tx) + abs(r[1] - ty), r[2]
 
         # ---- analytic estimate of the compass angle ----
-        dx, dy = tx - p.x, ty - p.y
-        est = int(round((math.atan2(dy, dx) / (2 * math.pi)) * 256)) & 0xFF
+        est = ac.bearing_to(p.x, p.y, tx, ty) or 0
 
         fallback = None  # best (ha,va,los) that hits the tile but maybe no LOS
         budget = 60  # hard cap on probe calls per aim (keep the run bounded)

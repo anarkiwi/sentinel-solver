@@ -69,7 +69,7 @@ angle it could rotate to, not just its current facing.
 | Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
 | Planners (the solver) | `scripts/climb_greedy.py`, `scripts/climb_search.py` | plan a winning climb + absorb sequence: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins) |
 | Plan adapter | `scripts/plan_game.py` | a mutable game + keyboard-step recorder over a `sentinel.State`, so the planners read/write one bit-exact state |
-| Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/vice_execute.py`, `scripts/record_win_0042.py`, `scripts/vice_state.py` | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video |
+| Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/sentinel_execute.py`, `scripts/record_win_0042.py`, `scripts/sentinel_state.py` | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video |
 
 ## Simulator (`sentinel/`)
 

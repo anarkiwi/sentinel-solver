@@ -45,10 +45,10 @@ sys.path.insert(0, HERE)
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
-import vice_state as gs
+import sentinel_state as gs
 from sentinel.state import State
 from sentinel import los
-from vice_execute import Executor
+from sentinel_execute import Executor
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 RENDERS = os.path.join(ROOT, "renders")

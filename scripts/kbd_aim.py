@@ -81,8 +81,6 @@ def snap_keyboard_view(mem4k, tile, want_centre):
     whose NATIVE ray hits `tile` with LOS (and centre fraction < $40 if want_centre).
     Returns (view, info) where view = {h_angle, v_angle, cursor:[cx,cy]} or (None,..).
     """
-    import math
-
     ps = mem4k[A_SLOT]
     eye_z = mem4k[A_ZH + ps]
     st = State.from_mem(bytes(mem4k))
@@ -92,17 +90,9 @@ def snap_keyboard_view(mem4k, tile, want_centre):
     hbase, vbase = h0 % 8, v0 % 4
     # h grid: full circle on the 8-step lattice (u-turn keeps us on it), but ordered by
     # proximity to the analytic compass bearing to the target so a hit is found early.
-    est = (
-        int(
-            round(
-                (math.atan2(_ty := tile[1] - py, _tx := tile[0] - px) / (2 * math.pi))
-                * 256
-            )
-        )
-        & 0xFF
-    )
+    est = ac.bearing_to(px, py, tile[0], tile[1]) or 0
     full = [(hbase + 8 * k) & 0xFF for k in range(32)]
-    hgrid = sorted(full, key=lambda h: abs(((h - est + 128) % 256) - 128))
+    hgrid = sorted(full, key=lambda h: ac.angle_dist(est, h))
     # v grid: real pan clamp is $CD..$35 ($1149), lattice v ≡ v0 (mod 4). The band is
     # [$CD..$FF]∪[$00..$35]; anything outside is physically unreachable by the keyboard.
     band = list(range(0xCD, 0x100)) + list(range(0x00, 0x36))
@@ -111,7 +101,7 @@ def snap_keyboard_view(mem4k, tile, want_centre):
     cys = _cursor_y_choices()
 
     # v candidates ordered by proximity to current v0 (fewest pan steps first).
-    vord = sorted(vgrid, key=lambda v: abs(((v - v0 + 128) % 256) - 128))
+    vord = sorted(vgrid, key=lambda v: ac.angle_dist(v0, v))
 
     def search(cx_list, cy_list, accept_thresh):
         """Return the first view found with centre <= accept_thresh (good enough; the
@@ -138,9 +128,7 @@ def snap_keyboard_view(mem4k, tile, want_centre):
                         if want_centre and centre >= 0x40:
                             continue
                         cur_pen = (cx != CX_CENTRE) + (cy != CY_CENTRE)
-                        hsteps = min((h - h0) % 256, (h0 - h) % 256) // 8
-                        vsteps = abs(((v - v0 + 128) % 256) - 128) // 4
-                        key = (cur_pen, centre, hsteps + vsteps)
+                        key = (cur_pen, centre, ac.h_steps(h0, h) + ac.v_steps(v0, v))
                         view = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
                         if best is None or key < best[0]:
                             best = (key, view)

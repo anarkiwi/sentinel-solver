@@ -11,6 +11,14 @@ def test_bearing_cardinals():
     assert ac.bearing_to(5, 5, 5, 5) is None  # same tile: no bearing
 
 
+def test_angle_dist():
+    assert ac.angle_dist(0, 0) == 0
+    assert ac.angle_dist(0, 8) == 8
+    assert ac.angle_dist(0, 248) == 8  # shortest way is -8, not +248
+    assert ac.angle_dist(0, 128) == 128  # antipode
+    assert ac.angle_dist(200, 40) == ac.angle_dist(40, 200)  # symmetric
+
+
 def test_h_steps_shortest_wrap():
     assert ac.h_steps(0, 64) == 8  # 64 units / 8
     assert ac.h_steps(0, 8) == 1
@@ -19,9 +27,12 @@ def test_h_steps_shortest_wrap():
     assert ac.h_steps(0, 128) == 16  # antipode: 128/8 either way
 
 
-def test_v_steps_no_wrap():
+def test_v_steps_circular_through_band_wrap():
     assert ac.v_steps(0, 16) == 4
     assert ac.v_steps(0xE1, 0xED) == 3  # (0xED-0xE1)/4 = 12/4
+    # the pitch band is contiguous through the $FF->$00 wrap: F5 -> 05 is 4 steps, not 60.
+    assert ac.v_steps(0xF5, 0x05) == 4
+    assert ac.v_steps(0x05, 0xF5) == 4  # symmetric
 
 
 def test_pan_steps_sums_axes_and_tolerates_none():

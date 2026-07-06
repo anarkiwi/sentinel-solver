@@ -40,7 +40,8 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import vice_state as gs
+import sentinel_state as gs
+from sentinel import aimcost as ac
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -130,7 +131,10 @@ class Driver:
             if cur == target:
                 return True
             diff = (target - cur) & 0xFF
-            if 0x60 <= diff <= 0xA0:  # ~half turn away: u-turn (EOR $80)
+            # more than half a turn away: one U-turn (EOR $80) + a short correction is
+            # fewer keystrokes than stepping round (aimcost.h_press_count, the canonical
+            # crossover the aim driver and planner cost share).
+            if ac.h_press_count(cur, target)[0]:
                 self.press(K_UTURN)
                 continue
             signed = diff if diff < 128 else diff - 256

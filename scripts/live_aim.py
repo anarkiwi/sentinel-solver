@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live keyboard aiming + action primitives for The Sentinel (C64) in asid-vice.
 
-THE ORACLE (verified live, see vice_execute.py):
+THE ORACLE (verified live, see sentinel_execute.py):
   When ANY action key is pressed, handle_player_actions ($1B43) runs
   prepare_vector_from_player_sights ($1C10) + check_for_line_of_sight_to_tile
   ($1CDD) and leaves the TILE the sights ray reached in $0024/$0026. On an
@@ -9,7 +9,7 @@ THE ORACLE (verified live, see vice_execute.py):
   STILL written -- so an action key is a NON-COMMITTING probe of the real aim
   path. This is the ground truth for "what the sights are pointing at".
 
-  Crucially, a COLD probe stub that just calls $1C10+$1CDD (vice_execute.Executor.
+  Crucially, a COLD probe stub that just calls $1C10+$1CDD (sentinel_execute.Executor.
   probe) and the py65 code_engine running the same two routines BOTH DIVERGE from
   the live target -- they lack per-frame view state the live routines consult.
   Measured: live center cursor -> (12,4); cold stub -> (13,32); py65 -> (15,17).
