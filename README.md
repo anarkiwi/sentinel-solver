@@ -73,9 +73,9 @@ driver; only the glue runners in `scripts/` wire the two together.
 | Area | Files | Role |
 |------|-------|------|
 | Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
-| Solver | `solver/climb_greedy.py`, `solver/climb_search.py`, `solver/plan_game.py` | plan a winning climb + absorb sequence on the simulator: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins), over the `plan_game` keyboard-step adapter. Imports only `sentinel/` |
+| Solver | `solver/climb_search.py`, `solver/plan_game.py` | plan a winning climb + absorb sequence on the simulator: a receding-horizon best-first lookahead (`climb_search`) over the `plan_game` keyboard-step adapter. Imports only `sentinel/` |
 | Driver | **`driver/core.py`** (the foundation `SentinelDriver` + the shared plumbing: container/bridge-IP, monitor-resilience, full 64 KB live-image read, and landscape entry by title-menu navigation), `driver/boot.py` (boot → title + reusable `boot.vsf`, snapshot save/load), `driver/kbd_aim.py` (aim), `driver/sentinel_state.py` (read live state) | boot the game, enter an arbitrary landscape, and run memory-verified operations (aim a tile, create/absorb/transfer/hyperspace). Solver-independent — executes operations, never plans |
-| Runners | `scripts/run_plan_live.py` | the live plan runner — drives a solver plan (fixed, or replanned live) in the real game and verifies the ROM win flag, optionally recording an AVI |
+| Runners | `scripts/run_plan_live.py` | the live plan runner — replans the climb live from real memory each step, drives it in the real game, and verifies the ROM win flag, optionally recording an AVI |
 
 ## Simulator (`sentinel/`)
 
@@ -128,8 +128,8 @@ python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
 # which is bit-exact vs the real 6502 code (golden-fixture CI, see below).
 
 # drive the real game live and record it (Docker; ~3-20 min):
-python3 scripts/run_plan_live.py --digits 0042 --snapshot   # replay a won plan
-python3 scripts/run_plan_live.py --digits 0000 --live --search --snapshot  # replan live
+# replans the climb live from real memory each step (climb_search lookahead):
+python3 scripts/run_plan_live.py --digits 0000 --snapshot
 ```
 
 ## Tests
