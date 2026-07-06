@@ -20,6 +20,7 @@ PLAYER_ENERGY = 0x0C0A  # player_energy, masked AND #$3F by set_player_energy $2
 PLATFORM_X = 0x0C19  # tile x of the Sentinel's platform
 PLATFORM_Y = 0x0C1A  # tile y of the Sentinel's platform
 FOV_WIDTH = 0x0C68  # enemy horizontal FOV width, reloaded to $14 each scan ($16F2)
+PLAYER_HAS_HYPERSPACED = 0x0CDE  # bit7 set on hyperspace ($216B); bit6 == complete
 LANDSCAPE_COMPLETE = 0x0CDE  # bit6 set by landscape_completed $3603 on a win
 
 # ---- the object arrays (64 slots each) ------------------------------------

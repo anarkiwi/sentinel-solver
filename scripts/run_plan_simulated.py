@@ -47,6 +47,7 @@ sys.path.insert(0, ROOT)
 from sentinel import landscape as _landscape
 from sentinel import actions, enemies as SE
 from sentinel import memmap as mm
+from sentinel import actioncost
 from solver import plan_game
 from solver import climb_search as csearch
 
@@ -125,22 +126,29 @@ def execute_step(world, stp, heading, budget, log):
         heading[1] = view.get("v_angle", heading[1])
         set_facing(world, view)
 
+    # Per-action settle: the ROM-cadence cost the enemies advance AFTER the pan,
+    # while the action animates and the live driver reads back the result. Priced
+    # from sentinel.actioncost (dither/tune floor + scene redraw), computed against
+    # the world at fire time so a dense view costs more -- replacing the old flat
+    # ROUNDS_PER_ACTION, which under-counted by ~15x and let the sim survive drains
+    # the live run does not.
+    settle = actioncost.action_rounds(world.mem, verb, view)
     e0 = world.energy
     if verb == "create":
         if e0 < ENERGY[otype]:  # drained below the build cost while aiming
             return "drained"
         slot = actions.create(world, otype, tile)
-        advance(world, ROUNDS_PER_ACTION, budget)
+        advance(world, settle, budget)
         return "ok" if slot is not None else "create"
     if verb == "transfer":
         slot = topmost_slot(world, tile)
         moved = slot is not None and actions.transfer(world, slot)
-        advance(world, ROUNDS_PER_ACTION, budget)
+        advance(world, settle, budget)
         return "ok" if moved else "transfer"
     if verb == "absorb":
         slot = topmost_slot(world, tile)
         got = slot is not None and actions.absorb(world, slot)
-        advance(world, ROUNDS_PER_ACTION, budget)
+        advance(world, settle, budget)
         if got:
             return "ok"
         return "sentinel" if otype == T_SENTINEL else "miss"

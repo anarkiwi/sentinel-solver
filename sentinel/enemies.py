@@ -30,13 +30,19 @@ classed partial where the ROM classes it fully visible.
 
 from sentinel import memmap as mm, relative, actions, terrain
 from sentinel.prng import Prng
+from sentinel.terrain import tile_byte, set_tile_byte
 
 FOV_SCAN = 0x14  # $16F2: enemy horizontal FOV width during a scan
+FOV_CREATE_MEANIE = 0x28  # $197F: two screen widths while hunting a tree to convert
 UPDATE_COOLDOWN_SCAN = 0x04  # $16ED
 UPDATE_COOLDOWN_DRAIN = 0x1E  # $17F1 / $1848: 30 rounds after a drain
+UPDATE_COOLDOWN_MEANIE_ROTATE = 0x0A  # $173A: 10 rounds after rotating a meanie
+UPDATE_COOLDOWN_MEANIE_MADE = 0x32  # $1869: 50 rounds after creating a meanie
 ROTATION_COOLDOWN_RELOAD = 0xC8  # $1813: 200 rounds after a rotation
 DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
+MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
+MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
 
 def enemy_slots(state):
@@ -90,12 +96,21 @@ def _reduce_object_energy(state, target):
     return False
 
 
+def _exposure_byte(see):
+    """The ROM's object_exposure ($14) from a can-see check: $80 fully visible (the
+    base was reached), $40 partial (only the robot's head), 0 not visible."""
+    if not (see["in_slot"] and see["in_fov"]):
+        return 0
+    return see["exposure"]
+
+
 # ---------------------------------------------------------------------------
 # target_object $1825
 # ---------------------------------------------------------------------------
 def _target_object(state, enemy, target, exposure):
-    """$1825: record the target and, once the draining cooldown counts down to 1
-    with the target fully visible, drain it."""
+    """$1825: record the target and, once the draining cooldown counts down to 1,
+    drain it if fully visible ($1838), otherwise try to spawn a meanie against a
+    partially-visible player ($184D consider_creating_meanie)."""
     mem = state.mem
     mem[mm.ENEMIES_TARGETED_OBJECT + enemy] = target
     mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + enemy] = exposure
@@ -105,11 +120,21 @@ def _target_object(state, enemy, target, exposure):
         return
     if cd != 0x01:  # still counting down
         return
-    if not (exposure & 0x80):  # not fully visible -> can't drain (meanie path)
+    if exposure & 0x80:  # fully visible -> drain
+        mem[mm.TARGETED_OBJECT_SLOT] = target
+        _reduce_object_energy(state, target)
+        mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         return
-    mem[mm.TARGETED_OBJECT_SLOT] = target
-    _reduce_object_energy(state, target)
-    mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
+    # enemy_can't_drain_object $184D: the player is only partially visible.  Try to
+    # turn a nearby tree into a meanie; if the whole scan fails, remember the
+    # attempt and either keep trying or give up after MEANIE_MAX_ATTEMPTS.
+    if _consider_creating_meanie(state, enemy):
+        mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_MADE
+        return
+    if mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] >= MEANIE_MAX_ATTEMPTS:
+        mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # give up on this player
+    else:
+        mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = 0x80  # keep trying next time
 
 
 # ---------------------------------------------------------------------------
@@ -134,15 +159,24 @@ def _consider_enemy_state(state, enemy):
     mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_SCAN
     mem[mm.FOV_WIDTH] = FOV_SCAN
 
-    # Re-check a held target ($1795): drop it if no longer fully visible.
+    # $16EA: an enemy that already owns a meanie runs the meanie lifecycle instead
+    # of scanning for a drain (top bit of enemies_meanie_object clear == has one).
+    if not (mem[mm.ENEMIES_MEANIE_OBJECT + enemy] & 0x80):
+        _update_meanie(state, enemy)
+        return
+
     mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (
         mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
     )
+    # Re-check a held target ($178C): keep it while it is visible AT ALL (a
+    # partially-visible player stays targeted so its drain timer runs down to the
+    # meanie-creation point $184D); drop it only when out of sight.
     if mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] != 0:
         held = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
         see = relative.can_see_object(state, enemy, held, mm.T_ROBOT, FOV_SCAN)
-        if see["full"]:
-            _target_object(state, enemy, held, 0x80)
+        exposure = _exposure_byte(see)
+        if exposure != 0:
+            _target_object(state, enemy, held, exposure)
             return
         mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # target lost
 
@@ -151,18 +185,21 @@ def _consider_enemy_state(state, enemy):
     partial_player = None
     for y in range(mm.NUM_SLOTS - 1, -1, -1):
         see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-        if not see["in_slot"] or not see["in_fov"]:
+        exposure = _exposure_byte(see)
+        if exposure == 0:  # $17B6: not visible at all -> next slot
             continue
-        if see["full"]:
+        if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
             _target_object(state, enemy, y, 0x80)
             return
-        if y == player:  # in view but not fully visible -> meanie candidate
+        if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial_player = y
     if partial_player is not None:
-        # The ROM arms the meanie search here; the meanie lifecycle is modelled by
-        # meanie_threat(), so we only record the partial exposure and target.
-        _target_object(state, enemy, partial_player, 0x40)
-        return
+        # $17C4: unless the player was already found un-meanie-able this episode
+        # (failed_meanie_memory), fresh-arm the meanie search and target them.
+        if partial_player != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
+            _initialise_enemy_meanie_variables(state, enemy)
+            _target_object(state, enemy, partial_player, 0x40)
+            return
 
     # reset_draining_cooldown_and_look_for_tree_or_boulder ($17E0).
     mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0
@@ -176,6 +213,193 @@ def _consider_enemy_state(state, enemy):
     # no_drain ($17F9): rotate if the rotation cooldown is low.
     if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
         _rotate_enemy(state, enemy)
+
+
+# ---------------------------------------------------------------------------
+# meanie lifecycle: creation ($197D), rotation/hyperspace ($16F2), removal
+# ---------------------------------------------------------------------------
+def _initialise_enemy_meanie_variables(state, enemy):
+    """$196A: (re)arm an enemy's meanie hunt -- no meanie owned, no failed memory,
+    zero attempts, and a fresh 64-slot tree search."""
+    mem = state.mem
+    mem[mm.ENEMIES_MEANIE_OBJECT + enemy] = 0x80  # top bit == no meanie
+    mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy] = 0x80
+    mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = 0
+    mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40
+
+
+def _consider_creating_meanie(state, enemy):
+    """consider_creating_meanie $197D: scan the object slots (walking the
+    per-enemy search counter down) for a tree within 10 tiles of the targeted
+    player, in both axes, that the enemy can fully see within a two-screen-width
+    FOV.  The first such tree is turned into a meanie owned by `enemy`.  Returns
+    True if a meanie was created, False if the whole scan came up empty."""
+    mem = state.mem
+    player = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
+    while True:
+        sc = mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy]
+        if sc == 0:  # $198D: scanned everything -> no meanie this pass
+            mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = (
+                mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] + 1
+            ) & 0xFF
+            mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy] = player
+            return False
+        mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = sc - 1
+        slot = sc - 1  # $199B DEY: the object index this iteration tests
+        if state.obj_flags[slot] & 0x80:  # empty slot
+            continue
+        if state.obj_type[slot] != mm.T_TREE:  # not a tree
+            continue
+        dx = (state.obj_x[player] - state.obj_x[slot]) & 0xFF
+        if dx >= 0x80:
+            dx = 0x100 - dx  # $19B5 abs
+        if dx >= 0x0A:  # more than 10 tiles away in x
+            continue
+        dy = (state.obj_y[player] - state.obj_y[slot]) & 0xFF
+        if dy >= 0x80:
+            dy = 0x100 - dy
+        if dy >= 0x0A:  # more than 10 tiles away in y
+            continue
+        see = relative.can_see_object(state, enemy, slot, mm.T_TREE, FOV_CREATE_MEANIE)
+        if not see["full"]:  # enemy hasn't a clear sight of the tree
+            continue
+        # $19E1: convert the tree into a meanie owned by this enemy.
+        mem[mm.ENEMIES_MEANIE_OBJECT + enemy] = slot
+        state.obj_type[slot] = mm.T_MEANIE
+        return True
+
+
+def _remove_meanie(state, enemy):
+    """remove_meanie $1754: drop the meanie (turn it back into a tree) and mark the
+    enemy as owning none."""
+    mem = state.mem
+    meanie = mem[mm.ENEMIES_MEANIE_OBJECT + enemy]
+    mem[mm.ENEMIES_MEANIE_OBJECT + enemy] = 0x80
+    state.obj_type[meanie] = mm.T_TREE
+
+
+def _remove_meanie_and_reset_enemy(state, enemy):
+    """remove_meanie_and_reset_enemy $174F: also clear the draining cooldown."""
+    state.mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0
+    _remove_meanie(state, enemy)
+
+
+def _update_meanie(state, enemy):
+    """update_meanie $16F2: the enemy's meanie rotates toward the player and, once
+    it is looking at a player it can still see, forcibly hyperspaces them."""
+    mem = state.mem
+    meanie = mem[mm.ENEMIES_MEANIE_OBJECT + enemy]
+    target = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
+    if state.obj_flags[target] & 0x80:  # $16F7: the object the player was in is gone
+        _remove_meanie_and_reset_enemy(state, enemy)
+        return
+    see = relative.can_see_object(state, meanie, target, mm.T_ROBOT, FOV_SCAN)
+    if not see["in_fov"]:  # $1706: meanie not yet looking at the player -> rotate
+        c57 = relative.relative_angles(state, meanie, target)["c57"]
+        step = MEANIE_ROTATE_STEP if not (c57 & 0x80) else (0x100 - MEANIE_ROTATE_STEP)
+        state.obj_h_angle[meanie] = (state.obj_h_angle[meanie] + step) & 0xFF
+        mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_ROTATE
+        return
+    if target != mem[mm.PLAYER_OBJECT]:  # $1708: player transferred out of the object
+        _remove_meanie_and_reset_enemy(state, enemy)
+        return
+    if _exposure_byte(see) == 0:  # $170E: meanie can't actually see the player
+        _remove_meanie(state, enemy)
+        return
+    do_hyperspace(state)  # $1710: forced hyperspace
+
+
+# ---------------------------------------------------------------------------
+# do_hyperspace $2147 (create a robot on a random low tile + transfer/energy)
+# ---------------------------------------------------------------------------
+def _create_object(state, otype):
+    """create_object $210E: the highest empty slot, typed `otype`, or None."""
+    for slot in range(mm.NUM_SLOTS - 1, -1, -1):
+        if state.obj_flags[slot] & 0x80:
+            state.obj_type[slot] = otype
+            return slot
+    return None
+
+
+def _random_tile_coord(prng):
+    """get_random_tile_coordinate $125A: a prnd draw masked to 0..31, rejecting 31
+    (the 32x32 board's out-of-range edge)."""
+    while True:
+        v = prng.next() & 0x1F
+        if v != 0x1F:
+            return v
+
+
+def _put_object_in_tile(state, slot, tx, ty, prng):
+    """put_object_in_tile $1EFF for a bare flat tile (the only kind the hyperspace
+    placement picks): ground flags, z from the tile height, and a random facing."""
+    b = tile_byte(state, tx, ty)
+    state.obj_x[slot] = tx
+    state.obj_y[slot] = ty
+    state.obj_flags[slot] = 0x00
+    state.obj_z_frac[slot] = 0xE0
+    state.obj_z_height[slot] = (b >> 4) & 0xFF
+    set_tile_byte(state, tx, ty, mm.OBJECT_TILE | slot)
+    state.obj_v_angle[slot] = 0xF5
+    rot = prng.next()
+    state.obj_h_angle[slot] = ((rot & 0xF8) + 0x60) & 0xFF
+
+
+def _put_object_in_random_tile_below_z(state, slot, z, prng):
+    """put_object_in_random_tile_below_z $1224: place `slot` on a random flat,
+    empty tile no higher than `z`.  After 256 misses the height ceiling `z` is
+    raised; it fails (returns False) once that ceiling reaches 12."""
+    attempts = 0
+    while True:
+        attempts = (attempts - 1) & 0xFF
+        if attempts == 0:  # $122E: 256 misses -> relax the height ceiling
+            z = (z + 1) & 0xFF
+            if z >= 0x0C:
+                return False
+        tx = _random_tile_coord(prng)
+        ty = _random_tile_coord(prng)
+        b = tile_byte(state, tx, ty)
+        if b >= mm.OBJECT_TILE:  # tile already holds an object
+            continue
+        if b & 0x0F:  # not a flat tile
+            continue
+        if (b >> 4) >= z:  # tile too high
+            continue
+        _put_object_in_tile(state, slot, tx, ty, prng)
+        return True
+
+
+def do_hyperspace(state):
+    """do_hyperspace $2147: create a synthoid on a random tile no higher than the
+    player, spend the robot's energy, and transfer the player into it.  A player
+    with too little energy dies; hyperspacing off the platform is the meanie's win
+    condition against the player, hyperspacing *from* the platform completes the
+    landscape ($2187)."""
+    mem = state.mem
+    prng = Prng().load(mem)
+    slot = _create_object(state, mm.T_ROBOT)
+    if slot is None:
+        prng.store(mem)
+        return
+    player = mem[mm.PLAYER_OBJECT]
+    z = (state.obj_z_height[player] + 1) & 0xFF
+    placed = _put_object_in_random_tile_below_z(state, slot, z, prng)
+    prng.store(mem)
+    if not placed:  # $2159: no tile found -> the hyperspace is abandoned
+        state.obj_flags[slot] |= 0x80
+        return
+    if state.energy < mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:  # $215F: out of energy -> death
+        actions.remove_object(state, slot)
+        mem[mm.PLAYER_HAS_HYPERSPACED] = 0x80
+        return
+    state.energy = state.energy - mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+    on_platform = (
+        state.obj_x[player] == mem[mm.PLATFORM_X]
+        and state.obj_y[player] == mem[mm.PLATFORM_Y]
+    )
+    if on_platform:  # $2187: hyperspacing from the platform completes the landscape
+        mem[mm.LANDSCAPE_COMPLETE] = 0xC0
+    mem[mm.PLAYER_OBJECT] = slot  # transfer the player into the new synthoid
 
 
 def _find_drainable_boulder_or_tree(state, enemy):
