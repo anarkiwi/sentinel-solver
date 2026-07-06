@@ -12,21 +12,22 @@ reachable foothold that, in priority order:
 
 Once the eye is above the platform it switches to an APPROACH phase: head toward the
 platform (minimising Chebyshev distance) while staying high enough to build/look down.
-The endgame (absorb the Sentinel, synthoid on the platform, transfer = win) mirrors
-native_game.plan.
+The endgame absorbs the Sentinel, builds a synthoid on the platform and transfers = win.
 
-Pure native (visibility_sweep / native_los); the emulator only validates the result.
-Steps are emitted in the verb/otype/target/view shape validate_kbd_plan expects.
+Runs on the bit-exact ``sentinel`` simulator via the ``plan_game.PlanGame`` adapter
+(line-of-sight, actions and enemy exposure all come from ``sentinel``). Steps are
+emitted in the verb/otype/target/view shape the live keyboard driver replays.
 """
 
 import sys, os, json, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 os.chdir(os.path.join(HERE, ".."))
-import native_game as NG
-from native_game import (
-    Game,
+import plan_game as NG
+from plan_game import (
+    PlanGame as Game,
     visibility_sweep,
     terrain_z,
     cheb,
@@ -36,13 +37,14 @@ from native_game import (
     OBJ_TYPE,
     OBJ_ZF,
     OBJ_FLAGS,
+    OBJ_HANG,
+    OBJ_VANG,
 )
-from native_los import NativeState, aim_target_native
-import game_model as GM
-import game_state as GS
+from sentinel import los, threat
+from sentinel import memmap as mm
 
 
-def _enemy_exposed_tiles(g, tiles, object_top=GM.ROBOT_EYE):
+def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
     """Which of `tiles` are within LOS of any enemy (sentry/Sentinel), using the
     existing game_model.is_exposed conservative check (any rotation, not just the
     enemy's current facing -- the same "could this ever be seen" question a planner
@@ -58,8 +60,7 @@ def _enemy_exposed_tiles(g, tiles, object_top=GM.ROBOT_EYE):
     equally-good alternative exists (it usually can't avoid it entirely near the
     Sentinel's own platform -- everything overlooking it is exposed to the Sentinel
     itself by construction)."""
-    state = GS.read_game_state(GS.Py65Source(g.mem))
-    return {t for t in tiles if GM.is_exposed(state, t[0], t[1], object_top)}
+    return threat.exposed_tiles(g.state, set(tiles))
 
 
 def _enemy_gaze_distance(g, tiles):
@@ -78,7 +79,7 @@ def _enemy_gaze_distance(g, tiles):
     for s in range(64):
         if g.mem[OBJ_FLAGS + s] & 0x80:
             continue
-        if g.mem[OBJ_TYPE + s] not in (GM.T_SENTRY, GM.T_SENTINEL):
+        if g.mem[OBJ_TYPE + s] not in (mm.T_SENTRY, mm.T_SENTINEL):
             continue
         ex, ey = g.mem[OBJ_X + s], g.mem[OBJ_Y + s]
         gaze = g.mem[NG.OBJ_HANG + s]
@@ -100,34 +101,7 @@ def _lattice_sweep(g, eye):
     map is the keyboard-feasibility gate for on-boulder synthoids ($1E48 needs the
     tile-centre fraction < $40). Same order/params as visibility_sweep(coarse) so the
     chosen views are identical."""
-    st = NativeState.from_mem(g.mem)
-    ps = g.player
-    views, centres = {}, {}
-    for h in range(0, 256, 8):
-        for v in NG._VBAND:
-            rx, ry, los, centre = aim_target_native(
-                st,
-                h,
-                v,
-                NG.CUR_CX,
-                NG.CUR_CY,
-                ps,
-                eye_z=eye,
-                max_steps=200,
-                return_centre=True,
-            )
-            if not los:
-                continue
-            t = (rx, ry)
-            if t not in views:
-                views[t] = {
-                    "h_angle": h,
-                    "v_angle": v,
-                    "cursor": [NG.CUR_CX, NG.CUR_CY],
-                }
-            if t not in centres or centre < centres[t]:
-                centres[t] = centre
-    return views, centres
+    return los.sweep_with_centres(g.state, g.player, eye, max_steps=200)
 
 
 def _top_type(g, tile):
@@ -154,7 +128,7 @@ CENTRE = (N - 1) / 2.0  # 15.5
 # makes boulder-steps (5 up-front) unaffordable once the budget dips, stalling the climb
 # at (20,6) cheb-3 (native_won False). 2 is the largest reserve that preserves the
 # ROM-validated win (climb ends at (21,3) eye 11.875, energy 6).
-RESERVE = 2
+RESERVE = int(os.environ.get("CLIMB_RESERVE", "2"))
 
 # EXTRA reserve required when a candidate's DESTINATION tile is enemy-exposed (see
 # _enemy_exposed_tiles): a live keyboard-driven climb can spend many real seconds
@@ -166,7 +140,40 @@ RESERVE = 2
 # NOTE: tuned like RESERVE above -- 2 stalls ls0 (oscillates, unable to ever afford
 # a height-gaining boulder-step near the exposed platform ring, native_won False).
 # 1 is the largest value that preserves the ROM-validated ls0 win.
-EXPOSURE_RESERVE = 1
+EXPOSURE_RESERVE = int(os.environ.get("CLIMB_EXPOSURE_RESERVE", "1"))
+
+# Accept a fractional eye above the platform ground as launch-ready in endgame(): the
+# default int(eye)>plat_ground gate rejects eye 8.875 over a z8 platform even though the
+# viewpoint is genuinely above it (see climb_search._reached_approach). Off by default.
+_ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
+
+# PAN-aware fuel: absorbing a fuel object requires panning the view to its bearing, and
+# the Sentinel drains the player during that scroll (see climb_search pan-cost notes).
+# The default _refuel greedily grabs EVERY visible object, chasing far-bearing fuel it
+# doesn't need -- a long pan per grab, drained live. When on: bank fuel NEAR the current
+# heading first, and SKIP a far-bearing (> _PAN_FUEL_MAX units) non-exposed grab once the
+# player already holds a comfortable buffer (so the climb never starves, but doesn't chase
+# distant fuel for a surplus it can bank locally later). Exposed trail is always reclaimed
+# (it degrades if left). Off by default (keeps the ROM-validated ls42 refuel).
+_PAN_COST = os.environ.get("PAN_COST", "0") == "1"
+_PAN_TICKS_H = float(os.environ.get("PAN_TICKS_H", "1.5"))
+_PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
+_PAN_FUEL_MAX = float(os.environ.get("PAN_FUEL_MAX", "48"))
+
+
+def _pan_units(cur_h, cur_v, view):
+    """Angular pan distance (h wraps mod 256 shortest; v linear) from heading (cur_h,
+    cur_v) to `view`'s aim, scaled by the per-axis tick weights -- a proxy for scroll time
+    (and thus mid-aim drain). 0 when the view carries no h angle."""
+    if not view:
+        return 0.0
+    th = view.get("h_angle")
+    if th is None:
+        return 0.0
+    tv = view.get("v_angle")
+    dh = abs(((th - cur_h) + 128) % 256 - 128)
+    dv = abs(tv - cur_v) if tv is not None else 0
+    return dh * _PAN_TICKS_H + dv * _PAN_TICKS_V
 
 
 def edge_dist(t):
@@ -335,7 +342,7 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     committed state; the lookahead search passes a coarser/shorter sweep (it only needs
     an APPROXIMATE recovered-energy figure for affordability, and this sweep dominates its
     per-node cost)."""
-    from native_game import ENERGY
+    from plan_game import ENERGY
 
     gained = 0
     cur = g.player_xy()
@@ -375,12 +382,37 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     # object left too long can be drained or downgraded before this batch gets to it.
     exposed = _enemy_exposed_tiles(g, {tile for _z, _slot, _ot, tile in cand})
     tiles_done = set()
-    for _z, slot, ot, tile in sorted(
-        cand, key=lambda c: (c[3] in exposed, c[0]), reverse=True
-    ):
+    # PAN-aware ordering: keep exposed-trail reclaim first (it degrades if left), then --
+    # when pan cost is on -- bank the NEAREST-bearing fuel before far grabs, so if the
+    # Sentinel comes around mid-pass the cheap local energy is already secured. Default
+    # order (exposed-first, height-first) is preserved when pan cost is off.
+    comfort = RESERVE + 6  # energy buffer above which far-bearing fuel is skipped (PAN)
+    if _PAN_COST:
+        ch, cv = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
+        order = sorted(
+            cand,
+            key=lambda c: (
+                c[3] not in exposed,
+                _pan_units(ch, cv, sweep.get(c[3])),
+                -c[0],
+            ),
+        )
+    else:
+        order = sorted(cand, key=lambda c: (c[3] in exposed, c[0]), reverse=True)
+    for _z, slot, ot, tile in order:
         if tile in tiles_done:
             continue
         if g.mem[OBJ_FLAGS + slot] & 0x80:  # already gone (stack collapsed)
+            continue
+        # skip a far-bearing non-exposed grab once a comfortable buffer is banked: the long
+        # pan to reach it would be drained for fuel not needed this pass (grab it later,
+        # closer, or when energy demands). Exposed trail is never skipped (it degrades).
+        if (
+            _PAN_COST
+            and tile not in exposed
+            and g.energy >= comfort
+            and _pan_units(ch, cv, sweep.get(tile)) > _PAN_FUEL_MAX
+        ):
             continue
         g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
         gained += ENERGY[ot]
@@ -680,13 +712,16 @@ def endgame(g, plat, log):
     highest ground it can find and fire the win from afar (the human ls0 win was cheb-10),
     instead of creeping into the platform ring."""
     eye = int(g.eye)
-    if not (
-        g.plat_ground is not None
-        and eye > g.plat_ground
-        and g.sentinel_slot is not None
-    ):
+    if g.plat_ground is None or g.sentinel_slot is None:
         return False
-    sw = visibility_sweep(g.mem, g.player, eye, max_steps=200, coarse=True)
+    above = g.eye > g.plat_ground if _ENDGAME_FRAC_EYE else eye > g.plat_ground
+    if not above:
+        return False
+    # A fractional eye above the platform ground sees DOWN onto it; sweeping at int(eye)
+    # (== plat_ground, the player's own level) drops the platform as not-below. Ceil the
+    # observer to reflect that the viewpoint is genuinely above (only when frac-eye is on).
+    seye = eye + 1 if (_ENDGAME_FRAC_EYE and g.eye > eye) else eye
+    sw = visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
     if plat not in sw:  # need LOS to the platform to absorb the Sentinel + build on it
         return False
     g.absorb(g.sentinel_slot, sw.get(plat), "absorb Sentinel")

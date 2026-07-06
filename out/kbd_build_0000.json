@@ -1,0 +1,669 @@
+{
+"landscape": 0,
+"native_won": true,
+"final_player": [
+12,
+4
+],
+"eye": 9.875,
+"energy": 13,
+"steps": [
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+11,
+17
+],
+"view": {
+"h_angle": 64,
+"v_angle": 225,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+8,
+17
+],
+"eye_z": 5.0,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+10,
+12
+],
+"view": {
+"h_angle": 112,
+"v_angle": 241,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+8,
+17
+],
+"eye_z": 5.0,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+10,
+12
+],
+"view": null,
+"player_tile": [
+8,
+17
+],
+"eye_z": 5.0,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+10,
+12
+],
+"view": null,
+"player_tile": [
+10,
+12
+],
+"eye_z": 6.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+8,
+17
+],
+"view": {
+"h_angle": 240,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+10,
+12
+],
+"eye_z": 6.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+11,
+10
+],
+"view": {
+"h_angle": 104,
+"v_angle": 241,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+10,
+12
+],
+"eye_z": 6.375,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+11,
+10
+],
+"view": null,
+"player_tile": [
+10,
+12
+],
+"eye_z": 6.375,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+11,
+10
+],
+"view": null,
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+10,
+12
+],
+"view": {
+"h_angle": 232,
+"v_angle": 213,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+20,
+10
+],
+"view": {
+"h_angle": 64,
+"v_angle": 241,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+10,
+12
+],
+"view": {
+"h_angle": 232,
+"v_angle": 213,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "absorb boulder for fuel"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+13,
+8
+],
+"view": {
+"h_angle": 96,
+"v_angle": 241,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+13,
+8
+],
+"view": null,
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+13,
+8
+],
+"view": null,
+"player_tile": [
+13,
+8
+],
+"eye_z": 8.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+11,
+10
+],
+"view": {
+"h_angle": 224,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+8
+],
+"eye_z": 8.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+11,
+10
+],
+"view": {
+"h_angle": 224,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+8
+],
+"eye_z": 8.375,
+"note": "absorb boulder for fuel"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+15,
+3
+],
+"view": {
+"h_angle": 112,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+8
+],
+"eye_z": 8.375,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+15,
+3
+],
+"view": null,
+"player_tile": [
+13,
+8
+],
+"eye_z": 8.375,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+15,
+3
+],
+"view": null,
+"player_tile": [
+15,
+3
+],
+"eye_z": 8.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+13,
+8
+],
+"view": {
+"h_angle": 240,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+15,
+3
+],
+"eye_z": 8.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+13,
+8
+],
+"view": {
+"h_angle": 240,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+15,
+3
+],
+"eye_z": 8.375,
+"note": "absorb boulder for fuel"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+13,
+3
+],
+"view": {
+"h_angle": 184,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+15,
+3
+],
+"eye_z": 8.375,
+"note": "greedy hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+13,
+3
+],
+"view": null,
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+15,
+3
+],
+"view": {
+"h_angle": 64,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+1,
+5
+],
+"view": {
+"h_angle": 200,
+"v_angle": 241,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+15,
+3
+],
+"view": {
+"h_angle": 64,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "absorb boulder for fuel"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+12,
+3
+],
+"view": {
+"h_angle": 168,
+"v_angle": 205,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+12,
+3
+],
+"view": null,
+"player_tile": [
+13,
+3
+],
+"eye_z": 8.875,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+12,
+3
+],
+"view": null,
+"player_tile": [
+12,
+3
+],
+"eye_z": 9.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+13,
+3
+],
+"view": {
+"h_angle": 40,
+"v_angle": 205,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+12,
+3
+],
+"eye_z": 9.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+24,
+8
+],
+"view": {
+"h_angle": 48,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+12,
+3
+],
+"eye_z": 9.375,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "absorb",
+"otype": 5,
+"target": [
+12,
+4
+],
+"view": {
+"h_angle": 0,
+"v_angle": 225,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+12,
+3
+],
+"eye_z": 9.375,
+"note": "absorb Sentinel"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+12,
+4
+],
+"view": null,
+"player_tile": [
+12,
+3
+],
+"eye_z": 9.375,
+"note": "platform synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+12,
+4
+],
+"view": null,
+"player_tile": [
+12,
+4
+],
+"eye_z": 9.875,
+"note": "hyperspace onto platform (WIN)"
+}
+]
+}

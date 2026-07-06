@@ -11,12 +11,12 @@ each real state, chess-engine style: the plan can be arbitrarily long though eac
 search is shallow (sec.3).
 
 It REUSES the real, keyboard-faithful mechanics already validated in climb_greedy /
-native_game (sec.4, sec.8) -- _candidates, _boulder_centre_feasible, _refuel, _apply,
-edge_dist -- and branches over native_game.Game.clone()d states. Enemy timing is folded
-in as a per-candidate SAFETY ANNOTATION via enemy_dynamics (sec.5), not an adversarial
+plan_game (sec.4, sec.8) -- _candidates, _boulder_centre_feasible, _refuel, _apply,
+edge_dist -- and branches over plan_game.Game.clone()d states. Enemy timing is folded
+in as a per-candidate SAFETY ANNOTATION via sentinel.threat (sec.5), not an adversarial
 search dimension (sec.2): meanie_safe is a hard pre-filter, ticks_until_seen a soft
-leaf-eval term. The EnemyPhase is advanced by TICKS_PER_ACTION per simulated move
-(sec.6) as the lookahead descends.
+leaf-eval term. Each node's sentinel enemy state is advanced by TICKS_PER_ACTION per
+simulated move (sec.6) as the lookahead descends.
 """
 
 import sys, os, json, time
@@ -37,9 +37,8 @@ from climb_greedy import (
     EXPOSURE_RESERVE,
     _enemy_exposed_tiles,
 )
-from native_game import Game, cheb, visibility_sweep
-import enemy_dynamics as ED
-import game_state as GS
+from plan_game import PlanGame as Game, cheb, visibility_sweep, OBJ_HANG, OBJ_VANG
+from sentinel import threat, enemies as SE
 
 INF = float("inf")
 _NOOP = lambda *a, **k: None
@@ -53,7 +52,7 @@ DEFAULT_BEAM = 3  # top-N candidates expanded per node, independent of depth (se
 # telemetry (aim-to-fire durations) against the live executor. The C64 advances
 # update_enemies ~once per frame (~50 PAL fps), so seconds*50 ~= ticks. A hop
 # (aim+build synthoid+transfer) is cheaper than a boulder-step (two builds+transfer).
-# These feed EnemyPhase advancement only; if the live run's safety forecast diverges,
+# These feed enemy-state advancement only; if the live run's safety forecast diverges,
 # recalibrate these from that run's log (sec.9 step 4) rather than adding static margin.
 TICKS_PER_HOP = 150
 TICKS_PER_BOULDER_STEP = 250
@@ -72,6 +71,82 @@ _REFUEL_MAX_STEPS = 160
 # and re-rank -- safety only reorders near-equal heights, so a small shortlist suffices.
 _SHORTLIST = 4
 
+# GAZE-AWARE exposure (opt-in via env; default off preserves the ROM-validated ls42 win).
+# The static _enemy_exposed_tiles mask is "could the Sentinel EVER see this tile at any
+# rotation" -- near the platform that's EVERY high tile, so any real EXPOSURE_RESERVE
+# stalls the climb. With gaze-awareness we instead penalize only tiles the Sentinel is
+# looking toward WITHIN one build/rotation window (ticks_until_seen < horizon), so a far
+# safe high tile -- or a ring tile while the Sentinel faces away -- stays affordable, but
+# a tile in its current/imminent view is avoided. This is the human ls0 win's actual
+# tactic: not "avoid what it could see" but "be where it isn't looking". Pair with a
+# larger CLIMB_EXPOSURE_RESERVE (now safe: it hits only currently-unsafe tiles).
+_GAZE_AWARE_COST = os.environ.get("GAZE_AWARE_COST", "0") == "1"
+_GAZE_COST_HORIZON = int(os.environ.get("GAZE_COST_HORIZON", "250"))
+# HARD no-build ring: forbid CREATE footholds within this Chebyshev radius of the
+# platform during the climb. A boulder/synthoid built in the Sentinel's face (cheb<=2)
+# sits in its view cone and is absorbed on the next scan -- which spawns meanies and
+# drains the player even when the player itself is unseen (gaze-timing can't help; the
+# hazard is the OBJECT's exposure, not the player's). The human ls0 win never built in
+# the ring: it climbed to launch height at a far tile (cheb-10) and struck from range.
+# This forces launch tiles to cheb>radius, replicating that as a constraint (cheb>radius
+# tiles stay available, so unlike a cost crank it won't collapse the candidate set).
+# Plain hops onto EXISTING ring objects stay allowed; the endgame (absorb Sentinel +
+# platform synthoid, fired after the Sentinel is gone) runs in climb_greedy.endgame and
+# is not gated here. 0 = off (default).
+_RING_NOBUILD_RADIUS = int(os.environ.get("RING_NOBUILD_RADIUS", "0"))
+# Treat a FRACTIONAL eye above the platform ground as launch-ready. The default gate is
+# int(eye) > plat_ground, which discards the 0.875/0.5 fraction: a climb that tops out at
+# eye 8.875 (genuinely above a z8 platform, LOS intact) is rejected and the search creeps
+# on -- into the ring -- chasing int(eye)>=9. With the no-build ring closing that off, the
+# far staircase strands at 8.875. Comparing the true float (8.875 > 8) recognises it as a
+# valid long-range launch. Off by default (keeps the ROM-validated ls42 int gate).
+_ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
+# PAN COST: charge a move for the real time spent SCROLLING the view from the previous
+# aim heading to this move's aim heading. Aiming is a keyboard pan -- h in +-8 unit
+# cycles, v in +-4 (kbd_aim) -- so a target on the far bearing costs many frames, during
+# which the Sentinel keeps rotating (0.1 unit/frame; a 128-unit pan swings it ~25 units,
+# past its FOV half). The flat TICKS_PER_* miss this: the search treats a grab on the
+# opposite bearing as no costlier than one dead ahead, then the live run gets drained mid-
+# pan (ls0 far route died reabsorbing a shell behind it -- a long return pan). When on:
+# (1) the enemy state advances by base+pan ticks (so ticks_until_seen/meanie foresee the
+# scroll), and (2) equal-height candidates are ordered to prefer the SMALLER pan. Frames
+# per angle-unit are ~1-2 (h) / ~2 (v) from the pan cycle length; env-tunable. Off by
+# default (keeps the ROM-validated ls42 tick model).
+_PAN_COST = os.environ.get("PAN_COST", "0") == "1"
+_PAN_TICKS_H = float(os.environ.get("PAN_TICKS_H", "1.5"))
+_PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
+# SEEN-DRAIN: model being seen as a COSTED, survivable state rather than a hard veto. As
+# the search simulates each move it debits the energy the player would actually lose while
+# dwelling at the destination during that move (sentinel.enemies.step: 1 energy per
+# ~120 seen ticks, nothing for a quick transit). Routes that linger in view bleed energy
+# and score lower; brief crossings are free -- so the planner can TRANSIT unavoidable seen
+# tiles (multi-sentry landscapes) and is pushed to reach a safe tile fast. Off by default
+# (keeps the ROM-validated ls42 energy accounting; ls0 relies on avoidance knobs instead).
+_SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "0") == "1"
+
+
+def _pan_ticks(cur_h, cur_v, view):
+    """Estimated frames to scroll the view from heading (cur_h, cur_v) to `view`'s aim.
+    h wraps mod 256 (shortest direction, max 128); v is clamped (linear). Returns 0 when
+    pan cost is off, the heading is unknown, or the target view carries no angle."""
+    if not _PAN_COST or cur_h is None or not view:
+        return 0.0
+    th = view.get("h_angle")
+    tv = view.get("v_angle")
+    if th is None:
+        return 0.0
+    dh = abs(((th - cur_h) + 128) % 256 - 128)
+    dv = abs((tv - cur_v)) if (tv is not None and cur_v is not None) else 0
+    return dh * _PAN_TICKS_H + dv * _PAN_TICKS_V
+
+
+def _cur_heading(g):
+    """The player's current view heading (h_angle, v_angle) from live/model RAM, or
+    (None, None) when pan cost is off."""
+    if not _PAN_COST:
+        return (None, None)
+    return (g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player])
+
 
 def _cost(c, exposed):
     """Up-front energy a candidate needs before the shell-reabsorb refund: boulder-step
@@ -89,29 +164,25 @@ def _ticks_for(c):
 
 
 def _read_state(g):
-    return GS.read_game_state(GS.Py65Source(g.mem))
+    return g.state
 
 
-def _init_phase(g, state):
-    """Build the enemy phase for a real decision. init_phase_from_ram reads the exact ROM
-    rotation-speed table at $9D37, which only exists in a FULL 64K image (offline
-    Game(landscape)); the LIVE resync snapshots just $0000-$0FFF (native_game reads no
-    higher), so fall back to init_phase (conservative CW-rotation default, per
-    enemy_dynamics) when the buffer can't reach $9D37. The cooldown arrays ($0C20-$0C30)
-    are within the live snapshot either way."""
-    if len(g.mem) > ED.ROTATION_SPEED_TABLE + 63:
-        return ED.init_phase_from_ram(state, g.mem)
-    return ED.init_phase(state)
-
-
-def _advance_phase(state, phase, c):
-    """Advance the EnemyPhase by the estimated tick-cost of applying candidate `c`
-    (SEARCH_REDESIGN.md sec.6). Enemies are fixed-rate automata, so rotation/cooldown
-    advance is a pure function of tick count against the node's `state`."""
-    ph = phase
-    for _ in range(_ticks_for(c)):
-        ph = ED.step_enemies(state, ph)
-    return ph
+def _advance_enemies(state, ticks, apply_drain):
+    """Advance the node's sentinel enemy state in place by `ticks` game rounds
+    (SEARCH_REDESIGN.md sec.6). Enemy timing (rotation/cooldown) lives inside the State and
+    is stepped bit-exact by sentinel.enemies.step, so a move behind a long scroll rotates
+    the Sentinel further (foreseeing mid-pan exposure). `ticks` is the base action cost plus
+    the pan time to aim at the move. When `apply_drain` is on the stepping debits the energy
+    the player would lose while dwelling in view during the window (seen tiles are PRICED,
+    not vetoed); when off, energy is restored so only the rotation forecast is kept (the
+    default ROM-validated accounting)."""
+    e0 = state.energy
+    for _ in range(ticks):
+        SE.step(state)
+    if not apply_drain:
+        state.energy = (
+            e0  # rotation forecast only; restore energy when seen-drain is off
+        )
 
 
 def _reached_approach(g, ctx):
@@ -124,18 +195,23 @@ def _reached_approach(g, ctx):
     ring (where the meanie spawns); it just gets high with LOS, then hops on."""
     if g.plat_ground is None or g.sentinel_slot is None:
         return False
-    if int(g.eye) <= g.plat_ground:
+    above = g.eye > g.plat_ground if _ENDGAME_FRAC_EYE else int(g.eye) > g.plat_ground
+    if not above:
         return False
     plat = ctx["plat"]
     if cheb(g.player_xy(), plat) <= 1:
         return True
     # far win: check LOS to the platform. Only reached once the eye is already above the
-    # platform (late climb), so this sweep runs on very few nodes.
-    sw = visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200, coarse=True)
+    # platform (late climb), so this sweep runs on very few nodes. A fractional eye above
+    # plat_ground sees DOWN onto it; ceil the observer so int(eye)==plat_ground doesn't
+    # drop the platform (matches endgame's seye; only when frac-eye is on).
+    ie = int(g.eye)
+    seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
+    sw = visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
     return plat in sw
 
 
-def _gen_candidates(g, ctx, blocked, state, phase, beam):
+def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     """Ordered successor list for a search node: the real _candidates footholds, cheaply
     hard-filtered (affordability, blocklist, meanie-safety) and sorted best-first
     (height, safety margin, edge distance -- the human-validated priority, sec.7).
@@ -177,8 +253,29 @@ def _gen_candidates(g, ctx, blocked, state, phase, beam):
     raw = [c for c in raw if (tuple(c[0]), round(c[2], 2)) not in ctx["visited"]]
     if not raw:
         return []
-    # affordability + blocklist (cheap, no sweeps)
+    # HARD no-build ring: drop CREATE footholds (c[1] is use_boulder) inside the deadly
+    # cheb<=_RING_NOBUILD_RADIUS zone -- an object built there is absorbed by the Sentinel
+    # and spawns meanies regardless of player exposure. Plain hops (c[1] False) onto
+    # existing objects stay. Forces the launch stack to a safer far tile (the human route).
+    if _RING_NOBUILD_RADIUS > 0:
+        raw = [
+            c
+            for c in raw
+            if not (c[1] and cheb(c[0], ctx["plat"]) <= _RING_NOBUILD_RADIUS)
+        ]
+        if not raw:
+            return []
+    # affordability + blocklist (cheap, no sweeps). The exposure set is either the static
+    # could-ever-be-seen LOS mask (default) or, when gaze-aware, only the subset the
+    # Sentinel is actually looking toward within a build/rotation window (see _cost notes).
     exposed = _enemy_exposed_tiles(g, {tuple(c[0]) for c in raw})
+    if _GAZE_AWARE_COST:
+        exposed = {
+            t
+            for t in exposed
+            if threat.ticks_until_seen(state, t[0], t[1], horizon=_GAZE_COST_HORIZON)
+            < _GAZE_COST_HORIZON
+        }
     pool = [
         c
         for c in raw
@@ -191,7 +288,7 @@ def _gen_candidates(g, ctx, blocked, state, phase, beam):
     # meanie-safe HARD filter: don't dwell somewhere a tree could convert into a meanie
     # that then forces a hyperspace, IF a safe alternative exists (sec.5). Fall back to
     # the full pool only when nothing is meanie-safe (better a risky climb than none).
-    safe = [c for c in pool if ED.meanie_safe(state, tuple(c[0]))]
+    safe = [c for c in pool if threat.meanie_safe(state, tuple(c[0]))]
     pool = safe or pool
     # cheap HEIGHT-first order (biggest eye gain wins; platform proximity only breaks
     # equal-height ties), then compute the enemy safety margin for the top shortlist and
@@ -200,15 +297,42 @@ def _gen_candidates(g, ctx, blocked, state, phase, beam):
     pool.sort(key=lambda c: (c[2], -cheb(c[0], plat), edge_dist(c[0])), reverse=True)
     head = pool[: beam + _SHORTLIST]
     safety = {
-        tuple(c[0]): ED.ticks_until_seen(
-            state, phase, c[0][0], c[0][1], horizon=_SAFETY_HORIZON
+        tuple(c[0]): threat.ticks_until_seen(
+            state, c[0][0], c[0][1], horizon=_SAFETY_HORIZON
         )
         for c in head
     }
-    head.sort(
-        key=lambda c: (c[2], -cheb(c[0], plat), safety[tuple(c[0])], edge_dist(c[0])),
-        reverse=True,
-    )
+    # pan cost to AIM each head candidate from the current heading (0 when _PAN_COST off,
+    # so the default order is unchanged). Prefer the smaller pan: aiming a far-bearing
+    # target holds the player exposed on its current tile for the whole scroll.
+    pan = {tuple(c[0]): _pan_ticks(cur_h, cur_v, c[3]) for c in head}
+    if _GAZE_AWARE_COST:
+        # Among EQUAL-height candidates, prefer the one the Sentinel is NOT looking at
+        # (safety) and the one that needs the least panning (least mid-aim exposure) OVER
+        # the one closest to the platform. The default order prefers proximity, which --
+        # since both a ring tile and a far tile at the Sentinel's height reach the endgame
+        # trigger (both score INF) -- makes the search launch from the exposed ring.
+        head.sort(
+            key=lambda c: (
+                c[2],
+                safety[tuple(c[0])],
+                -pan[tuple(c[0])],
+                -cheb(c[0], plat),
+                edge_dist(c[0]),
+            ),
+            reverse=True,
+        )
+    else:
+        head.sort(
+            key=lambda c: (
+                c[2],
+                -cheb(c[0], plat),
+                safety[tuple(c[0])],
+                -pan[tuple(c[0])],
+                edge_dist(c[0]),
+            ),
+            reverse=True,
+        )
     return head + pool[beam + _SHORTLIST :]
 
 
@@ -226,24 +350,29 @@ _W_EDGE = 1.0  # max span ~62
 _W_ENERGY = 0.01
 
 
-def _evaluate(g, ctx, phase):
+def _evaluate(g, ctx):
     """Score a cut leaf (depth exhausted, not yet won): height reached DOMINATES (gain
     height as fast as possible), then platform proximity / ticks_until_seen (safety) / edge
     / energy purely as tie-breaks among equal-height leaves (SEARCH_REDESIGN.md sec.7).
     """
     cur = g.player_xy()
     state = _read_state(g)
-    safety = ED.ticks_until_seen(state, phase, cur[0], cur[1], horizon=_SAFETY_HORIZON)
+    safety = threat.ticks_until_seen(state, cur[0], cur[1], horizon=_SAFETY_HORIZON)
+    # gaze-aware: SAFETY outranks platform-proximity among equal-height leaves (still far
+    # below height). Default: proximity outranks safety (the ROM-validated ls42 order).
+    w_safety = 100_000.0 if _GAZE_AWARE_COST else _W_SAFETY
     return (
         g.eye * _W_EYE
         - cheb(cur, ctx["plat"]) * _W_PLAT
-        + min(safety, 255) * _W_SAFETY
+        + min(safety, 255) * w_safety
         + edge_dist(cur) * _W_EDGE
         + g.energy * _W_ENERGY
     )
 
 
-def _lookahead(g, ctx, blocked, phase, depth, beam, stats, is_root=True):
+def _lookahead(
+    g, ctx, blocked, depth, beam, stats, is_root=True, cur_h=None, cur_v=None
+):
     """Best-first bounded lookahead (SEARCH_REDESIGN.md sec.7). Returns
     (score, first_move): the score of the best line from this node and the candidate to
     commit at THIS node. A won node scores +inf; a node with no non-dead-end successor
@@ -257,9 +386,9 @@ def _lookahead(g, ctx, blocked, phase, depth, beam, stats, is_root=True):
     if _reached_approach(g, ctx):
         return INF, None
     if depth <= 0:
-        return _evaluate(g, ctx, phase), None
+        return _evaluate(g, ctx), None
     state = _read_state(g)
-    cands = _gen_candidates(g, ctx, blocked, state, phase, beam)
+    cands = _gen_candidates(g, ctx, blocked, state, beam, cur_h, cur_v)
     stats["nodes"] += 1
     if not cands:
         return -INF, None  # dead end: no reachable/feasible foothold at all
@@ -283,9 +412,28 @@ def _lookahead(g, ctx, blocked, phase, depth, beam, stats, is_root=True):
         # the lookahead only needs approximate energy for affordability, and this sweep
         # is the per-node hot spot (the committed root refuel in search_iterate stays fine).
         _refuel(g2, _NOOP, sweep_max_steps=_REFUEL_MAX_STEPS, sweep_coarse=True)
-        phase2 = _advance_phase(state, phase, c)
+        # advance g2's in-state enemy timing by this move's tick cost so deeper plies see a
+        # rotated Sentinel. With _SEEN_DRAIN on, the stepping debits g2.state.energy while
+        # the player dwells in view (a lingering route bleeds energy, scores lower; a quick
+        # seen transit stays free -- 120-tick cooldown); with it off, energy is restored so
+        # only the rotation forecast is kept (the ROM-validated default accounting).
+        _advance_enemies(
+            g2.state,
+            _ticks_for(c) + int(round(_pan_ticks(cur_h, cur_v, c[3]))),
+            apply_drain=_SEEN_DRAIN,
+        )
+        nh = c[3].get("h_angle", cur_h) if c[3] else cur_h
+        nv = c[3].get("v_angle", cur_v) if c[3] else cur_v
         sub_score, _ = _lookahead(
-            g2, ctx, blocked, phase2, depth - 1, beam, stats, is_root=False
+            g2,
+            ctx,
+            blocked,
+            depth - 1,
+            beam,
+            stats,
+            is_root=False,
+            cur_h=nh,
+            cur_v=nv,
         )
         if sub_score == -INF:
             continue  # dead-end line -- PRUNE (never commit to it)
@@ -327,11 +475,12 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
         )
         return "approach"
 
-    state = _read_state(g)
-    phase = _init_phase(g, state)
     stats = {"nodes": 0}
     t0 = time.time()
-    score, move = _lookahead(g, ctx, blocked, phase, depth, beam, stats)
+    root_h, root_v = _cur_heading(g)
+    score, move = _lookahead(
+        g, ctx, blocked, depth, beam, stats, cur_h=root_h, cur_v=root_v
+    )
     dt = time.time() - t0
 
     if move is None:

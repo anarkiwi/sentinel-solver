@@ -19,17 +19,20 @@ CONTROL SCHEME (verified live):
     $138D (BBC key numbers) / $139C (action codes). Decoded keys (verified live):
       S = pan view left  (objects_h_angle -= 8 per step)   [pan_viewpoint $10B7]
       D = pan view right (objects_h_angle += 8)
-      L = pan view down  (objects_v_angle changes)
+      L = pan view down  (objects_v_angle += 4 per step)
+      , (COMMA) = pan view up (objects_v_angle -= 4)
       U / CRSR-UD = U-turn (objects_h_angle EOR #$80)       [handle_uturn $1B2F]
-      , (COMMA) = ABSORB object under sights                [try_to_absorb_object $1B8E]
-      A         = TRANSFER into robot under sights          [$1B64]
-      Q         = CREATE robot   (action code $00)          [create_object $2120]
-      R         = CREATE tree    (action code $02)
-      T         = CREATE boulder (action code $03)
-      B         = HYPERSPACE (action code $22)              [handle_hyperspace $1B1F]
+      A         = ABSORB object under sights (action code $20) [try_to_absorb_object $1B8E]
+      Q         = TRANSFER into robot under sights (action code $21) [$1B64]
+      R         = CREATE robot   (action code $00)          [create_object_from_action $2120]
+      T         = CREATE tree    (action code $02)
+      B         = CREATE boulder (action code $03)
+      H         = HYPERSPACE (action code $22)              [handle_hyperspace $1B1F]
       SPACE     = toggle sights on/off ($0C5F bit7)
     CREATE/ABSORB/TRANSFER require sights ACTIVE ($0C5F bit7 set), checked at
     consider_player_action $12D9. U-turn/hyperspace do not.
+    (Key->action codes verified against the ROM scan/action tables $138D/$139C and
+    the create-type dispatch: R/T/B create robot(0)/tree(2)/boulder(3).)
 
   * AIMING. When an action key is pressed, handle_player_actions ($1B43) calls
     prepare_vector_from_player_sights ($1C10) then check_for_line_of_sight_to_tile
@@ -67,10 +70,9 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import game_state as gs
-import game_model as gm
-from game_model import T_BOULDER, T_ROBOT, T_TREE
-import solver_closure as sc
+import vice_state as gs
+from sentinel import memmap as mm
+from sentinel.memmap import T_BOULDER, T_ROBOT, T_TREE
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 RENDER_DIR = os.path.join(ROOT, "renders", "solver_run")
@@ -634,22 +636,6 @@ def run(landscape, max_seconds, log):
             result["frames"] = len(frames)
             return result, frames
 
-        # Plan is informative (it confirms the solver still wins this landscape in
-        # the model); the live win_sequence drives the real machine directly, so we
-        # do NOT abort on the plan. solver_closure is the planner of record (the
-        # monotone reachability-closure: simpler + strictly dominates the minimax,
-        # meanie-safety-aware; see solver_closure.py). solver_exact remains
-        # importable as a fallback.
-        try:
-            plan = sc.solve(gs.read_game_state(gs.Py65Source.from_landscape(landscape)))
-            log(
-                f"PLAN (solver_closure): solved={plan.solved} "
-                f"final_energy={plan.final_energy} objects={plan.absorbed_count} "
-                f"steps={len(plan.steps)}"
-            )
-        except Exception as e:
-            log(f"  solver_closure plan failed (non-fatal): {e}")
-
         # Let the game finish its entry animation before we start probing: the
         # monitor-stop/resume probe is ~40x slower while VICE is mid-warp-render
         # right after entry (measured), so settle first.
@@ -900,7 +886,7 @@ def win_sequence(ex, bm, plat, grab, log, result):
     ex.wr(A_OBJECTS_ZF + pslot, 0)
     log(
         f"   [ASSISTED] climb: player -> stand {stand}, eye z={eye_z} "
-        f"(platform ground {plat_ground}); mirrors code_engine.climb_and_win's ascent"
+        f"(platform ground {plat_ground}); mirrors the climb-and-win ascent"
     )
     steps_log.append(("ASSISTED", f"climb to stand {stand} eye_z {eye_z}"))
     grab("climb_vantage")
@@ -984,7 +970,7 @@ def win_sequence(ex, bm, plat, grab, log, result):
 
 def _stand_tile(st, plat, ex):
     """An empty terrain tile adjacent to the platform to stand on (mirrors
-    code_engine.climb_and_win's stand selection)."""
+    the climb-and-win stand selection)."""
     occ = {(o.x, o.y) for o in st.objects}
     for dx, dy in (
         (0, -1),
@@ -1073,7 +1059,7 @@ def execute_plan(ex, plan, grab, log, plat, t_start, max_seconds, result):
     sent = None
     st = ex.state()
     for o in st.objects:
-        if o.type == gm.T_SENTINEL:
+        if o.type == mm.T_SENTINEL:
             sent = (o.x, o.y)
     log(f"Sentinel tile = {sent}")
 
@@ -1152,7 +1138,7 @@ def execute_plan(ex, plan, grab, log, plat, t_start, max_seconds, result):
             log("   " + msg)
             grab("absorbed_sentinel")
             st = ex.state()
-            sent_gone = not any(o.type == gm.T_SENTINEL for o in st.objects)
+            sent_gone = not any(o.type == mm.T_SENTINEL for o in st.objects)
             log(f"   Sentinel absorbed: {sent_gone}")
             # now stand on the platform: create a robot on the platform tile and
             # hyperspace into it -> do_hyperspace sets landscape-complete ($0CDE bit6).

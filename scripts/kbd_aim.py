@@ -11,16 +11,29 @@ VERIFIED pan primitive (scripts/_pan_probe.py):
 So h_angle is a +-8 keyboard grid (reachable = h0 + 8k), v_angle a +-4 grid, and the
 cursor moves on a 9px grid (cx in {17..143}, cy in {32..158}). The aim that the action
 fires on is computed by the ROM's prepare_vector_from_player_sights ($1C10):
-h_eff = h + cur_x>>3, v_eff = v + (cur_y-5)>>4 -- which native_los models exactly.
+h_eff = h + cur_x>>3, v_eff = v + (cur_y-5)>>4 -- which sentinel.los models exactly.
 
-We (1) search the keyboard grid NATIVELY (native_los.aim_target_native, bit-exact vs
+We (1) search the keyboard grid NATIVELY (sentinel.los.aim_target, bit-exact vs
 the ROM) for a (h, v, cursor) that lands the ray on the target tile with LOS (and a
 small tile-centre fraction when needed), then (2) drive the real keys to that exact
 (h, v, cursor) -- verified from memory reads -- and (3) the caller probes the live ROM
 LOS to confirm before pressing the action key. No pixels, no angle pokes.
 """
 
-from native_los import NativeState, aim_target_native
+import os
+
+from sentinel.state import State
+from sentinel import los
+
+# run_until_pc socket-guard timeouts. Under live AVI recording (warp OFF) the ZMBV
+# encoder can back-pressure the binmon socket for several seconds, so the CPU takes
+# longer than a few frames to next reach a checkpoint from the monitor's view. The
+# old 4 s pan guard tripped on that backpressure and aborted the aim mid-pan (an
+# aim_miss that then burned energy in re-plan churn). These are pure hang guards --
+# the checkpoints recur every frame -- so a generous value only costs time on a truly
+# dead socket, never on the happy path. Overridable via env for headless/warp runs.
+_RU_PAN = float(os.environ.get("KBD_PAN_TIMEOUT", "20"))
+_RU_STA = float(os.environ.get("KBD_STA_TIMEOUT", "8"))
 
 A_SLOT = 0x000B
 A_H = 0x09C0
@@ -71,7 +84,7 @@ def snap_keyboard_view(mem4k, tile, want_centre):
 
     ps = mem4k[A_SLOT]
     eye_z = mem4k[A_ZH + ps]
-    st = NativeState.from_mem(bytes(mem4k))
+    st = State.from_mem(bytes(mem4k))
     h0 = mem4k[A_H + ps]
     v0 = mem4k[A_V + ps]
     px, py = mem4k[0x0900 + ps], mem4k[0x0980 + ps]
@@ -108,7 +121,7 @@ def snap_keyboard_view(mem4k, tile, want_centre):
             for v in vord:
                 for cx in cx_list:
                     for cy in cy_list:
-                        rx, ry, los, centre = aim_target_native(
+                        rx, ry, los_hit, centre = los.aim_target(
                             st,
                             h,
                             v,
@@ -119,7 +132,7 @@ def snap_keyboard_view(mem4k, tile, want_centre):
                             max_steps=640,
                             return_centre=True,
                         )
-                        if (rx, ry) != tile or not los:
+                        if (rx, ry) != tile or not los_hit:
                             continue
                         if want_centre and centre >= 0x40:
                             continue
@@ -180,6 +193,14 @@ class KbdDriver:
     PC_V_COMMIT = (
         0x1135  # committed vertical pans (up branch + down-correction) reach here
     )
+    # The one PC reached ONCE PER PAN ATTEMPT on EVERY outcome -- commit, undo, AND clamp --
+    # and for BOTH axes: the instruction right after `JSR pan_viewpoint` in the foreground
+    # loop ($365A). The commit PCs above are reached only when plot_world returns carry-clear;
+    # when it returns carry-set (check_if_player_still_wants_to_pan aborts the plot) the pan
+    # is UNDONE and the commit PC is never hit -- which is why anchoring on a commit PC needs
+    # a wall-clock timeout to notice a stall. $365D needs none: the game always reaches it, so
+    # we step one attempt, read the settled angle, and decide from STATE, never from a clock.
+    PC_PAN_DONE = 0x365D
     # Cursor STA PCs (move_sights; no undo path) -- run_until_pc halts BEFORE the STA, so the
     # value about to be stored is read from A.
     PC_CX_INC = 0x997C  # STA $0CC6 (move_sights right, cx+1)
@@ -199,7 +220,12 @@ class KbdDriver:
         with self.bm.halted():
             try:
                 self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
-                self.bm.run_until_pc(sta_pc, timeout=6.0)
+                # A live pan/cursor step reaches its write PC within a frame or two; only a
+                # CLAMPED move (cursor/angle at the band edge, PC never reached) runs the
+                # full timeout -- and run_until_pc runs the CPU to get there, so at true
+                # gameplay speed that is dead seconds of dwell in which the Sentinel spawns
+                # a ring meanie. Cap short: detect the clamp fast, keep the dwell tiny.
+                self.bm.run_until_pc(sta_pc, timeout=1.5)
                 self.bm.advance_instructions(1)  # execute the STA -> 1px stored
             except Exception:
                 pass
@@ -207,26 +233,49 @@ class KbdDriver:
                 self.bm.keymatrix_release_all()
         self.bm.exit()
 
-    def _pan_angle(self, addr, want, key, commit_pc, max_steps=200):
-        """Hold `key`; step the view ONE COMMITTED pan at a time by halting at `commit_pc`
-        (reached only on the non-undo branch of pan_viewpoint). Read the SETTLED angle from
-        MEMORY there (the STA already ran and was not undone). Release the instant it equals
-        `want` (CPU frozen at the commit, so no overshoot and no later undo)."""
+    def _pan_angle(self, addr, want, dir_fn, stall_bail=24, max_attempts=300):
+        """Drive the view angle at `addr` to `want`, NO wall-clock wait. HOLD the pan key
+        and step ONE ATTEMPT at a time by halting at PC_PAN_DONE ($365D) -- reached once per
+        attempt on commit AND undo AND clamp, both axes -- then read the SETTLED angle from
+        memory. `dir_fn(cur)` picks the key for the remaining delta and is re-evaluated each
+        attempt (self-correcting across a wrap/overshoot). The key stays HELD across the plot
+        so check_if_player_still_wants_to_pan ($1223) sees it and the plot completes.
+
+        Stop conditions are STATE, never a timer: reached `want` (success), or `stall_bail`
+        consecutive attempts that moved the angle by ZERO (genuinely clamped / can't reach --
+        the caller re-snaps a different view). The run_until_pc timeout is a bare socket-hang
+        guard, not a functional wait: $365D recurs every attempt, so it is hit promptly.
+        """
         want &= 0xFF
         if self.rd(addr) == want:
             return True
-        r, c = _k(key)
+        stalled = 0
+        held = None
         with self.bm.halted():
             try:
-                self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
-                self.bm.run_until_pc(commit_pc, timeout=6.0)
-                for _ in range(max_steps):
-                    if self.rd(addr) == want:
+                for _ in range(max_attempts):
+                    cur = self.rd(addr)
+                    if cur == want:
                         break
-                    self.bm.advance_instructions(1)  # leave commit_pc
-                    self.bm.run_until_pc(commit_pc, timeout=6.0)  # next committed pan
-            except Exception as e:  # clamp reached / pan stalled
-                self.log(f"    pan_angle ${commit_pc:04x} stop: {type(e).__name__}")
+                    key = dir_fn(cur)
+                    if key != held:  # (re)press for the direction the delta needs
+                        self.bm.keymatrix_release_all()
+                        r, c = _k(key)
+                        self.bm.keymatrix_set([(r, c, 1)])
+                        held = key
+                    self.bm.run_until_pc(
+                        self.PC_PAN_DONE, timeout=_RU_PAN
+                    )  # one attempt
+                    new = self.rd(addr)
+                    self.bm.advance_instructions(1)  # step off $365D
+                    if new == cur:  # undone or clamped this attempt
+                        stalled += 1
+                        if stalled >= stall_bail:
+                            break
+                    else:
+                        stalled = 0
+            except Exception as e:  # socket drop / genuinely wedged
+                self.log(f"    pan ${self.PC_PAN_DONE:04x} stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
         self.bm.exit()
@@ -260,12 +309,13 @@ class KbdDriver:
         return self.sights_set(True)
 
     def coarse_h(self, want):
-        """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). Pick the
-        shorter direction (D pans right +8, S pans left -8); both commit at $10EE."""
+        """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). D pans right
+        +8, S pans left -8; the shorter direction is chosen per attempt (self-correcting).
+        """
         addr = A_H + self.slot()
         want &= 0xFF
-        key = K_RIGHT if ((want - self.rd(addr)) & 0xFF) <= 0x80 else K_LEFT
-        return self._pan_angle(addr, want, key, self.PC_H_COMMIT)
+        dir_fn = lambda cur: K_RIGHT if ((want - cur) & 0xFF) <= 0x80 else K_LEFT
+        return self._pan_angle(addr, want, dir_fn)
 
     @staticmethod
     def _pitch_lin(v):
@@ -278,11 +328,13 @@ class KbdDriver:
 
     def coarse_v(self, want):
         """SIGHTS OFF: pitch v to `want` (±4 lattice, clamped band wraps through $00).
-        L raises pitch (+4), COMMA lowers it (-4); both commit at $1135."""
+        L raises pitch (+4), COMMA lowers it (-4); direction is chosen per attempt."""
         addr = A_V + self.slot()
         want &= 0xFF
-        key = K_DOWN if self._pitch_lin(want) > self._pitch_lin(self.rd(addr)) else K_UP
-        return self._pan_angle(addr, want, key, self.PC_V_COMMIT)
+        dir_fn = lambda cur: (
+            K_DOWN if self._pitch_lin(want) > self._pitch_lin(cur) else K_UP
+        )
+        return self._pan_angle(addr, want, dir_fn)
 
     def fine_to_tile(self, target, probe_fn, want_centre=False, budget=24):
         """SIGHTS ON. Land the sights ray on `target` (with LOS, and centre fraction

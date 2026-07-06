@@ -6,7 +6,7 @@ genuine ROM win flag $0CDE bit6 verified.
 NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the
 authentic keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles
 sights-off (S/D/L/COMMA + U-turn) then the sights cursor sights-on, closed-loop on
-the live native-LOS probe (native_los on a RAM snapshot) until the target tile is hit
+the live native-LOS probe (sentinel.los on a RAM snapshot) until the target tile is hit
 with LOS. The action is then a real keystroke (R/B robot/boulder, Q transfer, A absorb,
 H hyperspace), fired via tap_action which polls the game's own $0CE9 action latch.
 Every state-changing input is a real key; reads never change state. The AVI is captured
@@ -25,11 +25,12 @@ sys.path.insert(0, HERE)
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 
-import game_state as gs
+import vice_state as gs
 from vice_execute import Executor, CREATE_KEY, K_ABSORB, K_TRANSFER, K_HYPERSPACE
 import kbd_aim
-from native_los import NativeState, aim_target_native
-import native_game
+from sentinel.state import State
+from sentinel import los
+import plan_game
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -228,7 +229,7 @@ def _free_port_6502(log):
 
 
 def verify_entry(bm, log, landscape=66):
-    """Confirm the live state matches game_state.Py65Source.from_landscape(landscape)."""
+    """Confirm the live state matches vice_state.Py65Source.from_landscape(landscape)."""
     try:
         ref = gs.read_game_state(gs.Py65Source.from_landscape(landscape))
     except Exception as e:
@@ -375,7 +376,11 @@ def run(
                         max_seconds,
                         landscape,
                         plat,
+                        toward_plat=os.environ.get("TOWARD_PLAT", "1") == "1",
+                        near_plat_radius=int(os.environ.get("NEAR_PLAT_RADIUS", "2")),
                         use_search=use_search,
+                        search_depth=int(os.environ.get("SEARCH_DEPTH", "2")),
+                        search_beam=int(os.environ.get("SEARCH_BEAM", "2")),
                     )
                 else:
                     won = execute(ex, steps, plat, log, result, t_start, max_seconds)
@@ -409,8 +414,8 @@ def run(
 def _probe_once(bm):
     m = bytearray(bm.mem_get(0x0000, 0x0FFF))
     ps = m[0x000B]
-    st = NativeState.from_mem(bytes(m))
-    rx, ry, los, centre = aim_target_native(
+    st = State.from_mem(bytes(m))
+    rx, ry, los_hit, centre = los.aim_target(
         st,
         m[0x09C0 + ps],
         m[0x0140 + ps],
@@ -422,11 +427,11 @@ def _probe_once(bm):
         return_centre=True,
     )
     sig = (m[0x0CE4] & 0x80, m[0x09C0 + ps], m[0x0140 + ps], m[0x0CC6], m[0x0CC7])
-    return (rx, ry, los, centre), sig
+    return (rx, ry, los_hit, centre), sig
 
 
 def probe_tile(bm):
-    """Where the live sights ray lands now (native_los on a cheap RAM snapshot).
+    """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
     Hardened (D2): only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
     identical across two consecutive reads (reject transient mid-pan / queued-wrap
     state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
@@ -450,6 +455,7 @@ def perform_step(ex, drv, label, stp, log, result):
       "ok"               -- verified success
       "best_effort_miss" -- a non-Sentinel absorb missed (fuel recovery; non-fatal)
       "drained"          -- energy already below a create's cost before firing (no keys sent)
+      "aim_miss"         -- the aim never reached the requested view (nothing fired)
       "fail"             -- verify() rejected the step (wrong-tile/count/energy delta)
     """
     verb, tile, otype = stp["verb"], tuple(stp["target"]), stp["otype"]
@@ -479,14 +485,14 @@ def perform_step(ex, drv, label, stp, log, result):
     # A view of None means the planner deferred the aim (an on-boulder synthoid re-
     # aims after the boulder just landed; an absorb whose coarse candidate sweep
     # didn't resolve one). The fixed-plan JSON has these filled in by the offline
-    # ROM-validation pass (aim_invert.solve_view/native_game.centre_view_for against
+    # ROM-validation pass (plan_game.centre_view_for against
     # the real engine); the live path has no such pass, so resolve a live centre-
     # aimed view here, against CURRENT memory (e.g. post-boulder), before firing.
     if verb in ("create", "absorb") and plan_view is None:
         mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
         ps = mem[0x000B]
-        eye_z = mem[native_game.OBJ_Z + ps]
-        plan_view = native_game.centre_view_for(bytes(mem), tile, ps, eye_z)
+        eye_z = mem[plan_game.OBJ_Z + ps]
+        plan_view = plan_game.centre_view_for(bytes(mem), tile, ps, eye_z)
         if plan_view is None:
             log(
                 f"[{label}] {verb} {tile}: no live keyboard view (no LOS); "
@@ -548,7 +554,7 @@ def perform_step(ex, drv, label, stp, log, result):
             f"v=${ach['v']:02x} cur={ach['cur']} probe=({rx},{ry}) los={los} "
             f"centre=${centre:02x}"
         )
-        # The native_los probe is ADVISORY only: the arbiter is the real ROM's
+        # The sentinel.los probe is ADVISORY only: the arbiter is the real ROM's
         # object-count/energy delta (verify() below). Drive the view and let the game
         # decide; only note a probe miss. drove_ok comes from the already-read ach (no
         # extra monitor round-trips -- fewer socket ops = fewer flaky-idle drops).
@@ -557,10 +563,25 @@ def perform_step(ex, drv, label, stp, log, result):
             and ach["v"] == view["v_angle"]
             and ach["cur"] == tuple(view["cursor"])
         )
-        if (rx, ry) != tile or not los or not drove_ok:
+        # GUARD: never fire when the aim did NOT reach the requested view. The angles read
+        # back (ach) not matching the request means a pan clamped or could not converge, so
+        # the sights are pointing somewhere other than `tile` -- firing here is exactly the
+        # "acted on the wrong tile" failure that drained energy and desynced the model. Skip
+        # the action and report a miss so the loop resyncs and re-plans (re-snaps a view, or
+        # picks a different foothold) instead. The native-LOS probe stays ADVISORY: with the
+        # angles correct it can still disagree with the ROM, so a probe-only mismatch is NOT
+        # a reason to withhold the action (that would skip valid actions forever).
+        if not drove_ok:
             log(
-                f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los} "
-                f"drove_ok={drove_ok}; firing anyway, verify() decides"
+                f"[{label}] {verb} {tile}: aim did NOT reach view (want h=${view['h_angle']:02x} "
+                f"v=${view['v_angle']:02x} cur={view['cursor']}, got h=${ach['h']:02x} "
+                f"v=${ach['v']:02x} cur={ach['cur']}); NOT firing -- resync + re-plan"
+            )
+            return "aim_miss"
+        if (rx, ry) != tile or not los:
+            log(
+                f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los} but angles "
+                f"reached; firing, verify() decides"
             )
 
     # --- ACTION KEY (deterministic, scan-consumed) ---
@@ -682,6 +703,74 @@ def execute(ex, steps, plat, log, result, t_start, max_seconds):
     return fire_hyperspace(ex, drv, plat, log, result)
 
 
+import math as _math
+
+# Approach-timing (gaze-safe advance). The platform ring is the most enemy-exposed
+# region: while the driver spends real seconds aiming there, a Sentinel facing the
+# player drains its energy and downgrades its just-built fuel objects, starving the
+# final hop (observed: a foothold's fuel wiped, energy 6->1, at cheb(player,plat)<=1).
+# Before each near-platform action we advance the game one foreground frame at a time
+# (halt at the per-frame pan-commit PC $365D) until the Sentinel's facing is OUT of
+# its FOV toward the player by a margin -- i.e. the action fires in its blind arc.
+# Purely event-driven: every wait polls the live Sentinel facing, never a clock.
+_PC_PAN_DONE = 0x365D
+GAZE_RING_RADIUS = int(os.environ.get("GAZE_RING_RADIUS", "3"))
+GAZE_SAFE_MARGIN = int(os.environ.get("GAZE_SAFE_MARGIN", "36"))
+GAZE_MAX_FRAMES = int(os.environ.get("GAZE_MAX_FRAMES", "280"))
+
+
+def _sentinel_gaze_margin(bm):
+    """|signed(bearing_to_player - Sentinel_facing)| in angle units (0..128), or None
+    if no live Sentinel. Small == the Sentinel is looking toward the player (FOV half
+    is 10 units); large == facing away. Mirrors the enemy FOV geometry."""
+    flags = bm.mem_get(plan_game.OBJ_FLAGS, plan_game.OBJ_FLAGS + 63)
+    types = bm.mem_get(plan_game.OBJ_TYPE, plan_game.OBJ_TYPE + 63)
+    ssl = next((s for s in range(64) if not (flags[s] & 0x80) and types[s] == 5), None)
+    if ssl is None:
+        return None
+    sx = bm.mem_get(plan_game.OBJ_X + ssl, plan_game.OBJ_X + ssl)[0]
+    sy = bm.mem_get(plan_game.OBJ_Y + ssl, plan_game.OBJ_Y + ssl)[0]
+    sh = bm.mem_get(plan_game.OBJ_HANG + ssl, plan_game.OBJ_HANG + ssl)[0]
+    ps = bm.mem_get(A_PLAYER_SLOT, A_PLAYER_SLOT)[0]
+    px = bm.mem_get(plan_game.OBJ_X + ps, plan_game.OBJ_X + ps)[0]
+    py = bm.mem_get(plan_game.OBJ_Y + ps, plan_game.OBJ_Y + ps)[0]
+    dx, dy = px - sx, py - sy
+    if dx == 0 and dy == 0:
+        return 0
+    bearing = int(round((_math.atan2(dy, dx) / (2 * _math.pi)) * 256)) & 0xFF
+    d = (bearing - sh) & 0xFF
+    if d >= 128:
+        d -= 256
+    return abs(d)
+
+
+def wait_gaze_away(bm, log, safe=GAZE_SAFE_MARGIN, max_frames=GAZE_MAX_FRAMES):
+    """Advance foreground frames until the Sentinel faces away from the player by
+    `safe` units (its blind arc), so imminent keystrokes avoid its drain/downgrade.
+    Returns the final margin. Event-driven: steps one frame per $365D, polls state."""
+    m0 = _sentinel_gaze_margin(bm)
+    if m0 is None or m0 >= safe:
+        return m0
+    log(
+        f"  gaze-wait: Sentinel margin {m0} < {safe} (eyeing player); waiting for blind arc"
+    )
+    m = m0
+    with bm.halted():
+        for _ in range(max_frames):
+            try:
+                bm.run_until_pc(_PC_PAN_DONE, timeout=20)  # run one foreground frame
+                bm.advance_instructions(1)  # step off $365D
+            except Exception as e:
+                log(f"    gaze-wait: {type(e).__name__} advancing; proceeding anyway")
+                break
+            m = _sentinel_gaze_margin(bm)
+            if m is None or m >= safe:
+                break
+    bm.exit()  # resume for the keystrokes
+    log(f"  gaze-wait: proceeding (margin {m})")
+    return m
+
+
 def execute_live(
     ex,
     log,
@@ -705,7 +794,7 @@ def execute_live(
     self-heals on the NEXT iteration (a fresh resync never has the failed object,
     so the planner routes around it) instead of cascading into a run-ending
     divergence."""
-    import native_game
+    import plan_game
     import climb_greedy as cg
 
     # decision function: the greedy single-step picker, or the receding-horizon best-first
@@ -743,7 +832,7 @@ def execute_live(
                 mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
         else:
             mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
-        return native_game.Game.from_mem(
+        return plan_game.Game.from_mem(
             mem, landscape, seed_built_columns=seed_built_columns
         )
 
@@ -752,7 +841,7 @@ def execute_live(
     # landscape generator's original spawn placement, which -- like any first-level
     # object -- carries the ROM's fixed z_fraction=$E0 render offset. Seeding that
     # into g.col raises eye by 0.875 above the ROM-validated offline baseline and
-    # steers the climb onto different (worse) footholds (see native_game.Game.from_mem
+    # steers the climb onto different (worse) footholds (see plan_game.Game.from_mem
     # docstring). Once a real create() lands, the player's tile IS one this model
     # built, so the full z+zf/256 reconstruction becomes correct.
     built_anything = False
@@ -784,13 +873,27 @@ def execute_live(
         built_tiles_this_batch = set()
         for stp in new_steps:
             label += 1
-            outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             tile = tuple(stp["target"])
+            # approach-timing: in the exposed platform ring, fire this action only when
+            # the Sentinel is looking away, so it can't drain/downgrade the fuel mid-aim.
+            if plan_game.cheb(tile, ctx["plat"]) <= GAZE_RING_RADIUS:
+                wait_gaze_away(ex.bm, log)
+            outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             if outcome in ("ok", "best_effort_miss"):
                 if outcome == "ok" and stp["verb"] == "create":
                     built_tiles_this_batch.add(tile)
                     built_anything = True
                 continue
+            if outcome == "aim_miss":
+                # the aim couldn't reach the requested view, so NOTHING was fired -- the
+                # tile is still valid, only the view needs another try. Resync + re-plan
+                # (which re-snaps a fresh view) WITHOUT blocking the foothold.
+                log(
+                    f"    LIVE: {stp['verb']} {tile} -> aim_miss (nothing fired); "
+                    "resync + re-plan, tile not blocked"
+                )
+                blocked_this_round = True
+                break
             if stp["verb"] == "create":
                 if tile in built_tiles_this_batch:
                     # the boulder half of this foothold already landed for real; only

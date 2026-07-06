@@ -1,11 +1,12 @@
 # sentinel-solver
 
 An automated solver for **The Sentinel** (Geoff Crammond, Firebird, 1986) on the
-Commodore 64. It plans a winning action sequence for a landscape, validates the
-plan against the real game code running in a headless 6502 emulator, then drives
-the real game in [VICE](https://vice-emu.sourceforge.io/) (asid-vice) purely by
-keyboard input and records the win as an AVI — verified by the game's own
-landscape-complete flag (`$0CDE` bit 6).
+Commodore 64. It plans a winning action sequence for a landscape on a standalone
+bit-exact simulator (`sentinel/`), then drives the real game in
+[VICE](https://vice-emu.sourceforge.io/) (asid-vice) purely by keyboard input and
+records the win as an AVI — verified by the game's own landscape-complete flag
+(`$0CDE` bit 6). The simulator is validated byte-for-byte against the real 6502
+code, frozen as golden fixtures so CI proves correctness without the ROM.
 
 ## Gameplay model
 
@@ -65,13 +66,10 @@ angle it could rotate to, not just its current facing.
 
 | Area | Files | Role |
 |------|-------|------|
-| Game state | `scripts/game_state.py` | read the game state from emulator memory |
-| Game model | `scripts/game_model.py`, `scripts/enemy_dynamics.py` | forward simulation of rules, energy, enemy timing |
-| Native LOS | `scripts/native_los.py` | fast Python port of the game's line-of-sight / sights-targeting |
-| Planners | `scripts/solver*.py`, `scripts/climb_*.py`, `scripts/native_game.py` | plan a winning climb + absorb sequence |
-| Engine oracle | `scripts/code_engine.py`, `scripts/validate_kbd_plan.py`, `scripts/climb_greedy_validate.py` | replay plans through the real game code headlessly (py65) |
-| Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/vice_execute.py`, `scripts/record_win_0042.py` | drive the real game by keystrokes in VICE and record video |
-| Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game (no emulator) |
+| Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
+| Planners (the solver) | `scripts/climb_greedy.py`, `scripts/climb_search.py` | plan a winning climb + absorb sequence: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins) |
+| Plan adapter | `scripts/plan_game.py` | a mutable game + keyboard-step recorder over a `sentinel.State`, so the planners read/write one bit-exact state |
+| Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/vice_execute.py`, `scripts/record_win_0042.py`, `scripts/vice_state.py` | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video |
 
 ## Simulator (`sentinel/`)
 
@@ -96,12 +94,14 @@ CI proves correctness without the copyrighted image. See
 
 The game itself is copyrighted and is **not** included. Place your own copies at:
 
-- `sentinel-gold.tap` — C64 tape image of The Sentinel (Firebird "gold" release)
-- `out/sentinel_stage2.bin` — 64KB C64 memory image of the loaded game
-  (a raw dump of $0000-$FFFF taken after the game has fully loaded; the py65
-  harness `scripts/_emu.py` executes the game code from it)
+- `sentinel-gold.tap` — C64 tape image of The Sentinel (Firebird "gold" release),
+  used only by the live driver and the video-record test
+- `out/sentinel_stage2.bin` — 64KB C64 memory image of the loaded game (a raw dump
+  of $0000-$FFFF after the game has loaded), used only by the `oracle`-marked
+  `sentinel/` tests that regenerate the golden fixtures from the real 6502 code
 
-Both paths are gitignored. Tests that need them auto-skip when absent.
+Both paths are gitignored. Tests that need them auto-skip when absent; the
+simulator, the planners and their tests run without either.
 
 ## Setup
 
@@ -115,15 +115,14 @@ The live driver additionally needs Docker and the `asid-vice:latest` image
 ## Run
 
 ```bash
-# plan (fast, deterministic; landscape "0042" is internal seed 66):
-python3 -c "import sys;sys.path.insert(0,'scripts');import climb_greedy as c;\
-g=c.plan_greedy(66,verbose=False,toward_plat=True);print(g.native_won,g.energy,len(g.steps))"
+# plan a win with the best-first lookahead (landscape 0, depth 2; ~85s):
+python3 scripts/climb_search.py 0 2     # prints native_won True + the step plan
 
-# validate the plan against the real game code (slow, ~5 min):
-python3 scripts/_finalize66.py          # writes out/kbd_greedy_0066.json
+# the plan is validated by construction: it is built on the sentinel simulator,
+# which is bit-exact vs the real 6502 code (golden-fixture CI, see below).
 
 # drive the real game to the win and record it (Docker; ~3-20 min):
-python3 scripts/record_win_0042.py      # -> renders/solver_run_0042.avi
+python3 scripts/record_win_0042.py      # -> renders/solver_run_*.avi
 ```
 
 ## Tests

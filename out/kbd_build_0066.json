@@ -2,22 +2,22 @@
 "landscape": 66,
 "native_won": false,
 "final_player": [
-20,
-6
+12,
+3
 ],
-"eye": 9.875,
-"energy": 2,
+"eye": 7.875,
+"energy": 3,
 "steps": [
 {
 "verb": "create",
 "otype": 3,
 "target": [
-13,
-30
+10,
+27
 ],
 "view": {
-"h_angle": 0,
-"v_angle": 205,
+"h_angle": 168,
+"v_angle": 237,
 "cursor": [
 80,
 95
@@ -34,8 +34,8 @@
 "verb": "create",
 "otype": 0,
 "target": [
-13,
-30
+10,
+27
 ],
 "view": null,
 "player_tile": [
@@ -49,13 +49,13 @@
 "verb": "transfer",
 "otype": null,
 "target": [
-13,
-30
+10,
+27
 ],
 "view": null,
 "player_tile": [
-13,
-30
+10,
+27
 ],
 "eye_z": 6.375,
 "note": "step"
@@ -68,16 +68,16 @@
 29
 ],
 "view": {
-"h_angle": 104,
-"v_angle": 205,
+"h_angle": 40,
+"v_angle": 233,
 "cursor": [
 80,
 95
 ]
 },
 "player_tile": [
-13,
-30
+10,
+27
 ],
 "eye_z": 6.375,
 "note": "reabsorb prior shell"
@@ -90,16 +90,16 @@
 30
 ],
 "view": {
-"h_angle": 192,
-"v_angle": 233,
+"h_angle": 240,
+"v_angle": 229,
 "cursor": [
 80,
 95
 ]
 },
 "player_tile": [
-13,
-30
+10,
+27
 ],
 "eye_z": 6.375,
 "note": "absorb tree for fuel"
@@ -109,10 +109,10 @@
 "otype": 3,
 "target": [
 13,
-27
+26
 ],
 "view": {
-"h_angle": 128,
+"h_angle": 72,
 "v_angle": 241,
 "cursor": [
 80,
@@ -120,8 +120,8 @@
 ]
 },
 "player_tile": [
-13,
-30
+10,
+27
 ],
 "eye_z": 6.375,
 "note": "greedy climb boulder"
@@ -131,12 +131,12 @@
 "otype": 0,
 "target": [
 13,
-27
+26
 ],
 "view": null,
 "player_tile": [
-13,
-30
+10,
+27
 ],
 "eye_z": 6.375,
 "note": "greedy climb synthoid"
@@ -146,12 +146,12 @@
 "otype": null,
 "target": [
 13,
-27
+26
 ],
 "view": null,
 "player_tile": [
 13,
-27
+26
 ],
 "eye_z": 7.375,
 "note": "step"
@@ -160,11 +160,11 @@
 "verb": "absorb",
 "otype": 0,
 "target": [
-13,
-30
+10,
+27
 ],
 "view": {
-"h_angle": 0,
+"h_angle": 208,
 "v_angle": 221,
 "cursor": [
 80,
@@ -173,7 +173,7 @@
 },
 "player_tile": [
 13,
-27
+26
 ],
 "eye_z": 7.375,
 "note": "reabsorb prior shell"
@@ -182,11 +182,11 @@
 "verb": "absorb",
 "otype": 3,
 "target": [
-13,
-30
+10,
+27
 ],
 "view": {
-"h_angle": 0,
+"h_angle": 208,
 "v_angle": 221,
 "cursor": [
 80,
@@ -195,7 +195,7 @@
 },
 "player_tile": [
 13,
-27
+26
 ],
 "eye_z": 7.375,
 "note": "absorb boulder for fuel"
@@ -205,11 +205,11 @@
 "otype": 3,
 "target": [
 15,
-26
+24
 ],
 "view": {
-"h_angle": 80,
-"v_angle": 237,
+"h_angle": 96,
+"v_angle": 241,
 "cursor": [
 80,
 95
@@ -217,7 +217,7 @@
 },
 "player_tile": [
 13,
-27
+26
 ],
 "eye_z": 7.375,
 "note": "greedy climb boulder"
@@ -227,12 +227,12 @@
 "otype": 0,
 "target": [
 15,
-26
+24
 ],
 "view": null,
 "player_tile": [
 13,
-27
+26
 ],
 "eye_z": 7.375,
 "note": "greedy climb synthoid"
@@ -242,12 +242,12 @@
 "otype": null,
 "target": [
 15,
-26
+24
 ],
 "view": null,
 "player_tile": [
 15,
-26
+24
 ],
 "eye_z": 8.375,
 "note": "step"
@@ -257,11 +257,11 @@
 "otype": 0,
 "target": [
 13,
-27
+26
 ],
 "view": {
-"h_angle": 208,
-"v_angle": 213,
+"h_angle": 224,
+"v_angle": 217,
 "cursor": [
 80,
 95
@@ -269,10 +269,32 @@
 },
 "player_tile": [
 15,
-26
+24
 ],
 "eye_z": 8.375,
 "note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+13,
+26
+],
+"view": {
+"h_angle": 224,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+15,
+24
+],
+"eye_z": 8.375,
+"note": "absorb boulder for fuel"
 },
 {
 "verb": "absorb",
@@ -283,7 +305,7 @@
 ],
 "view": {
 "h_angle": 136,
-"v_angle": 233,
+"v_angle": 225,
 "cursor": [
 80,
 95
@@ -291,69 +313,10 @@
 },
 "player_tile": [
 15,
-26
+24
 ],
 "eye_z": 8.375,
 "note": "absorb tree for fuel"
-},
-{
-"verb": "absorb",
-"otype": 3,
-"target": [
-13,
-27
-],
-"view": {
-"h_angle": 208,
-"v_angle": 213,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-15,
-26
-],
-"eye_z": 8.375,
-"note": "absorb boulder for fuel"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-22,
-27
-],
-"view": {
-"h_angle": 56,
-"v_angle": 245,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-15,
-26
-],
-"eye_z": 8.375,
-"note": "greedy hop synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-22,
-27
-],
-"view": null,
-"player_tile": [
-22,
-27
-],
-"eye_z": 8.875,
-"note": "step"
 },
 {
 "verb": "absorb",
@@ -363,7 +326,7 @@
 23
 ],
 "view": {
-"h_angle": 152,
+"h_angle": 72,
 "v_angle": 221,
 "cursor": [
 80,
@@ -371,390 +334,21 @@
 ]
 },
 "player_tile": [
-22,
-27
+15,
+24
 ],
-"eye_z": 8.875,
+"eye_z": 8.375,
 "note": "absorb tree for fuel"
 },
 {
 "verb": "create",
-"otype": 3,
-"target": [
-23,
-27
-],
-"view": {
-"h_angle": 40,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-22,
-27
-],
-"eye_z": 8.875,
-"note": "greedy climb boulder"
-},
-{
-"verb": "create",
 "otype": 0,
 "target": [
-23,
-27
-],
-"view": null,
-"player_tile": [
-22,
-27
-],
-"eye_z": 8.875,
-"note": "greedy climb synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-23,
-27
-],
-"view": null,
-"player_tile": [
-23,
-27
-],
-"eye_z": 9.375,
-"note": "step"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-22,
-27
-],
-"view": {
-"h_angle": 168,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-23,
-27
-],
-"eye_z": 9.375,
-"note": "reabsorb prior shell"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-23,
-21
-],
-"view": {
-"h_angle": 128,
-"v_angle": 237,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-23,
-27
-],
-"eye_z": 9.375,
-"note": "greedy hop synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-23,
-21
-],
-"view": null,
-"player_tile": [
-23,
-21
-],
-"eye_z": 8.875,
-"note": "step"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-15,
-26
-],
-"view": {
-"h_angle": 216,
-"v_angle": 241,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-23,
-21
-],
-"eye_z": 8.875,
-"note": "absorb synthoid for fuel"
-},
-{
-"verb": "absorb",
-"otype": 2,
-"target": [
-20,
-17
+11,
+18
 ],
 "view": {
 "h_angle": 152,
-"v_angle": 217,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-23,
-21
-],
-"eye_z": 8.875,
-"note": "absorb tree for fuel"
-},
-{
-"verb": "create",
-"otype": 3,
-"target": [
-24,
-21
-],
-"view": {
-"h_angle": 40,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-23,
-21
-],
-"eye_z": 8.875,
-"note": "greedy climb boulder"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-24,
-21
-],
-"view": null,
-"player_tile": [
-23,
-21
-],
-"eye_z": 8.875,
-"note": "greedy climb synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-24,
-21
-],
-"view": null,
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "step"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-23,
-21
-],
-"view": {
-"h_angle": 168,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "reabsorb prior shell"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-23,
-27
-],
-"view": {
-"h_angle": 248,
-"v_angle": 241,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "absorb synthoid for fuel"
-},
-{
-"verb": "absorb",
-"otype": 2,
-"target": [
-18,
-15
-],
-"view": {
-"h_angle": 160,
-"v_angle": 229,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "absorb tree for fuel"
-},
-{
-"verb": "create",
-"otype": 3,
-"target": [
-24,
-20
-],
-"view": {
-"h_angle": 104,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "greedy climb boulder"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-24,
-20
-],
-"view": null,
-"player_tile": [
-24,
-21
-],
-"eye_z": 9.375,
-"note": "greedy climb synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-24,
-20
-],
-"view": null,
-"player_tile": [
-24,
-20
-],
-"eye_z": 9.375,
-"note": "step"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-24,
-21
-],
-"view": {
-"h_angle": 0,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-20
-],
-"eye_z": 9.375,
-"note": "reabsorb prior shell"
-},
-{
-"verb": "absorb",
-"otype": 3,
-"target": [
-24,
-21
-],
-"view": {
-"h_angle": 0,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-24,
-20
-],
-"eye_z": 9.375,
-"note": "absorb boulder for fuel"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-15,
-11
-],
-"view": {
-"h_angle": 160,
 "v_angle": 245,
 "cursor": [
 80,
@@ -762,26 +356,70 @@
 ]
 },
 "player_tile": [
-24,
-20
+15,
+24
 ],
-"eye_z": 9.375,
+"eye_z": 8.375,
 "note": "greedy hop synthoid"
 },
 {
 "verb": "transfer",
 "otype": null,
 "target": [
-15,
-11
+11,
+18
 ],
 "view": null,
 "player_tile": [
-15,
-11
+11,
+18
 ],
-"eye_z": 9.875,
+"eye_z": 8.875,
 "note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+15,
+24
+],
+"view": {
+"h_angle": 24,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+18
+],
+"eye_z": 8.875,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "absorb",
+"otype": 3,
+"target": [
+15,
+24
+],
+"view": {
+"h_angle": 24,
+"v_angle": 237,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+18
+],
+"eye_z": 8.875,
+"note": "absorb boulder for fuel"
 },
 {
 "verb": "absorb",
@@ -791,78 +429,48 @@
 12
 ],
 "view": {
-"h_angle": 200,
-"v_angle": 221,
+"h_angle": 136,
+"v_angle": 229,
 "cursor": [
 80,
 95
 ]
 },
 "player_tile": [
-15,
-11
+11,
+18
 ],
-"eye_z": 9.875,
+"eye_z": 8.875,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+18,
+15
+],
+"view": {
+"h_angle": 80,
+"v_angle": 229,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+18
+],
+"eye_z": 8.875,
 "note": "absorb tree for fuel"
 },
 {
 "verb": "create",
 "otype": 3,
 "target": [
-15,
-10
-],
-"view": {
-"h_angle": 104,
-"v_angle": 205,
-"cursor": [
-80,
-95
-]
-},
-"player_tile": [
-15,
-11
-],
-"eye_z": 9.875,
-"note": "greedy climb boulder"
-},
-{
-"verb": "create",
-"otype": 0,
-"target": [
-15,
-10
-],
-"view": null,
-"player_tile": [
-15,
-11
-],
-"eye_z": 9.875,
-"note": "greedy climb synthoid"
-},
-{
-"verb": "transfer",
-"otype": null,
-"target": [
-15,
-10
-],
-"view": null,
-"player_tile": [
-15,
-10
-],
-"eye_z": 10.375,
-"note": "step"
-},
-{
-"verb": "absorb",
-"otype": 0,
-"target": [
-15,
-11
+11,
+19
 ],
 "view": {
 "h_angle": 0,
@@ -873,47 +481,210 @@
 ]
 },
 "player_tile": [
-15,
-10
+11,
+18
 ],
-"eye_z": 10.375,
-"note": "reabsorb prior shell"
+"eye_z": 8.875,
+"note": "greedy climb boulder"
 },
 {
 "verb": "create",
 "otype": 0,
 "target": [
-20,
-6
+11,
+19
+],
+"view": null,
+"player_tile": [
+11,
+18
+],
+"eye_z": 8.875,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+11,
+19
+],
+"view": null,
+"player_tile": [
+11,
+19
+],
+"eye_z": 9.375,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 0,
+"target": [
+11,
+18
 ],
 "view": {
-"h_angle": 88,
-"v_angle": 237,
+"h_angle": 104,
+"v_angle": 205,
 "cursor": [
 80,
 95
 ]
 },
 "player_tile": [
-15,
-10
+11,
+19
 ],
-"eye_z": 10.375,
+"eye_z": 9.375,
+"note": "reabsorb prior shell"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+7,
+8
+],
+"view": {
+"h_angle": 144,
+"v_angle": 245,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+19
+],
+"eye_z": 9.375,
 "note": "greedy hop synthoid"
 },
 {
 "verb": "transfer",
 "otype": null,
 "target": [
-20,
-6
+7,
+8
 ],
 "view": null,
 "player_tile": [
-20,
-6
+7,
+8
 ],
 "eye_z": 9.875,
+"note": "step"
+},
+{
+"verb": "absorb",
+"otype": 2,
+"target": [
+5,
+12
+],
+"view": {
+"h_angle": 240,
+"v_angle": 209,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+7,
+8
+],
+"eye_z": 9.875,
+"note": "absorb tree for fuel"
+},
+{
+"verb": "create",
+"otype": 3,
+"target": [
+11,
+10
+],
+"view": {
+"h_angle": 40,
+"v_angle": 217,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+7,
+8
+],
+"eye_z": 9.875,
+"note": "greedy climb boulder"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+11,
+10
+],
+"view": null,
+"player_tile": [
+7,
+8
+],
+"eye_z": 9.875,
+"note": "greedy climb synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+11,
+10
+],
+"view": null,
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "step"
+},
+{
+"verb": "create",
+"otype": 0,
+"target": [
+12,
+3
+],
+"view": {
+"h_angle": 120,
+"v_angle": 245,
+"cursor": [
+80,
+95
+]
+},
+"player_tile": [
+11,
+10
+],
+"eye_z": 7.375,
+"note": "greedy hop synthoid"
+},
+{
+"verb": "transfer",
+"otype": null,
+"target": [
+12,
+3
+],
+"view": null,
+"player_tile": [
+12,
+3
+],
+"eye_z": 7.875,
 "note": "step"
 }
 ]
