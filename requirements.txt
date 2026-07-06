@@ -1,2 +1,2 @@
 py65>=1.2.0
-vice-driver @ git+https://github.com/anarkiwi/vice-driver@v0.3.2
+vice-driver @ git+https://github.com/anarkiwi/vice-driver@v0.3.3
