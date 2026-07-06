@@ -39,12 +39,16 @@ DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
 
 
-def _enemy_slots(state):
+def enemy_slots(state):
+    """The occupied sentry/Sentinel slots."""
     return [
         s
         for s in range(mm.NUM_SLOTS)
         if not state.is_empty(s) and state.obj_type[s] in mm.ENEMY_TYPES
     ]
+
+
+_enemy_slots = enemy_slots  # internal alias kept for existing call sites
 
 
 # ---------------------------------------------------------------------------

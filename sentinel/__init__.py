@@ -23,11 +23,13 @@ from sentinel import (
     relative,
     enemies,
 )
+from sentinel.game import Game
 
 __all__ = [
     "Prng",
     "seed_state",
     "State",
+    "Game",
     "los",
     "terrain",
     "memmap",
