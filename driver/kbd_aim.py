@@ -222,7 +222,45 @@ class KbdDriver:
                 self.bm.keymatrix_release_all()
         self.bm.exit()
 
-    def _pan_angle(self, addr, want, dir_fn, stall_bail=24, max_attempts=300):
+    def _pan_angle(
+        self, addr, want, dir_fn, stall_bail=24, max_attempts=300, residue=8
+    ):
+        """Drive the view angle at `addr` to `want`. Fast path: HOLD the direction key
+        and resume ONCE with a condition-gated checkpoint at PC_PAN_DONE ($365D) that
+        stops the CPU exactly when the angle register reads `want` -- the scroll runs
+        through every intermediate notch at full speed, no per-notch read-back, no
+        self-correction, no stall_bail. `want` is only reachable on the +-`residue`
+        lattice from `cur`, so a residue mismatch (or any monitor error) falls back to
+        the stepwise loop below."""
+        want &= 0xFF
+        cur = self.rd(addr)
+        if cur == want:
+            return True
+        if (want - cur) % residue == 0:
+            key = dir_fn(cur)
+            r, c = _k(key)
+            with self.bm.halted():
+                try:
+                    self.bm.keymatrix_release_all()
+                    self.bm.keymatrix_set([(r, c, 1)])
+                    self.bm.run_until_pc(
+                        self.PC_PAN_DONE,
+                        timeout=_RU_PAN,
+                        # VICE condition grammar (mon_parse.y): memory read is
+                        # @BANKNAME:(addr); numbers are $-hex. Stop the scroll the
+                        # instant the angle register reads `want`.
+                        condition=f"@cpu:(${addr:04x}) == ${want:02x}",
+                    )
+                except Exception as e:  # off-lattice, clamp, or monitor rejects cond
+                    self.log(f"    pan cond fallback: {type(e).__name__}")
+                finally:
+                    self.bm.keymatrix_release_all()
+            self.bm.exit()
+            if self.rd(addr) == want:
+                return True
+        return self._pan_angle_stepwise(addr, want, dir_fn, stall_bail, max_attempts)
+
+    def _pan_angle_stepwise(self, addr, want, dir_fn, stall_bail=24, max_attempts=300):
         """Drive the view angle at `addr` to `want`, NO wall-clock wait. HOLD the pan key
         and step ONE ATTEMPT at a time by halting at PC_PAN_DONE ($365D) -- reached once per
         attempt on commit AND undo AND clamp, both axes -- then read the SETTLED angle from
@@ -367,7 +405,7 @@ class KbdDriver:
         dir_fn = lambda cur: (
             K_DOWN if self._pitch_lin(want) > self._pitch_lin(cur) else K_UP
         )
-        return self._pan_angle(addr, want, dir_fn)
+        return self._pan_angle(addr, want, dir_fn, residue=4)
 
     def fine_to_tile(self, target, probe_fn, want_centre=False, budget=24):
         """SIGHTS ON. Land the sights ray on `target` (with LOS, and centre fraction
