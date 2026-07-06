@@ -41,7 +41,7 @@ from solver.plan_game import (
     OBJ_HANG,
     OBJ_VANG,
 )
-from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost
+from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost, actions
 
 # --- shared climb mechanics (keyboard-faithful, validated against plan_game) --------
 # These were the reusable core the greedy picker and this search both drove; they now
@@ -897,6 +897,12 @@ def _lookahead(
         # the rotation forecast is kept (the ROM-validated default accounting).
         ticks, nh, nv = _move_cost(g, c, cur_h, cur_v)
         _advance_enemies(g2.state, ticks, apply_drain=_SEEN_DRAIN)
+        # a move whose real drain window KILLS the player (drained at 0, or a meanie's
+        # forced hyperspace) is a dead end -- never commit to it, so the search routes
+        # around the exposed-launch drain instead of walking into it. Only bites when the
+        # forecast actually applies drain (_SEEN_DRAIN); with drain off the state cannot die.
+        if actions.player_dead(g2.state):
+            continue
         sub_score, _ = _lookahead(
             g2,
             ctx,
