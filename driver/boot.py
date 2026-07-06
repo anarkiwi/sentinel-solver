@@ -8,9 +8,9 @@ BinMon + the live ViceContainer; the caller closes both."""
 import os, sys, time, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 from vice_driver import BinMon, DiskMount, ViceContainer
-import gen_enter
+from driver import gen_enter
 
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 TAP = os.path.join(ROOT, "sentinel-gold.tap")

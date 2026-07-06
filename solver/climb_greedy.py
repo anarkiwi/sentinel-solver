@@ -22,11 +22,11 @@ emitted in the verb/otype/target/view shape the live keyboard driver replays.
 import sys, os, json, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, os.path.dirname(HERE))
 os.chdir(os.path.join(HERE, ".."))
-import plan_game as NG
-from plan_game import (
+from solver import plan_game as NG
+from solver.plan_game import (
     PlanGame as Game,
     visibility_sweep,
     terrain_z,
@@ -307,7 +307,7 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     committed state; the lookahead search passes a coarser/shorter sweep (it only needs
     an APPROXIMATE recovered-energy figure for affordability, and this sweep dominates its
     per-node cost)."""
-    from plan_game import ENERGY
+    from solver.plan_game import ENERGY
 
     gained = 0
     cur = g.player_xy()

@@ -6,13 +6,13 @@ import sys
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 
 
 def test_clone_isolation():
     """clone() must fully decouple every MUTABLE piece of state so a search branch
     cannot leak into the parent (or a sibling) it was cloned from."""
-    import plan_game
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     g.create(3, (g.player_xy()[0] + 2, g.player_xy()[1]), None, "seed boulder")
@@ -39,7 +39,7 @@ def test_clone_isolation():
 
 def test_clone_equivalent_start():
     """A fresh clone is byte-for-byte and field-for-field equal to its parent."""
-    import plan_game
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     c = g.clone()
@@ -53,8 +53,8 @@ def test_clone_equivalent_start():
 def test_cost_and_ticks_monotone():
     """A boulder-step costs more energy AND more ticks than a hop (the search relies on
     both for affordability filtering and enemy-state advancement)."""
-    import climb_search as CS
-    import plan_game
+    from solver import climb_search as CS
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     hop = ((1, 2), False, 6.0, None)
@@ -74,8 +74,8 @@ def test_move_cost_prices_return_pan_and_geometry():
     (b) the tick cost varies with the foothold's bearing geometry (the thing the flat
     constant ignored); (c) the ending heading it reports is the return-pan bearing, so the
     next move chains from where the view actually ends."""
-    import climb_search as CS
-    import plan_game
+    from solver import climb_search as CS
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     px, py = g.player_xy()
@@ -97,8 +97,8 @@ def test_move_cost_prices_return_pan_and_geometry():
 
 def test_read_state_returns_sentinel_state():
     """_read_state hands back the node's live sentinel State (enemy timing lives there)."""
-    import climb_search as CS
-    import plan_game
+    from solver import climb_search as CS
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     assert CS._read_state(g) is g.state
@@ -107,8 +107,8 @@ def test_read_state_returns_sentinel_state():
 def test_advance_enemies_rotation_forecast_pure_on_energy():
     """With seen-drain off, _advance_enemies advances enemy rotation IN PLACE but restores
     the player energy (rotation forecast only, the ROM-validated default accounting)."""
-    import climb_search as CS
-    import plan_game
+    from solver import climb_search as CS
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     e0 = g.state.energy
@@ -118,9 +118,9 @@ def test_advance_enemies_rotation_forecast_pure_on_energy():
 
 def test_reached_approach_flags_endgame_state():
     """_reached_approach is False from the start tile (eye not yet above the platform)."""
-    import climb_search as CS
-    import climb_greedy as cg
-    import plan_game
+    from solver import climb_search as CS
+    from solver import climb_greedy as cg
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     ctx = cg.climb_ctx(g, toward_plat=False)
@@ -132,9 +132,9 @@ def test_search_climbs_without_height_regression():
     lookahead never commits a move that LOSES height. Run a few real decisions and
     assert the eye is monotonically non-decreasing across committed steps -- the exact
     invariant the old greedy 'reposition to a lower tile' fallback violated."""
-    import climb_search as CS
-    import climb_greedy as cg
-    import plan_game
+    from solver import climb_search as CS
+    from solver import climb_greedy as cg
+    from solver import plan_game
 
     g = plan_game.PlanGame(0)
     ctx = cg.climb_ctx(g, toward_plat=False)
@@ -158,7 +158,7 @@ def test_search_climbs_without_height_regression():
 @pytest.mark.skipif(
     os.environ.get("RUN_SLOW_WIN") != "1",
     reason="full offline climb ~85s (over the 60s dev budget); "
-    "run with RUN_SLOW_WIN=1, or reproduce via `python3 scripts/climb_search.py 0 2`",
+    "run with RUN_SLOW_WIN=1, or reproduce via `python3 solver/climb_search.py 0 2`",
 )
 def test_plan_search_wins_ls0():
     """A full depth-2 offline climb of ls0 reaches the win (native_won True).
@@ -166,7 +166,7 @@ def test_plan_search_wins_ls0():
     Gated behind RUN_SLOW_WIN because the bit-exact sentinel line-of-sight makes a
     full multi-decision plan take ~85s; the fast tests above cover the per-decision
     search behaviour (progress, no height regression, clone isolation)."""
-    import climb_search as CS
+    from solver import climb_search as CS
 
     g = CS.plan_search(0, verbose=False, depth=2)
     assert g.native_won is True

@@ -32,7 +32,7 @@ ROM addresses: play_setup $1A97, $14AA gate.
 import os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 
 # ---- ROM routine addresses ----
 R_RESET = 0x1149  # reset_game_state

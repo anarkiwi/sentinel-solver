@@ -4,9 +4,9 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from plan_game import PlanGame, cheb, terrain_z, TIDX, N  # noqa: E402
+from solver.plan_game import PlanGame, cheb, terrain_z, TIDX, N  # noqa: E402
 
 
 def _adjacent_bare_tile(g):

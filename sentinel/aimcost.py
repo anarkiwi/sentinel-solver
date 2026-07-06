@@ -2,7 +2,7 @@
 pan the view from one heading to another, or to aim at a tile.
 
 The Sentinel is driven by panning a view on a fixed keyboard lattice (verified in
-scripts/kbd_aim.py against the ROM):
+driver/kbd_aim.py against the ROM):
 
   * bearing ``h_angle`` moves in :data:`AZIMUTH_STEP` (8) unit steps -- D pans +8,
     S pans -8, wrapping mod 256 (the u-turn key is an EOR $80, i.e. +16 steps);
@@ -32,7 +32,7 @@ UTURN_STEP = (
 def bearing_to(ex, ey, tx, ty):
     """The ``h_angle`` (0..255) an observer at tile (ex, ey) faces to look toward
     tile (tx, ty), on the game's 256-unit compass (mirrors the analytic estimate
-    scripts/kbd_aim.py snaps the keyboard grid around, $1C10 vector math). Returns
+    driver/kbd_aim.py snaps the keyboard grid around, $1C10 vector math). Returns
     None when the tiles coincide (no bearing)."""
     dx, dy = tx - ex, ty - ey
     if dx == 0 and dy == 0:
