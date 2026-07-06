@@ -12,21 +12,22 @@ reachable foothold that, in priority order:
 
 Once the eye is above the platform it switches to an APPROACH phase: head toward the
 platform (minimising Chebyshev distance) while staying high enough to build/look down.
-The endgame (absorb the Sentinel, synthoid on the platform, transfer = win) mirrors
-native_game.plan.
+The endgame absorbs the Sentinel, builds a synthoid on the platform and transfers = win.
 
-Pure native (visibility_sweep / native_los); the emulator only validates the result.
-Steps are emitted in the verb/otype/target/view shape validate_kbd_plan expects.
+Runs on the bit-exact ``sentinel`` simulator via the ``plan_game.PlanGame`` adapter
+(line-of-sight, actions and enemy exposure all come from ``sentinel``). Steps are
+emitted in the verb/otype/target/view shape the live keyboard driver replays.
 """
 
 import sys, os, json, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 os.chdir(os.path.join(HERE, ".."))
-import native_game as NG
-from native_game import (
-    Game,
+import plan_game as NG
+from plan_game import (
+    PlanGame as Game,
     visibility_sweep,
     terrain_z,
     cheb,
@@ -36,8 +37,62 @@ from native_game import (
     OBJ_TYPE,
     OBJ_ZF,
     OBJ_FLAGS,
+    OBJ_HANG,
+    OBJ_VANG,
 )
-from native_los import NativeState, aim_target_native
+from sentinel import los, threat
+from sentinel import memmap as mm
+
+
+def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
+    """Which of `tiles` are within LOS of any enemy (sentry/Sentinel), using the
+    existing game_model.is_exposed conservative check (any rotation, not just the
+    enemy's current facing -- the same "could this ever be seen" question a planner
+    wants when deciding where to build/leave objects). game_model reads the SAME
+    tiles_table/object-array addresses native_game.py uses, so g.mem (live or
+    offline, 4KB or 64KB) can be wrapped directly with no conversion.
+
+    Real-game motivation: a live keyboard-driven climb takes real WALL-CLOCK seconds
+    per action; an object left standing in enemy LOS for that long can be drained or
+    downgraded (robot->boulder->tree, enemy_dynamics.py) before the plan gets back to
+    it -- observed live as an absorb landing on a lower-value object than planned.
+    This lets the planner prefer NOT to leave footholds in enemy view when an
+    equally-good alternative exists (it usually can't avoid it entirely near the
+    Sentinel's own platform -- everything overlooking it is exposed to the Sentinel
+    itself by construction)."""
+    return threat.exposed_tiles(g.state, set(tiles))
+
+
+def _enemy_gaze_distance(g, tiles):
+    """For each tile, the angular distance (0..128, i.e. 0..180 degrees in h_angle
+    units) from the NEAREST enemy's CURRENT facing (OBJ_HANG) to the bearing from
+    that enemy toward the tile -- how far OUT of its instantaneous line of sight the
+    tile currently sits. Larger == safer RIGHT NOW. This is a snapshot, not a
+    guarantee (the enemy rotates over time, ~200 ticks/full sweep per
+    enemy_dynamics.py); use it to prefer footholds the Sentinel isn't currently
+    looking toward, on top of (not instead of) the hard is_exposed avoidance in
+    _enemy_exposed_tiles, which is the "could it EVER see this" guarantee."""
+    import math
+
+    tiles = list(tiles)
+    best = {t: 128 for t in tiles}
+    for s in range(64):
+        if g.mem[OBJ_FLAGS + s] & 0x80:
+            continue
+        if g.mem[OBJ_TYPE + s] not in (mm.T_SENTRY, mm.T_SENTINEL):
+            continue
+        ex, ey = g.mem[OBJ_X + s], g.mem[OBJ_Y + s]
+        gaze = g.mem[NG.OBJ_HANG + s]
+        for t in tiles:
+            dx, dy = t[0] - ex, t[1] - ey
+            if dx == 0 and dy == 0:
+                continue
+            bearing = int(round(math.atan2(dy, dx) * 128.0 / math.pi)) & 0xFF
+            diff = (bearing - gaze) & 0xFF
+            ang_diff = min(diff, 256 - diff)
+            if ang_diff < best[t]:
+                best[t] = ang_diff
+    return best
 
 
 def _lattice_sweep(g, eye):
@@ -46,34 +101,7 @@ def _lattice_sweep(g, eye):
     map is the keyboard-feasibility gate for on-boulder synthoids ($1E48 needs the
     tile-centre fraction < $40). Same order/params as visibility_sweep(coarse) so the
     chosen views are identical."""
-    st = NativeState.from_mem(g.mem)
-    ps = g.player
-    views, centres = {}, {}
-    for h in range(0, 256, 8):
-        for v in NG._VBAND:
-            rx, ry, los, centre = aim_target_native(
-                st,
-                h,
-                v,
-                NG.CUR_CX,
-                NG.CUR_CY,
-                ps,
-                eye_z=eye,
-                max_steps=200,
-                return_centre=True,
-            )
-            if not los:
-                continue
-            t = (rx, ry)
-            if t not in views:
-                views[t] = {
-                    "h_angle": h,
-                    "v_angle": v,
-                    "cursor": [NG.CUR_CX, NG.CUR_CY],
-                }
-            if t not in centres or centre < centres[t]:
-                centres[t] = centre
-    return views, centres
+    return los.sweep_with_centres(g.state, g.player, eye, max_steps=200)
 
 
 def _top_type(g, tile):
@@ -100,7 +128,52 @@ CENTRE = (N - 1) / 2.0  # 15.5
 # makes boulder-steps (5 up-front) unaffordable once the budget dips, stalling the climb
 # at (20,6) cheb-3 (native_won False). 2 is the largest reserve that preserves the
 # ROM-validated win (climb ends at (21,3) eye 11.875, energy 6).
-RESERVE = 2
+RESERVE = int(os.environ.get("CLIMB_RESERVE", "2"))
+
+# EXTRA reserve required when a candidate's DESTINATION tile is enemy-exposed (see
+# _enemy_exposed_tiles): a live keyboard-driven climb can spend many real seconds
+# choosing/aiming its NEXT move while standing there, and an exposed player can be
+# drained during that wait. Without this margin a move that's merely affordable
+# TODAY can leave no energy to afford any escape once drained a few points --
+# observed live as energy draining 6->0 over repeated stuck retries at an exposed
+# tile with no affordable move (see climb_iterate's affordability filter).
+# NOTE: tuned like RESERVE above -- 2 stalls ls0 (oscillates, unable to ever afford
+# a height-gaining boulder-step near the exposed platform ring, native_won False).
+# 1 is the largest value that preserves the ROM-validated ls0 win.
+EXPOSURE_RESERVE = int(os.environ.get("CLIMB_EXPOSURE_RESERVE", "1"))
+
+# Accept a fractional eye above the platform ground as launch-ready in endgame(): the
+# default int(eye)>plat_ground gate rejects eye 8.875 over a z8 platform even though the
+# viewpoint is genuinely above it (see climb_search._reached_approach). Off by default.
+_ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
+
+# PAN-aware fuel: absorbing a fuel object requires panning the view to its bearing, and
+# the Sentinel drains the player during that scroll (see climb_search pan-cost notes).
+# The default _refuel greedily grabs EVERY visible object, chasing far-bearing fuel it
+# doesn't need -- a long pan per grab, drained live. When on: bank fuel NEAR the current
+# heading first, and SKIP a far-bearing (> _PAN_FUEL_MAX units) non-exposed grab once the
+# player already holds a comfortable buffer (so the climb never starves, but doesn't chase
+# distant fuel for a surplus it can bank locally later). Exposed trail is always reclaimed
+# (it degrades if left). Off by default (keeps the ROM-validated ls42 refuel).
+_PAN_COST = os.environ.get("PAN_COST", "0") == "1"
+_PAN_TICKS_H = float(os.environ.get("PAN_TICKS_H", "1.5"))
+_PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
+_PAN_FUEL_MAX = float(os.environ.get("PAN_FUEL_MAX", "48"))
+
+
+def _pan_units(cur_h, cur_v, view):
+    """Angular pan distance (h wraps mod 256 shortest; v linear) from heading (cur_h,
+    cur_v) to `view`'s aim, scaled by the per-axis tick weights -- a proxy for scroll time
+    (and thus mid-aim drain). 0 when the view carries no h angle."""
+    if not view:
+        return 0.0
+    th = view.get("h_angle")
+    if th is None:
+        return 0.0
+    tv = view.get("v_angle")
+    dh = abs(((th - cur_h) + 128) % 256 - 128)
+    dv = abs(tv - cur_v) if tv is not None else 0
+    return dh * _PAN_TICKS_H + dv * _PAN_TICKS_V
 
 
 def edge_dist(t):
@@ -123,6 +196,48 @@ def _foothold_eye(g, T2, use_b):
         boulder_top = cur + (0.875 if first else 0.5)
         return boulder_top + 0.5  # synthoid on the boulder
     return cur + (0.875 if first else 0.5)  # synthoid on terrain/column
+
+
+def _boulder_centre_feasible(g, T2, view, max_steps=2000):
+    """Simulate landing a boulder at T2 (a direct byte-level mutation mirroring
+    Game.create's own boulder-placement logic, on a throwaway mem copy -- no scratch
+    Game/col reconstruction needed) and check whether the on-boulder synthoid then has
+    an actual keyboard-reachable centre-aim ($1E48 <$40), from the PLAYER's current eye
+    (the ray origin doesn't move until the transfer after this build). The pre-build
+    lattice sweep's centre estimate (`centres`, in _candidates) is taken against the
+    BARE-TERRAIN surface, not the post-build object surface, so a tile can look
+    centre_ok there yet have NO valid on-boulder aim once the boulder is real --
+    wasting a real build (energy + real-time aiming) to discover it, exactly what the
+    ROM-validator's blocklist-replan exists to catch offline. Live driving has no such
+    later pass, so catch it here instead: pure native math, no ROM replay."""
+    if not g.free:
+        return False
+    mem = bytearray(g.mem)
+    slot = g.free[-1]
+    tb = mem[0x0400 + NG.TIDX(*T2)]
+    if tb >= 0xC0:  # stacking a boulder onto an existing boulder/platform
+        below = tb & 0x3F
+        btype = mem[OBJ_TYPE + below]
+        if btype not in (3, 6):
+            return False
+        t = mem[OBJ_ZF + below] + 0x80
+        zf = t & 0xFF
+        z = mem[OBJ_Z + below] + (t >> 8)
+        mem[OBJ_FLAGS + slot] = 0x40 | below
+    else:  # bare terrain
+        zf = 0xE0
+        z = tb >> 4
+        mem[OBJ_FLAGS + slot] = 0x00
+    mem[0x0400 + NG.TIDX(*T2)] = 0xC0 | slot
+    mem[OBJ_X + slot] = T2[0]
+    mem[OBJ_Y + slot] = T2[1]
+    mem[OBJ_Z + slot] = z & 0xFF
+    mem[OBJ_ZF + slot] = zf & 0xFF
+    mem[OBJ_TYPE + slot] = 3
+    return (
+        NG.centre_view_for(mem, T2, g.player, int(g.eye), max_steps=max_steps)
+        is not None
+    )
 
 
 def _candidates(g, cur, eye, adj_boulder=False, plat=None, near_plat_radius=0):
@@ -215,18 +330,25 @@ def _apply(g, T2, use_b, view):
 _FUEL_NAME = {0: "synthoid", 1: "sentry", 2: "tree", 3: "boulder"}
 
 
-def _refuel(g, log):
+def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     """Earn energy by absorbing everything you can look DOWN on (top <= eye, in LOS):
     TREES (+1) and SENTRIES (+3), AND -- crucially -- the climb's OWN abandoned BOULDERS
     (+2) and SYNTHOIDS (+3) once you've climbed past them. Reclaiming your own trail makes
     the staircase nearly energy-NEUTRAL (the boulder/synthoid cost is recovered), which is
     how the climb funds itself from the low real starting energy. Never absorb the column
-    the player is standing on (you'd fall). Returns energy gained."""
-    from native_game import ENERGY
+    the player is standing on (you'd fall). Returns energy gained.
+
+    sweep_max_steps/sweep_coarse tune the LOS sweep: the fine default is used on the real
+    committed state; the lookahead search passes a coarser/shorter sweep (it only needs
+    an APPROXIMATE recovered-energy figure for affordability, and this sweep dominates its
+    per-node cost)."""
+    from plan_game import ENERGY
 
     gained = 0
     cur = g.player_xy()
-    sweep = visibility_sweep(g.mem, g.player, int(g.eye), max_steps=320)
+    sweep = visibility_sweep(
+        g.mem, g.player, int(g.eye), max_steps=sweep_max_steps, coarse=sweep_coarse
+    )
     # absorb topmost-first per tile (matches the ROM gate) so stacks unwind cleanly.
     cand = []
     for slot in range(64):
@@ -246,13 +368,372 @@ def _refuel(g, log):
         if g.mem[OBJ_Z + slot] + g.mem[OBJ_ZF + slot] / 256.0 > g.eye + 1e-9:
             continue
         cand.append((g.mem[OBJ_Z + slot] * 256 + g.mem[OBJ_ZF + slot], slot, ot, tile))
-    for _z, slot, ot, tile in sorted(cand, reverse=True):
+    # only the TOPMOST object per tile: `sweep[tile]`'s view/aim was computed for
+    # whatever was on top when the sweep ran. A live keyboard aim centres on the
+    # target's own height, so it does NOT carry over once the top object is gone --
+    # absorbing a second, lower object at the same tile with the stale view can miss
+    # in the real ROM even though the native model (which has no aim concept) sees it
+    # as fine. Leave any object thus exposed for the NEXT refuel pass, which resyncs
+    # (live) or re-sweeps (offline) and gets a fresh, correct view for it.
+    #
+    # Reclaim ENEMY-EXPOSED fuel (typically the climb's own abandoned boulder/synthoid
+    # trail, left standing in the Sentinel's view) BEFORE safer fuel elsewhere: a live
+    # keyboard-driven climb takes real wall-clock seconds per action, and an exposed
+    # object left too long can be drained or downgraded before this batch gets to it.
+    exposed = _enemy_exposed_tiles(g, {tile for _z, _slot, _ot, tile in cand})
+    tiles_done = set()
+    # PAN-aware ordering: keep exposed-trail reclaim first (it degrades if left), then --
+    # when pan cost is on -- bank the NEAREST-bearing fuel before far grabs, so if the
+    # Sentinel comes around mid-pass the cheap local energy is already secured. Default
+    # order (exposed-first, height-first) is preserved when pan cost is off.
+    comfort = RESERVE + 6  # energy buffer above which far-bearing fuel is skipped (PAN)
+    if _PAN_COST:
+        ch, cv = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
+        order = sorted(
+            cand,
+            key=lambda c: (
+                c[3] not in exposed,
+                _pan_units(ch, cv, sweep.get(c[3])),
+                -c[0],
+            ),
+        )
+    else:
+        order = sorted(cand, key=lambda c: (c[3] in exposed, c[0]), reverse=True)
+    for _z, slot, ot, tile in order:
+        if tile in tiles_done:
+            continue
         if g.mem[OBJ_FLAGS + slot] & 0x80:  # already gone (stack collapsed)
+            continue
+        # skip a far-bearing non-exposed grab once a comfortable buffer is banked: the long
+        # pan to reach it would be drained for fuel not needed this pass (grab it later,
+        # closer, or when energy demands). Exposed trail is never skipped (it degrades).
+        if (
+            _PAN_COST
+            and tile not in exposed
+            and g.energy >= comfort
+            and _pan_units(ch, cv, sweep.get(tile)) > _PAN_FUEL_MAX
+        ):
             continue
         g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
         gained += ENERGY[ot]
+        tiles_done.add(tile)
         log(f"    +fuel: absorbed {_FUEL_NAME[ot]} {tile}, energy {g.energy}")
     return gained
+
+
+def climb_ctx(g, toward_plat=False, near_plat_radius=0):
+    """Fixed climb parameters + mutable progress state for `climb_iterate`, derived
+    from g's CURRENT state (so it works whether g is a fresh landscape or a live
+    resync mid-climb)."""
+    plat = g.plat
+    plat_ground = g.plat_ground if g.plat_ground is not None else 8
+    return {
+        "plat": plat,
+        "plat_ground": plat_ground,
+        "target_z": plat_ground + 1,
+        "toward_plat": toward_plat,
+        "near_plat_radius": near_plat_radius,
+        "visited": set(),
+        "tiles_used": set(),  # TILES a foothold has ever been built on (any height) --
+        # blocks the "mine a small cluster" cycle: build here, later absorb your OWN
+        # structure back as fuel, then rebuild nearby at a similar height forever
+        # without net progress (each (tile, height) pair in `visited` is distinct
+        # enough to dodge that check since the exact height differs slightly each
+        # lap). Once a tile has hosted a foothold, don't build there again.
+        "peak_eye": g.eye,
+        "no_gain": 0,
+        "runtime_blocked": set(),
+    }
+
+
+def climb_iterate(g, ctx, blocked, log):
+    """ONE iteration of the greedy climb decision, against g's CURRENT state (which
+    a live driver may have just resynced from real memory). Mutates ctx's
+    visited/peak_eye/no_gain in place and appends to g.steps via g.create/absorb/
+    transfer. Returns a status string:
+      'retry'    -- no foothold move this call (a refuel-only pass); call again
+      'stepped'  -- a foothold move (+ any refuel absorbs) was applied
+      'no_gain'  -- no height progress in 16 iterations; climb should stop
+      'approach' -- reached the platform approach (eye>plat_ground, cheb<=1); stop
+      'stuck'    -- no affordable/reachable foothold; climb should stop
+    """
+    plat, plat_ground, target_z = ctx["plat"], ctx["plat_ground"], ctx["target_z"]
+    toward_plat, near_plat_radius = ctx["toward_plat"], ctx["near_plat_radius"]
+    cur = g.player_xy()
+    eye = int(g.eye)
+    # ENERGY: from the real low starting energy, fund the climb by absorbing every
+    # tree / sentry that comes into view (look-down) as the eye rises -- grab the
+    # fuel the moment it's reachable. Called BEFORE the no_gain check (below) so a
+    # long, deliberate absorb streak -- banking fuel for several iterations before
+    # spending it -- counts as real progress, not stalling: a recorded human win on
+    # ls0 spent ~15s at one vantage point absorbing 5+ energy before its next build,
+    # which the OLD height-only no_gain counter would have aborted as "no progress"
+    # since eye doesn't move while banking.
+    gained_this_pass = _refuel(g, log)
+    if g.eye > ctx["peak_eye"] + 1e-9:
+        ctx["peak_eye"] = g.eye
+        ctx["no_gain"] = 0
+    elif gained_this_pass > 0:
+        ctx["no_gain"] = 0
+    else:
+        ctx["no_gain"] += 1
+    if ctx["no_gain"] > 16:
+        log(f"  no height/fuel progress in 16 steps (peak {ctx['peak_eye']:.2f}); stop")
+        return "no_gain"
+    if eye > plat_ground and cheb(cur, plat) <= 1:
+        log(f"  reached platform approach: {cur} eye {eye} (d=0/1)")
+        return "approach"
+    # _candidates forbids a non-adjacent boulder-step whose BUILD TILE is within
+    # near_plat_radius of the platform (the ROM-infeasible on-distant-boulder synthoid
+    # in the steep ring); far-from-platform far steps stay available for the pocket
+    # break-out. Gating on the build tile (not the player) is what eliminates the
+    # (18,9)->(18,6) cheb-3 step the ROM rejected.
+    cands = _candidates(
+        g,
+        cur,
+        eye,
+        plat=(plat if toward_plat else None),
+        near_plat_radius=near_plat_radius,
+    )
+    climbing = g.eye < target_z
+
+    def _cost(c, exposed):
+        return (
+            (5 if c[1] else 3)
+            + RESERVE
+            + (EXPOSURE_RESERVE if tuple(c[0]) in exposed else 0)
+        )
+
+    # PATIENCE: a recorded human win on ls0 banked a real energy surplus (absorbing
+    # everything visible from one vantage point, sometimes 5+ energy) BEFORE ever
+    # committing to the next build, then took the single biggest height+edge jump
+    # available -- landing +1.0 eye per move, roughly double this planner's old
+    # "take the first affordable gaining move" behaviour (+0.5/move, spending down to
+    # near-zero every time). Model that: if the BEST possible gaining move (any
+    # height, any cost) isn't affordable yet, but this pass's refuel found more fuel,
+    # hold off and keep banking instead of settling for a smaller move that IS
+    # affordable now. Only settle once refueling plateaus (nothing left to absorb
+    # from here) -- the no_gain counter above still bounds how long that can go on.
+    if climbing and not toward_plat:
+        gain_all = [c for c in cands if c[2] > g.eye + 1e-9]
+        # prefer FRESH ground over rebuilding on a tile already used as a foothold
+        # (only fall back to reuse if nothing fresh gains height) -- see tiles_used.
+        fresh_gain = [c for c in gain_all if tuple(c[0]) not in ctx["tiles_used"]]
+        gain_all = fresh_gain or gain_all
+        if gain_all:
+            exposed_all = _enemy_exposed_tiles(g, {tuple(c[0]) for c in gain_all})
+            gaze_all = _enemy_gaze_distance(g, {tuple(c[0]) for c in gain_all})
+            best_possible = max(
+                gain_all,
+                key=lambda c: (c[2], gaze_all.get(tuple(c[0]), 0), edge_dist(c[0])),
+            )
+            if g.energy < _cost(best_possible, exposed_all) and gained_this_pass > 0:
+                log(
+                    f"  banking fuel before committing: best available gain is "
+                    f"{best_possible[2]:.3f} (needs {_cost(best_possible, exposed_all)}, "
+                    f"have {g.energy}); absorbed {gained_this_pass} this pass, retrying"
+                )
+                return "retry"
+
+    # affordability: a boulder-step pays boulder(2)+synthoid(3)=5 up front, a hop
+    # pays synthoid(3), BEFORE the shell re-absorb refunds 3. Skip what we can't pay.
+    # Exposed DESTINATIONS need the extra EXPOSURE_RESERVE margin (see its docstring):
+    # landing there may strand the player waiting on an unaffordable next move while
+    # actively being drained.
+    exposed_dest = _enemy_exposed_tiles(g, {tuple(c[0]) for c in cands})
+    cands = [c for c in cands if g.energy >= _cost(c, exposed_dest)]
+    # blocklist: footholds a real ROM build/aim found infeasible (occluded / gate-
+    # rejected / occupied by a meanie), plus ones THIS session's own centre-aim probe
+    # found infeasible (runtime_blocked) -- avoid them so the replan routes around it.
+    cands = [
+        c
+        for c in cands
+        if (tuple(c[0]), c[1]) not in blocked
+        and (tuple(c[0]), c[1]) not in ctx["runtime_blocked"]
+    ]
+    if not cands:
+        # out of affordable footholds this pass. Retry rather than calling _refuel
+        # again HERE: a same-tile object _refuel deferred (see its one-per-tile note)
+        # may now be absorbable, but computing that from THIS SAME native state (no
+        # real resync/live keypress has happened yet) would batch a second same-tile
+        # absorb using a view computed for a hypothetical post-absorb board -- exactly
+        # the stale-aim risk that regressed a real run (an abandoned robot the plan
+        # expected was, live, already downgraded to a boulder by an enemy; the
+        # precomputed second absorb then fired against a board state that never
+        # actually existed). Returning "retry" lets the NEXT iteration's own fresh
+        # resync (live) or fresh native sweep (offline) discover it correctly instead.
+        # The no_gain counter above still ends the loop after 16 height-less iterations,
+        # so this can't spin forever if the board is genuinely out of reachable fuel.
+        if g.energy < 6:
+            log(
+                f"  no affordable reachable foothold from {cur} eye {eye} "
+                f"(energy {g.energy}); retrying (deferred fuel?)"
+            )
+            return "retry"
+        log(
+            f"  NO affordable reachable foothold from {cur} eye {eye} (energy {g.energy})"
+        )
+        return "stuck"
+
+    if toward_plat:
+        # TOWARD-PLATFORM STRATEGY: ls66 starts in a low pocket whose only break-out
+        # footholds lie W/SW; the original "furthest + most-edge" climb escapes the
+        # pocket but ascends the NW corner, AWAY from the platform (21,3), and the
+        # approach phase can't traverse back at elevation. Instead, among the
+        # HEIGHT-GAINING boulder-steps take the one CLOSEST to the platform, then
+        # HIGHEST. Because the terrain rises toward the platform, "climb while heading
+        # at the platform" rides a boulder-staircase straight up the SW slope onto the
+        # height-10 ring around the platform -- reaching (20,3) eye 11.375 (cheb 1),
+        # the endgame-launch state. The very first moves still go W/SW (only footholds
+        # visible from the pocket) but as soon as height is gained the bias pulls the
+        # staircase east toward the platform.
+        if climbing:
+            gain = [c for c in cands if c[2] > g.eye + 1e-9]
+            if gain:
+                pool = gain
+                # HEIGHT FIRST (matches THE STRATEGY's own height-first doctrine below --
+                # always take the biggest jump you can), platform-proximity only as a
+                # tiebreaker among equal-height candidates. Sorting by proximity-to-plat
+                # FIRST (as this used to) makes the climb take whatever minimal-gain step
+                # is closest to the platform even when a much bigger jump is available
+                # elsewhere -- visibly wasteful small increments, not "gain fastest".
+                key = lambda c: (
+                    c[2],
+                    -cheb(c[0], plat),
+                )  # highest, then closest to plat
+            else:
+                # locally maxed: reposition toward the platform at the best height.
+                pool = [
+                    c for c in cands if (c[0], round(c[2], 2)) not in ctx["visited"]
+                ] or cands
+                key = lambda c: (-cheb(c[0], plat), c[2])
+        else:
+            pool = [c for c in cands if c[2] >= plat_ground] or cands
+            key = lambda c: (-cheb(c[0], plat), c[2])
+    elif climbing:
+        # THE STRATEGY (verbatim): gain HEIGHT as fast as possible, moving toward the
+        # EDGE, while tracking the Sentinel's CURRENT gaze and preferring footholds
+        # furthest from where it's actually looking right now (on top of the hard
+        # is_exposed avoidance below, which only knows "could this ever be seen").
+        # Height gain is the GATE (strict float gain -- the staircase climbs in 0.5
+        # increments by re-stacking); among gaining moves pick the HIGHEST, then
+        # furthest from the enemy's current gaze, then most-edge.
+        gain = [c for c in cands if c[2] > g.eye + 1e-9]
+        # prefer FRESH ground (see tiles_used): otherwise the climb can mine a small
+        # cluster forever -- build here, later absorb the same structure back as
+        # fuel, rebuild nearby at a near-identical height -- since each lap's exact
+        # height differs slightly, `visited` (tile, height) pairs don't catch it.
+        gain = [c for c in gain if tuple(c[0]) not in ctx["tiles_used"]] or gain
+        if gain:
+            gaze = _enemy_gaze_distance(g, {tuple(c[0]) for c in gain})
+            # THE STRATEGY: MAX height per step, then furthest from the Sentinel's
+            # CURRENT gaze, then most EDGE (avoid the centre) -- this is what breaks
+            # out of the low start pocket. boulder-steps give the height; hops alone
+            # can't climb.
+            pool = gain
+            key = lambda c: (c[2], gaze.get(tuple(c[0]), 0), edge_dist(c[0]))
+        else:
+            # locally maxed: reposition to the FURTHEST unvisited high foothold to
+            # find a fresh place to climb (bounded; avoids replouhing visited spots).
+            pool = [c for c in cands if (c[0], round(c[2], 2)) not in ctx["visited"]]
+            key = lambda c: (c[2], cheb(c[0], cur), edge_dist(c[0]))
+    else:
+        # APPROACH phase (high enough): close on the platform, staying high.
+        pool = [c for c in cands if c[2] >= plat_ground] or cands
+        key = lambda c: (-cheb(c[0], plat), c[2], edge_dist(c[0]))
+
+    if not pool:
+        log(
+            f"  NO foothold from {cur} eye {g.eye:.2f} "
+            f"(d={cheb(cur, plat)}) -- climb pocketed here"
+        )
+        return "stuck"
+    if not toward_plat and climbing:
+        # THE STRATEGY's own key already ranks HEIGHT first with the Sentinel's
+        # CURRENT gaze-distance as the safety tiebreaker (see _enemy_gaze_distance
+        # above) -- that key IS the height/safety tradeoff for this mode. Layering
+        # the static "prefer non-exposed" hard reorder below on TOP of it overrides
+        # height with static is_exposed status whenever ANY non-exposed candidate
+        # exists, even a far lower one -- confirmed live: it picked a +0.375 tile
+        # over several centre-feasible +1.0 tiles purely because the big ones were
+        # (statically) exposed and the small one wasn't, exactly the small-wasteful-
+        # step behaviour a recorded human win showed THE STRATEGY should avoid (see
+        # climb_iterate's PATIENCE comment). So for this mode, trust the key as-is.
+        safe_first = sorted(pool, key=key, reverse=True)
+    else:
+        # Other modes (toward_plat, approach) don't yet weigh gaze in their own key,
+        # so keep the static is_exposed PREFERENCE (not a hard filter) here: walk the
+        # non-exposed candidates first, falling back to exposed ones only if none of
+        # those are centre-feasible either.
+        exposed = _enemy_exposed_tiles(g, {tuple(c[0]) for c in pool})
+        ordered = sorted(pool, key=key, reverse=True)
+        safe_first = [c for c in ordered if tuple(c[0]) not in exposed] + [
+            c for c in ordered if tuple(c[0]) in exposed
+        ]
+    # Walk the pool in preference order, verifying boulder-step centre-feasibility only
+    # for the candidate actually under consideration (not the whole pool up front --
+    # that's O(pool size) native-LOS sweeps every iteration for a check only the
+    # eventual pick needs). A rejected boulder-step is blocklisted so future iterations
+    # don't retry it.
+    chosen = None
+    for cand in safe_first:
+        cT2, cuse_b, _ch_after, cview = cand
+        if cuse_b and not _boulder_centre_feasible(g, cT2, cview):
+            ctx["runtime_blocked"].add((tuple(cT2), True))
+            log(f"  boulder-step {cT2}: no on-boulder centre-aim once built; blocking")
+            continue
+        chosen = cand
+        break
+    if chosen is None:
+        log(
+            f"  NO feasible foothold from {cur} eye {g.eye:.2f} "
+            f"(d={cheb(cur, plat)}) after centre-aim check -- climb pocketed here"
+        )
+        return "stuck"
+    T2, use_b, h_after, view = chosen
+    ctx["visited"].add((T2, round(h_after, 2)))
+    ctx["tiles_used"].add(T2)
+    _apply(g, T2, use_b, view)
+    log(
+        f"  {'step' if use_b else 'hop '} -> {T2} eye {g.eye} "
+        f"(d={cheb(g.player_xy(), plat)}) edge={edge_dist(T2):.0f} energy {g.energy}"
+    )
+    return "stepped"
+
+
+def endgame(g, plat, log):
+    """Attempt the win sequence (absorb the Sentinel, build a platform synthoid,
+    transfer) from g's CURRENT state. Returns True iff the transfer onto the
+    platform (the win condition) was applied.
+
+    The win is a LONG-RANGE hop: a synthoid can be created on any tile in line of sight
+    (the sweep supplies the aim), so the endgame needs the eye above the platform ground
+    and LOS to the platform tile -- NOT adjacency. This lets the climb top out on the
+    highest ground it can find and fire the win from afar (the human ls0 win was cheb-10),
+    instead of creeping into the platform ring."""
+    eye = int(g.eye)
+    if g.plat_ground is None or g.sentinel_slot is None:
+        return False
+    above = g.eye > g.plat_ground if _ENDGAME_FRAC_EYE else eye > g.plat_ground
+    if not above:
+        return False
+    # A fractional eye above the platform ground sees DOWN onto it; sweeping at int(eye)
+    # (== plat_ground, the player's own level) drops the platform as not-below. Ceil the
+    # observer to reflect that the viewpoint is genuinely above (only when frac-eye is on).
+    seye = eye + 1 if (_ENDGAME_FRAC_EYE and g.eye > eye) else eye
+    sw = visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
+    if plat not in sw:  # need LOS to the platform to absorb the Sentinel + build on it
+        return False
+    g.absorb(g.sentinel_slot, sw.get(plat), "absorb Sentinel")
+    log(f"  absorbed Sentinel from eye {g.eye}, energy {g.energy}")
+    if g.feasible(0, plat):
+        g.transfer(
+            g.create(0, plat, None, "platform synthoid"),
+            "hyperspace onto platform (WIN)",
+        )
+        log(f"  WIN: synthoid on platform {plat} + transfer")
+        return True
+    return False
 
 
 def plan_greedy(
@@ -269,152 +750,18 @@ def plan_greedy(
     if start_energy is not None:  # else keep the REAL generated energy
         g.energy = start_energy
     log = lambda *a: verbose and print(*a)
-    plat = g.plat
-    plat_ground = g.plat_ground if g.plat_ground is not None else 8
-    target_z = plat_ground + 1
+    ctx = climb_ctx(g, toward_plat, near_plat_radius)
     log(
-        f"greedy ls{landscape}: start {g.player_xy()} eye {g.eye} plat {plat} "
-        f"plat_ground {plat_ground} target_z {target_z} energy {g.energy}"
+        f"greedy ls{landscape}: start {g.player_xy()} eye {g.eye} plat {ctx['plat']} "
+        f"plat_ground {ctx['plat_ground']} target_z {ctx['target_z']} energy {g.energy}"
     )
 
-    visited = set()
-    peak_eye = g.eye
-    no_gain = 0
-    for step in range(max_steps):
-        cur = g.player_xy()
-        eye = int(g.eye)
-        if g.eye > peak_eye + 1e-9:
-            peak_eye = g.eye
-            no_gain = 0
-        else:
-            no_gain += 1
-        if no_gain > 16:
-            log(
-                f"  step {step}: no height progress in 16 steps (peak {peak_eye:.2f}); stop"
-            )
-            break
-        if eye > plat_ground and cheb(cur, plat) <= 1:
-            log(f"  reached platform approach: {cur} eye {eye} (d=0/1)")
-            break
-        # ENERGY: from the real low starting energy, fund the climb by absorbing every
-        # tree / sentry that comes into view (look-down) as the eye rises -- grab the
-        # fuel the moment it's reachable so a build never beeps for lack of energy.
-        _refuel(g, log)
-        # _candidates forbids a non-adjacent boulder-step whose BUILD TILE is within
-        # near_plat_radius of the platform (the ROM-infeasible on-distant-boulder synthoid
-        # in the steep ring); far-from-platform far steps stay available for the pocket
-        # break-out. Gating on the build tile (not the player) is what eliminates the
-        # (18,9)->(18,6) cheb-3 step the ROM rejected.
-        cands = _candidates(
-            g,
-            cur,
-            eye,
-            plat=(plat if toward_plat else None),
-            near_plat_radius=near_plat_radius,
-        )
-        # affordability: a boulder-step pays boulder(2)+synthoid(3)=5 up front, a hop
-        # pays synthoid(3), BEFORE the shell re-absorb refunds 3. Skip what we can't pay.
-        cands = [c for c in cands if g.energy >= (5 if c[1] else 3) + RESERVE]
-        # blocklist: footholds the real-ROM validation pass found infeasible (occluded /
-        # gate-rejected) -- avoid them so the replan routes around the bad build.
-        cands = [c for c in cands if (tuple(c[0]), c[1]) not in blocked]
-        if not cands:
-            # out of affordable footholds -- try once more to refuel, then give up.
-            if g.energy < 6 and _refuel(g, log) > 0:
-                continue
-            log(
-                f"  step {step}: NO affordable reachable foothold from {cur} eye {eye} "
-                f"(energy {g.energy})"
-            )
+    for _ in range(max_steps):
+        status = climb_iterate(g, ctx, blocked, log)
+        if status in ("no_gain", "approach", "stuck"):
             break
 
-        climbing = g.eye < target_z
-        if toward_plat:
-            # TOWARD-PLATFORM STRATEGY: ls66 starts in a low pocket whose only break-out
-            # footholds lie W/SW; the original "furthest + most-edge" climb escapes the
-            # pocket but ascends the NW corner, AWAY from the platform (21,3), and the
-            # approach phase can't traverse back at elevation. Instead, among the
-            # HEIGHT-GAINING boulder-steps take the one CLOSEST to the platform, then
-            # HIGHEST. Because the terrain rises toward the platform, "climb while heading
-            # at the platform" rides a boulder-staircase straight up the SW slope onto the
-            # height-10 ring around the platform -- reaching (20,3) eye 11.375 (cheb 1),
-            # the endgame-launch state. The very first moves still go W/SW (only footholds
-            # visible from the pocket) but as soon as height is gained the bias pulls the
-            # staircase east toward the platform.
-            if climbing:
-                gain = [c for c in cands if c[2] > g.eye + 1e-9]
-                if gain:
-                    pool = gain
-                    key = lambda c: (
-                        -cheb(c[0], plat),
-                        c[2],
-                    )  # closest to plat, then highest
-                else:
-                    # locally maxed: reposition toward the platform at the best height.
-                    pool = [
-                        c for c in cands if (c[0], round(c[2], 2)) not in visited
-                    ] or cands
-                    key = lambda c: (-cheb(c[0], plat), c[2])
-            else:
-                pool = [c for c in cands if c[2] >= plat_ground] or cands
-                key = lambda c: (-cheb(c[0], plat), c[2])
-        elif climbing:
-            # THE STRATEGY (verbatim): gain HEIGHT as fast as possible, using the square
-            # FURTHEST from the current position, avoiding the map CENTRE. Height gain is
-            # the GATE (strict float gain -- the staircase climbs in 0.5 increments by
-            # re-stacking); among gaining moves pick the FURTHEST, then most-edge, then
-            # highest. Minimising transfers falls out of always taking the biggest jump.
-            gain = [c for c in cands if c[2] > g.eye + 1e-9]
-            if gain:
-                # THE STRATEGY: MAX height per step, then FURTHEST from current, then most
-                # EDGE (avoid the centre) -- this is what breaks out of the low start
-                # pocket. boulder-steps give the height; hops alone can't climb.
-                pool = gain
-                key = lambda c: (c[2], cheb(c[0], cur), edge_dist(c[0]))
-            else:
-                # locally maxed: reposition to the FURTHEST unvisited high foothold to
-                # find a fresh place to climb (bounded; avoids replouhing visited spots).
-                pool = [c for c in cands if (c[0], round(c[2], 2)) not in visited]
-                key = lambda c: (c[2], cheb(c[0], cur), edge_dist(c[0]))
-        else:
-            # APPROACH phase (high enough): close on the platform, staying high.
-            pool = [c for c in cands if c[2] >= plat_ground] or cands
-            key = lambda c: (-cheb(c[0], plat), c[2], edge_dist(c[0]))
-
-        if not pool:
-            log(
-                f"  step {step}: NO foothold from {cur} eye {g.eye:.2f} "
-                f"(d={cheb(cur, plat)}) -- climb pocketed here"
-            )
-            break
-        T2, use_b, h_after, view = max(pool, key=key)
-        visited.add((T2, round(h_after, 2)))
-        _apply(g, T2, use_b, view)
-        log(
-            f"  [{step:2}] {'step' if use_b else 'hop '} -> {T2} eye {g.eye} "
-            f"(d={cheb(g.player_xy(), plat)}) edge={edge_dist(T2):.0f} energy {g.energy}"
-        )
-
-    # ---- endgame: absorb the Sentinel (look down), synthoid on platform, transfer ----
-    won = False
-    cur = g.player_xy()
-    eye = int(g.eye)
-    if (
-        g.plat_ground is not None
-        and eye > g.plat_ground
-        and cheb(cur, plat) <= 1
-        and g.sentinel_slot is not None
-    ):
-        sw = visibility_sweep(g.mem, g.player, eye, max_steps=200, coarse=True)
-        g.absorb(g.sentinel_slot, sw.get(plat), "absorb Sentinel")
-        log(f"  absorbed Sentinel from eye {g.eye}, energy {g.energy}")
-        if g.feasible(0, plat):
-            g.transfer(
-                g.create(0, plat, None, "platform synthoid"),
-                "hyperspace onto platform (WIN)",
-            )
-            won = True
-            log(f"  WIN: synthoid on platform {plat} + transfer")
+    won = endgame(g, ctx["plat"], log)
     g.native_won = won
     log(
         f"=== greedy {'WON' if won else 'INCOMPLETE'} in {time.time()-t0:.2f}s, "

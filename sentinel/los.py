@@ -1010,6 +1010,42 @@ def visible_tiles(
     return seen
 
 
+def sweep_with_centres(state, slot, eye_z, max_steps=200):
+    """One keyboard-lattice sweep returning (views, centres):
+      views:   {(tx,ty): {"h_angle":h,"v_angle":v,"cursor":[SIGHTS_CX,SIGHTS_CY]}}
+               first LOS hit per tile
+      centres: {(tx,ty): min tile-centre fraction seen for that tile}
+    Same lattice/order/params as visible_tiles(); centre from
+    aim_target(return_centre=True)."""
+    views = {}
+    centres = {}
+    for h in range(0, 256, AZIMUTH_STEP):
+        for v in PITCH_BAND:
+            tx, ty, los, centre = aim_target(
+                state,
+                h,
+                v,
+                SIGHTS_CX,
+                SIGHTS_CY,
+                slot,
+                eye_z=eye_z,
+                max_steps=max_steps,
+                return_centre=True,
+            )
+            if not los:
+                continue
+            tile = (tx, ty)
+            if tile not in views:
+                views[tile] = {
+                    "h_angle": h,
+                    "v_angle": v,
+                    "cursor": [SIGHTS_CX, SIGHTS_CY],
+                }
+            if tile not in centres or centre < centres[tile]:
+                centres[tile] = centre
+    return views, centres
+
+
 def centre_view(
     state, tile, slot=None, eye_z=None, azimuth_step=AZIMUTH_STEP, max_steps=2000
 ):

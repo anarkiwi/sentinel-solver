@@ -6,7 +6,7 @@ genuine ROM win flag $0CDE bit6 verified.
 NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the
 authentic keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles
 sights-off (S/D/L/COMMA + U-turn) then the sights cursor sights-on, closed-loop on
-the live native-LOS probe (native_los on a RAM snapshot) until the target tile is hit
+the live native-LOS probe (sentinel.los on a RAM snapshot) until the target tile is hit
 with LOS. The action is then a real keystroke (R/B robot/boulder, Q transfer, A absorb,
 H hyperspace), fired via tap_action which polls the game's own $0CE9 action latch.
 Every state-changing input is a real key; reads never change state. The AVI is captured
@@ -16,7 +16,7 @@ Plan: out/kbd_greedy_0066.json -- ROM-validated steps (count == len(steps)). The
 TYPES "0042" (BCD 0x42 = internal seed 66).
 """
 
-import os, sys, time, json, argparse
+import os, sys, time, json, struct, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
@@ -25,10 +25,12 @@ sys.path.insert(0, HERE)
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 
-import game_state as gs
+import vice_state as gs
 from vice_execute import Executor, CREATE_KEY, K_ABSORB, K_TRANSFER, K_HYPERSPACE
 import kbd_aim
-from native_los import NativeState, aim_target_native
+from sentinel.state import State
+from sentinel import los
+import plan_game
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -77,9 +79,45 @@ def robust(bm, log, fn, tries=4):
     return fn()
 
 
-def navigate(bm, typed_digits, log):
+# VICE binary-monitor snapshot commands (vice.texi 22378/22416): a snapshot (.vsf) is
+# the complete machine state (CPU+RAM+chips). Saving one at the code-entry screen and
+# restoring it lets a re-run skip the ~50s tape boot entirely.
+SNAP_SAVE_OPCODE = 0x41  # MON_CMD_DUMP:   body SR|SD|FL|FN  -> empty response
+SNAP_LOAD_OPCODE = 0x42  # MON_CMD_UNDUMP: body FL|FN        -> response = restored PC
+
+
+def save_snapshot(bm, container_path, log, save_roms=False, save_disks=False):
+    """MON_CMD_DUMP (0x41): SR|SD|FL|FN. `container_path` is a path INSIDE the emulator
+    process -- point it at the mounted /renders volume so the .vsf persists on the host
+    across container runs. ROMs/disks are omitted (SR=SD=0): the RAM+CPU+chip state is all
+    that is needed to resume at the code-entry screen (ROMs reload from config on boot).
+    """
+    fn = container_path.encode()
+    body = (
+        struct.pack("<BBB", int(bool(save_roms)), int(bool(save_disks)), len(fn)) + fn
+    )
+    robust(bm, log, lambda: bm.call(SNAP_SAVE_OPCODE, body, timeout=30.0))
+
+
+def load_snapshot(bm, container_path, log):
+    """MON_CMD_UNDUMP (0x42): FL|FN, response = the restored PC (2 bytes LE). Restores the
+    full machine state saved by save_snapshot -- skipping the tape boot."""
+    fn = container_path.encode()
+    body = struct.pack("<B", len(fn)) + fn
+    resp = robust(bm, log, lambda: bm.call(SNAP_LOAD_OPCODE, body, timeout=30.0))
+    if resp is not None and len(resp.body) >= 2:
+        return struct.unpack("<H", resp.body[:2])[0]
+    return None
+
+
+def navigate(bm, typed_digits, log, snapshot_container=None, snapshot_host=None):
     """Boot under WARP to LANDSCAPE NUMBER, patch the code-checks, type the digits +
-    dummy secret code, dismiss the preview, enter play."""
+    dummy secret code, dismiss the preview, enter play.
+
+    If snapshot_host exists, RESTORE the machine state saved there (skipping the ~50s tape
+    boot) instead of booting; otherwise boot, then SAVE a snapshot at the code-entry screen
+    (after the code-check patches, before the landscape digits) so the NEXT run is fast.
+    The snapshot is landscape-agnostic -- the digits are always typed after restore."""
 
     def tap(name, hold=20, settle=0.4):
         robust(
@@ -101,15 +139,36 @@ def navigate(bm, typed_digits, log):
             )
             time.sleep(0.4)
 
-    log("booting + loading (warp)...")
-    for _ in range(50):
-        time.sleep(1.0)
-        robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
-    for _ in range(3):
-        tap("SPACE", hold=30, settle=1.5)
-    log("patching secret-code checks ($14DF/$2565/$2570)")
-    for addr, data in PATCHES:
-        robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
+    restored = False
+    if snapshot_container and snapshot_host and os.path.exists(snapshot_host):
+        try:
+            log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
+            load_snapshot(bm, snapshot_container, log)
+            try:
+                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
+            except Exception:
+                pass
+            time.sleep(1.0)
+            restored = True
+        except Exception as e:
+            log(f"  snapshot restore failed ({e}); falling back to full boot")
+
+    if not restored:
+        log("booting + loading (warp)...")
+        for _ in range(50):
+            time.sleep(1.0)
+            robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
+        for _ in range(3):
+            tap("SPACE", hold=30, settle=1.5)
+        log("patching secret-code checks ($14DF/$2565/$2570)")
+        for addr, data in PATCHES:
+            robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
+        if snapshot_container and snapshot_host:
+            log(f"saving VICE snapshot -> {snapshot_host} (reuse to skip next boot)")
+            try:
+                save_snapshot(bm, snapshot_container, log)
+            except Exception as e:
+                log(f"  snapshot save failed ({e}); continuing without it")
     log(f"typing landscape digits {typed_digits!r}")
     tap_text(typed_digits)
     tap("RETURN", hold=30, settle=3.0)
@@ -169,10 +228,10 @@ def _free_port_6502(log):
         log(f"  port-cleanup warning: {e}")
 
 
-def verify_entry(bm, log):
-    """Confirm the live state matches game_state.Py65Source.from_landscape(66) 16/16."""
+def verify_entry(bm, log, landscape=66):
+    """Confirm the live state matches vice_state.Py65Source.from_landscape(landscape)."""
     try:
-        ref = gs.read_game_state(gs.Py65Source.from_landscape(66))
+        ref = gs.read_game_state(gs.Py65Source.from_landscape(landscape))
     except Exception as e:
         log(f"  (entry ref unavailable: {e})")
         return None
@@ -181,28 +240,56 @@ def verify_entry(bm, log):
     live_objs = sorted((o.x, o.y, o.type) for o in live.objects)
     matched = sum(1 for o in ref_objs if o in live_objs)
     log(
-        f"ENTRY MATCH: {matched}/{len(ref_objs)} objects vs from_landscape(66) "
+        f"ENTRY MATCH: {matched}/{len(ref_objs)} objects vs from_landscape({landscape}) "
         f"(live has {len(live_objs)})"
     )
     return matched, len(ref_objs)
 
 
-def run(typed_digits, plan_path, max_seconds, log):
+def landscape_from_digits(typed_digits):
+    """The player types a 4-digit landscape number; the game reads the last two
+    digits as a single BCD byte, whose value IS the internal seed (e.g. "0042" ->
+    byte 0x42 -> seed 66). Decimal digits are numerically identical to hex nibbles,
+    so parsing the last 2 characters as hex reproduces the BCD-to-binary step."""
+    return int(typed_digits[-2:], 16)
+
+
+def run(
+    typed_digits,
+    plan_path,
+    max_seconds,
+    log,
+    video_name="solver_run_0042.avi",
+    live=False,
+    use_search=False,
+    use_snapshot=False,
+):
     if not os.path.exists(TAP):
         raise FileNotFoundError(
             f"{TAP} missing: place the game tape image there (not distributed)"
         )
-    with open(plan_path) as f:
-        plan = json.load(f)
-    if not plan.get("won"):
-        log(f"REFUSING: plan {plan_path} is not a win (won={plan.get('won')})")
-        return {"won": False, "note": "plan not validated"}
-    steps = plan["steps"]
-    log(f"loaded {len(steps)} steps from {plan_path}")
+    landscape = landscape_from_digits(typed_digits)
+    steps, plan = None, {"landscape": landscape}
+    if not live:
+        with open(plan_path) as f:
+            plan = json.load(f)
+        if not plan.get("won"):
+            log(f"REFUSING: plan {plan_path} is not a win (won={plan.get('won')})")
+            return {"won": False, "note": "plan not validated"}
+        steps = plan["steps"]
+        log(f"loaded {len(steps)} steps from {plan_path}")
+    else:
+        log(f"LIVE replanning mode: landscape {landscape} (no precomputed plan)")
 
     renders_host = os.path.join(ROOT, "renders")
     os.makedirs(renders_host, exist_ok=True)
-    video_host = os.path.join(renders_host, "solver_run_0042.avi")
+    video_host = os.path.join(renders_host, video_name)
+    # code-entry snapshot lives on the mounted /renders volume, so it persists on the host
+    # across container runs and can be restored to skip the ~50s tape boot (landscape-
+    # agnostic: the digits are typed after restore). None disables the snapshot path.
+    snap_name = "vice_code_entry.vsf"
+    snapshot_host = os.path.join(renders_host, snap_name) if use_snapshot else None
+    snapshot_container = f"/renders/{snap_name}" if use_snapshot else None
     if os.path.exists(video_host):
         try:
             os.remove(video_host)
@@ -256,12 +343,12 @@ def run(typed_digits, plan_path, max_seconds, log):
                     raise
                 bm.exit()
 
-                navigate(bm, typed_digits, log)
+                navigate(bm, typed_digits, log, snapshot_container, snapshot_host)
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
                     continue
-                result["entry_match"] = verify_entry(bm, log)
+                result["entry_match"] = verify_entry(bm, log, plan.get("landscape", 66))
                 ex = Executor(bm, log)
                 plat = (ex.rd(A_PLAT_X), ex.rd(A_PLAT_Y))
                 log(
@@ -273,14 +360,30 @@ def run(typed_digits, plan_path, max_seconds, log):
                 if record:
                     log(f"-- starting AVI recording -> {video_host} --")
                     try:
-                        bm.video_record("/renders/solver_run_0042.avi")
+                        bm.video_record(f"/renders/{video_name}")
                     except Exception as e:
                         log(f"  video_record failed: {e}")
                     time.sleep(1.0)
                 else:
                     log("-- NO_RECORD=1: skipping AVI (warp stays on) --")
 
-                won = execute(ex, steps, plat, log, result, t_start, max_seconds)
+                if live:
+                    won = execute_live(
+                        ex,
+                        log,
+                        result,
+                        t_start,
+                        max_seconds,
+                        landscape,
+                        plat,
+                        toward_plat=os.environ.get("TOWARD_PLAT", "1") == "1",
+                        near_plat_radius=int(os.environ.get("NEAR_PLAT_RADIUS", "2")),
+                        use_search=use_search,
+                        search_depth=int(os.environ.get("SEARCH_DEPTH", "2")),
+                        search_beam=int(os.environ.get("SEARCH_BEAM", "2")),
+                    )
+                else:
+                    won = execute(ex, steps, plat, log, result, t_start, max_seconds)
                 result["won"] = won
                 time.sleep(1.5)
 
@@ -308,206 +411,254 @@ def run(typed_digits, plan_path, max_seconds, log):
     return result
 
 
-def execute(ex, steps, plat, log, result, t_start, max_seconds):
-    """Walk the ROM-validated steps with the authentic keyboard sights-cursor aim
-    (kbd_aim.KbdDriver) + real action keys, verifying each step's memory delta and
-    watching the energy curve."""
-    drv = kbd_aim.KbdDriver(ex.bm, log)
+def _probe_once(bm):
+    m = bytearray(bm.mem_get(0x0000, 0x0FFF))
+    ps = m[0x000B]
+    st = State.from_mem(bytes(m))
+    rx, ry, los_hit, centre = los.aim_target(
+        st,
+        m[0x09C0 + ps],
+        m[0x0140 + ps],
+        m[0x0CC6],
+        m[0x0CC7],
+        ps,
+        eye_z=m[0x0940 + ps],
+        max_steps=4000,
+        return_centre=True,
+    )
+    sig = (m[0x0CE4] & 0x80, m[0x09C0 + ps], m[0x0140 + ps], m[0x0CC6], m[0x0CC7])
+    return (rx, ry, los_hit, centre), sig
 
-    def _probe_once():
-        m = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
-        ps = m[0x000B]
-        st = NativeState.from_mem(bytes(m))
-        rx, ry, los, centre = aim_target_native(
-            st,
-            m[0x09C0 + ps],
-            m[0x0140 + ps],
-            m[0x0CC6],
-            m[0x0CC7],
-            ps,
-            eye_z=m[0x0940 + ps],
-            max_steps=4000,
-            return_centre=True,
+
+def probe_tile(bm):
+    """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
+    Hardened (D2): only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
+    identical across two consecutive reads (reject transient mid-pan / queued-wrap
+    state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
+    res, prev = _probe_once(bm)
+    for _ in range(8):
+        if prev[0] == 0:
+            res2, sig2 = _probe_once(bm)
+            if sig2 == prev:
+                return res2
+            res, prev = res2, sig2
+        else:
+            time.sleep(0.05)
+            res, prev = _probe_once(bm)
+    return res
+
+
+def perform_step(ex, drv, label, stp, log, result):
+    """Fire ONE plan step (verb/otype/target/view) against the live game via a real
+    keystroke, verify the memory delta, and report the outcome. Shared by the fixed-
+    plan executor and the live replanning loop. Returns one of:
+      "ok"               -- verified success
+      "best_effort_miss" -- a non-Sentinel absorb missed (fuel recovery; non-fatal)
+      "drained"          -- energy already below a create's cost before firing (no keys sent)
+      "aim_miss"         -- the aim never reached the requested view (nothing fired)
+      "fail"             -- verify() rejected the step (wrong-tile/count/energy delta)
+    """
+    verb, tile, otype = stp["verb"], tuple(stp["target"]), stp["otype"]
+    plan_view = stp.get("view")
+
+    before = ex.state()
+    e0 = before.player_energy
+    objs0 = len(objects_at(before, *tile))
+    slot0 = before.player_slot
+    result["energy_curve"].append({"step": label, "verb": verb, "energy_before": e0})
+
+    # D7: proactive drain watch -- if the live budget before a CREATE has already
+    # fallen below its cost, enemies drained us during aiming; flag it explicitly
+    # rather than letting the create silently energy-block.
+    if verb == "create" and e0 < otype_cost(otype):
+        log(
+            f"[{label}] create {tile}: DRAINED -- energy {e0} < cost {otype_cost(otype)}"
         )
-        sig = (m[0x0CE4] & 0x80, m[0x09C0 + ps], m[0x0140 + ps], m[0x0CC6], m[0x0CC7])
-        return (rx, ry, los, centre), sig
+        result["energy_block"] = {
+            "step": label,
+            "tile": list(tile),
+            "otype": otype,
+            "energy_before": e0,
+        }
+        return "drained"
 
-    def probe_tile():
-        """Where the live sights ray lands now (native_los on a cheap RAM snapshot).
-        Hardened (D2): only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
-        identical across two consecutive reads (reject transient mid-pan / queued-wrap
-        state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
-        res, prev = _probe_once()
-        for _ in range(8):
-            if prev[0] == 0:
-                res2, sig2 = _probe_once()
-                if sig2 == prev:
-                    return res2
-                res, prev = res2, sig2
-            else:
-                time.sleep(0.05)
-                res, prev = _probe_once()
-        return res
-
-    for i, stp in enumerate(steps):
-        if time.time() - t_start > max_seconds:
-            log(f"TIME BUDGET ({max_seconds}s) exceeded at step {i}; aborting")
-            result["divergence"] = f"timeout at step {i}"
-            return False
-        verb, tile, otype = stp["verb"], tuple(stp["target"]), stp["otype"]
-        _tx, _ty = tile
-        plan_view = stp.get("view")
-
-        before = ex.state()
-        e0 = before.player_energy
-        objs0 = len(objects_at(before, *tile))
-        slot0 = before.player_slot
-        result["energy_curve"].append({"step": i, "verb": verb, "energy_before": e0})
-
-        # D7: proactive drain watch. The plan carries the ROM-validated expected energy
-        # AFTER each step ("plan_energy"); if the live budget before a CREATE has already
-        # fallen below its cost, enemies drained us during aiming -- flag it explicitly
-        # rather than letting the create silently energy-block.
-        if verb == "create" and e0 < otype_cost(otype):
+    # A view of None means the planner deferred the aim (an on-boulder synthoid re-
+    # aims after the boulder just landed; an absorb whose coarse candidate sweep
+    # didn't resolve one). The fixed-plan JSON has these filled in by the offline
+    # ROM-validation pass (plan_game.centre_view_for against
+    # the real engine); the live path has no such pass, so resolve a live centre-
+    # aimed view here, against CURRENT memory (e.g. post-boulder), before firing.
+    if verb in ("create", "absorb") and plan_view is None:
+        mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+        ps = mem[0x000B]
+        eye_z = mem[plan_game.OBJ_Z + ps]
+        plan_view = plan_game.centre_view_for(bytes(mem), tile, ps, eye_z)
+        if plan_view is None:
             log(
-                f"[{i:2}] create {tile}: DRAINED -- energy {e0} < cost {otype_cost(otype)} "
-                f"(plan expected ~{stp.get('plan_energy')})"
+                f"[{label}] {verb} {tile}: no live keyboard view (no LOS); "
+                "firing blind, verify() decides"
             )
-            result["energy_block"] = {
-                "step": i,
-                "tile": list(tile),
-                "otype": otype,
-                "energy_before": e0,
-                "plan_energy": stp.get("plan_energy"),
-            }
-            result["divergence"] = f"step {i} create {tile}: drained (energy {e0})"
-            return False
 
-        # --- KEYBOARD AIM: DRIVE the persisted view. Each create/absorb step carries a
-        # ROM-validated, keyboard-lattice view (h%8==0, v%4==1 in the pan band) computed by
-        # inverting the aim transform (scripts/aim_invert.py). We do NOT recompute via
-        # snap_keyboard_view (broken/slow); we drive the real keys to the persisted angles
-        # sights-off, then the persisted cursor sights-on, and CONFIRM the live LOS ray.
-        # blind synthoid-creates (view=null) build on the boulder we already aimed at;
-        # transfers need no aim. ---
-        aim_info = None
-        if verb in ("create", "absorb") and plan_view is not None:
-            view = plan_view
-            if not drv.sights_set(False):
-                log(f"[{i:2}] {verb} {tile}: sights would not turn OFF")
-                result["divergence"] = f"step {i} sights off failed"
-                return False
-            okh = drv.coarse_h(view["h_angle"])
-            okv = drv.coarse_v(view["v_angle"])
-            if not (okh and okv):
+    # --- KEYBOARD AIM: DRIVE the given view. Create/absorb steps carry a keyboard-
+    # lattice view (h%8==0, v%4==1 in the pan band); drive the real keys to those
+    # angles sights-off, then the cursor sights-on, and CONFIRM the live LOS ray. ---
+    aim_info = None
+    if verb in ("create", "absorb") and plan_view is not None:
+        view = plan_view
+        # AIM is pre-action and idempotent (drives the cursor to ABSOLUTE angles, reads
+        # probes -- no game action fires). A best-effort fuel absorb at an extreme angle
+        # can leave the monitor checkpoint desynced (CPU stopped / PC never recurs), and
+        # the raw driver calls do not catch that -- an unhandled socket TimeoutError would
+        # otherwise crash the whole run into the boot-retry. Reconnect + re-aim instead.
+        okh = okv = okc = False
+        rx = ry = centre = 0
+        los = False
+        ach = {"h": 0, "v": 0, "cur": (0, 0)}
+        for _aim_try in range(3):
+            try:
+                if not drv.sights_set(False):
+                    log(f"[{label}] {verb} {tile}: sights would not turn OFF")
+                    return "fail"
                 okh = drv.coarse_h(view["h_angle"])
                 okv = drv.coarse_v(view["v_angle"])
-            if not drv.sights_on():
-                log(f"[{i:2}] {verb} {tile}: sights would not turn ON")
-                result["divergence"] = f"step {i} sights on failed"
-                return False
-            okc = drv.fine_cursor(
-                *view["cursor"]
-            )  # sights-on re-centred it; drive persisted
-            rx, ry, los, centre = probe_tile()
-            ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
-            aim_info = {
-                "ach": ach,
-                "want": view,
-                "probe": (rx, ry, los, centre),
-                "ok": {"h": okh, "v": okv, "cur": okc},
-            }
-            log(
-                f"[{i:2}] {verb} {tile}: drove view h=${view['h_angle']:02x} "
-                f"v=${view['v_angle']:02x} cur={view['cursor']} -> ach h=${ach['h']:02x} "
-                f"v=${ach['v']:02x} cur={ach['cur']} probe=({rx},{ry}) los={los} "
-                f"centre=${centre:02x}"
-            )
-            # The native_los probe is ADVISORY only: the arbiter is the real ROM's
-            # object-count/energy delta (verify() below). The persisted view is
-            # ROM-validated; drive it and let the game decide. Only note a probe miss.
-            drove_ok = (
-                drv.hang() == view["h_angle"]
-                and drv.vang() == view["v_angle"]
-                and drv.cur() == tuple(view["cursor"])
-            )
-            if (rx, ry) != tile or not los or not drove_ok:
+                if not (okh and okv):
+                    okh = drv.coarse_h(view["h_angle"])
+                    okv = drv.coarse_v(view["v_angle"])
+                if not drv.sights_on():
+                    log(f"[{label}] {verb} {tile}: sights would not turn ON")
+                    return "fail"
+                okc = drv.fine_cursor(
+                    *view["cursor"]
+                )  # sights-on re-centred it; drive persisted
+                rx, ry, los, centre = probe_tile(ex.bm)
+                ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
+                break
+            except (TimeoutError, OSError, ConnectionError) as e:
                 log(
-                    f"[{i:2}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los} "
-                    f"drove_ok={drove_ok}; firing anyway, verify() decides"
+                    f"[{label}] {verb} {tile}: aim monitor drop "
+                    f"({type(e).__name__}); reconnecting + re-aiming"
                 )
-
-        # --- ACTION KEY (deterministic, scan-consumed) ---
-        if verb == "create":
-            key = CREATE_KEY[otype]
-        elif verb == "transfer":
-            key = K_TRANSFER
-        elif verb == "absorb":
-            key = K_ABSORB
+                _reconnect(ex.bm, log)
         else:
-            log(f"[{i:2}] unknown verb {verb}; abort")
-            result["divergence"] = f"step {i} unknown verb {verb}"
-            return False
-        # consider_player_action ($12D9) requires sights active for create/absorb AND
-        # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
-        # false-negative latch -- a second create/absorb would stack an extra object). The
-        # object-count/energy/slot delta in verify() is the real arbiter of success.
-        if verb in ("create", "absorb", "transfer"):
-            drv.sights_on()
-        latched = drv.tap_action(key)
-        if not latched:
+            log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
+            return "fail"
+        aim_info = {
+            "ach": ach,
+            "want": view,
+            "probe": (rx, ry, los, centre),
+            "ok": {"h": okh, "v": okv, "cur": okc},
+        }
+        log(
+            f"[{label}] {verb} {tile}: drove view h=${view['h_angle']:02x} "
+            f"v=${view['v_angle']:02x} cur={view['cursor']} -> ach h=${ach['h']:02x} "
+            f"v=${ach['v']:02x} cur={ach['cur']} probe=({rx},{ry}) los={los} "
+            f"centre=${centre:02x}"
+        )
+        # The sentinel.los probe is ADVISORY only: the arbiter is the real ROM's
+        # object-count/energy delta (verify() below). Drive the view and let the game
+        # decide; only note a probe miss. drove_ok comes from the already-read ach (no
+        # extra monitor round-trips -- fewer socket ops = fewer flaky-idle drops).
+        drove_ok = (
+            ach["h"] == view["h_angle"]
+            and ach["v"] == view["v_angle"]
+            and ach["cur"] == tuple(view["cursor"])
+        )
+        # GUARD: never fire when the aim did NOT reach the requested view. The angles read
+        # back (ach) not matching the request means a pan clamped or could not converge, so
+        # the sights are pointing somewhere other than `tile` -- firing here is exactly the
+        # "acted on the wrong tile" failure that drained energy and desynced the model. Skip
+        # the action and report a miss so the loop resyncs and re-plans (re-snaps a view, or
+        # picks a different foothold) instead. The native-LOS probe stays ADVISORY: with the
+        # angles correct it can still disagree with the ROM, so a probe-only mismatch is NOT
+        # a reason to withhold the action (that would skip valid actions forever).
+        if not drove_ok:
             log(
-                f"[{i:2}] {verb} {tile}: action key {key} latch not observed; verify() decides"
+                f"[{label}] {verb} {tile}: aim did NOT reach view (want h=${view['h_angle']:02x} "
+                f"v=${view['v_angle']:02x} cur={view['cursor']}, got h=${ach['h']:02x} "
+                f"v=${ach['v']:02x} cur={ach['cur']}); NOT firing -- resync + re-plan"
+            )
+            return "aim_miss"
+        if (rx, ry) != tile or not los:
+            log(
+                f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los} but angles "
+                f"reached; firing, verify() decides"
             )
 
-        after = ex.state()
-        e1 = after.player_energy
-        objs1 = len(objects_at(after, *tile))
-        slot1 = after.player_slot
-
-        ok, msg = verify(
-            verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1
-        )
-        result["actions"].append(
-            {
-                "step": i,
-                "verb": verb,
-                "tile": list(tile),
-                "otype": otype,
-                "ok": ok,
-                "msg": msg,
-                "energy": [e0, e1],
-                "aim": aim_info,
-            }
-        )
-        log(f"[{i:2}] {verb:8} {tile} otype={otype}: {'OK ' if ok else 'FAIL'} {msg}")
-        if not ok:
-            # BEST-EFFORT ABSORBS: trail/fuel absorbs (otype != 5, the Sentinel) are energy
-            # recovery, exactly as the ROM validator treats them -- a miss is NOT fatal. The
-            # plan carries an energy margin; if a missed refund later starves a build, that
-            # CREATE will energy-block below and abort with a clear message. Skip and go on.
-            if verb == "absorb" and otype != 5:
+    # --- ACTION KEY (deterministic, scan-consumed) ---
+    if verb == "create":
+        key = CREATE_KEY[otype]
+    elif verb == "transfer":
+        key = K_TRANSFER
+    elif verb == "absorb":
+        key = K_ABSORB
+    else:
+        log(f"[{label}] unknown verb {verb}; abort")
+        return "fail"
+    # consider_player_action ($12D9) requires sights active for create/absorb AND
+    # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
+    # false-negative latch -- a second create/absorb would stack an extra object). The
+    # object-count/energy/slot delta in verify() is the real arbiter of success.
+    if verb in ("create", "absorb", "transfer"):
+        for _s_try in range(3):
+            try:
+                drv.sights_on()
+                break
+            except (TimeoutError, OSError, ConnectionError) as e:
                 log(
-                    f"    (best-effort absorb miss at step {i}; continuing -- "
-                    f"energy {e1})"
+                    f"[{label}] {verb} {tile}: sights-on monitor drop "
+                    f"({type(e).__name__}); reconnecting"
                 )
-                continue
-            # If a CREATE failed with energy at/near 0, flag it as an energy-budget block.
-            if verb == "create" and e0 <= otype_cost(otype):
-                result["energy_block"] = {
-                    "step": i,
-                    "tile": list(tile),
-                    "otype": otype,
-                    "energy_before": e0,
-                }
-                log(
-                    f"    >>> ENERGY BLOCK: build at step {i} needs more energy than "
-                    f"the {e0} available"
-                )
-            result["divergence"] = f"step {i} {verb} {tile}: {msg}"
-            return False
+                _reconnect(ex.bm, log)
+    latched = drv.tap_action(key)
+    if not latched:
+        log(
+            f"[{label}] {verb} {tile}: action key {key} latch not observed; verify() decides"
+        )
 
-    # ---- FINAL HYPERSPACE ----
+    after = ex.state()
+    e1 = after.player_energy
+    objs1 = len(objects_at(after, *tile))
+    slot1 = after.player_slot
+
+    ok, msg = verify(
+        verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1
+    )
+    result["actions"].append(
+        {
+            "step": label,
+            "verb": verb,
+            "tile": list(tile),
+            "otype": otype,
+            "ok": ok,
+            "msg": msg,
+            "energy": [e0, e1],
+            "aim": aim_info,
+        }
+    )
+    log(f"[{label}] {verb:8} {tile} otype={otype}: {'OK ' if ok else 'FAIL'} {msg}")
+    if ok:
+        return "ok"
+    # BEST-EFFORT ABSORBS: trail/fuel absorbs (otype != 5, the Sentinel) are energy
+    # recovery -- a miss is NOT fatal.
+    if verb == "absorb" and otype != 5:
+        log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
+        return "best_effort_miss"
+    if verb == "create" and e0 <= otype_cost(otype):
+        result["energy_block"] = {
+            "step": label,
+            "tile": list(tile),
+            "otype": otype,
+            "energy_before": e0,
+        }
+        log(
+            f"    >>> ENERGY BLOCK: build at {label} needs more energy than the {e0} available"
+        )
+    return "fail"
+
+
+def fire_hyperspace(ex, drv, plat, log, result):
+    """Final hyperspace attempt from the platform tile; verified by the ROM's own
+    landscape-complete flag ($0CDE bit6)."""
     p = ex.state().player
     pcur = (p.x, p.y)
     done0 = ex.rd(A_LANDSCAPE_DONE)
@@ -527,6 +678,281 @@ def execute(ex, steps, plat, log, result, t_start, max_seconds):
             break
     result["landscape_done"] = ex.rd(A_LANDSCAPE_DONE)
     return won
+
+
+def execute(ex, steps, plat, log, result, t_start, max_seconds):
+    """Walk a fixed precomputed plan with the authentic keyboard sights-cursor aim
+    (kbd_aim.KbdDriver) + real action keys, verifying each step's memory delta."""
+    drv = kbd_aim.KbdDriver(ex.bm, log)
+
+    for i, stp in enumerate(steps):
+        if time.time() - t_start > max_seconds:
+            log(f"TIME BUDGET ({max_seconds}s) exceeded at step {i}; aborting")
+            result["divergence"] = f"timeout at step {i}"
+            return False
+        outcome = perform_step(ex, drv, f"{i:2}", stp, log, result)
+        if outcome in ("ok", "best_effort_miss"):
+            continue
+        tile = tuple(stp["target"])
+        if outcome == "drained":
+            result["divergence"] = f"step {i} create {tile}: drained (energy)"
+        else:
+            result["divergence"] = f"step {i} {stp['verb']} {tile}: {outcome}"
+        return False
+
+    return fire_hyperspace(ex, drv, plat, log, result)
+
+
+import math as _math
+
+# Approach-timing (gaze-safe advance). The platform ring is the most enemy-exposed
+# region: while the driver spends real seconds aiming there, a Sentinel facing the
+# player drains its energy and downgrades its just-built fuel objects, starving the
+# final hop (observed: a foothold's fuel wiped, energy 6->1, at cheb(player,plat)<=1).
+# Before each near-platform action we advance the game one foreground frame at a time
+# (halt at the per-frame pan-commit PC $365D) until the Sentinel's facing is OUT of
+# its FOV toward the player by a margin -- i.e. the action fires in its blind arc.
+# Purely event-driven: every wait polls the live Sentinel facing, never a clock.
+_PC_PAN_DONE = 0x365D
+GAZE_RING_RADIUS = int(os.environ.get("GAZE_RING_RADIUS", "3"))
+GAZE_SAFE_MARGIN = int(os.environ.get("GAZE_SAFE_MARGIN", "36"))
+GAZE_MAX_FRAMES = int(os.environ.get("GAZE_MAX_FRAMES", "280"))
+
+
+def _sentinel_gaze_margin(bm):
+    """|signed(bearing_to_player - Sentinel_facing)| in angle units (0..128), or None
+    if no live Sentinel. Small == the Sentinel is looking toward the player (FOV half
+    is 10 units); large == facing away. Mirrors the enemy FOV geometry."""
+    flags = bm.mem_get(plan_game.OBJ_FLAGS, plan_game.OBJ_FLAGS + 63)
+    types = bm.mem_get(plan_game.OBJ_TYPE, plan_game.OBJ_TYPE + 63)
+    ssl = next((s for s in range(64) if not (flags[s] & 0x80) and types[s] == 5), None)
+    if ssl is None:
+        return None
+    sx = bm.mem_get(plan_game.OBJ_X + ssl, plan_game.OBJ_X + ssl)[0]
+    sy = bm.mem_get(plan_game.OBJ_Y + ssl, plan_game.OBJ_Y + ssl)[0]
+    sh = bm.mem_get(plan_game.OBJ_HANG + ssl, plan_game.OBJ_HANG + ssl)[0]
+    ps = bm.mem_get(A_PLAYER_SLOT, A_PLAYER_SLOT)[0]
+    px = bm.mem_get(plan_game.OBJ_X + ps, plan_game.OBJ_X + ps)[0]
+    py = bm.mem_get(plan_game.OBJ_Y + ps, plan_game.OBJ_Y + ps)[0]
+    dx, dy = px - sx, py - sy
+    if dx == 0 and dy == 0:
+        return 0
+    bearing = int(round((_math.atan2(dy, dx) / (2 * _math.pi)) * 256)) & 0xFF
+    d = (bearing - sh) & 0xFF
+    if d >= 128:
+        d -= 256
+    return abs(d)
+
+
+def wait_gaze_away(bm, log, safe=GAZE_SAFE_MARGIN, max_frames=GAZE_MAX_FRAMES):
+    """Advance foreground frames until the Sentinel faces away from the player by
+    `safe` units (its blind arc), so imminent keystrokes avoid its drain/downgrade.
+    Returns the final margin. Event-driven: steps one frame per $365D, polls state."""
+    m0 = _sentinel_gaze_margin(bm)
+    if m0 is None or m0 >= safe:
+        return m0
+    log(
+        f"  gaze-wait: Sentinel margin {m0} < {safe} (eyeing player); waiting for blind arc"
+    )
+    m = m0
+    with bm.halted():
+        for _ in range(max_frames):
+            try:
+                bm.run_until_pc(_PC_PAN_DONE, timeout=20)  # run one foreground frame
+                bm.advance_instructions(1)  # step off $365D
+            except Exception as e:
+                log(f"    gaze-wait: {type(e).__name__} advancing; proceeding anyway")
+                break
+            m = _sentinel_gaze_margin(bm)
+            if m is None or m >= safe:
+                break
+    bm.exit()  # resume for the keystrokes
+    log(f"  gaze-wait: proceeding (margin {m})")
+    return m
+
+
+def execute_live(
+    ex,
+    log,
+    result,
+    t_start,
+    max_seconds,
+    landscape,
+    plat,
+    toward_plat=True,
+    near_plat_radius=2,
+    max_iterations=200,
+    use_search=False,
+    search_depth=2,
+    search_beam=2,
+):
+    """Closed-loop climb: at each iteration, RESYNC the native climb model from live
+    memory (ground truth, including any real enemy/meanie activity since the last
+    look), compute the next foothold move fresh (climb_greedy.climb_iterate), and
+    drive it via real keystrokes immediately -- so a step that a stale precomputed
+    plan assumed would land cleanly, but which real timing/enemies made infeasible,
+    self-heals on the NEXT iteration (a fresh resync never has the failed object,
+    so the planner routes around it) instead of cascading into a run-ending
+    divergence."""
+    import plan_game
+    import climb_greedy as cg
+
+    # decision function: the greedy single-step picker, or the receding-horizon best-first
+    # lookahead (climb_search, SEARCH_REDESIGN.md) which won't commit a move without a
+    # continuation within the horizon (fixes the greedy dead-end/reposition failure).
+    if use_search:
+        import climb_search as csearch
+
+        def decide(g, ctx, blocked_set, lg):
+            return csearch.search_iterate(
+                g, ctx, blocked_set, lg, depth=search_depth, beam=search_beam
+            )
+
+        log(f"LIVE decision: lookahead search D{search_depth} B{search_beam}")
+    else:
+        decide = cg.climb_iterate
+        log("LIVE decision: greedy climb_iterate")
+
+    drv = kbd_aim.KbdDriver(ex.bm, log)
+    blocked = set()
+    label = 0
+    # The lookahead search spends several real SECONDS per decision. Under warp the
+    # emulator would run millions of cycles in that gap -- enemies rotate, a meanie can
+    # arm/spawn, the player can be drained -- so the state the search read is stale by the
+    # time it acts, and the idle monitor socket goes flaky (the observed aim TimeoutErrors).
+    # FREEZE the CPU across resync+decide (bm.halted() leaves it stopped after the mem read,
+    # and the search issues no monitor I/O, so it stays frozen), then resume before driving
+    # keystrokes. Now meanie_safe decides against the true state at action time. The greedy
+    # picker is sub-second, so it doesn't need the freeze.
+    halt_during_decide = use_search
+
+    def resync(seed_built_columns=True, keep_halted=False):
+        if keep_halted:
+            with ex.bm.halted():  # read with the CPU LEFT stopped (no auto-resume)
+                mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+        else:
+            mem = bytearray(ex.bm.mem_get(0x0000, 0x0FFF))
+        return plan_game.Game.from_mem(
+            mem, landscape, seed_built_columns=seed_built_columns
+        )
+
+    # seed_built_columns must stay False until a create() has ACTUALLY landed in the
+    # real game: before that, the only object standing on the player's tile is the
+    # landscape generator's original spawn placement, which -- like any first-level
+    # object -- carries the ROM's fixed z_fraction=$E0 render offset. Seeding that
+    # into g.col raises eye by 0.875 above the ROM-validated offline baseline and
+    # steers the climb onto different (worse) footholds (see plan_game.Game.from_mem
+    # docstring). Once a real create() lands, the player's tile IS one this model
+    # built, so the full z+zf/256 reconstruction becomes correct.
+    built_anything = False
+    g = resync(seed_built_columns=False)
+    ctx = cg.climb_ctx(g, toward_plat, near_plat_radius)
+    log(
+        f"LIVE climb start: {g.player_xy()} eye {g.eye} plat {ctx['plat']} energy {g.energy}"
+    )
+
+    status = "retry"
+    for it in range(max_iterations):
+        if time.time() - t_start > max_seconds:
+            log(
+                f"TIME BUDGET ({max_seconds}s) exceeded at live iteration {it}; aborting"
+            )
+            result["divergence"] = f"timeout at live iteration {it}"
+            return False
+        g = resync(seed_built_columns=built_anything, keep_halted=halt_during_decide)
+        before_n = len(g.steps)
+        status = decide(g, ctx, blocked, log)  # CPU frozen here if halt_during_decide
+        if halt_during_decide:
+            try:
+                ex.bm.exit()  # resume the CPU (frozen during the search) for the keystrokes
+            except Exception as e:
+                log(f"    (resume after search failed: {e}; reconnecting)")
+                _reconnect(ex.bm, log)
+        new_steps = g.steps[before_n:]
+        blocked_this_round = False
+        built_tiles_this_batch = set()
+        for stp in new_steps:
+            label += 1
+            tile = tuple(stp["target"])
+            # approach-timing: in the exposed platform ring, fire this action only when
+            # the Sentinel is looking away, so it can't drain/downgrade the fuel mid-aim.
+            if plan_game.cheb(tile, ctx["plat"]) <= GAZE_RING_RADIUS:
+                wait_gaze_away(ex.bm, log)
+            outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
+            if outcome in ("ok", "best_effort_miss"):
+                if outcome == "ok" and stp["verb"] == "create":
+                    built_tiles_this_batch.add(tile)
+                    built_anything = True
+                continue
+            if outcome == "aim_miss":
+                # the aim couldn't reach the requested view, so NOTHING was fired -- the
+                # tile is still valid, only the view needs another try. Resync + re-plan
+                # (which re-snaps a fresh view) WITHOUT blocking the foothold.
+                log(
+                    f"    LIVE: {stp['verb']} {tile} -> aim_miss (nothing fired); "
+                    "resync + re-plan, tile not blocked"
+                )
+                blocked_this_round = True
+                break
+            if stp["verb"] == "create":
+                if tile in built_tiles_this_batch:
+                    # the boulder half of this foothold already landed for real; only
+                    # the synthoid-on-boulder half failed. Don't block the tile -- the
+                    # next resync sees a real boulder there and the natural "hop onto
+                    # an existing boulder" candidate is exactly the correct retry.
+                    log(
+                        f"    LIVE: {stp['verb']} {tile} -> {outcome} (boulder already "
+                        "landed; not blocking, natural hop retry will pick it up)"
+                    )
+                else:
+                    # candidate key is (tile, use_boulder) -- a plain hop is otype 0.
+                    blocked.add((tile, stp["otype"] == 3))
+                    log(
+                        f"    LIVE: {stp['verb']} {tile} -> {outcome}; blocking foothold"
+                    )
+            else:
+                log(
+                    f"    LIVE: {stp['verb']} {tile} -> {outcome}; resyncing and replanning"
+                )
+            blocked_this_round = True
+            break
+        if blocked_this_round:
+            continue
+        if status in ("no_gain", "stuck"):
+            log(
+                f"  LIVE climb stopped ({status}); attempting endgame from current state"
+            )
+            break
+        if status == "approach":
+            break
+    else:
+        log(
+            f"LIVE climb: hit max_iterations ({max_iterations}) without reaching approach"
+        )
+
+    # ---- ENDGAME: resync once more, then absorb Sentinel + platform synthoid ----
+    g = resync()
+    before_n = len(g.steps)
+    won_native = cg.endgame(g, ctx["plat"], log)
+    for stp in g.steps[before_n:]:
+        label += 1
+        outcome = perform_step(ex, drv, f"E{label}", stp, log, result)
+        if outcome not in ("ok", "best_effort_miss"):
+            log(
+                f"    LIVE endgame step {stp['verb']} {tuple(stp['target'])}: {outcome}"
+            )
+            result["divergence"] = (
+                f"endgame {stp['verb']} {tuple(stp['target'])}: {outcome}"
+            )
+            return False
+    if not won_native:
+        result["divergence"] = result.get("divergence") or (
+            f"endgame not reachable from final climb state {g.player_xy()} eye {g.eye}"
+        )
+        log(f"  LIVE: endgame not reachable from {g.player_xy()} eye {g.eye}")
+        return False
+
+    return fire_hyperspace(ex, drv, ctx["plat"], log, result)
 
 
 def otype_cost(otype):
@@ -620,13 +1046,45 @@ def main():
     ap.add_argument("--digits", default="0042")
     ap.add_argument("--plan", default=os.path.join(ROOT, "out", "kbd_greedy_0066.json"))
     ap.add_argument("--max-seconds", type=int, default=1500)
+    ap.add_argument("--video-name", default=None)
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="replan the climb live from real memory each step instead of "
+        "following a fixed precomputed --plan",
+    )
+    ap.add_argument(
+        "--search",
+        action="store_true",
+        help="with --live, use the receding-horizon best-first lookahead "
+        "(climb_search) as the per-step decision instead of greedy climb_iterate",
+    )
+    ap.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="restore a VICE snapshot at the code-entry screen (renders/"
+        "vice_code_entry.vsf) to skip the ~50s tape boot; the first run saves it",
+    )
     args = ap.parse_args()
+    video_name = args.video_name or f"solver_run_{args.digits}.avi"
 
     def log(m):
         print(m, flush=True)
 
-    log(f"=== VICE keyboard record: type {args.digits!r} plan={args.plan} ===")
-    result = run(args.digits, args.plan, args.max_seconds, log)
+    log(
+        f"=== VICE keyboard record: type {args.digits!r} "
+        f"{'LIVE replanning' if args.live else f'plan={args.plan}'} ==="
+    )
+    result = run(
+        args.digits,
+        args.plan,
+        args.max_seconds,
+        log,
+        video_name=video_name,
+        live=args.live,
+        use_search=args.search,
+        use_snapshot=args.snapshot,
+    )
 
     vid = result.get("video")
     if vid:

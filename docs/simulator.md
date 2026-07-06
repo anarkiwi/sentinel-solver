@@ -18,6 +18,7 @@ ROM image.
 | `sentinel/landscape.py` | `generate(landscape) -> State`: the from-scratch board generator |
 | `sentinel/relative.py` | object-relative bearing/distance/vertical angle and the enemy field-of-view + visibility test |
 | `sentinel/enemies.py` | one game round of enemy rotation / targeting / draining / cooldowns |
+| `sentinel/threat.py` | planner-facing enemy queries built on the above: any-rotation tile exposure, gaze distance, ticks-until-seen, meanie safety, drain-over-window |
 | `sentinel/game.py` | `Game`, a facade tying the above together |
 
 ## Usage

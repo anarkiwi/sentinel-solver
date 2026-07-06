@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 /out/*.pkl
 /out/*.log
+
+# VICE runtime home (cache/config/local)
+/.vice-home/

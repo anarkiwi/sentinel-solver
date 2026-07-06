@@ -8,7 +8,7 @@ keystroke (S/D/L/COMMA pan + sights cursor, U u-turn, R/B robot/boulder, Q trans
 A absorb, H hyperspace, SPACE sights). We READ memory only to (a) confirm an aim
 reached its snapped view and (b) verify each action's state delta -- reads never
 change game state. If VICE ever diverges from the native prediction we ABORT and
-report it (that would be a native_los bug), rather than silently retrying.
+report it (that would be a sentinel.los bug), rather than silently retrying.
 
 Boot/load/menu nav run under WARP (not the recorded gameplay). Recording wraps the
 in-game actions at true speed so the AVI is watchable.
@@ -40,7 +40,7 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import game_state as gs
+import vice_state as gs
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -295,6 +295,31 @@ def _free_port_6502(log):
         log(f"  port-cleanup warning: {e}")
 
 
+def _bridge_ip(container_id, log):
+    """Docker-bridge IP of the container. In this environment the published
+    loopback port (127.0.0.1:6502) is refused; the container's bridge IP is
+    directly reachable (same path live_climb.connect uses)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                container_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout.strip()
+        return out or None
+    except Exception as e:
+        log(f"  bridge-ip lookup failed: {e}")
+        return None
+
+
 def run(landscape, plan_path, max_seconds, log):
     with open(plan_path) as f:
         plan = json.load(f)
@@ -340,7 +365,14 @@ def run(landscape, plan_path, max_seconds, log):
         t_start = time.time()
         try:
             with container:
-                bm = BinMon("127.0.0.1", 6502)
+                time.sleep(2)
+                host = (
+                    os.environ.get("BINMON_HOST")
+                    or _bridge_ip(container.container_id, log)
+                    or "127.0.0.1"
+                )
+                log(f"  connecting binmon {host}:6502")
+                bm = BinMon(host, 6502)
                 bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
                 bm.exit()
                 pal = parse_palette_response(bm.palette_get())
