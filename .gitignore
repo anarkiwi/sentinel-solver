@@ -12,3 +12,5 @@ __pycache__/
 
 # VICE runtime home (cache/config/local)
 /.vice-home/
+/out/*.json
+/out/*.jsonl
