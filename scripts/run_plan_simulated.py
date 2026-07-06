@@ -132,7 +132,8 @@ def execute_step(world, stp, heading, budget, log):
     # the world at fire time so a dense view costs more -- replacing the old flat
     # ROUNDS_PER_ACTION, which under-counted by ~15x and let the sim survive drains
     # the live run does not.
-    settle = actioncost.action_rounds(world.mem, verb, view)
+    stacked = verb == "create" and actioncost.is_stacked(world.mem, tile)
+    settle = actioncost.action_rounds(world.mem, verb, view, stacked=stacked)
     e0 = world.energy
     if verb == "create":
         if e0 < ENERGY[otype]:  # drained below the build cost while aiming

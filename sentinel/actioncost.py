@@ -73,6 +73,14 @@ SETTLE = {
     "transfer": float(os.environ.get("SETTLE_TRANSFER", "300")),
 }
 
+# Extra rounds a create costs when it STACKS on an existing object (a synthoid built on
+# a boulder, the ls0 foothold pattern). The new object sits a tile-height higher, so the
+# ROM re-plots a taller stack -> more frames. Measured live: a synthoid-on-boulder create
+# costs ~285-300 more than the bare boulder at the same tile (L10->L11 254->557,
+# L14->L15 270->555), yet the flat SETTLE priced them equally -- the dominant source of
+# the sim's ~793-round cumulative UNDER-count that hid the far-corner meanie.
+STACK_CREATE = float(os.environ.get("STACK_CREATE", "285"))
+
 
 def _bearing_to(ex, ey, tx, ty):
     """Compass bearing (0..255) from tile (ex,ey) toward (tx,ty); None if same."""
@@ -105,9 +113,18 @@ def visible_edges(mem, view):
     return total
 
 
-def action_rounds(mem, verb, view):
+def action_rounds(mem, verb, view, stacked=False):
     """Enemy-round (``enemies.step``) cost an action costs AFTER the aim pan: the
-    per-verb SETTLE floor plus the scene redraw term.  The aim itself is priced
-    separately by the caller (``climb_search._pan_rounds``)."""
+    per-verb SETTLE floor, plus the scene redraw term, plus STACK_CREATE when a create
+    lands on an already-occupied tile (taller stack -> bigger redraw). The aim itself is
+    priced separately by the caller (``climb_search._pan_rounds``)."""
     settle = SETTLE.get(verb, SETTLE["absorb"])
+    if verb == "create" and stacked:
+        settle += STACK_CREATE
     return settle + STEPS_PER_EDGE * visible_edges(mem, view)
+
+
+def is_stacked(mem, tile):
+    """True if `tile` already holds a live object (so a create there STACKS)."""
+    b = mem[mm.TILES_TABLE + mm.tidx(tile[0], tile[1])]
+    return b >= mm.OBJECT_TILE

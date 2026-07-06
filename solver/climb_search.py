@@ -585,7 +585,9 @@ def _move_cost(g, c, cur_h, cur_v):
     if use_b:
         rounds += ROUNDS_PER_H_STEP + ROUNDS_PER_V_STEP  # re-centre on-boulder synthoid
         settle += actioncost.SETTLE["create"]  # boulder create
-    settle += actioncost.SETTLE["transfer"]  # transfer confirm
+        # the synthoid stacks ON the boulder -> taller redraw, ~STACK_CREATE more rounds
+        # (the dominant per-move cost the flat model missed; see actioncost).
+        settle += actioncost.STACK_CREATE
     end_h, end_v = vh, vv
     back_h = ac.bearing_to(T2[0], T2[1], prev[0], prev[1])  # look back at departed tile
     if back_h is not None and end_h is not None:
