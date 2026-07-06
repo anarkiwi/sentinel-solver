@@ -155,6 +155,12 @@ def won(state):
     return on_platform(state)
 
 
+def player_dead(state):
+    """Whether the Sentinel drained the player to death (kill_player $1A00 set the
+    $0C4E death flag while the player had no energy left)."""
+    return bool(state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80)
+
+
 def win(state, tile=None):
     """The endgame: absorb the Sentinel, build a synthoid on its platform tile,
     and transfer onto it.  Returns True if the player ends on the platform.  The

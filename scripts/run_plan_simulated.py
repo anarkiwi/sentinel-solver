@@ -32,10 +32,17 @@ bit-exact ``sentinel`` simulator instead of VICE:
 
 It then reports whether the player ends up on the platform (``actions.won``).
 
+A LOSS is a genuine, tick-accurate solver failure: the player being drained with no
+energy left is DEATH (kill_player $1A00 sets the $0C4E flag; ``actions.player_dead``),
+exactly as live -- so a route that lingers in the Sentinel's view at low energy dies
+here instead of silently flooring at 0 and marching on. Refuelling cannot outrun the
+drain either (``climb_search._REFUEL_DRAIN``): each fuel absorb pays the drain over its
+re-aim pan, so absorbing trees while being drained does not net-gain.
+
 Not modelled: the meanie forced-hyperspace side channel (``sentinel.enemies.step``
-covers drain/rotation/downgrade but not meanie spawning -- see
+covers drain/rotation/downgrade/drain-death but not meanie spawning -- see
 ``sentinel.threat.meanie_safe``). So a WIN here is necessary-but-not-sufficient for
-a live win; a LOSS is a genuine, tick-accurate solver failure.
+a live win.
 """
 
 import os, sys, json, time, argparse
@@ -51,6 +58,11 @@ from sentinel import actioncost
 from solver import plan_game
 from solver import climb_search as csearch
 
+# This runner models real-time enemy drain, so the planner's refuel forecast must too:
+# absorbing fuel while being drained costs the re-aim pan's drain and cannot net-gain
+# (see climb_search._REFUEL_DRAIN). The offline plan_search keeps this off by design.
+csearch._REFUEL_DRAIN = True
+
 ENERGY = mm.ENERGY_IN_OBJECTS
 ROUNDS_PER_ACTION = csearch.ROUNDS_PER_ACTION
 T_SENTINEL = mm.T_SENTINEL
@@ -63,6 +75,7 @@ def make_world(landscape):
     world = _landscape.generate(landscape)
     world.mem[mm.CURSOR] = 7
     world.mem[mm.COOLDOWN_GATE] = 0
+    world.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
     return world
 
 
@@ -71,8 +84,11 @@ def advance(world, rounds, budget):
     APPLIED (this is the real game running, not a forecast). Accumulates into the
     tick budget for reporting."""
     n = int(round(rounds))
-    for _ in range(n):
+    for i in range(n):
         SE.step(world)
+        if actions.player_dead(world):  # drained to death mid-advance -- stop the clock
+            budget["ticks"] += i + 1
+            return
     budget["ticks"] += n
 
 
@@ -189,6 +205,7 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
 
     blocked = set()
     status = "retry"
+    died = False
     for it in range(max_iterations):
         g = resync(built_anything)
         # seed the planner's root heading from the world's current facing.
@@ -206,6 +223,11 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
             tile = tuple(stp["target"])
             result["energy_curve"].append(world.energy)
             outcome = execute_step(world, stp, heading, budget, log)
+            if actions.player_dead(world):
+                result["divergence"] = f"player drained to death at {tile}"
+                log(f"  [{it}] player DRAINED TO DEATH at {tile}")
+                died = True
+                break
             if outcome == "ok":
                 if stp["verb"] == "create":
                     built_tiles.add(tile)
@@ -238,6 +260,8 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
             break
 
         result["decisions"] += 1
+        if died:
+            break
         if blocked_this_round:
             continue
         if status in ("no_gain", "stuck"):
@@ -250,6 +274,14 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
         log(f"SIM climb hit max_iterations ({max_iterations}) without approach")
 
     # --- endgame: absorb Sentinel + platform synthoid + transfer, tick-accurate ---
+    if died:
+        result["won"] = False
+        result["final_energy"] = world.energy
+        result["total_ticks"] = budget["ticks"]
+        gfinal = resync(built_anything)
+        result["final_player"] = list(gfinal.player_xy())
+        result["final_eye"] = gfinal.eye
+        return result
     g = resync(built_anything)
     world.mem[mm.OBJECTS_H_ANGLE + world.player] = heading[0]
     world.mem[mm.OBJECTS_V_ANGLE + world.player] = heading[1]
@@ -259,6 +291,12 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
     endgame_planned = csearch.endgame(g, ctx["plat"], log)
     for stp in g.steps[before_n:]:
         outcome = execute_step(world, stp, heading, budget, log)
+        if actions.player_dead(world):
+            result["divergence"] = (
+                f"player drained to death in endgame {stp['verb']} {tuple(stp['target'])}"
+            )
+            log(f"  SIM endgame: player DRAINED TO DEATH at {tuple(stp['target'])}")
+            break
         if outcome not in ("ok", "miss"):
             result["divergence"] = (
                 f"endgame {stp['verb']} {tuple(stp['target'])} -> {outcome}"
@@ -273,7 +311,7 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
         )
 
     # --- the arbiter: is the player on the platform? (actions.won == on_platform) ---
-    result["won"] = actions.won(world)
+    result["won"] = actions.won(world) and not actions.player_dead(world)
     result["landscape_complete_flag"] = bool(world.mem[mm.LANDSCAPE_COMPLETE] & 0x40)
     gfinal = resync(built_anything)
     result["final_player"] = list(gfinal.player_xy())

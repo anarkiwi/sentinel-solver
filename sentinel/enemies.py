@@ -95,7 +95,9 @@ def _reduce_object_energy(state, target, enemy):
     mem = state.mem
     if target == mem[mm.PLAYER_OBJECT]:
         if state.energy == 0:
-            return True  # kill_player (out of energy) -- no discharge
+            # kill_player $1A00: drained with no energy left -> mark the player dead.
+            mem[mm.PLAYER_DIED_BY_DRAINING] |= 0x80
+            return True  # no discharge
         state.energy = state.energy - 1
         _discharge_bank(state, enemy)
         return True

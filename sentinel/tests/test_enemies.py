@@ -115,6 +115,21 @@ def test_consider_discharging_scatters_tree():
     assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0
 
 
+def test_drain_at_zero_energy_kills_player():
+    state = landscape.generate(42)
+    enemy = enemies._enemy_slots(state)[0]
+    player = state.mem[mm.PLAYER_OBJECT]
+    state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
+    # draining the player with energy left just decrements and does not kill.
+    state.energy = 1
+    assert enemies._reduce_object_energy(state, player, enemy) is True
+    assert state.energy == 0
+    assert not (state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80)
+    # draining again at zero energy sets the death flag (kill_player $1A00).
+    assert enemies._reduce_object_energy(state, player, enemy) is True
+    assert state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80
+
+
 def test_meanie_threat_signature():
     state = landscape.generate(42)
     enemy = enemies._enemy_slots(state)[0]

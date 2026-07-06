@@ -349,8 +349,8 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     # Sentinel comes around mid-pass the cheap local energy is already secured. Default
     # order (exposed-first, height-first) is preserved when pan cost is off.
     comfort = RESERVE + 6  # energy buffer above which far-bearing fuel is skipped (PAN)
+    ch, cv = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
     if _PAN_COST:
-        ch, cv = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
         order = sorted(
             cand,
             key=lambda c: (
@@ -361,6 +361,12 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
         )
     else:
         order = sorted(cand, key=lambda c: (c[3] in exposed, c[0]), reverse=True)
+    # honest refuel: on the COMMITTED pass the enemies step (and drain) while the view pans
+    # onto each fuel object, so absorbing while being drained cannot net-gain. Return the
+    # REAL energy delta so a drained "refuel" registers as no progress (no_gain), not a
+    # phantom bank. The coarse lookahead refuel stays instantaneous (approximate ranking).
+    drain_aim = _REFUEL_DRAIN and not sweep_coarse
+    e_start = g.energy
     for _z, slot, ot, tile in order:
         if tile in tiles_done:
             continue
@@ -376,11 +382,18 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
             and _pan_units(ch, cv, sweep.get(tile)) > _PAN_FUEL_MAX
         ):
             continue
+        if drain_aim:
+            _advance_enemies(
+                g.state, int(round(_pan_rounds(ch, cv, sweep[tile]))), apply_drain=True
+            )
+            view = sweep[tile]
+            ch = view.get("h_angle", ch) if view else ch
+            cv = view.get("v_angle", cv) if view else cv
         g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
         gained += ENERGY[ot]
         tiles_done.add(tile)
         log(f"    +fuel: absorbed {_FUEL_NAME[ot]} {tile}, energy {g.energy}")
-    return gained
+    return g.energy - e_start if drain_aim else gained
 
 
 def climb_ctx(g, toward_plat=False, near_plat_radius=0):
@@ -540,6 +553,19 @@ _ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
 # tiles (multi-sentry landscapes) and is pushed to reach a safe tile fast. Off by default
 # (keeps the ROM-validated ls42 energy accounting; ls0 relies on avoidance knobs instead).
 _SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "0") == "1"
+# REFUEL-DRAIN: charge the drain incurred while RE-AIMING at each fuel object. A refuel is
+# not free -- every absorb needs a keyboard pan onto the target, and if the Sentinel is
+# currently draining the player, that pan bleeds energy the whole time. So absorbing trees
+# to "catch up" while being drained nets <=0 (each +1 tree is offset by the drain over its
+# re-aim), which the old instantaneous _refuel (credit every absorb, advance nothing) got
+# wrong -- it fabricated the energy that funded the ls0 energy-1 endgame the live player
+# (drained the whole time) can never bank. When on, the COMMITTED refuel steps the enemy
+# state (bit-exact drain) over each re-aim pan before crediting the absorb, so the planner's
+# banked energy is what the drained player could REALLY earn. OFF by default (the offline
+# plan_search is deliberately rotation-only / energy-restored -- SEEN_DRAIN off -- so it must
+# not leak real drain into its refuel); the tick-accurate runner (run_plan_simulated) turns
+# it ON so its planner forecast matches its real-drain execution.
+_REFUEL_DRAIN = os.environ.get("REFUEL_DRAIN", "0") == "1"
 
 
 def _pan_rounds(cur_h, cur_v, view):
