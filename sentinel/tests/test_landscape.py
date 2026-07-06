@@ -12,7 +12,10 @@ exercised by the oracle-parity suite (Phase 6).
 import json
 import os
 
+import pytest
+
 from sentinel import landscape, memmap as mm
+from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_landscape.json")
 
@@ -77,3 +80,20 @@ def test_generated_state_is_sane():
 def test_landscape_0_player_is_fixed():
     state = landscape.generate(0)
     assert state.player_xy() == (8, 17)
+
+
+@pytest.mark.oracle
+def test_generate_matches_rom_live():
+    """Re-derive a spread of boards live through the 6502 code and diff, byte for
+    byte, against the pure-Python generator (needs the ROM image fixture)."""
+    for ls in (0, 7, 42, 314, 777, 2024, 9999):
+        rom = oracle.generate(ls)
+        state = landscape.generate(ls)
+        num = rom[0x0C6F]
+        for base, n in SPANS:
+            assert bytes(rom[base : base + n]) == bytes(
+                state.mem[base : base + n]
+            ), f"landscape {ls} region {hex(base)} diverged"
+        assert bytes(rom[0x9D37 : 0x9D37 + num]) == bytes(
+            state.mem[0x9D37 : 0x9D37 + num]
+        )
