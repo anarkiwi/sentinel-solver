@@ -188,6 +188,10 @@ class GameState:
                 return o
         return None
 
+    def objects_at(self, x, y):
+        """Every decoded object standing on tile (x, y)."""
+        return [o for o in self.objects if o.x == x and o.y == y]
+
     @property
     def player(self):
         return self.object_by_slot(self.player_slot)
@@ -268,6 +272,26 @@ def read_game_state(source: MemorySource) -> GameState:
         )
 
     return state
+
+
+def verify_entry(bm, landscape, log=print):
+    """Confirm the live board matches the standalone generator for ``landscape``
+    (:meth:`Py65Source.from_landscape`). Returns ``(matched, total)`` object
+    position/type counts, or ``None`` if the reference could not be generated."""
+    try:
+        ref = read_game_state(Py65Source.from_landscape(landscape))
+    except Exception as e:  # generator unavailable (no simulator import, bad seed)
+        log(f"  (entry ref unavailable: {e})")
+        return None
+    live = read_game_state(ViceSource(bm))
+    ref_objs = sorted((o.x, o.y, o.type) for o in ref.objects)
+    live_objs = sorted((o.x, o.y, o.type) for o in live.objects)
+    matched = sum(1 for o in ref_objs if o in live_objs)
+    log(
+        f"ENTRY MATCH: {matched}/{len(ref_objs)} objects vs from_landscape({landscape}) "
+        f"(live has {len(live_objs)})"
+    )
+    return matched, len(ref_objs)
 
 
 def dump(state: GameState) -> str:

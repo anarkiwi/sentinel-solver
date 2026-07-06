@@ -46,6 +46,9 @@ A_V = 0x0140  # objects_v_angle + slot
 A_ZH = 0x0940  # objects_z_height + slot
 A_ENERGY = 0x0C0A  # player_energy (6-bit)
 A_LANDSCAPE_DONE = 0x0CDE  # bit6 set == landscape complete ($2198)
+A_CURSOR_X = 0x0CC6  # sights cursor column
+A_CURSOR_Y = 0x0CC7  # sights cursor row
+A_ACTION_LATCH = 0x0CE4  # bit7 set mid-pan / queued-wrap (reject transient probes)
 
 CX_CENTRE, CY_CENTRE = kbd_aim.CX_CENTRE, kbd_aim.CY_CENTRE
 
@@ -364,6 +367,51 @@ def snap_view(bm, tile, want_centre=False):
 
     hit = sweep([CX_CENTRE], [CY_CENTRE]) or sweep(cxs, cys)
     return hit[1] if hit else None
+
+
+def _probe_once(bm):
+    """One live sights-ray read: (tile hit, LOS, centre) + the (latch, h, v, cursor)
+    signature used to reject a transient mid-pan snapshot."""
+    m = live_image(bm)
+    ps = m[A_SLOT]
+    st = State.from_mem(bytes(m))
+    rx, ry, hit, centre = los.aim_target(
+        st,
+        m[A_H + ps],
+        m[A_V + ps],
+        m[A_CURSOR_X],
+        m[A_CURSOR_Y],
+        ps,
+        eye_z=m[A_ZH + ps],
+        max_steps=4000,
+        return_centre=True,
+    )
+    sig = (
+        m[A_ACTION_LATCH] & 0x80,
+        m[A_H + ps],
+        m[A_V + ps],
+        m[A_CURSOR_X],
+        m[A_CURSOR_Y],
+    )
+    return (rx, ry, hit, centre), sig
+
+
+def probe_tile(bm):
+    """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
+    Hardened: only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
+    identical across two consecutive reads (reject transient mid-pan / queued-wrap
+    state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
+    res, prev = _probe_once(bm)
+    for _ in range(8):
+        if prev[0] == 0:
+            res2, sig2 = _probe_once(bm)
+            if sig2 == prev:
+                return res2
+            res, prev = res2, sig2
+        else:
+            time.sleep(0.05)
+            res, prev = _probe_once(bm)
+    return res
 
 
 # ============================================================================
