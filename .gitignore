@@ -5,6 +5,8 @@
 
 # run products
 /renders/
+# VICE machine snapshots (boot.vsf and friends) — regenerated, never committed
+*.vsf
 __pycache__/
 *.pyc
 /out/*.pkl
