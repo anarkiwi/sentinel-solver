@@ -41,7 +41,7 @@ from plan_game import (
     OBJ_VANG,
 )
 from sentinel import los, threat
-from sentinel import memmap as mm
+from sentinel import aimcost as ac
 
 
 def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
@@ -61,38 +61,6 @@ def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
     Sentinel's own platform -- everything overlooking it is exposed to the Sentinel
     itself by construction)."""
     return threat.exposed_tiles(g.state, set(tiles))
-
-
-def _enemy_gaze_distance(g, tiles):
-    """For each tile, the angular distance (0..128, i.e. 0..180 degrees in h_angle
-    units) from the NEAREST enemy's CURRENT facing (OBJ_HANG) to the bearing from
-    that enemy toward the tile -- how far OUT of its instantaneous line of sight the
-    tile currently sits. Larger == safer RIGHT NOW. This is a snapshot, not a
-    guarantee (the enemy rotates over time, ~200 ticks/full sweep per
-    enemy_dynamics.py); use it to prefer footholds the Sentinel isn't currently
-    looking toward, on top of (not instead of) the hard is_exposed avoidance in
-    _enemy_exposed_tiles, which is the "could it EVER see this" guarantee."""
-    import math
-
-    tiles = list(tiles)
-    best = {t: 128 for t in tiles}
-    for s in range(64):
-        if g.mem[OBJ_FLAGS + s] & 0x80:
-            continue
-        if g.mem[OBJ_TYPE + s] not in (mm.T_SENTRY, mm.T_SENTINEL):
-            continue
-        ex, ey = g.mem[OBJ_X + s], g.mem[OBJ_Y + s]
-        gaze = g.mem[NG.OBJ_HANG + s]
-        for t in tiles:
-            dx, dy = t[0] - ex, t[1] - ey
-            if dx == 0 and dy == 0:
-                continue
-            bearing = int(round(math.atan2(dy, dx) * 128.0 / math.pi)) & 0xFF
-            diff = (bearing - gaze) & 0xFF
-            ang_diff = min(diff, 256 - diff)
-            if ang_diff < best[t]:
-                best[t] = ang_diff
-    return best
 
 
 def _lattice_sweep(g, eye):
@@ -156,24 +124,21 @@ _ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
 # distant fuel for a surplus it can bank locally later). Exposed trail is always reclaimed
 # (it degrades if left). Off by default (keeps the ROM-validated ls42 refuel).
 _PAN_COST = os.environ.get("PAN_COST", "0") == "1"
-_PAN_TICKS_H = float(os.environ.get("PAN_TICKS_H", "1.5"))
-_PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
-_PAN_FUEL_MAX = float(os.environ.get("PAN_FUEL_MAX", "48"))
+# skip a far-bearing non-exposed fuel grab past this many enemy rounds of panning.
+_PAN_FUEL_MAX = float(os.environ.get("PAN_FUEL_MAX", "64"))
 
 
 def _pan_units(cur_h, cur_v, view):
-    """Angular pan distance (h wraps mod 256 shortest; v linear) from heading (cur_h,
-    cur_v) to `view`'s aim, scaled by the per-axis tick weights -- a proxy for scroll time
-    (and thus mid-aim drain). 0 when the view carries no h angle."""
-    if not view:
+    """Enemy rounds to pan the view from heading (cur_h, cur_v) to `view`'s aim -- a
+    proxy for scroll time (and thus mid-aim drain). Uses the canonical keyboard-aim
+    geometry (sentinel.aimcost) weighted by the ROM scroll cadence (a bearing keystroke
+    animates a 16-round scroll, a pitch keystroke 8), the same conversion the search's
+    move cost uses. 0 when the view carries no h angle."""
+    if not view or view.get("h_angle") is None:
         return 0.0
-    th = view.get("h_angle")
-    if th is None:
-        return 0.0
-    tv = view.get("v_angle")
-    dh = abs(((th - cur_h) + 128) % 256 - 128)
-    dv = abs(tv - cur_v) if tv is not None else 0
-    return dh * _PAN_TICKS_H + dv * _PAN_TICKS_V
+    return ac.bearing_rounds(cur_h, view["h_angle"], 16, 16) + (
+        ac.v_steps(cur_v, view["v_angle"]) * 8 if view.get("v_angle") is not None else 0
+    )
 
 
 def edge_dist(t):
@@ -522,7 +487,7 @@ def climb_iterate(g, ctx, blocked, log):
         gain_all = fresh_gain or gain_all
         if gain_all:
             exposed_all = _enemy_exposed_tiles(g, {tuple(c[0]) for c in gain_all})
-            gaze_all = _enemy_gaze_distance(g, {tuple(c[0]) for c in gain_all})
+            gaze_all = threat.gaze_distance(g.state, {tuple(c[0]) for c in gain_all})
             best_possible = max(
                 gain_all,
                 key=lambda c: (c[2], gaze_all.get(tuple(c[0]), 0), edge_dist(c[0])),
@@ -625,7 +590,7 @@ def climb_iterate(g, ctx, blocked, log):
         # height differs slightly, `visited` (tile, height) pairs don't catch it.
         gain = [c for c in gain if tuple(c[0]) not in ctx["tiles_used"]] or gain
         if gain:
-            gaze = _enemy_gaze_distance(g, {tuple(c[0]) for c in gain})
+            gaze = threat.gaze_distance(g.state, {tuple(c[0]) for c in gain})
             # THE STRATEGY: MAX height per step, then furthest from the Sentinel's
             # CURRENT gaze, then most EDGE (avoid the centre) -- this is what breaks
             # out of the low start pocket. boulder-steps give the height; hops alone
@@ -650,7 +615,7 @@ def climb_iterate(g, ctx, blocked, log):
         return "stuck"
     if not toward_plat and climbing:
         # THE STRATEGY's own key already ranks HEIGHT first with the Sentinel's
-        # CURRENT gaze-distance as the safety tiebreaker (see _enemy_gaze_distance
+        # CURRENT gaze-distance as the safety tiebreaker (see threat.gaze_distance
         # above) -- that key IS the height/safety tradeoff for this mode. Layering
         # the static "prefer non-exposed" hard reorder below on TOP of it overrides
         # height with static is_exposed status whenever ANY non-exposed candidate

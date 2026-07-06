@@ -25,11 +25,12 @@ sys.path.insert(0, HERE)
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 
-import vice_state as gs
-from vice_execute import Executor, CREATE_KEY, K_ABSORB, K_TRANSFER, K_HYPERSPACE
+import sentinel_state as gs
+from sentinel_execute import Executor, CREATE_KEY, K_ABSORB, K_TRANSFER, K_HYPERSPACE
 import kbd_aim
 from sentinel.state import State
 from sentinel import los
+from sentinel import aimcost as ac
 import plan_game
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
@@ -229,7 +230,7 @@ def _free_port_6502(log):
 
 
 def verify_entry(bm, log, landscape=66):
-    """Confirm the live state matches vice_state.Py65Source.from_landscape(landscape)."""
+    """Confirm the live state matches sentinel_state.Py65Source.from_landscape(landscape)."""
     try:
         ref = gs.read_game_state(gs.Py65Source.from_landscape(landscape))
     except Exception as e:
@@ -703,8 +704,6 @@ def execute(ex, steps, plat, log, result, t_start, max_seconds):
     return fire_hyperspace(ex, drv, plat, log, result)
 
 
-import math as _math
-
 # Approach-timing (gaze-safe advance). The platform ring is the most enemy-exposed
 # region: while the driver spends real seconds aiming there, a Sentinel facing the
 # player drains its energy and downgrades its just-built fuel objects, starving the
@@ -734,14 +733,10 @@ def _sentinel_gaze_margin(bm):
     ps = bm.mem_get(A_PLAYER_SLOT, A_PLAYER_SLOT)[0]
     px = bm.mem_get(plan_game.OBJ_X + ps, plan_game.OBJ_X + ps)[0]
     py = bm.mem_get(plan_game.OBJ_Y + ps, plan_game.OBJ_Y + ps)[0]
-    dx, dy = px - sx, py - sy
-    if dx == 0 and dy == 0:
+    bearing = ac.bearing_to(sx, sy, px, py)
+    if bearing is None:
         return 0
-    bearing = int(round((_math.atan2(dy, dx) / (2 * _math.pi)) * 256)) & 0xFF
-    d = (bearing - sh) & 0xFF
-    if d >= 128:
-        d -= 256
-    return abs(d)
+    return ac.angle_dist(sh, bearing)
 
 
 def wait_gaze_away(bm, log, safe=GAZE_SAFE_MARGIN, max_frames=GAZE_MAX_FRAMES):

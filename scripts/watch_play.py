@@ -29,9 +29,9 @@ sys.path.insert(0, HERE)
 
 from vice_driver import BinMon
 from vice_driver.binmon import BinmonError
-import vice_state as gs
+import sentinel_state as gs
 
-# Every address vice_state.read_game_state() needs (tiles_table, all object
+# Every address sentinel_state.read_game_state() needs (tiles_table, all object
 # arrays, player slot/energy/scalars) falls within [0, 0x0CDE] -- so ONE
 # mem_get covering that whole span replaces the ~13 separate per-table reads
 # read_game_state() would otherwise issue against a live ViceSource. Each
@@ -42,7 +42,7 @@ _SNAPSHOT_END = 0x0CDE  # inclusive; also covers our own done-flag byte
 
 
 class _BatchSource:
-    """A vice_state.MemorySource backed by ONE already-fetched buffer, so
+    """A sentinel_state.MemorySource backed by ONE already-fetched buffer, so
     read_game_state()'s many per-table reads cost zero extra monitor calls."""
 
     def __init__(self, buf):

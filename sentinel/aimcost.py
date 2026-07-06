@@ -40,18 +40,25 @@ def bearing_to(ex, ey, tx, ty):
     return int(round(math.atan2(dy, dx) / (2 * math.pi) * 256)) & 0xFF
 
 
+def angle_dist(a, b):
+    """Shortest distance between two 256-unit compass angles, 0..128 (i.e. the
+    ``abs(((b - a) + 128) % 256 - 128)`` idiom, in one place)."""
+    return abs(((b - a) + 128) % 256 - 128)
+
+
 def h_steps(h0, h1):
-    """Keystrokes to pan the bearing from ``h0`` to ``h1``: the shortest signed
-    distance around the mod-256 circle, in 8-unit lattice steps."""
-    dh = abs(((h1 - h0) + 128) % 256 - 128)
-    return dh // AZIMUTH_STEP
+    """Keystrokes to pan the bearing from ``h0`` to ``h1``: the shortest distance
+    around the mod-256 circle, in 8-unit lattice steps."""
+    return angle_dist(h0, h1) // AZIMUTH_STEP
 
 
 def v_steps(v0, v1):
-    """Keystrokes to pitch from ``v0`` to ``v1``.  Pitch does not wrap for the
-    keyboard (it is clamped to a contiguous band), so this is the plain lattice
-    distance in 4-unit steps."""
-    return abs(v0 - v1) // PITCH_STEP
+    """Keystrokes to pitch from ``v0`` to ``v1`` in 4-unit steps.  The keyboard pitch
+    band ($CD..$35) is contiguous THROUGH the $FF->$00 wrap (L advances $FD->$01), and
+    is only ~104 units wide, so the in-band keyboard distance is exactly the shortest
+    circular distance -- a plain ``abs(v0 - v1)`` over-counts a wrap-crossing tilt
+    (e.g. $F5 -> $05 is 4 steps, not 60)."""
+    return angle_dist(v0, v1) // PITCH_STEP
 
 
 def h_press_count(h0, h1):
