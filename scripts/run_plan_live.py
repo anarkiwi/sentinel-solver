@@ -4,9 +4,12 @@ verified by the ROM's own win flag ($0CDE bit6), optionally recorded to an AVI. 
 the glue that wires the solver (solver/) to the driver (driver/); it plans and verifies
 nothing itself beyond executing steps.
 
-It runs ONE mode: live replanning. Each iteration resyncs the simulator from live memory
-and asks the solver (climb_search's receding-horizon lookahead) for the next move, so
-real timing/enemy divergence self-heals on the next resync.
+It is the live counterpart of scripts/run_plan_simulated.py: the SAME bare loop --
+resync the planner from the real game, ask the solver (climb_search's receding-horizon
+lookahead) for the next move, drive it, replan -- with NO avoidance tricks or tuning
+overrides layered on top. The only difference from the simulated version is the "real
+game" here is asid-vice instead of the bit-exact simulator, so real timing / enemy /
+meanie divergence self-heals (or defeats the plan) on the next resync.
 
 NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the driver's
 keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles sights-off
@@ -15,9 +18,12 @@ probe (sentinel.los on a RAM snapshot) until the target tile is hit with LOS. Th
 a real keystroke (R/B robot/boulder, Q transfer, A absorb, H hyperspace) fired via
 tap_action, which polls the game's own $0CE9 action latch. Reads never change state.
 
-Boot, landscape entry (menu navigation + code-entry snapshot), the monitor-resilience
-helpers and the full 64 KB live-image read all live in driver/core (+ driver/boot); this
-file is just the plan-execution loop and CLI.
+Everything reusable lives in the driver, not here: boot + landscape entry + snapshot
+caching + monitor-resilience + the 64 KB live-image read + the live sights-ray probe
+(driver/core), reading/comparing the live board (driver/sentinel_state: read_game_state,
+GameState.objects_at, verify_entry) and arbitrating an action's memory delta
+(driver/sentinel_execute: verify, otype_cost, the Executor accessors). This file is just
+the plan-execution loop that wires the solver to those pieces, plus the CLI.
 """
 
 import os, sys, time, argparse
@@ -35,43 +41,14 @@ from driver.sentinel_execute import (
     K_ABSORB,
     K_TRANSFER,
     K_HYPERSPACE,
+    otype_cost,
+    verify,
 )
 from driver import kbd_aim
-from sentinel.state import State
-from sentinel import los
-from sentinel import aimcost as ac
 from solver import plan_game
 from driver import core
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
-
-A_PLAYER_SLOT = 0x000B
-A_ENERGY = 0x0C0A
-A_LANDSCAPE_DONE = 0x0CDE
-A_PLAT_X = 0x0C19
-A_PLAT_Y = 0x0C1A
-
-
-def objects_at(state, x, y):
-    return [o for o in state.objects if o.x == x and o.y == y]
-
-
-def verify_entry(bm, log, landscape=66):
-    """Confirm the live state matches sentinel_state.Py65Source.from_landscape(landscape)."""
-    try:
-        ref = gs.read_game_state(gs.Py65Source.from_landscape(landscape))
-    except Exception as e:
-        log(f"  (entry ref unavailable: {e})")
-        return None
-    live = gs.read_game_state(gs.ViceSource(bm))
-    ref_objs = sorted((o.x, o.y, o.type) for o in ref.objects)
-    live_objs = sorted((o.x, o.y, o.type) for o in live.objects)
-    matched = sum(1 for o in ref_objs if o in live_objs)
-    log(
-        f"ENTRY MATCH: {matched}/{len(ref_objs)} objects vs from_landscape({landscape}) "
-        f"(live has {len(live_objs)})"
-    )
-    return matched, len(ref_objs)
 
 
 def run(
@@ -79,7 +56,6 @@ def run(
     max_seconds,
     log,
     video_name="solver_run_0042.avi",
-    use_snapshot=False,
 ):
     if not os.path.exists(TAP):
         raise FileNotFoundError(
@@ -91,12 +67,6 @@ def run(
     renders_host = os.path.join(ROOT, "renders")
     os.makedirs(renders_host, exist_ok=True)
     video_host = os.path.join(renders_host, video_name)
-    # code-entry snapshot lives on the mounted /renders volume, so it persists on the host
-    # across container runs and can be restored to skip the ~50s tape boot (landscape-
-    # agnostic: the digits are typed after restore). None disables the snapshot path.
-    snap_name = "vice_code_entry.vsf"
-    snapshot_host = os.path.join(renders_host, snap_name) if use_snapshot else None
-    snapshot_container = f"/renders/{snap_name}" if use_snapshot else None
     if os.path.exists(video_host):
         try:
             os.remove(video_host)
@@ -150,14 +120,24 @@ def run(
                     raise
                 bm.exit()
 
-                core.navigate(bm, typed_digits, log, snapshot_container, snapshot_host)
+                # navigate auto-caches the code-entry snapshot on the mounted /renders
+                # volume: it restores renders/vice_code_entry.vsf when present (skipping
+                # the ~50s tape boot) and saves it after the code-check patches when
+                # absent -- landscape-agnostic (the digits are typed after restore).
+                core.navigate(
+                    bm,
+                    typed_digits,
+                    log,
+                    snapshot_container="/renders/" + core.CODE_ENTRY_SNAP,
+                    snapshot_host=os.path.join(renders_host, core.CODE_ENTRY_SNAP),
+                )
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
                     continue
-                result["entry_match"] = verify_entry(bm, log, landscape)
+                result["entry_match"] = gs.verify_entry(bm, landscape, log)
                 ex = Executor(bm, log)
-                plat = (ex.rd(A_PLAT_X), ex.rd(A_PLAT_Y))
+                plat = ex.platform()
                 log(
                     f"IN PLAY: slot {st.player_slot} @ ({st.player.x},{st.player.y}) "
                     f"energy {st.player_energy} objs {len(st.objects)} platform {plat}"
@@ -181,11 +161,6 @@ def run(
                     t_start,
                     max_seconds,
                     landscape,
-                    plat,
-                    toward_plat=os.environ.get("TOWARD_PLAT", "1") == "1",
-                    near_plat_radius=int(os.environ.get("NEAR_PLAT_RADIUS", "2")),
-                    search_depth=int(os.environ.get("SEARCH_DEPTH", "2")),
-                    search_beam=int(os.environ.get("SEARCH_BEAM", "2")),
                 )
                 result["won"] = won
                 time.sleep(1.5)
@@ -214,43 +189,6 @@ def run(
     return result
 
 
-def _probe_once(bm):
-    m = core.live_image(bm)
-    ps = m[0x000B]
-    st = State.from_mem(bytes(m))
-    rx, ry, los_hit, centre = los.aim_target(
-        st,
-        m[0x09C0 + ps],
-        m[0x0140 + ps],
-        m[0x0CC6],
-        m[0x0CC7],
-        ps,
-        eye_z=m[0x0940 + ps],
-        max_steps=4000,
-        return_centre=True,
-    )
-    sig = (m[0x0CE4] & 0x80, m[0x09C0 + ps], m[0x0140 + ps], m[0x0CC6], m[0x0CC7])
-    return (rx, ry, los_hit, centre), sig
-
-
-def probe_tile(bm):
-    """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
-    Hardened (D2): only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
-    identical across two consecutive reads (reject transient mid-pan / queued-wrap
-    state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
-    res, prev = _probe_once(bm)
-    for _ in range(8):
-        if prev[0] == 0:
-            res2, sig2 = _probe_once(bm)
-            if sig2 == prev:
-                return res2
-            res, prev = res2, sig2
-        else:
-            time.sleep(0.05)
-            res, prev = _probe_once(bm)
-    return res
-
-
 def perform_step(ex, drv, label, stp, log, result):
     """Fire ONE plan step (verb/otype/target/view) against the live game via a real
     keystroke, verify the memory delta, and report the outcome. Used by the live
@@ -266,7 +204,7 @@ def perform_step(ex, drv, label, stp, log, result):
 
     before = ex.state()
     e0 = before.player_energy
-    objs0 = len(objects_at(before, *tile))
+    objs0 = len(before.objects_at(*tile))
     slot0 = before.player_slot
     result["energy_curve"].append({"step": label, "verb": verb, "energy_before": e0})
 
@@ -331,7 +269,7 @@ def perform_step(ex, drv, label, stp, log, result):
                 okc = drv.fine_cursor(
                     *view["cursor"]
                 )  # sights-on re-centred it; drive persisted
-                rx, ry, los, centre = probe_tile(ex.bm)
+                rx, ry, los, centre = core.probe_tile(ex.bm)
                 ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
                 break
             except (TimeoutError, OSError, ConnectionError) as e:
@@ -418,7 +356,7 @@ def perform_step(ex, drv, label, stp, log, result):
 
     after = ex.state()
     e1 = after.player_energy
-    objs1 = len(objects_at(after, *tile))
+    objs1 = len(after.objects_at(*tile))
     slot1 = after.player_slot
 
     ok, msg = verify(
@@ -462,14 +400,14 @@ def fire_hyperspace(ex, drv, plat, log, result):
     landscape-complete flag ($0CDE bit6)."""
     p = ex.state().player
     pcur = (p.x, p.y)
-    done0 = ex.rd(A_LANDSCAPE_DONE)
+    done0 = ex.landscape_done()
     log(f"-- FINAL HYPERSPACE (H) from {pcur} platform {plat}; $0CDE=${done0:02x} --")
     if pcur != plat:
         log(f"   WARNING: player tile {pcur} != platform {plat}")
     won = False
     for attempt in range(4):
         drv.tap_action(K_HYPERSPACE)
-        done1 = ex.rd(A_LANDSCAPE_DONE)
+        done1 = ex.landscape_done()
         log(
             f"   H attempt {attempt}: $0CDE=${done1:02x} "
             f"bit6={'SET' if done1 & 0x40 else 'clear'}"
@@ -477,70 +415,8 @@ def fire_hyperspace(ex, drv, plat, log, result):
         if done1 & 0x40:
             won = True
             break
-    result["landscape_done"] = ex.rd(A_LANDSCAPE_DONE)
+    result["landscape_done"] = ex.landscape_done()
     return won
-
-
-# Approach-timing (gaze-safe advance). The platform ring is the most enemy-exposed
-# region: while the driver spends real seconds aiming there, a Sentinel facing the
-# player drains its energy and downgrades its just-built fuel objects, starving the
-# final hop (observed: a foothold's fuel wiped, energy 6->1, at cheb(player,plat)<=1).
-# Before each near-platform action we advance the game one foreground frame at a time
-# (halt at the per-frame pan-commit PC $365D) until the Sentinel's facing is OUT of
-# its FOV toward the player by a margin -- i.e. the action fires in its blind arc.
-# Purely event-driven: every wait polls the live Sentinel facing, never a clock.
-_PC_PAN_DONE = 0x365D
-GAZE_RING_RADIUS = int(os.environ.get("GAZE_RING_RADIUS", "3"))
-GAZE_SAFE_MARGIN = int(os.environ.get("GAZE_SAFE_MARGIN", "36"))
-GAZE_MAX_FRAMES = int(os.environ.get("GAZE_MAX_FRAMES", "280"))
-
-
-def _sentinel_gaze_margin(bm):
-    """|signed(bearing_to_player - Sentinel_facing)| in angle units (0..128), or None
-    if no live Sentinel. Small == the Sentinel is looking toward the player (FOV half
-    is 10 units); large == facing away. Mirrors the enemy FOV geometry."""
-    flags = bm.mem_get(plan_game.OBJ_FLAGS, plan_game.OBJ_FLAGS + 63)
-    types = bm.mem_get(plan_game.OBJ_TYPE, plan_game.OBJ_TYPE + 63)
-    ssl = next((s for s in range(64) if not (flags[s] & 0x80) and types[s] == 5), None)
-    if ssl is None:
-        return None
-    sx = bm.mem_get(plan_game.OBJ_X + ssl, plan_game.OBJ_X + ssl)[0]
-    sy = bm.mem_get(plan_game.OBJ_Y + ssl, plan_game.OBJ_Y + ssl)[0]
-    sh = bm.mem_get(plan_game.OBJ_HANG + ssl, plan_game.OBJ_HANG + ssl)[0]
-    ps = bm.mem_get(A_PLAYER_SLOT, A_PLAYER_SLOT)[0]
-    px = bm.mem_get(plan_game.OBJ_X + ps, plan_game.OBJ_X + ps)[0]
-    py = bm.mem_get(plan_game.OBJ_Y + ps, plan_game.OBJ_Y + ps)[0]
-    bearing = ac.bearing_to(sx, sy, px, py)
-    if bearing is None:
-        return 0
-    return ac.angle_dist(sh, bearing)
-
-
-def wait_gaze_away(bm, log, safe=GAZE_SAFE_MARGIN, max_frames=GAZE_MAX_FRAMES):
-    """Advance foreground frames until the Sentinel faces away from the player by
-    `safe` units (its blind arc), so imminent keystrokes avoid its drain/downgrade.
-    Returns the final margin. Event-driven: steps one frame per $365D, polls state."""
-    m0 = _sentinel_gaze_margin(bm)
-    if m0 is None or m0 >= safe:
-        return m0
-    log(
-        f"  gaze-wait: Sentinel margin {m0} < {safe} (eyeing player); waiting for blind arc"
-    )
-    m = m0
-    with bm.halted():
-        for _ in range(max_frames):
-            try:
-                bm.run_until_pc(_PC_PAN_DONE, timeout=20)  # run one foreground frame
-                bm.advance_instructions(1)  # step off $365D
-            except Exception as e:
-                log(f"    gaze-wait: {type(e).__name__} advancing; proceeding anyway")
-                break
-            m = _sentinel_gaze_margin(bm)
-            if m is None or m >= safe:
-                break
-    bm.exit()  # resume for the keystrokes
-    log(f"  gaze-wait: proceeding (margin {m})")
-    return m
 
 
 def execute_live(
@@ -550,12 +426,7 @@ def execute_live(
     t_start,
     max_seconds,
     landscape,
-    plat,
-    toward_plat=True,
-    near_plat_radius=2,
     max_iterations=200,
-    search_depth=2,
-    search_beam=2,
 ):
     """Closed-loop climb: at each iteration, RESYNC the native climb model from live
     memory (ground truth, including any real enemy/meanie activity since the last
@@ -567,6 +438,14 @@ def execute_live(
     divergence."""
     from solver import plan_game
     from solver import climb_search as csearch
+
+    # the same planner config the simulated runner uses (run_plan_simulated defaults):
+    # drive toward the platform, gate the ROM-infeasible on-distant-boulder synthoid in
+    # the steep ring, depth-2 / beam-2 lookahead.
+    toward_plat = True
+    near_plat_radius = 2
+    search_depth = 2
+    search_beam = 2
 
     # decision function: the receding-horizon best-first lookahead (climb_search,
     # SEARCH_REDESIGN.md) which won't commit a move without a continuation within the
@@ -638,10 +517,6 @@ def execute_live(
         for stp in new_steps:
             label += 1
             tile = tuple(stp["target"])
-            # approach-timing: in the exposed platform ring, fire this action only when
-            # the Sentinel is looking away, so it can't drain/downgrade the fuel mid-aim.
-            if plan_game.cheb(tile, ctx["plat"]) <= GAZE_RING_RADIUS:
-                wait_gaze_away(ex.bm, log)
             outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             if outcome in ("ok", "best_effort_miss"):
                 if outcome == "ok" and stp["verb"] == "create":
@@ -719,67 +594,6 @@ def execute_live(
     return fire_hyperspace(ex, drv, ctx["plat"], log, result)
 
 
-def otype_cost(otype):
-    # ROM object energy costs: robot/synthoid 3, tree 1, boulder 2.
-    return _CREATE_COST.get(otype, 3)
-
-
-# ROM energy deltas ($214F, masked AND #$3F): create pays the cost; absorb refunds it.
-_CREATE_COST = {0: 3, 2: 1, 3: 2}
-_ABSORB_REFUND = {0: 3, 1: 3, 2: 1, 3: 2, 5: 4}
-
-
-def verify(verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1):
-    # D6: require the EXACT on-tile object delta and the EXACT energy delta, and flag any
-    # other global object-count change (wrong-tile landing, meanie spawn, held-key extra
-    # creates) as divergence -- the loose "grew/gone OR global-count" test hid all three.
-    dtot = len(after.objects) - len(before.objects)
-    if verb == "create":
-        if objs1 != objs0 + 1:
-            return (
-                False,
-                f"create wrong-tile/none on {tile} (objs {objs0}->{objs1}); E {e0}->{e1}",
-            )
-        if dtot != 1:
-            return (
-                False,
-                f"create changed global object count by {dtot} (meanie/extra?); E {e0}->{e1}",
-            )
-        exp = (e0 - _CREATE_COST.get(otype, 3)) & 0x3F
-        if e1 != exp:
-            return (
-                False,
-                f"create energy {e0}->{e1} != expected {exp} (cost {_CREATE_COST.get(otype, 3)})",
-            )
-        return True, f"object created on {tile} (objs {objs0}->{objs1}); E {e0}->{e1}"
-    if verb == "transfer":
-        moved = (slot1 != slot0) or (
-            after.player and (after.player.x, after.player.y) == tile
-        )
-        if moved:
-            return (
-                True,
-                f"slot {slot0}->{slot1}, now ({after.player.x},{after.player.y})",
-            )
-        return False, f"transfer did not move player (slot {slot0}->{slot1})"
-    if verb == "absorb":
-        if objs1 != objs0 - 1:
-            return (
-                False,
-                f"absorb wrong-tile/none on {tile} (objs {objs0}->{objs1}); E {e0}->{e1}",
-            )
-        if dtot != -1:
-            return False, f"absorb changed global object count by {dtot}; E {e0}->{e1}"
-        exp = (e0 + _ABSORB_REFUND.get(otype, 3)) & 0x3F
-        if e1 != exp:
-            return (
-                False,
-                f"absorb energy {e0}->{e1} != expected {exp} (refund {_ABSORB_REFUND.get(otype, 3)})",
-            )
-        return True, f"object absorbed on {tile} (objs {objs0}->{objs1}); E {e0}->{e1}"
-    return False, "?"
-
-
 def validate_avi(path):
     import struct
 
@@ -810,12 +624,6 @@ def main():
     ap.add_argument("--digits", default="0042")
     ap.add_argument("--max-seconds", type=int, default=1500)
     ap.add_argument("--video-name", default=None)
-    ap.add_argument(
-        "--snapshot",
-        action="store_true",
-        help="restore a VICE snapshot at the code-entry screen (renders/"
-        "vice_code_entry.vsf) to skip the ~50s tape boot; the first run saves it",
-    )
     args = ap.parse_args()
     video_name = args.video_name or f"solver_run_{args.digits}.avi"
 
@@ -828,7 +636,6 @@ def main():
         args.max_seconds,
         log,
         video_name=video_name,
-        use_snapshot=args.snapshot,
     )
 
     vid = result.get("video")

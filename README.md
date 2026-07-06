@@ -74,8 +74,8 @@ driver; only the glue runners in `scripts/` wire the two together.
 |------|-------|------|
 | Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
 | Solver | `solver/climb_search.py`, `solver/plan_game.py` | plan a winning climb + absorb sequence on the simulator: a receding-horizon best-first lookahead (`climb_search`) over the `plan_game` keyboard-step adapter. Imports only `sentinel/` |
-| Driver | **`driver/core.py`** (the foundation `SentinelDriver` + the shared plumbing: container/bridge-IP, monitor-resilience, full 64 KB live-image read, and landscape entry by title-menu navigation), `driver/boot.py` (boot → title + reusable `boot.vsf`, snapshot save/load), `driver/kbd_aim.py` (aim), `driver/sentinel_state.py` (read live state) | boot the game, enter an arbitrary landscape, and run memory-verified operations (aim a tile, create/absorb/transfer/hyperspace). Solver-independent — executes operations, never plans |
-| Runners | `scripts/run_plan_live.py` | the live plan runner — replans the climb live from real memory each step, drives it in the real game, and verifies the ROM win flag, optionally recording an AVI |
+| Driver | **`driver/core.py`** (the foundation `SentinelDriver` + the shared plumbing: container/bridge-IP, monitor-resilience, full 64 KB live-image read, landscape entry by title-menu navigation, and the live sights-ray probe `probe_tile`), `driver/boot.py` (boot → title + reusable `boot.vsf`, snapshot save/load), `driver/kbd_aim.py` (aim), `driver/sentinel_state.py` (read live state → `GameState`, `verify_entry`), `driver/sentinel_execute.py` (action keys, the `Executor` accessors, and the ROM memory-delta `verify`) | boot the game, enter an arbitrary landscape, and run memory-verified operations (aim a tile, create/absorb/transfer/hyperspace). Solver-independent — executes operations, never plans |
+| Runners | `scripts/run_plan_simulated.py`, `scripts/run_plan_live.py` | run the SAME bare planner loop (resync → decide → execute → replan) against, respectively, the simulator as a tick-accurate "real game" and the actual game in asid-vice. Both verify the win by the on-platform condition / ROM win flag |
 
 ## Simulator (`sentinel/`)
 
@@ -127,10 +127,22 @@ python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
 # the plan is validated by construction: it is built on the sentinel simulator,
 # which is bit-exact vs the real 6502 code (golden-fixture CI, see below).
 
-# drive the real game live and record it (Docker; ~3-20 min):
-# replans the climb live from real memory each step (climb_search lookahead):
-python3 scripts/run_plan_live.py --digits 0000 --snapshot
+# run the planner against the simulator as a TICK-ACCURATE "real game": enemies
+# advance every game round (drain/rotate/downgrade) between and during actions,
+# and the loop resyncs + replans each step (~60s, no emulator):
+python3 scripts/run_plan_simulated.py 0     # reports WON / lost + the climb log
+
+# drive the same loop in the real game and record it (Docker; ~3-20 min). Boot +
+# landscape entry are handled by the driver, which auto-caches a code-entry
+# snapshot under renders/ to skip the ~50s tape load after the first run:
+python3 scripts/run_plan_live.py --digits 0000
 ```
+
+Sharing one loop makes the two runners a controlled comparison. On landscape 0
+they currently **disagree** — simulated wins, live loses to a meanie spawned by a
+near-platform build — because `sentinel.enemies.step` models drain/rotation/downgrade
+but not yet the meanie forced-hyperspace (exposed only passively via
+`sentinel.threat.meanie_safe`).
 
 ## Tests
 
