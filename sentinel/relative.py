@@ -385,12 +385,21 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     the horizontal field of view `fov_width`?  Returns a dict with:
       in_slot   -- target occupies its slot and is the expected type
       in_fov    -- target bearing lies within the horizontal cone
-      full      -- clear line of sight at the object's upper point ($0014 top bit)
-      probes    -- the per-probe LOS booleans (upper first for robots, then base)
+      exposure  -- the ROM's object_exposure byte ($0014): $80 fully visible (base
+                   reached), $40 partial (only the upper point reached), 0 unseen
+      full      -- exposure top bit ($0014 bit7): the base was reached un-occluded
+      probes    -- per-probe reached-the-target booleans (upper first for robots,
+                   then base)
 
     The horizontal/vertical bearings come from the bit-exact geometry above; the
     terrain ray-march is :func:`sentinel.los.check_for_line_of_sight_to_tile`."""
-    out = {"in_slot": False, "in_fov": False, "full": False, "probes": []}
+    out = {
+        "in_slot": False,
+        "in_fov": False,
+        "full": False,
+        "exposure": 0,
+        "probes": [],
+    }
     if state.obj_flags[target] & 0x80:  # empty slot
         return out
     if state.obj_type[target] != expected_type:  # wrong type
@@ -410,26 +419,41 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     v_angle_obs = state.obj_v_angle[observer]
     state.mem[0x0C58] = target  # the ray-march recognises the targeted object
 
-    probes = []
+    # A robot is probed at its upper point first ($18DC is_robot) then its base
+    # ($1904 not_robot); every other object only at its base.  The upper-point
+    # probe runs with enemy_is_considering_robot ($0C6E bit7) SET, which waives the
+    # "can't look up" rejection ($1D26) so an enemy can see a robot's head above its
+    # own eye; the base probe runs with the flag clear.
+    probes = []  # (rel_z_lo, rel_z_hi, do_los_checks)
     if expected_type == mm.T_ROBOT:  # robots probe the upper point first
-        probes.append((z_lo, z_hi))
+        probes.append((z_lo, z_hi, 0x80))
     base_lo = (z_lo - 0xE0) & 0xFF
     base_hi = (z_hi - (1 if z_lo < 0xE0 else 0)) & 0xFF
-    probes.append((base_lo, base_hi))
+    probes.append((base_lo, base_hi, 0x00))
 
-    tgt_x, tgt_y = state.obj_x[target], state.obj_y[target]
-    for plo, phi in probes:
+    # object_exposure ($0014) starts at 0 ($188A) and each probe shifts one bit in.
+    exposure = 0
+    for plo, phi, do_los in probes:
         zp[0x80] = plo
         _vertical_angle(zp, phi, v_angle_obs)  # sets zp[$8A]/zp[$8B] = vertical bearing
         v_lo, v_hi = zp[0x8A], zp[0x8B]
         vec = los.prepare_vector_from_angle(h_hi, h_lo, v_hi, v_lo, v_lo)
-        tx, ty, los_ok = los.check_for_line_of_sight_to_tile(
-            vec, state, observer, do_los_checks=0, max_steps=max_steps
+        _tx, _ty, los_ok = los.check_for_line_of_sight_to_tile(
+            vec, state, observer, do_los_checks=do_los, max_steps=max_steps
         )
-        # the ROM's $0014 bit is set only when the ray reaches the targeted object's
-        # own tile with a clear sight ($0C58); a clear ray to a neighbouring tile
-        # does not count as seeing the target.
-        reached = los_ok and tx == tgt_x and ty == tgt_y
-        out["probes"].append(reached)
-    out["full"] = out["probes"][0]  # upper (robot) / sole (other) probe
+        # $18F9 ROL $0C56 (carry in = no-LOS) then $18FC ROR $0014 (carry out = the
+        # OLD $0C56 bit7).  The march sets $0C56 bit7 when it steps onto the targeted
+        # object's own tile un-occluded ($1E13, gated on $0C58) -- so "reached", not
+        # "the ray ended on the tile", is what marks the object visible.  A ray that
+        # clears intervening terrain and passes over the target's head still reaches
+        # its tile, which is how an enemy sees a robot standing above its eye.
+        c56 = state.mem[0x0C56]
+        reached = (c56 >> 7) & 1
+        state.mem[0x0C56] = ((c56 << 1) | (0 if los_ok else 1)) & 0xFF
+        exposure = ((exposure >> 1) | (reached << 7)) & 0xFF
+        out["probes"].append(bool(reached))
+    state.mem[0x0014] = exposure
+    out["exposure"] = exposure
+    # $0014 top bit == fully visible (base reached for a robot, the sole probe else).
+    out["full"] = bool(exposure & 0x80)
     return out

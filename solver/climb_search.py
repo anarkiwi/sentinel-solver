@@ -41,7 +41,7 @@ from solver.plan_game import (
     OBJ_HANG,
     OBJ_VANG,
 )
-from sentinel import los, threat, enemies as SE, aimcost as ac
+from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost
 
 # --- shared climb mechanics (keyboard-faithful, validated against plan_game) --------
 # These were the reusable core the greedy picker and this search both drove; they now
@@ -577,10 +577,15 @@ def _move_cost(g, c, cur_h, cur_v):
     vh = view.get("h_angle") if view else None
     vv = view.get("v_angle") if view else None
     rounds = _pan_rounds(cur_h, cur_v, view)  # aim the build tile
-    fires = 2 if use_b else 1  # boulder + synthoid, or lone synthoid
+    # Price each fire by its per-verb SETTLE floor (sentinel.actioncost), shared with
+    # the simulated runner's world advance so the enemy forward-sim rotates/drains by
+    # the SAME amount the real action costs -- the flat ROUNDS_PER_ACTION under-counted
+    # a fire ~15x, so the planner forecast a route the real drain could not survive.
+    settle = actioncost.SETTLE["create"]  # the synthoid create (always fired)
     if use_b:
         rounds += ROUNDS_PER_H_STEP + ROUNDS_PER_V_STEP  # re-centre on-boulder synthoid
-    fires += 1  # transfer confirm
+        settle += actioncost.SETTLE["create"]  # boulder create
+    settle += actioncost.SETTLE["transfer"]  # transfer confirm
     end_h, end_v = vh, vv
     back_h = ac.bearing_to(T2[0], T2[1], prev[0], prev[1])  # look back at departed tile
     if back_h is not None and end_h is not None:
@@ -588,8 +593,8 @@ def _move_cost(g, c, cur_h, cur_v):
         # U-turn + a short correction, matching what the live driver keys.
         rounds += ac.bearing_rounds(end_h, back_h, ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
         end_h = back_h
-        fires += 1  # reabsorb-shell confirm
-    ticks = int(round(rounds + fires * ROUNDS_PER_ACTION))
+        settle += actioncost.SETTLE["absorb"]  # reabsorb-shell confirm
+    ticks = int(round(rounds + settle))
     return ticks, end_h, end_v
 
 

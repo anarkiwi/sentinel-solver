@@ -676,9 +676,20 @@ def check_for_line_of_sight_to_tile(
     # We seed them from live memory and clear bit7 exactly as the ROM does.
     c56 = (state.mem[0x0C56] >> 1) & 0xFF
     cdd = (state.mem[0x0CDD] >> 1) & 0xFF
+    # $0C56/$0CDD live in memory: seed them (LSR) back so a caller reading them
+    # after the march (the enemy visibility plumbing) sees the ROM's value on the
+    # edge-return paths too.  They only change again in the object branch below.
+    # The read-only player-aim path (bytes-backed state) never reads them back.
+    writable = not isinstance(state.mem, bytes)
+    if writable:
+        state.mem[0x0C56] = c56
+        state.mem[0x0CDD] = cdd
     c58 = state.mem[0x0C58] & 0xFF  # $0C58 targeted object slot ($FF = none)
     c67 = 0  # $0C67 boulder-consider flag
-    c6e = do_los_checks & 0x7F  # LSR cleared top bit at $1B40
+    # $0C6E as the caller left it: the player path LSRs bit7 clear ($1B40), while
+    # the enemy's robot upper-point probe sets it ($18DD is_robot) so bit7 waives
+    # the looking-up rejection below.  Only bit7 is read (at the $1D26 check).
+    c6e = do_los_checks & 0xFF
     tx = ty = 0
     # bound the march like the ROM's natural board-edge exit; an off-board ray
     # eventually trips the $1F edge test. Cap to avoid an infinite near-horizontal
@@ -708,6 +719,11 @@ def check_for_line_of_sight_to_tile(
             z, s79, c0c_var, c67, c56, cdd, s60 = _get_tile_z_from_object(
                 vec, state, raw, s60, s79, c0c_var, c67, c56, cdd, c58
             )
+            # $1E13 ROR $0C56 / the $0CDD tree tracker are memory writes in the ROM;
+            # persist them so the caller's post-march plumbing reads the right byte.
+            if writable:
+                state.mem[0x0C56] = c56
+                state.mem[0x0CDD] = cdd
             carry_set = False
             slope = 0
         if not carry_set:

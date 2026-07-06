@@ -442,10 +442,12 @@ def execute_live(
     # the same planner config the simulated runner uses (run_plan_simulated defaults):
     # drive toward the platform, gate the ROM-infeasible on-distant-boulder synthoid in
     # the steep ring, depth-2 / beam-2 lookahead.
-    toward_plat = True
-    near_plat_radius = 2
-    search_depth = 2
-    search_beam = 2
+    # Env-overridable so the live run uses the SAME planner config as the winning
+    # simulated run (run_plan_simulated). Defaults preserve the prior live behaviour.
+    toward_plat = os.environ.get("TOWARD_PLAT", "1") == "1"
+    near_plat_radius = int(os.environ.get("NEAR_PLAT_RADIUS", "2"))
+    search_depth = int(os.environ.get("SEARCH_DEPTH", "2"))
+    search_beam = int(os.environ.get("SEARCH_BEAM", "2"))
 
     # decision function: the receding-horizon best-first lookahead (climb_search,
     # SEARCH_REDESIGN.md) which won't commit a move without a continuation within the
