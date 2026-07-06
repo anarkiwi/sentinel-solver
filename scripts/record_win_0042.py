@@ -20,18 +20,24 @@ import os, sys, time, json, struct, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 
-import sentinel_state as gs
-from sentinel_execute import Executor, CREATE_KEY, K_ABSORB, K_TRANSFER, K_HYPERSPACE
-import kbd_aim
+from driver import sentinel_state as gs
+from driver.sentinel_execute import (
+    Executor,
+    CREATE_KEY,
+    K_ABSORB,
+    K_TRANSFER,
+    K_HYPERSPACE,
+)
+from driver import kbd_aim
 from sentinel.state import State
 from sentinel import los
 from sentinel import aimcost as ac
-import plan_game
+from solver import plan_game
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -789,14 +795,14 @@ def execute_live(
     self-heals on the NEXT iteration (a fresh resync never has the failed object,
     so the planner routes around it) instead of cascading into a run-ending
     divergence."""
-    import plan_game
-    import climb_greedy as cg
+    from solver import plan_game
+    from solver import climb_greedy as cg
 
     # decision function: the greedy single-step picker, or the receding-horizon best-first
     # lookahead (climb_search, SEARCH_REDESIGN.md) which won't commit a move without a
     # continuation within the horizon (fixes the greedy dead-end/reposition failure).
     if use_search:
-        import climb_search as csearch
+        from solver import climb_search as csearch
 
         def decide(g, ctx, blocked_set, lg):
             return csearch.search_iterate(

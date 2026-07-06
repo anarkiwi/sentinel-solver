@@ -41,14 +41,14 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
-import sentinel_state as gs
+from driver import sentinel_state as gs
 from sentinel.state import State
 from sentinel import los
-from sentinel_execute import Executor
+from driver.sentinel_execute import Executor
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 RENDERS = os.path.join(ROOT, "renders")

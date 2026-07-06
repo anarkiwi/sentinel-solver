@@ -52,7 +52,7 @@ CONTROL SCHEME (verified live):
     routine landscape_completed ($3603).
 
 Usage:
-    python3 scripts/sentinel_execute.py [LANDSCAPE]
+    python3 driver/sentinel_execute.py [LANDSCAPE]
     LANDSCAPE defaults to 0 (0000). Output GIF at renders/solver_run.gif, frames
     under renders/solver_run/.
 """
@@ -64,13 +64,13 @@ import argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import sentinel_state as gs
+from driver import sentinel_state as gs
 from sentinel import memmap as mm
 from sentinel import aimcost as ac
 from sentinel.memmap import T_BOULDER, T_ROBOT, T_TREE

@@ -64,12 +64,18 @@ angle it could rotate to, not just its current facing.
 
 ## What's here
 
+The code is in three cleanly separated layers, each its own top-level package:
+the **simulator** (`sentinel/`) it all builds on, the **solver** (`solver/`)
+that plans on the simulator, and the **driver** (`driver/`) that plays the real
+game. The driver never imports the solver and the solver never imports the
+driver; only the glue runners in `scripts/` wire the two together.
+
 | Area | Files | Role |
 |------|-------|------|
 | Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
-| Planners (the solver) | `scripts/climb_greedy.py`, `scripts/climb_search.py` | plan a winning climb + absorb sequence: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins) |
-| Plan adapter | `scripts/plan_game.py` | a mutable game + keyboard-step recorder over a `sentinel.State`, so the planners read/write one bit-exact state |
-| Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/sentinel_execute.py`, `scripts/record_win_0042.py`, `scripts/sentinel_state.py` | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video |
+| Solver | `solver/climb_greedy.py`, `solver/climb_search.py`, `solver/plan_game.py` | plan a winning climb + absorb sequence on the simulator: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins), over the `plan_game` keyboard-step adapter. Imports only `sentinel/` |
+| Driver | `driver/boot.py`, `driver/kbd_aim.py`, `driver/sentinel_execute.py`, `driver/sentinel_state.py`, `driver/live_climb.py`, … | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video. Solver-independent — executes a plan, never plans |
+| Runners | `scripts/record_win_0042.py` | glue entry points that wire a solver plan into the driver |
 
 ## Simulator (`sentinel/`)
 
@@ -116,7 +122,7 @@ The live driver additionally needs Docker and the `asid-vice:latest` image
 
 ```bash
 # plan a win with the best-first lookahead (landscape 0, depth 2; ~85s):
-python3 scripts/climb_search.py 0 2     # prints native_won True + the step plan
+python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
 
 # the plan is validated by construction: it is built on the sentinel simulator,
 # which is bit-exact vs the real 6502 code (golden-fixture CI, see below).

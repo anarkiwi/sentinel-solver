@@ -23,10 +23,10 @@ pan to reabsorb the shell) as the lookahead descends (sec.6).
 import sys, os, json, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 os.chdir(os.path.join(HERE, ".."))
 
-from climb_greedy import (
+from solver.climb_greedy import (
     _candidates,
     _boulder_centre_feasible,
     _refuel,
@@ -38,7 +38,13 @@ from climb_greedy import (
     EXPOSURE_RESERVE,
     _enemy_exposed_tiles,
 )
-from plan_game import PlanGame as Game, cheb, visibility_sweep, OBJ_HANG, OBJ_VANG
+from solver.plan_game import (
+    PlanGame as Game,
+    cheb,
+    visibility_sweep,
+    OBJ_HANG,
+    OBJ_VANG,
+)
 from sentinel import threat, enemies as SE, aimcost as ac
 
 INF = float("inf")

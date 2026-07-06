@@ -33,14 +33,14 @@ import os, sys, time, json, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, os.path.abspath(os.path.join(ROOT, "..", "vice-driver")))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from vice_driver.display import parse_display_response, parse_palette_response
 
-import sentinel_state as gs
+from driver import sentinel_state as gs
 from sentinel import aimcost as ac
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")

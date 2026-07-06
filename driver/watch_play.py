@@ -12,7 +12,7 @@ Usage:
      Play up to the point you want recorded (type the landscape code
      yourself, dismiss the preview, etc).
   2. In another terminal, run this script to start logging + video capture:
-       python3 scripts/watch_play.py --landscape 0
+       python3 driver/watch_play.py --landscape 0
      It polls state ~4x/second (one combined memory read per poll, to avoid
      disrupting the emulator's speed pacing) into out/play_TIMESTAMP.jsonl and records
      renders/play_TIMESTAMP.avi (via asid-vice's native VIDEO_RECORD opcode,
@@ -25,11 +25,11 @@ import os, sys, time, json, argparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 
 from vice_driver import BinMon
 from vice_driver.binmon import BinmonError
-import sentinel_state as gs
+from driver import sentinel_state as gs
 
 # Every address sentinel_state.read_game_state() needs (tiles_table, all object
 # arrays, player slot/energy/scalars) falls within [0, 0x0CDE] -- so ONE

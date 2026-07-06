@@ -13,7 +13,7 @@ file is a genuine frame-by-frame capture of the emulated VIC-II output --
 NOT a stitched-together animated GIF.
 
 Run:
-    python3 scripts/test_video_record.py
+    python3 driver/test_video_record.py
 """
 
 import os
