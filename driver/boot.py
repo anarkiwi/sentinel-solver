@@ -2,7 +2,7 @@
 """Robust boot of the Sentinel tape in asid-vice. The multi-stage tape load
 occasionally JAMs the 6502 under warp (the container exits, closing the binmon socket),
 so we retry the whole container launch until a connection survives long enough for the
-game code to be resident (gen_enter.wait_for_load signature). Returns a connected
+game code to be resident (wait_for_load signature). Returns a connected
 BinMon + the live ViceContainer; the caller closes both."""
 
 import os, sys, time, struct, subprocess
@@ -10,10 +10,32 @@ import os, sys, time, struct, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from vice_driver import BinMon, DiskMount, ViceContainer
-from driver import gen_enter
 
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
+
+# signature bytes of the loaded game in RAM, used to detect that the multi-stage
+# tape load has finished (the ROM routines we later call are resident). $35A4 holds
+# `A5 0B 85` (play_landscape: LDA player_object / STA) once loaded.
+SIG_ADDR = 0x35A4
+SIG_BYTES = bytes([0xA5, 0x0B, 0x85])
+
+
+def wait_for_load(bm, log=print, total=80.0, poll=2.0):
+    """Poll RAM until the game is resident (SIG_BYTES present at SIG_ADDR).
+    The tape load is multi-stage and its timing under warp varies; polling a
+    signature is more reliable than a fixed sleep. Returns True if loaded."""
+    deadline = time.time() + total
+    while time.time() < deadline:
+        try:
+            if bytes(bm.mem_get(SIG_ADDR, SIG_ADDR + 2)) == SIG_BYTES:
+                log(f"  load complete (sig at ${SIG_ADDR:04x})")
+                return True
+        except Exception:
+            pass
+        time.sleep(poll)
+    return False
+
 
 # Reusable boot snapshot: once the tape has loaded to the title screen we save the full
 # VICE machine state so later runs can resume it instead of re-loading the ~50s tape.
@@ -102,7 +124,7 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
             bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
             bm.exit()
             log(f"[boot {attempt}] connected; waiting for tape load ...")
-            if gen_enter.wait_for_load(bm, log, total=80.0, poll=2.0):
+            if wait_for_load(bm, log, total=80.0, poll=2.0):
                 # loaded to the title screen: cache a reusable boot snapshot if absent.
                 save_boot_snapshot_if_missing(bm, renders, log)
                 return container, bm
