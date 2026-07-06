@@ -74,7 +74,7 @@ driver; only the glue runners in `scripts/` wire the two together.
 |------|-------|------|
 | Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
 | Solver | `solver/climb_greedy.py`, `solver/climb_search.py`, `solver/plan_game.py` | plan a winning climb + absorb sequence on the simulator: greedy height-first and the receding-horizon best-first lookahead (`climb_search`, the one that wins), over the `plan_game` keyboard-step adapter. Imports only `sentinel/` |
-| Driver | `driver/boot.py`, `driver/kbd_aim.py`, `driver/sentinel_execute.py`, `driver/sentinel_state.py`, `driver/live_climb.py`, … | drive the real game by keystrokes in VICE, read live state (via `sentinel`) and record video. Solver-independent — executes a plan, never plans |
+| Driver | **`driver/core.py`** (the foundation `SentinelDriver`), built on `driver/boot.py` (boot → title + reusable `boot.vsf`), `driver/gen_enter.py` (enter a landscape), `driver/kbd_aim.py` (aim), `driver/sentinel_state.py` (read live state) | one driver: boot the game, enter an arbitrary landscape, and run memory-verified operations (aim a tile, create/absorb/transfer/hyperspace). Solver-independent — executes operations, never plans. The `sentinel_*`/`live_*` scripts are standalone experiments over the same VICE transport |
 | Runners | `scripts/record_win_0042.py` | glue entry points that wire a solver plan into the driver |
 
 ## Simulator (`sentinel/`)

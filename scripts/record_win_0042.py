@@ -38,6 +38,7 @@ from sentinel.state import State
 from sentinel import los
 from sentinel import aimcost as ac
 from solver import plan_game
+from driver import core
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -190,32 +191,6 @@ def objects_at(state, x, y):
     return [o for o in state.objects if o.x == x and o.y == y]
 
 
-def _bridge_ip(container_id, log):
-    """Look up a started container's docker BRIDGE IP. Host -p port publishing is not
-    reachable in this environment (127.0.0.1:6502 fails); the container's bridge IP is.
-    """
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                container_id,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.strip()
-        if out:
-            return out
-    except Exception as e:
-        log(f"  bridge-ip lookup failed: {e}")
-    return None
-
-
 def _free_port_6502(log):
     import subprocess
 
@@ -328,7 +303,7 @@ def run(
                 # Host -p publishing is broken here (127.0.0.1:6502 unreachable); connect
                 # via the started container's docker bridge IP. BINMON_HOST env overrides.
                 time.sleep(2)
-                bm_host = os.environ.get("BINMON_HOST") or _bridge_ip(
+                bm_host = os.environ.get("BINMON_HOST") or core.bridge_ip(
                     container.container_id, log
                 )
                 if not bm_host:
