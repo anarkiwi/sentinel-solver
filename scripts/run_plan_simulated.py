@@ -32,17 +32,16 @@ bit-exact ``sentinel`` simulator instead of VICE:
 
 It then reports whether the player ends up on the platform (``actions.won``).
 
-A LOSS is a genuine, tick-accurate solver failure: the player being drained with no
-energy left is DEATH (kill_player $1A00 sets the $0C4E flag; ``actions.player_dead``),
-exactly as live -- so a route that lingers in the Sentinel's view at low energy dies
-here instead of silently flooring at 0 and marching on. Refuelling cannot outrun the
-drain either (``climb_search._REFUEL_DRAIN``): each fuel absorb pays the drain over its
-re-aim pan, so absorbing trees while being drained does not net-gain.
-
-Not modelled: the meanie forced-hyperspace side channel (``sentinel.enemies.step``
-covers drain/rotation/downgrade/drain-death but not meanie spawning -- see
-``sentinel.threat.meanie_safe``). So a WIN here is necessary-but-not-sufficient for
-a live win.
+``sentinel.enemies.step`` models the full enemy round: rotation, cooldowns, target
+LOS, draining, object downgrades, the energy-conservation tree discharge, AND both
+loss paths -- drained at 0 energy (kill_player $1A00) and a meanie's forced hyperspace
+(the meanie lifecycle create/rotate/hyperspace runs inside the scan). ``run`` checks
+``actions.player_dead`` after every advance/endgame step, so a route that lingers in
+the Sentinel's view at low energy DIES here (as live) instead of flooring at 0 and
+marching on. Refuelling cannot outrun the drain either (``climb_search._REFUEL_DRAIN``):
+each fuel absorb pays the drain over its re-aim pan, so absorbing trees while being
+drained does not net-gain. A LOSS is thus a genuine, tick-accurate solver failure and a
+WIN reflects a route that survives the modelled enemy round end to end.
 """
 
 import os, sys, json, time, argparse
@@ -58,9 +57,14 @@ from sentinel import actioncost
 from solver import plan_game
 from solver import climb_search as csearch
 
-# This runner models real-time enemy drain, so the planner's refuel forecast must too:
-# absorbing fuel while being drained costs the re-aim pan's drain and cannot net-gain
-# (see climb_search._REFUEL_DRAIN). The offline plan_search keeps this off by design.
+# This runner models real-time enemy drain, so the planner's forecast must too:
+#  * _SEEN_DRAIN: the lookahead debits the energy the player loses while dwelling in view
+#    over each move's real window, and PRUNES any move whose window kills the player -- so
+#    the search routes around the exposed-launch drain instead of dying in it; and
+#  * _REFUEL_DRAIN: absorbing fuel while being drained pays the re-aim pan's drain and
+#    cannot net-gain.
+# The offline plan_search keeps both off by design (rotation-only, ROM-validated accounting).
+csearch._SEEN_DRAIN = True
 csearch._REFUEL_DRAIN = True
 
 ENERGY = mm.ENERGY_IN_OBJECTS
@@ -76,6 +80,7 @@ def make_world(landscape):
     world.mem[mm.CURSOR] = 7
     world.mem[mm.COOLDOWN_GATE] = 0
     world.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
+    world.mem[mm.PLAYER_HAS_HYPERSPACED] = 0
     return world
 
 

@@ -156,9 +156,16 @@ def won(state):
 
 
 def player_dead(state):
-    """Whether the Sentinel drained the player to death (kill_player $1A00 set the
-    $0C4E death flag while the player had no energy left)."""
-    return bool(state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80)
+    """Whether the player has been killed. Two ROM death paths:
+    * drained at 0 energy -- kill_player $1A00 sets the $0C4E flag; and
+    * a meanie forcibly hyperspaced the player with too little energy to survive it
+      -- do_hyperspace $215F sets PLAYER_HAS_HYPERSPACED ($0CDE bit7) and does NOT
+      relocate the player.  A WIN also touches $0CDE (bit6, landscape complete), so a
+      death is bit7 set with bit6 clear ($0CDE & $C0 == $80).  The simulator never
+      voluntarily hyperspaces, so a lone bit7 during enemy stepping is a meanie kill."""
+    if state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80:
+        return True
+    return (state.mem[mm.PLAYER_HAS_HYPERSPACED] & 0xC0) == 0x80
 
 
 def win(state, tile=None):

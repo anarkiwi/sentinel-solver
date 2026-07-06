@@ -135,3 +135,18 @@ def test_on_platform_detects_win():
     state.player = player
     assert actions.on_platform(state) is True
     assert actions.won(state) is True
+
+
+def test_player_dead_detects_both_death_paths():
+    state = State.from_mem(bytearray(0x10000))
+    assert actions.player_dead(state) is False
+    # drain-death: kill_player $1A00 sets $0C4E bit7.
+    state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0x80
+    assert actions.player_dead(state) is True
+    state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
+    # meanie forced-hyperspace death: $0CDE bit7 set, complete bit6 clear.
+    state.mem[mm.PLAYER_HAS_HYPERSPACED] = 0x80
+    assert actions.player_dead(state) is True
+    # a win also touches $0CDE (bit6): 0xC0 is NOT death.
+    state.mem[mm.PLAYER_HAS_HYPERSPACED] = 0xC0
+    assert actions.player_dead(state) is False
