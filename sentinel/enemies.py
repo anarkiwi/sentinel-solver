@@ -15,10 +15,13 @@ loop's ``update_enemy_cooldowns`` ($1317) + ``update_enemies`` ($16B5) pair:
         cooldown reloads to 30; with nothing to drain and its rotation cooldown
         low, the enemy rotates ($9D37,X added to its facing, cooldown -> 200).
 
-The rendering-coupled side effects of the ROM routine (object re-plotting, sound,
-the energy-discharge that scatters trees when an enemy is absorbed) do not change
-the gameplay state a strategy search reasons about and are not modelled here; the
-meanie lifecycle is exposed separately via :func:`meanie_threat`.
+Landscape-energy conservation IS modelled: every drain banks a unit on the enemy
+(``reduce_object_energy`` $1A4F) which a later ``consider_discharging_enemy_energy``
+($1A5D) returns to the board as a tree on a random flat tile -- so a Sentinel that
+drains the player over the time an action takes scatters trees exactly as the live
+ROM does.  The purely rendering-coupled side effects (object re-plotting, sound) do
+not change the gameplay state and are not modelled; the meanie lifecycle is exposed
+separately via :func:`meanie_threat`.
 
 The cooldown, rotation, targeting and drain machinery reproduces the ROM round for
 round (validated bit-exact over the enemy arrays for hundreds of rounds). The one
@@ -76,23 +79,35 @@ def tick_cooldowns(state):
 # ---------------------------------------------------------------------------
 # reduce_object_energy $1A08
 # ---------------------------------------------------------------------------
-def _reduce_object_energy(state, target):
+def _discharge_bank(state, enemy):
+    """increase_enemy_energy_to_discharge $1A4F: bank one unit of drained energy on
+    `enemy`, to be returned to the landscape as a tree by a later discharge pass."""
+    a = mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy
+    state.mem[a] = (state.mem[a] + 1) & 0xFF
+
+
+def _reduce_object_energy(state, target, enemy):
     """$1A08: drain `target`. The player loses one energy (returns True); a robot
     downgrades to a boulder, a boulder to a tree, a tree is removed (returns
-    False -- no player energy change)."""
+    False -- no player energy change).  Every drain that is not a kill banks one
+    unit of energy on `enemy` ($1A4F/$1A4E) for later discharge as a tree -- the
+    landscape-energy conservation that scatters trees while the Sentinel drains."""
     mem = state.mem
     if target == mem[mm.PLAYER_OBJECT]:
         if state.energy == 0:
-            return True  # kill_player (out of energy)
+            return True  # kill_player (out of energy) -- no discharge
         state.energy = state.energy - 1
+        _discharge_bank(state, enemy)
         return True
     otype = state.obj_type[target]
     if otype == mm.T_ROBOT:
+        mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $1A31
         state.obj_type[target] = mm.T_BOULDER
     elif otype == mm.T_TREE:
         actions.remove_object(state, target)
     else:  # boulder -> tree
         state.obj_type[target] = mm.T_TREE
+    _discharge_bank(state, enemy)
     return False
 
 
@@ -122,7 +137,7 @@ def _target_object(state, enemy, target, exposure):
         return
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
-        _reduce_object_energy(state, target)
+        _reduce_object_energy(state, target, enemy)
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         return
     # enemy_can't_drain_object $184D: the player is only partially visible.  Try to
@@ -163,6 +178,12 @@ def _consider_enemy_state(state, enemy):
     # of scanning for a drain (top bit of enemies_meanie_object clear == has one).
     if not (mem[mm.ENEMIES_MEANIE_OBJECT + enemy] & 0x80):
         _update_meanie(state, enemy)
+        return
+
+    # no_meanie ($1773): before draining, return any energy banked from earlier drains
+    # to the landscape as a tree. If one is discharged the enemy dithers and skips its
+    # drain/rotate for this update ($177A) -- the conservation that scatters trees.
+    if _consider_discharging_enemy_energy(state, enemy):
         return
 
     mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (
@@ -206,7 +227,7 @@ def _consider_enemy_state(state, enemy):
     tb = _find_drainable_boulder_or_tree(state, enemy)
     if tb is not None:
         mem[mm.TARGETED_OBJECT_SLOT] = tb
-        _reduce_object_energy(state, tb)
+        _reduce_object_energy(state, tb, enemy)
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         return
 
@@ -367,6 +388,31 @@ def _put_object_in_random_tile_below_z(state, slot, z, prng):
             continue
         _put_object_in_tile(state, slot, tx, ty, prng)
         return True
+
+
+def _consider_discharging_enemy_energy(state, enemy):
+    """consider_discharging_enemy_energy $1A5D: if `enemy` has banked drained energy,
+    return one unit to the landscape as a TREE on a random flat tile no higher than
+    the below-enemies ceiling ($0C06), and decrement the bank.  Returns True if a tree
+    was discharged (the ROM then dithers and SKIPS this enemy's drain/rotate for the
+    update, $177A), False if there was nothing to discharge or no tile could take it."""
+    mem = state.mem
+    if mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0:
+        return False  # $1A63: carry set -- nothing to discharge
+    prng = Prng().load(mem)
+    slot = _create_object(state, mm.T_TREE)  # $1A65 create_object(type 2)
+    if slot is None:
+        prng.store(mem)
+        return False
+    placed = _put_object_in_random_tile_below_z(
+        state, slot, mem[mm.ENEMY_BELOW_Z], prng
+    )
+    prng.store(mem)
+    if not placed:  # $1A70: no tile found -> abandon (slot stays flagged empty)
+        return False
+    a = mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy
+    mem[a] = (mem[a] - 1) & 0xFF  # $1A7A DEC
+    return True
 
 
 def do_hyperspace(state):
