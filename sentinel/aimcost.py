@@ -24,6 +24,9 @@ import math
 
 AZIMUTH_STEP = 8  # h_angle keyboard step (D/S), wraps mod 256
 PITCH_STEP = 4  # v_angle keyboard step (L/COMMA), clamped band
+UTURN_STEP = (
+    16  # a U-turn (EOR $80) flips 128 units = 16 lattice steps in ONE keystroke
+)
 
 
 def bearing_to(ex, ey, tx, ty):
@@ -49,6 +52,30 @@ def v_steps(v0, v1):
     keyboard (it is clamped to a contiguous band), so this is the plain lattice
     distance in 4-unit steps."""
     return abs(v0 - v1) // PITCH_STEP
+
+
+def h_press_count(h0, h1):
+    """Minimal keyboard bearing plan from ``h0`` to ``h1`` on the +-8 lattice, as
+    ``(n_uturn, n_step)``: ``n_uturn`` is 0 or 1 U-turn presses (each an EOR $80 = +128,
+    i.e. +16 lattice steps in ONE keystroke, $1B2F) and ``n_step`` the remaining +-8
+    presses.  The U-turn is taken only when it STRICTLY lowers the total keystroke count --
+    a target more than half a turn away -- since a U-turn plus a short correction beats
+    stepping most of the way round: direct ``d`` presses vs ``1 + (16 - d)``, so the
+    crossover is ``d >= 9`` (a bearing >= 72 units, past which each avoided +-8 press also
+    avoids a full pan scroll, cutting real aiming time)."""
+    d = h_steps(h0, h1)
+    if 1 + (UTURN_STEP - d) < d:
+        return (1, UTURN_STEP - d)
+    return (0, d)
+
+
+def bearing_rounds(h0, h1, rounds_per_step, rounds_per_uturn):
+    """Enemy rounds to pan the bearing ``h0 -> h1`` using the minimal U-turn-aware key
+    plan (:func:`h_press_count`).  Keeps the planner's move cost consistent with what the
+    live driver actually keys: a far-bearing swing costs one U-turn + a short correction,
+    not up to sixteen +-8 pans."""
+    nu, ns = h_press_count(h0, h1)
+    return nu * rounds_per_uturn + ns * rounds_per_step
 
 
 def pan_steps(h0, v0, h1, v1):
