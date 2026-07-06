@@ -54,13 +54,45 @@ def test_cost_and_ticks_monotone():
     """A boulder-step costs more energy AND more ticks than a hop (the search relies on
     both for affordability filtering and enemy-state advancement)."""
     import climb_search as CS
+    import plan_game
 
+    g = plan_game.PlanGame(0)
     hop = ((1, 2), False, 6.0, None)
     boulder = ((1, 2), True, 6.0, None)
     assert CS._cost(boulder, set()) > CS._cost(hop, set())
-    assert CS._ticks_for(boulder) > CS._ticks_for(hop)
+    hop_ticks, _, _ = CS._move_cost(g, hop, None, None)
+    boulder_ticks, _, _ = CS._move_cost(g, boulder, None, None)
+    assert boulder_ticks > hop_ticks
     # exposure adds reserve to the up-front cost
     assert CS._cost(hop, {(1, 2)}) > CS._cost(hop, set())
+
+
+def test_move_cost_prices_return_pan_and_geometry():
+    """The move cost prices the WHOLE keyboard sequence -- not a flat per-move constant.
+    (a) It includes the return-pan to reabsorb the departed tile's shell, so even a move
+    whose build-aim needs no pan still costs pan keystrokes to swing the view back;
+    (b) the tick cost varies with the foothold's bearing geometry (the thing the flat
+    constant ignored); (c) the ending heading it reports is the return-pan bearing, so the
+    next move chains from where the view actually ends."""
+    import climb_search as CS
+    import plan_game
+
+    g = plan_game.PlanGame(0)
+    px, py = g.player_xy()
+    east = ((px + 3, py), False, 6.0, {"h_angle": 0x00, "v_angle": 0xF5})
+    south = ((px, py + 3), False, 6.0, {"h_angle": 0x40, "v_angle": 0xF5})
+    # (a) build-aim is already on-heading (view h == cur h) yet the move still costs pan
+    # keystrokes -- the return swing back to the departed tile behind the new foothold.
+    fires_only = 2 * CS.ROUNDS_PER_ACTION  # hop = synthoid + transfer, no reabsorb pan
+    east_ticks, end_h, _ = CS._move_cost(g, east, 0x00, 0xF5)
+    assert east_ticks > fires_only
+    # (b) a different bearing -> a different combined aim+return pan -> a different cost.
+    south_ticks, _, _ = CS._move_cost(g, south, 0x00, 0xF5)
+    assert south_ticks != east_ticks
+    # (c) the ending heading is the bearing from the new foothold back to the departed tile.
+    from sentinel import aimcost as ac
+
+    assert end_h == ac.bearing_to(px + 3, py, px, py)
 
 
 def test_read_state_returns_sentinel_state():

@@ -131,19 +131,35 @@ estimated tick-cost of each simulated move (§6) as the lookahead descends —
 this is what turns "the enemy will do something" into a concrete forecast
 instead of a guess.
 
-## 6. Tick-cost-per-move: needs empirical calibration, not a guess
+## 6. Tick-cost-per-move: derived from the simulator's own aim geometry
 
-Advancing `EnemyPhase` correctly during lookahead requires knowing how many
-ticks elapse per real keyboard-driven action (aim + confirm + fire). This is
-NOT a constant to invent — it should be measured from real telemetry:
-`scripts/watch_play.py` (built earlier this session) already logs
-wall-clock-timestamped game state during human play; the same instrumentation
-run against the live executor gives real aim-to-fire durations. Convert real
-seconds to ticks via the C64's frame rate (`update_enemies` runs once per
-game loop iteration, ≈ one per frame). Treat this as a tunable
-(`TICKS_PER_ACTION`, with separate estimates for aim-only vs. aim+build vs.
-refuel-only actions if they measurably differ) reviewed against actual
-recorded sessions before trusting the search's safety forecasts.
+Advancing the enemy state correctly during lookahead requires knowing how many
+game rounds elapse per real keyboard-driven move. This is NOT a flat constant
+per move type — a move is a *keyboard sequence* whose cost is dominated by how
+far the view has to **pan** to aim each sub-action, and that pan distance is
+computable exactly from the simulator (`sentinel.aimcost` +
+`sentinel.los`'s keyboard lattice), not something to guess or crudely measure.
+
+`climb_search._move_cost` mirrors `_apply`'s real sequence — aim + build the
+foothold (a boulder then a re-centred on-boulder synthoid, or a lone synthoid),
+transfer, then **swing the view back** to look down on the departed tile and
+reabsorb its shell — and prices each aim by the keyboard lattice distance from
+the previous heading (`aimcost.h_steps`/`v_steps`). That return swing is often a
+near-180° bearing pan (verified in `out/ls0_pancost.log`: `h $90→$08` = 15
+lattice steps) and is the bulk of a move's exposure window — the cost the old
+flat `TICKS_PER_HOP`/`TICKS_PER_BOULDER_STEP` constants entirely ignored.
+
+Keystrokes convert to enemy rounds by the ROM's own scroll cadence (the view
+scrolls one step per frame, and `enemies.step` ≈ one frame): a coarse ±8
+**bearing** keystroke animates a 16-step scroll (≈16 rounds), a ±4 **pitch**
+keystroke an 8-step scroll (≈8 rounds), and a fired create/absorb/transfer
+settles over its own plot cycle (≈16 rounds). These are the `ROUNDS_PER_H_STEP`
+/ `ROUNDS_PER_V_STEP` / `ROUNDS_PER_ACTION` tunables (env-overridable so a
+diverging live run can be recalibrated from its own telemetry, sec.9 step 4).
+`_move_cost` also returns the **ending heading**, which the search threads into
+the next move so each move's pan is charged from where the last one left the
+view — the whole reason the enemy-rotation and drain forecasts a move descends
+into are evaluated at the state the enemies *really* reach while it executes.
 
 ## 7. Search algorithm
 

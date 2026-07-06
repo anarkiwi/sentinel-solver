@@ -15,8 +15,9 @@ plan_game (sec.4, sec.8) -- _candidates, _boulder_centre_feasible, _refuel, _app
 edge_dist -- and branches over plan_game.Game.clone()d states. Enemy timing is folded
 in as a per-candidate SAFETY ANNOTATION via sentinel.threat (sec.5), not an adversarial
 search dimension (sec.2): meanie_safe is a hard pre-filter, ticks_until_seen a soft
-leaf-eval term. Each node's sentinel enemy state is advanced by TICKS_PER_ACTION per
-simulated move (sec.6) as the lookahead descends.
+leaf-eval term. Each node's sentinel enemy state is advanced by the move's REAL tick cost
+(_move_cost, derived from the keyboard-aim geometry: aim + build + transfer + the return-
+pan to reabsorb the shell) as the lookahead descends (sec.6).
 """
 
 import sys, os, json, time
@@ -38,7 +39,7 @@ from climb_greedy import (
     _enemy_exposed_tiles,
 )
 from plan_game import PlanGame as Game, cheb, visibility_sweep, OBJ_HANG, OBJ_VANG
-from sentinel import threat, enemies as SE
+from sentinel import threat, enemies as SE, aimcost as ac
 
 INF = float("inf")
 _NOOP = lambda *a, **k: None
@@ -47,15 +48,36 @@ _NOOP = lambda *a, **k: None
 DEFAULT_DEPTH = 3  # plies of lookahead; raise for landscapes that need it (sec.7)
 DEFAULT_BEAM = 3  # top-N candidates expanded per node, independent of depth (sec.7)
 
-# --- tick-cost per real keyboard action (SEARCH_REDESIGN.md sec.6) -----------
-# NOT invented: a placeholder pending empirical calibration from watch_play.py-style
-# telemetry (aim-to-fire durations) against the live executor. The C64 advances
-# update_enemies ~once per frame (~50 PAL fps), so seconds*50 ~= ticks. A hop
-# (aim+build synthoid+transfer) is cheaper than a boulder-step (two builds+transfer).
-# These feed enemy-state advancement only; if the live run's safety forecast diverges,
-# recalibrate these from that run's log (sec.9 step 4) rather than adding static margin.
-TICKS_PER_HOP = 150
-TICKS_PER_BOULDER_STEP = 250
+# --- move-cost model: the REAL cost of moving, from the simulator (SEARCH_REDESIGN.md
+# sec.6) ----------------------------------------------------------------------
+# A move is not a single aim -- it is a KEYBOARD SEQUENCE, each aim panning the view from
+# wherever the last one left it (verified against a live run's per-action views,
+# out/ls0_pancost.log): aim+build the foothold (a boulder then a re-centred synthoid, or a
+# lone synthoid), transfer, then SWING THE VIEW BACK to look down on the departed tile and
+# reabsorb its shell. That return pan is often a ~180-degree bearing swing (h $90->$08 =
+# 15 lattice steps in the log) and was the live killer the old flat TICKS_PER_HOP/STEP
+# constants entirely ignored -- they charged every move the same regardless of how far the
+# view actually had to scroll, so the search could not see that a grab on the opposite
+# bearing holds the player exposed for many rounds while the Sentinel rotates onto it.
+#
+# _move_cost now derives each move's cost from the sentinel keyboard-aim GEOMETRY
+# (sentinel.aimcost): the number of pan keystrokes for the whole sequence, converted to
+# elapsed enemy rounds by two ROM-cadence scalars below. This feeds the bit-exact
+# enemy-state advancement (_advance_enemies) so ticks_until_seen / meanie_safe / the drain
+# forecast are all evaluated at the state the enemies REALLY reach while the move executes.
+#
+# enemy rounds (sentinel.enemies.step calls ~= frames) elapsed per keyboard action, from
+# the ROM's own scroll cadence: the view scrolls one step per frame, and the scroll length
+# for one keystroke is baked into the pan setup. A coarse +-8 BEARING keystroke animates a
+# 16-step horizontal scroll ($10EE LDA #$10) -> ~16 rounds; a +-4 PITCH keystroke an 8-step
+# scroll ($1135 LDA #$8) -> ~8 rounds; a fired create/absorb/transfer settles over its own
+# plot cycle (~a scroll's worth). Bearing pans are thus ~2x costlier than pitch pans -- so
+# the enemies rotate much further while the view swings across the map than while it tilts,
+# which the old single flat per-move constant could not express. Overridable so a diverging
+# live run can be recalibrated from its own telemetry without a code change (sec.9 step 4).
+ROUNDS_PER_H_STEP = float(os.environ.get("ROUNDS_PER_H_STEP", "16"))
+ROUNDS_PER_V_STEP = float(os.environ.get("ROUNDS_PER_V_STEP", "8"))
+ROUNDS_PER_ACTION = float(os.environ.get("ROUNDS_PER_ACTION", "16"))
 
 # ticks_until_seen / meanie forward-sim horizons: bounded so the per-decision search
 # stays inside the 60s script budget. The safety margin only needs to distinguish
@@ -101,20 +123,6 @@ _RING_NOBUILD_RADIUS = int(os.environ.get("RING_NOBUILD_RADIUS", "0"))
 # far staircase strands at 8.875. Comparing the true float (8.875 > 8) recognises it as a
 # valid long-range launch. Off by default (keeps the ROM-validated ls42 int gate).
 _ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
-# PAN COST: charge a move for the real time spent SCROLLING the view from the previous
-# aim heading to this move's aim heading. Aiming is a keyboard pan -- h in +-8 unit
-# cycles, v in +-4 (kbd_aim) -- so a target on the far bearing costs many frames, during
-# which the Sentinel keeps rotating (0.1 unit/frame; a 128-unit pan swings it ~25 units,
-# past its FOV half). The flat TICKS_PER_* miss this: the search treats a grab on the
-# opposite bearing as no costlier than one dead ahead, then the live run gets drained mid-
-# pan (ls0 far route died reabsorbing a shell behind it -- a long return pan). When on:
-# (1) the enemy state advances by base+pan ticks (so ticks_until_seen/meanie foresee the
-# scroll), and (2) equal-height candidates are ordered to prefer the SMALLER pan. Frames
-# per angle-unit are ~1-2 (h) / ~2 (v) from the pan cycle length; env-tunable. Off by
-# default (keeps the ROM-validated ls42 tick model).
-_PAN_COST = os.environ.get("PAN_COST", "0") == "1"
-_PAN_TICKS_H = float(os.environ.get("PAN_TICKS_H", "1.5"))
-_PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
 # SEEN-DRAIN: model being seen as a COSTED, survivable state rather than a hard veto. As
 # the search simulates each move it debits the energy the player would actually lose while
 # dwelling at the destination during that move (sentinel.enemies.step: 1 energy per
@@ -125,27 +133,51 @@ _PAN_TICKS_V = float(os.environ.get("PAN_TICKS_V", "2.0"))
 _SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "0") == "1"
 
 
-def _pan_ticks(cur_h, cur_v, view):
-    """Estimated frames to scroll the view from heading (cur_h, cur_v) to `view`'s aim.
-    h wraps mod 256 (shortest direction, max 128); v is clamped (linear). Returns 0 when
-    pan cost is off, the heading is unknown, or the target view carries no angle."""
-    if not _PAN_COST or cur_h is None or not view:
+def _pan_rounds(cur_h, cur_v, view):
+    """Enemy rounds to aim from heading (cur_h, cur_v) at `view`: the bit-exact keyboard
+    lattice distance (sentinel.aimcost) weighted by the per-axis scroll cadence (bearing
+    keystrokes cost ROUNDS_PER_H_STEP, pitch keystrokes ROUNDS_PER_V_STEP). 0 when the
+    heading is unknown or the view carries no angle."""
+    if cur_h is None or not view:
         return 0.0
-    th = view.get("h_angle")
-    tv = view.get("v_angle")
-    if th is None:
-        return 0.0
-    dh = abs(((th - cur_h) + 128) % 256 - 128)
-    dv = abs((tv - cur_v)) if (tv is not None and cur_v is not None) else 0
-    return dh * _PAN_TICKS_H + dv * _PAN_TICKS_V
+    vh, vv = view.get("h_angle"), view.get("v_angle")
+    r = ac.h_steps(cur_h, vh) * ROUNDS_PER_H_STEP if vh is not None else 0.0
+    if vv is not None and cur_v is not None:
+        r += ac.v_steps(cur_v, vv) * ROUNDS_PER_V_STEP
+    return r
 
 
-def _cur_heading(g):
-    """The player's current view heading (h_angle, v_angle) from live/model RAM, or
-    (None, None) when pan cost is off."""
-    if not _PAN_COST:
-        return (None, None)
-    return (g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player])
+def _move_cost(g, c, cur_h, cur_v):
+    """The REAL cost of executing candidate `c` from view heading (cur_h, cur_v):
+    (ticks, end_h, end_v). Mirrors _apply's keyboard sequence and prices it from the
+    keyboard-aim geometry (sentinel.aimcost) rather than a flat per-move constant.
+
+    Sequence (see out/ls0_pancost.log): pan to the build tile and fire (a boulder then a
+    re-centred on-boulder synthoid, or a lone synthoid), transfer (no pan -- already
+    looking at the tile), then SWING THE VIEW BACK to look down on the departed tile and
+    reabsorb its shell. The return swing is a near-180-degree bearing pan and is the bulk
+    of a move's exposure window -- the cost the flat model missed. Returns the ending
+    heading so the search can chain the next move's pan from where this one left the view.
+    """
+    T2, use_b, _he, view = c
+    prev = g.player_xy()
+    vh = view.get("h_angle") if view else None
+    vv = view.get("v_angle") if view else None
+    rounds = _pan_rounds(cur_h, cur_v, view)  # aim the build tile
+    fires = 2 if use_b else 1  # boulder + synthoid, or lone synthoid
+    if use_b:
+        rounds += ROUNDS_PER_H_STEP + ROUNDS_PER_V_STEP  # re-centre on-boulder synthoid
+    fires += 1  # transfer confirm
+    end_h, end_v = vh, vv
+    back_h = ac.bearing_to(T2[0], T2[1], prev[0], prev[1])  # look back at departed tile
+    if back_h is not None and end_h is not None:
+        rounds += (
+            ac.h_steps(end_h, back_h) * ROUNDS_PER_H_STEP
+        )  # the return-pan (bearing)
+        end_h = back_h
+        fires += 1  # reabsorb-shell confirm
+    ticks = int(round(rounds + fires * ROUNDS_PER_ACTION))
+    return ticks, end_h, end_v
 
 
 def _cost(c, exposed):
@@ -157,10 +189,6 @@ def _cost(c, exposed):
         + RESERVE
         + (EXPOSURE_RESERVE if tuple(c[0]) in exposed else 0)
     )
-
-
-def _ticks_for(c):
-    return TICKS_PER_BOULDER_STEP if c[1] else TICKS_PER_HOP
 
 
 def _read_state(g):
@@ -302,10 +330,11 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
         )
         for c in head
     }
-    # pan cost to AIM each head candidate from the current heading (0 when _PAN_COST off,
-    # so the default order is unchanged). Prefer the smaller pan: aiming a far-bearing
-    # target holds the player exposed on its current tile for the whole scroll.
-    pan = {tuple(c[0]): _pan_ticks(cur_h, cur_v, c[3]) for c in head}
+    # pan keystrokes to AIM each head candidate's build tile from the current heading
+    # (0 at the root when the heading is unknown). Prefer the smaller pan among otherwise
+    # equal candidates: aiming a far-bearing target holds the player exposed on its current
+    # tile for the whole scroll, and lets the Sentinel rotate further onto it.
+    pan = {tuple(c[0]): _pan_rounds(cur_h, cur_v, c[3]) for c in head}
     if _GAZE_AWARE_COST:
         # Among EQUAL-height candidates, prefer the one the Sentinel is NOT looking at
         # (safety) and the one that needs the least panning (least mid-aim exposure) OVER
@@ -412,18 +441,16 @@ def _lookahead(
         # the lookahead only needs approximate energy for affordability, and this sweep
         # is the per-node hot spot (the committed root refuel in search_iterate stays fine).
         _refuel(g2, _NOOP, sweep_max_steps=_REFUEL_MAX_STEPS, sweep_coarse=True)
-        # advance g2's in-state enemy timing by this move's tick cost so deeper plies see a
-        # rotated Sentinel. With _SEEN_DRAIN on, the stepping debits g2.state.energy while
-        # the player dwells in view (a lingering route bleeds energy, scores lower; a quick
-        # seen transit stays free -- 120-tick cooldown); with it off, energy is restored so
-        # only the rotation forecast is kept (the ROM-validated default accounting).
-        _advance_enemies(
-            g2.state,
-            _ticks_for(c) + int(round(_pan_ticks(cur_h, cur_v, c[3]))),
-            apply_drain=_SEEN_DRAIN,
-        )
-        nh = c[3].get("h_angle", cur_h) if c[3] else cur_h
-        nv = c[3].get("v_angle", cur_v) if c[3] else cur_v
+        # advance g2's in-state enemy timing by this move's REAL tick cost (aim + build +
+        # transfer + the return-pan to reabsorb the shell, priced from the keyboard-aim
+        # geometry) so deeper plies see the Sentinel rotated by how far it actually turns
+        # while the move executes. The ending heading chains into the child so its own moves
+        # pan from where this one left the view. With _SEEN_DRAIN on, the stepping debits
+        # g2.state.energy while the player dwells in view over that real window (a long-pan
+        # route bleeds more energy, scores lower); with it off, energy is restored so only
+        # the rotation forecast is kept (the ROM-validated default accounting).
+        ticks, nh, nv = _move_cost(g, c, cur_h, cur_v)
+        _advance_enemies(g2.state, ticks, apply_drain=_SEEN_DRAIN)
         sub_score, _ = _lookahead(
             g2,
             ctx,
@@ -477,7 +504,12 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
 
     stats = {"nodes": 0}
     t0 = time.time()
-    root_h, root_v = _cur_heading(g)
+    # Seed the root view heading from the player's current facing so the first move's aim
+    # pan is costed from where the view actually points. Live this is the resynced real
+    # heading; offline it is the generator's starting facing. The search threads the ending
+    # heading of each committed move onward (see _move_cost), so deeper plies never depend
+    # on RAM (native create/absorb don't write OBJ_HANG) -- only this root read touches it.
+    root_h, root_v = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
     score, move = _lookahead(
         g, ctx, blocked, depth, beam, stats, cur_h=root_h, cur_v=root_v
     )
