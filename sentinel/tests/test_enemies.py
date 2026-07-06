@@ -77,14 +77,42 @@ def test_rotation_steps_by_speed_table():
 
 def test_reduce_object_energy_downgrades():
     state = landscape.generate(42)
+    enemy = enemies._enemy_slots(state)[0]
     # a tree is removed, a boulder becomes a tree, a robot becomes a boulder.
     tree = state.slot_of_type(mm.T_TREE)
-    assert enemies._reduce_object_energy(state, tree) is False
+    d0 = state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy]
+    assert enemies._reduce_object_energy(state, tree, enemy) is False
     assert state.is_empty(tree)
-    # player loses one energy
+    # every non-kill drain banks one unit of energy to discharge later as a tree.
+    assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 1) & 0xFF
+    # player loses one energy (and banks another discharge unit).
     e0 = state.energy
-    drained = enemies._reduce_object_energy(state, state.mem[mm.PLAYER_OBJECT])
+    drained = enemies._reduce_object_energy(state, state.mem[mm.PLAYER_OBJECT], enemy)
     assert drained is True and state.energy == e0 - 1
+    assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 2) & 0xFF
+
+
+def test_consider_discharging_scatters_tree():
+    state = landscape.generate(42)
+    enemy = enemies._enemy_slots(state)[0]
+    # nothing banked -> no discharge.
+    state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 0
+    assert enemies._consider_discharging_enemy_energy(state, enemy) is False
+    # one unit banked -> one new tree placed, bank decremented.
+    trees0 = sum(
+        1
+        for s in range(mm.NUM_SLOTS)
+        if not state.is_empty(s) and state.obj_type[s] == mm.T_TREE
+    )
+    state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 1
+    assert enemies._consider_discharging_enemy_energy(state, enemy) is True
+    trees1 = sum(
+        1
+        for s in range(mm.NUM_SLOTS)
+        if not state.is_empty(s) and state.obj_type[s] == mm.T_TREE
+    )
+    assert trees1 == trees0 + 1
+    assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0
 
 
 def test_meanie_threat_signature():
