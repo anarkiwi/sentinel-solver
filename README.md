@@ -71,6 +71,26 @@ angle it could rotate to, not just its current facing.
 | Planners | `scripts/solver*.py`, `scripts/climb_*.py`, `scripts/native_game.py` | plan a winning climb + absorb sequence |
 | Engine oracle | `scripts/code_engine.py`, `scripts/validate_kbd_plan.py`, `scripts/climb_greedy_validate.py` | replay plans through the real game code headlessly (py65) |
 | Live driver | `scripts/boot.py`, `scripts/kbd_aim.py`, `scripts/vice_execute.py`, `scripts/record_win_0042.py` | drive the real game by keystrokes in VICE and record video |
+| Simulator | `sentinel/` | standalone, bit-exact forward model of the whole game (no emulator) |
+
+## Simulator (`sentinel/`)
+
+A standalone Python package that reproduces the game bit-for-bit — terrain
+generation, line-of-sight, player actions, energy and enemy dynamics — with no
+emulator, as the substrate for testing strategies.
+
+```python
+from sentinel import Game
+g = Game.new(42)                 # generate the board from scratch
+g.player_xy(), g.energy           # ((14, 27), 10)
+g.step_enemies()                  # advance the world one round
+g.player_sees(g.platform_xy())    # line-of-sight query
+```
+
+Every mechanic is validated byte-for-byte against the real 6502 code; the ROM is
+used only as a test-time oracle, and those checks are frozen as golden fixtures so
+CI proves correctness without the copyrighted image. See
+[docs/simulator.md](docs/simulator.md).
 
 ## Fixtures (not distributed)
 
