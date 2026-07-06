@@ -78,6 +78,13 @@ DEFAULT_BEAM = 3  # top-N candidates expanded per node, independent of depth (se
 ROUNDS_PER_H_STEP = float(os.environ.get("ROUNDS_PER_H_STEP", "16"))
 ROUNDS_PER_V_STEP = float(os.environ.get("ROUNDS_PER_V_STEP", "8"))
 ROUNDS_PER_ACTION = float(os.environ.get("ROUNDS_PER_ACTION", "16"))
+# A U-turn (EOR $80) flips the bearing 180 degrees in ONE keystroke, so a far-bearing swing
+# costs one U-turn + a short +-8 correction instead of up to sixteen +-8 pans -- which the
+# live aim driver now does (kbd_aim.coarse_h). Cost it the same here so the planner does not
+# over-charge a big bearing swing the driver will actually shortcut (~one keystroke's worth
+# of plot; kept equal to a bearing pan step so the keystroke and rounds crossovers coincide
+# at a bearing >= 72 units).
+ROUNDS_PER_UTURN = float(os.environ.get("ROUNDS_PER_UTURN", "16"))
 
 # ticks_until_seen / meanie forward-sim horizons: bounded so the per-decision search
 # stays inside the 60s script budget. The safety margin only needs to distinguish
@@ -141,7 +148,11 @@ def _pan_rounds(cur_h, cur_v, view):
     if cur_h is None or not view:
         return 0.0
     vh, vv = view.get("h_angle"), view.get("v_angle")
-    r = ac.h_steps(cur_h, vh) * ROUNDS_PER_H_STEP if vh is not None else 0.0
+    r = (
+        ac.bearing_rounds(cur_h, vh, ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
+        if vh is not None
+        else 0.0
+    )
     if vv is not None and cur_v is not None:
         r += ac.v_steps(cur_v, vv) * ROUNDS_PER_V_STEP
     return r
@@ -171,9 +182,9 @@ def _move_cost(g, c, cur_h, cur_v):
     end_h, end_v = vh, vv
     back_h = ac.bearing_to(T2[0], T2[1], prev[0], prev[1])  # look back at departed tile
     if back_h is not None and end_h is not None:
-        rounds += (
-            ac.h_steps(end_h, back_h) * ROUNDS_PER_H_STEP
-        )  # the return-pan (bearing)
+        # the return-pan (bearing), U-turn-aware: a swing back past half a turn is one
+        # U-turn + a short correction, matching what the live driver keys.
+        rounds += ac.bearing_rounds(end_h, back_h, ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
         end_h = back_h
         fires += 1  # reabsorb-shell confirm
     ticks = int(round(rounds + fires * ROUNDS_PER_ACTION))

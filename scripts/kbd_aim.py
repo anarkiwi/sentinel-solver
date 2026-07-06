@@ -24,6 +24,7 @@ import os
 
 from sentinel.state import State
 from sentinel import los
+from sentinel import aimcost as ac
 
 # run_until_pc socket-guard timeouts. Under live AVI recording (warp OFF) the ZMBV
 # encoder can back-pressure the binmon socket for several seconds, so the CPU takes
@@ -308,12 +309,56 @@ class KbdDriver:
     def sights_on(self):
         return self.sights_set(True)
 
+    def _uturn(self, max_passes=5):
+        """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F,
+        objects_h_angle EOR $80) -- the fast way across half the compass. The u-turn is
+        edge-latched and auto-repeat gated like an action key ($0C51 ASL/BPL): update_game
+        zeroes the want-flag and only an IDLE full scan re-arms it, so a bare tap right after
+        a pan burst is dropped ($1B2F). So per pass run one idle full scan to re-arm, press U
+        WHILE HALTED through the next scan, release, and confirm the EOR $80 flip; retry
+        until it takes. Returns True on a confirmed flip -- purely an optimisation, the +-8
+        loop in coarse_h still converges if this is swallowed."""
+        addr = A_H + self.slot()
+        r, c = _k(K_UTURN)
+        flipped = False
+        with self.bm.halted():
+            try:
+                for _ in range(max_passes):
+                    before = self.rd(addr)
+                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
+                    self.bm.advance_instructions(1)  # off the anchor
+                    self.bm.run_until_pc(
+                        self.PC_IRQ_SCAN, timeout=6.0
+                    )  # idle scan re-arms
+                    self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
+                    self.bm.run_until_pc(
+                        self.PC_IRQ_SCAN_DONE, timeout=6.0
+                    )  # scan consumed
+                    self.bm.keymatrix_release_all()  # before the next scan
+                    if ((self.rd(addr) - before) & 0xFF) == 0x80:
+                        flipped = True
+                        break
+            except Exception as e:
+                self.log(f"    uturn stop: {type(e).__name__}")
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+        return flipped
+
     def coarse_h(self, want):
         """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). D pans right
         +8, S pans left -8; the shorter direction is chosen per attempt (self-correcting).
-        """
+
+        When `want` is more than half a turn away, ONE U-turn (EOR $80) + a short +-8
+        correction is FEWER keystrokes -- and far less pan-scroll time, so less time held
+        exposed while the Sentinel rotates -- than stepping up to 16 times round the circle.
+        aimcost.h_press_count picks the minimal plan; the +-8 loop below finishes the
+        residual whether or not the U-turn latched (so this only ever saves time)."""
         addr = A_H + self.slot()
         want &= 0xFF
+        n_uturn, _n_step = ac.h_press_count(self.rd(addr), want)
+        if n_uturn:
+            self._uturn()
         dir_fn = lambda cur: K_RIGHT if ((want - cur) & 0xFF) <= 0x80 else K_LEFT
         return self._pan_angle(addr, want, dir_fn)
 
