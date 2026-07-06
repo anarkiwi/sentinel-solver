@@ -1,0 +1,63 @@
+"""Keyboard-aim geometry: how many keystrokes (and thus game rounds) it costs to
+pan the view from one heading to another, or to aim at a tile.
+
+The Sentinel is driven by panning a view on a fixed keyboard lattice (verified in
+scripts/kbd_aim.py against the ROM):
+
+  * bearing ``h_angle`` moves in :data:`AZIMUTH_STEP` (8) unit steps -- D pans +8,
+    S pans -8, wrapping mod 256 (the u-turn key is an EOR $80, i.e. +16 steps);
+  * pitch ``v_angle`` moves in :data:`PITCH_STEP` (4) unit steps inside the clamp
+    band -- L pitches +4, COMMA -4.
+
+So the number of *keystrokes* to reach a target heading is the lattice distance
+``|Delta h| / 8 + |Delta v| / 4``.  Each keystroke is consumed by one gated input
+scan and its pan animates over a fixed number of game rounds, so keystrokes convert
+to elapsed enemy rounds by a single scalar (:data:`ROUNDS_PER_PAN_STEP`, calibrated
+in the planner) -- which is what lets a strategy search forecast how far the enemies
+rotate, and how much they drain, while the player aims a move.
+
+This module is pure geometry (no ROM, no State mutation) so it is cheap enough to
+call for every candidate in a lookahead and unit-testable on its own.
+"""
+
+import math
+
+AZIMUTH_STEP = 8  # h_angle keyboard step (D/S), wraps mod 256
+PITCH_STEP = 4  # v_angle keyboard step (L/COMMA), clamped band
+
+
+def bearing_to(ex, ey, tx, ty):
+    """The ``h_angle`` (0..255) an observer at tile (ex, ey) faces to look toward
+    tile (tx, ty), on the game's 256-unit compass (mirrors the analytic estimate
+    scripts/kbd_aim.py snaps the keyboard grid around, $1C10 vector math). Returns
+    None when the tiles coincide (no bearing)."""
+    dx, dy = tx - ex, ty - ey
+    if dx == 0 and dy == 0:
+        return None
+    return int(round(math.atan2(dy, dx) / (2 * math.pi) * 256)) & 0xFF
+
+
+def h_steps(h0, h1):
+    """Keystrokes to pan the bearing from ``h0`` to ``h1``: the shortest signed
+    distance around the mod-256 circle, in 8-unit lattice steps."""
+    dh = abs(((h1 - h0) + 128) % 256 - 128)
+    return dh // AZIMUTH_STEP
+
+
+def v_steps(v0, v1):
+    """Keystrokes to pitch from ``v0`` to ``v1``.  Pitch does not wrap for the
+    keyboard (it is clamped to a contiguous band), so this is the plain lattice
+    distance in 4-unit steps."""
+    return abs(v0 - v1) // PITCH_STEP
+
+
+def pan_steps(h0, v0, h1, v1):
+    """Total keystrokes to pan the view from heading (h0, v0) to (h1, v1): the sum
+    of the bearing and pitch lattice distances.  ``None`` coordinates contribute 0
+    (an aim that carries no angle for that axis)."""
+    n = 0
+    if h0 is not None and h1 is not None:
+        n += h_steps(h0, h1)
+    if v0 is not None and v1 is not None:
+        n += v_steps(v0, v1)
+    return n
