@@ -41,9 +41,10 @@ def wait_for_load(bm, log=print, total=80.0, poll=2.0):
 # VICE machine state so later runs can resume it instead of re-loading the ~50s tape.
 # Written to the mounted /renders volume (gitignored) so it persists on the host.
 BOOT_VSF_NAME = "boot.vsf"
-# VICE binary-monitor MON_CMD_DUMP (vice.texi): body SR|SD|FL|FN, saves a .vsf snapshot
-# (full CPU+RAM+chip state) to a path inside the emulator process.
-SNAP_SAVE_OPCODE = 0x41
+# VICE binary-monitor snapshot opcodes (vice.texi): MON_CMD_DUMP saves a .vsf (full
+# CPU+RAM+chip state) to a path inside the emulator process; MON_CMD_UNDUMP restores one.
+SNAP_SAVE_OPCODE = 0x41  # body SR|SD|FL|FN
+SNAP_LOAD_OPCODE = 0x42  # body FL|FN -> response = restored PC (2 bytes LE)
 
 
 def save_snapshot(bm, container_path, save_roms=False, save_disks=False, timeout=30.0):
@@ -56,6 +57,18 @@ def save_snapshot(bm, container_path, save_roms=False, save_disks=False, timeout
         struct.pack("<BBB", int(bool(save_roms)), int(bool(save_disks)), len(fn)) + fn
     )
     bm.call(SNAP_SAVE_OPCODE, body, timeout=timeout)
+
+
+def load_snapshot(bm, container_path, timeout=30.0):
+    """Restore a VICE machine snapshot via the monitor (MON_CMD_UNDUMP $42) from
+    ``container_path`` (a path INSIDE the emulator). Returns the restored PC, or None.
+    Used to resume a saved code-entry screen and skip the ~50s tape load."""
+    fn = container_path.encode()
+    body = struct.pack("<B", len(fn)) + fn
+    resp = bm.call(SNAP_LOAD_OPCODE, body, timeout=timeout)
+    if resp is not None and len(resp.body) >= 2:
+        return struct.unpack("<H", resp.body[:2])[0]
+    return None
 
 
 def save_boot_snapshot_if_missing(bm, renders, log=print):
