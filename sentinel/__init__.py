@@ -13,7 +13,16 @@ same addresses the original does and the line-of-sight stays bit-exact.
 
 from sentinel.prng import Prng, seed_state
 from sentinel.state import State
-from sentinel import los, terrain, memmap, actions, energy, landscape, relative
+from sentinel import (
+    los,
+    terrain,
+    memmap,
+    actions,
+    energy,
+    landscape,
+    relative,
+    enemies,
+)
 
 __all__ = [
     "Prng",
@@ -26,4 +35,5 @@ __all__ = [
     "energy",
     "landscape",
     "relative",
+    "enemies",
 ]

@@ -39,7 +39,20 @@ TILES_TABLE = 0x0400  # $0400-$07FF, 32x32, interleaved (calculate_tile_address)
 ENEMIES_DRAINING_COOLDOWN = 0x0C20  # $0C20
 ENEMIES_ROTATION_COOLDOWN = 0x0C28  # $0C28
 ENEMIES_UPDATE_COOLDOWN = 0x0C30  # $0C30
+ENEMIES_MEANIE_SEARCH_OBJECT = 0x0C80  # $0C80
+ENEMIES_ENERGY_TO_DISCHARGE = 0x0C88  # $0C88
+ENEMIES_FAILED_MEANIE_MEMORY = 0x0C90  # $0C90
+ENEMIES_MEANIE_ATTEMPT_SCANS = 0x0C98  # $0C98
+ENEMIES_MEANIE_OBJECT = 0x0CA0  # $0CA0 (top bit set == no meanie)
+ENEMIES_TARGETED_OBJECT = 0x0CA8  # $0CA8
+ENEMIES_TARGETED_OBJECT_EXPOSURE = 0x0CB0  # $0CB0 (top bit == fully visible)
+ENEMIES_CONSIDERING_MEANIE = 0x0CB8  # $0CB8
 ROTATION_SPEED_TABLE = 0x9D37  # per-enemy rotation step (+$14 / $EC), indexed by slot
+
+# ---- enemy-update scalars -------------------------------------------------
+COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
+TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
+FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
 
 # ---- the PRNG state -------------------------------------------------------
 PRND_STATE = 0x0C7B  # 5-byte LFSR state $0C7B-$0C7F (prnd $31CA)

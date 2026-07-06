@@ -101,6 +101,11 @@ def _remove_object(state, slot):
     state.obj_flags[slot] = 0x80
 
 
+# public alias: removing an object is also part of enemy draining (a tree drained
+# to nothing) and the win sequence, not only player absorption.
+remove_object = _remove_object
+
+
 def can_absorb(state, slot):
     """Whether the object in `slot` can be absorbed (occupied, not a platform),
     ignoring line of sight."""
