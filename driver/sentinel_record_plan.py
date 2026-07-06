@@ -42,6 +42,7 @@ from vice_driver.display import parse_display_response, parse_palette_response
 
 from driver import sentinel_state as gs
 from sentinel import aimcost as ac
+from driver import core
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
@@ -299,31 +300,6 @@ def _free_port_6502(log):
         log(f"  port-cleanup warning: {e}")
 
 
-def _bridge_ip(container_id, log):
-    """Docker-bridge IP of the container. In this environment the published
-    loopback port (127.0.0.1:6502) is refused; the container's bridge IP is
-    directly reachable (same path live_climb.connect uses)."""
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                container_id,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.strip()
-        return out or None
-    except Exception as e:
-        log(f"  bridge-ip lookup failed: {e}")
-        return None
-
-
 def run(landscape, plan_path, max_seconds, log):
     with open(plan_path) as f:
         plan = json.load(f)
@@ -372,7 +348,7 @@ def run(landscape, plan_path, max_seconds, log):
                 time.sleep(2)
                 host = (
                     os.environ.get("BINMON_HOST")
-                    or _bridge_ip(container.container_id, log)
+                    or core.bridge_ip(container.container_id, log)
                     or "127.0.0.1"
                 )
                 log(f"  connecting binmon {host}:6502")

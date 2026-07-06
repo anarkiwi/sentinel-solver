@@ -44,11 +44,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 
-from vice_driver import BinMon, DiskMount, ViceContainer, keys
+from vice_driver import DiskMount, ViceContainer, keys
 from driver import sentinel_state as gs
 from sentinel.state import State
 from sentinel import los
 from driver.sentinel_execute import Executor
+from driver import core
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
 RENDERS = os.path.join(ROOT, "renders")
@@ -601,60 +602,6 @@ def do_absorb(drv, ex, tile, tries=3):
 # ===========================================================================
 # container / connection
 # ===========================================================================
-def _bridge_ip(container_id, log):
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                container_id,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.strip()
-        return out or None
-    except Exception as e:
-        log(f"  bridge-ip lookup failed: {e}")
-        return None
-
-
-def _free_containers(log):
-    import subprocess
-
-    try:
-        ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=asid-vice:latest"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.split()
-        if ids:
-            subprocess.run(
-                ["docker", "rm", "-f", *ids], capture_output=True, timeout=30
-            )
-            time.sleep(2)
-    except Exception as e:
-        log(f"  container cleanup warning: {e}")
-
-
-def connect(container, log):
-    time.sleep(2)
-    host = os.environ.get("BINMON_HOST") or _bridge_ip(container.container_id, log)
-    if not host:
-        host = "127.0.0.1"
-    port = int(os.environ.get("BINMON_PORT", "6502"))
-    log(f"  connecting binmon {host}:{port}")
-    bm = BinMon(host, port)
-    bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
-    bm.exit()
-    return bm
-
-
 def enter_landscape0(bm, log):
     """Restore the code-entry snapshot (skip tape boot) and enter landscape 0 the
     normal way -- through the menu -- which installs the real gameplay IRQ. This is
@@ -833,7 +780,7 @@ def main():
         except OSError:
             pass
 
-    _free_containers(log)
+    core.free_stale_containers(log)
     container = ViceContainer(
         autostart="/work/sentinel.tap",
         mounts=[
@@ -845,7 +792,7 @@ def main():
     )
     outcome = "error"
     with container:
-        bm = connect(container, log)
+        bm = core.connect_binmon(container, log)
         try:
             enter_landscape0(bm, log)
             st = read_state(bm)
