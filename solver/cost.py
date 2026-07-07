@@ -12,9 +12,17 @@ the planner forecasts enemy rotation/drain over exactly the window an action rea
 
 from sentinel import aimcost as ac, actioncost, actions, enemies
 
-ROUNDS_PER_H_STEP = 16.0
-ROUNDS_PER_V_STEP = 8.0
-ROUNDS_PER_UTURN = 16.0
+# Keyboard-pan cadence in enemy-round (tick) units. A +-8 bearing notch animates a
+# 16-frame horizontal scroll ($10EE); a +-4 pitch notch an 8-frame vertical scroll
+# ($1135); the scene replot is folded into those scroll frames (the wide vertical
+# buffer double-plots each polygon within its 8, $2AAB). Frames -> ticks via the
+# shared $130C/$1335 Bresenham factor (actioncost.FRAME_TICKS == 0.80). A U-turn
+# swings the bearing the same per-notch cost as a forward pan.
+H_SCROLL_FRAMES = 16.0  # $10EE
+V_SCROLL_FRAMES = 8.0  # $1135
+ROUNDS_PER_H_STEP = actioncost.FRAME_TICKS * H_SCROLL_FRAMES
+ROUNDS_PER_V_STEP = actioncost.FRAME_TICKS * V_SCROLL_FRAMES
+ROUNDS_PER_UTURN = ROUNDS_PER_H_STEP
 
 
 def aim_rounds(h0, v0, view):

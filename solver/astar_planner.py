@@ -24,6 +24,7 @@ from typing import Optional
 if __package__ in (None, ""):  # run as a script: put the repo root on the path
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sentinel import actioncost
 from solver.plan_game import PlanGame
 from solver.search_node import Node, node_key
 from solver.search_node import energy as node_energy
@@ -42,7 +43,11 @@ def _envi(name, default):
 # --- tuning constants (all env-overridable) ---------------------------------
 W_ASTAR = _envf("W_ASTAR", "1.5")  # weighted-A* inflation on the heuristic
 MAX_H_PER_MOVE = _envf("MAX_H_PER_MOVE", "2.0")  # optimistic eye gain per macro
-MIN_MOVE_ROUNDS = _envf("MIN_MOVE_ROUNDS", "290.0")  # cheapest possible move cost
+# Cheapest a single height-gaining macro can cost: one game-intrinsic create settle
+# (sentinel.actioncost, ROM-derived) with no pan/redraw. Keeps the heuristic an
+# admissible lower bound after the move model went game-intrinsic (was a stale 290
+# floor that made h dominate f with numbers no move could reach).
+MIN_MOVE_ROUNDS = _envf("MIN_MOVE_ROUNDS", str(actioncost.SETTLE["create"]))
 T_BUCKET = _envi("T_BUCKET", "64")  # closed-set tick bucket (mirrors search_node)
 NEXT_COST_FLOOR = _envi("NEXT_COST_FLOOR", "3")  # energy kept for one more synthoid
 # HORIZON bounds both the gaze build and the ``c.t < HORIZON`` child filter. The plan's
@@ -50,13 +55,16 @@ NEXT_COST_FLOOR = _envi("NEXT_COST_FLOOR", "3")  # energy kept for one more synt
 # rounds (each macro's action window is ~2000), so 4000 prunes the winning path mid-climb.
 HORIZON = _envi("HORIZON", "20000")  # gaze / world tick horizon
 NODE_BUDGET = _envi("NODE_BUDGET", "20000")  # max node expansions
-T_BUDGET_S = _envf("T_BUDGET_S", "45.0")  # wall-clock budget (< 60 s hard cap)
-# BEAM: children pushed per expansion. The plan's nominal 8 cannot fit the 60 s CPU
-# budget -- each expansion costs ~5 s (full survivability enemy-stepping over ~2000-round
-# windows for ~50 candidates), so a wide beam drowns in the equal-eye plateau before
-# reaching launch. BEAM=1 is a greedy commit (best child by height then cost) that wins
-# ls0 in 6 expansions / ~33 s; raise it (with faster macros) for backtracking robustness.
-BEAM = _envi("BEAM", "1")  # children pushed per expansion
+T_BUDGET_S = _envf("T_BUDGET_S", "150.0")  # wall-clock budget (search grant, < 3 min)
+# BEAM: children pushed per expansion. The plan's nominal 8 is correct: the winning ls0
+# launch position sits on a branch a narrow beam prunes (two eye-6.875 nodes exist at
+# different tiles; only one can reach the platform-landable launch build). BEAM=1 greedy
+# was an overfit shortcut that only won under the old inflated action costs; once the
+# costs went game-intrinsic (sentinel.actioncost) it dead-ends at eye 7.875. With early
+# goal detection (a launch-height child wins on generation, not on pop) BEAM=8 wins ls0
+# in ~7 expansions. Each expansion is ~7 s (survivability enemy-stepping over ~50
+# candidates), independent of BEAM, so the budget scales with expansion COUNT, not width.
+BEAM = _envi("BEAM", "8")  # children pushed per expansion
 BRANCH_HIGH = _envi("BRANCH_HIGH", "24")  # high-branch escalation threshold
 SAFETY_HORIZON = _envi("SAFETY_HORIZON", "256")  # exposure look-ahead window
 
@@ -168,9 +176,35 @@ def plan(landscape_or_game, cfg=None) -> PlanResult:
         closed[k] = n.cost
         best_eye = max(best_eye, n.g.eye)
 
-        children = expand_climb(n, gaze) + expand_refuel(n, gaze)
+        climb_children = expand_climb(n, gaze)
+        children = climb_children + expand_refuel(n, gaze)
         children = [c for c in children if node_energy(c) > 0 and c.t < HORIZON]
+
+        # Early goal detection: a launch-height child can win immediately, without
+        # waiting to be popped in f-order. Weighted-A* starves a high-eye/high-cost
+        # winning node behind dozens of cheap low-eye nodes, so the pop-time-only goal
+        # test never reaches it within budget; testing the endgame as children are
+        # generated fires the win the moment the launch build is producible.
+        for c in children:
+            if c.g.eye > g0.plat_ground:
+                end = endgame_child(c, g0.plat, g0.plat_ground)
+                if end is not None:
+                    stats = {
+                        "nodes": nodes,
+                        "wall_s": round(time.time() - t_start, 3),
+                        "peak_eye": round(max(best_eye, c.g.eye), 3),
+                    }
+                    return PlanResult(True, end.g.steps, None, stats)
+
         gaining = any(c.g.eye > n.g.eye + 1e-9 for c in children)
+        if os.environ.get("PLAN_DEBUG"):
+            pairs = sorted({(round(c.g.eye, 3), node_energy(c)) for c in children})
+            top = sorted(pairs, key=lambda p: (-p[0], -p[1]))[:8]
+            print(
+                f"[dbg] n={nodes} eye={n.g.eye:.3f} t={n.t} E={node_energy(n)} "
+                f"kids={len(children)} gain={gaining} top(eye,E)={top}",
+                file=sys.stderr,
+            )
         if not gaining and n.g.eye < g0.plat_ground:
             no_safe_seen = True  # nothing raised the eye from this below-launch node
         children.sort(key=lambda c: (-c.g.eye, c.cost))
