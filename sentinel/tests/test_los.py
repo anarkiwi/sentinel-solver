@@ -89,3 +89,17 @@ def test_height_slope_grid_shape():
     assert len(height) == mm.N and len(height[0]) == mm.N
     assert all(0 <= height[y][x] <= 15 for y in range(mm.N) for x in range(mm.N))
     assert len(slope) == mm.N
+
+
+def test_sees_tile_agrees_with_visible_tiles():
+    # sees_tile is the short-circuit of "tile in visible_tiles(...)": it must agree
+    # tile-for-tile with the full sweep it replaces.
+    for _ls, g in _golden().items():
+        state = _rebuild(g["regions"])
+        ps = g["player_slot"]
+        seen = set(los.visible_tiles(state, ps, max_steps=2000))
+        for x in range(0, mm.N, 3):
+            for y in range(0, mm.N, 3):
+                assert los.sees_tile(state, (x, y), ps, max_steps=2000) == (
+                    (x, y) in seen
+                ), f"landscape {_ls} tile ({x},{y})"

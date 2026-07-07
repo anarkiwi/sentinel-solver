@@ -254,7 +254,7 @@ The live driver additionally needs Docker and the `asid-vice:latest` image
 ## Run
 
 ```bash
-# plan a win with the best-first lookahead (landscape 0, depth 2; ~85s):
+# plan a win with the best-first lookahead (landscape 0, depth 2; ~25s):
 python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
 
 # the plan is validated by construction: it is built on the sentinel simulator,
@@ -262,7 +262,7 @@ python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
 
 # run the planner against the simulator as a TICK-ACCURATE "real game": enemies
 # advance every game round (drain/rotate/downgrade) between and during actions,
-# and the loop resyncs + replans each step (~60s, no emulator):
+# and the loop resyncs + replans each step (~45s, no emulator):
 python3 scripts/run_plan_simulated.py 0     # reports WON / lost + the climb log
 
 # drive the same loop in the real game and record it (Docker; ~3-20 min). Boot +
