@@ -27,9 +27,12 @@ BLOCKED = 0
 OBJECT = 2
 
 # Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
-# code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940.
+# code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
+# OBJECTS_Z_FRACTION $0A00, OBJECTS_TYPE $0A40.
 _OFLAGS = 0x0100
 _OZHEIGHT = 0x0940
+_OZFRAC = 0x0A00
+_OTYPE = 0x0A40
 
 
 @njit(cache=True)
@@ -188,6 +191,125 @@ def _check_slope(mem, x, y, z00, px_sub, py_sub, pz_sub, pz_whole):
 
 
 @njit(cache=True)
+def _min_xy(px_sub, py_sub):
+    """los._get_min_xy_fraction $1EAF: min tile-centre fraction of x/y (the exact
+    6502 form, not plain abs)."""
+    ax = (px_sub - 0x80) & 0xFF
+    if ax & 0x80:
+        ax ^= 0xFF
+    t74 = ax & 0xFF
+    ay = (py_sub - 0x80) & 0xFF
+    if ay & 0x80:
+        ay ^= 0xFF
+    if ay >= t74:
+        t74 = ay
+    return t74 & 0xFF
+
+
+@njit(cache=True)
+def _is_tree_cdd(mem, Y, pz_sub, pz_whole, px_sub, py_sub, c56, cdd):
+    """los._is_tree $1E69: the enemy-can-see-a-tree marker ($0CDD).  Works in a
+    scratch byte, not $0079, so it only (maybe) sets $0CDD; returns the new cdd."""
+    zf = int(mem[_OZFRAC + Y])
+    t = zf - (pz_sub & 0xFF)
+    s75 = t & 0xFF
+    borrow = 1 if t < 0 else 0
+    saved_hi = (int(mem[_OZHEIGHT + Y]) - (pz_whole & 0xFF) - borrow) & 0xFF
+    t2 = s75 + 0xE0
+    s75 = t2 & 0xFF
+    carry = 1 if t2 > 0xFF else 0
+    a = (saved_hi + carry) & 0xFF
+    if a & 0x80:
+        return cdd
+    c = a & 1
+    a >>= 1
+    s75 = ((s75 >> 1) | (c << 7)) & 0xFF
+    c = a & 1
+    a >>= 1
+    if a != 0:
+        return cdd
+    a = ((s75 >> 1) | (c << 7)) & 0xFF
+    if a < _min_xy(px_sub, py_sub):
+        return cdd
+    if c56 & 0x80:
+        return cdd
+    return ((cdd >> 1) | 0x80) & 0xFF
+
+
+@njit(cache=True)
+def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
+    """los._get_tile_z_from_object $1E3F and its helpers, flattened into one bounded
+    iterative walk of the object stack.  Returns the 7-tuple
+    ``(z, s79, c0c, c67, c56, cdd, s60)`` -- the object surface the flat-tile check
+    then compares against, plus the $0C56/$0CDD trackers (threaded in/out)."""
+    s60 = 0x80
+    s79 = 0
+    c0c = 0x80
+    c67 = 0
+    raw = raw0 & 0xFF
+    for _ in range(80):
+        Y = raw & 0x3F
+        do_ghol = False
+        if (s60 & 0x80) == 0:
+            # $1E44 BPL get_height_of_lowest_object
+            do_ghol = True
+        else:
+            # get_tile_z_for_line_of_sight $1E0E
+            if Y == (c58 & 0xFF):
+                c56 = ((c56 >> 1) | 0x80) & 0xFF
+            otype = int(mem[_OTYPE + Y])
+            if otype == 3 or otype == 2:
+                # get_boulder_or_tree_z_for_line_of_sight $1E48
+                go_skip = False
+                if _min_xy(px_sub, py_sub) >= 0x40:
+                    go_skip = True
+                elif otype == 2:  # is_tree $1E69
+                    cdd = _is_tree_cdd(
+                        mem, Y, pz_sub, pz_whole, px_sub, py_sub, c56, cdd
+                    )
+                    go_skip = True
+                else:
+                    # boulder near-centre $1E56: targetable, RTS with z
+                    c67 = ((c67 >> 1) | 0x80) & 0xFF
+                    t = int(mem[_OZFRAC + Y]) - 0x60
+                    s79 = t & 0xFF
+                    borrow = 1 if t < 0 else 0
+                    z = (int(mem[_OZHEIGHT + Y]) - borrow) & 0xFF
+                    return (z, s79, c0c, c67, c56, cdd, s60)
+                if go_skip:
+                    # skip_targeting_object $1E99, then fall into ghol
+                    if int(mem[_OTYPE + Y]) != 2:
+                        s60 = 0xC0
+                    do_ghol = True
+            elif otype != 6:
+                # $1E23 BNE ghol (robot/sentry/enemy)
+                do_ghol = True
+            else:
+                # platform (type 6) $1E25
+                if _min_xy(px_sub, py_sub) >= 0x64:
+                    if int(mem[_OTYPE + Y]) != 2:
+                        s60 = 0xC0
+                    do_ghol = True
+                else:
+                    c0c = 0x10
+                    t = int(mem[_OZFRAC + Y]) + 0x20
+                    s79 = t & 0xFF
+                    carry = 1 if t > 0xFF else 0
+                    z = (int(mem[_OZHEIGHT + Y]) + carry) & 0xFF
+                    return (z, s79, c0c, c67, c56, cdd, s60)
+        if do_ghol:
+            # get_height_of_lowest_object $1EA4: stacked -> recurse on the object
+            # beneath (raw = flags); else the bottom object's z_height.
+            flags = int(mem[_OFLAGS + Y])
+            if flags >= 0x40:
+                raw = flags
+                continue
+            return (int(mem[_OZHEIGHT + Y]), s79, c0c, c67, c56, cdd, s60)
+    # safety: corrupt/deep stack
+    return (int(mem[_OZHEIGHT + (raw & 0x3F)]), s79, c0c, c67, c56, cdd, s60)
+
+
+@njit(cache=True)
 def march(
     mem,
     ax_lo,
@@ -209,24 +331,28 @@ def march(
     ox,
     oy,
     c6e,
-    ty_in,
+    c58,
+    c56,
+    cdd,
     max_steps,
 ):
     """March the ray from the given position for at most ``max_steps`` sub-steps.
 
-    Fast path only (flat / sloping terrain).  Returns the 13-tuple::
+    Fully self-contained: flat, sloping AND object tiles are resolved in numba, so
+    the march never bails back to Python.  Returns the 15-tuple::
 
         (status, tx, ty,
          px_frac, px_sub, px_whole, pz_frac, pz_sub, pz_whole,
-         py_frac, py_sub, py_whole, steps_used)
+         py_frac, py_sub, py_whole, c56, cdd, steps_used)
 
     ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
     do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.
-    ``ty_in`` seeds the (stale) ``ty`` the ROM returns on a same-step x-edge exit
-    (0 on a fresh march; the object-tile py_whole on a resume)."""
-    ty = ty_in & 0xFF
+    ``c58`` is the targeted-object slot; ``c56``/``cdd`` are the $0C56/$0CDD
+    trackers (seeded/LSR'd by the caller, returned so the caller can persist them)."""
+    ty = 0
     tx = 0
     steps = 0
+    status = BLOCKED
     while steps < max_steps:
         steps += 1
         # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
@@ -257,56 +383,44 @@ def march(
 
         tx = px_whole & 0xFF
         if tx >= 0x1F:
-            return (
-                BLOCKED,
-                tx,
-                ty,
-                px_frac,
-                px_sub,
-                px_whole,
-                pz_frac,
-                pz_sub,
-                pz_whole,
-                py_frac,
-                py_sub,
-                py_whole,
-                steps,
-            )
+            status = BLOCKED
+            break
         ty = py_whole & 0xFF
         if ty >= 0x1F:
-            return (
-                BLOCKED,
-                tx,
-                ty,
-                px_frac,
-                px_sub,
-                px_whole,
-                pz_frac,
-                pz_sub,
-                pz_whole,
-                py_frac,
-                py_sub,
-                py_whole,
-                steps,
-            )
+            status = BLOCKED
+            break
 
         b = _tile_byte(mem, tx, ty)
         if b >= 0xC0:
-            return (
-                OBJECT,
-                tx,
-                ty,
-                px_frac,
-                px_sub,
-                px_whole,
-                pz_frac,
-                pz_sub,
-                pz_whole,
-                py_frac,
-                py_sub,
-                py_whole,
-                steps,
+            # object tile: resolve the stack surface ($1E3F) then the general
+            # (object-aware) check_flat_tile $1D0D.
+            z, s79, c0c, c67, c56, cdd, s60 = _object_surface(
+                mem, b, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd
             )
+            t = (s79 & 0xFF) - (pz_sub & 0xFF)
+            borrow = 1 if t < 0 else 0
+            s79 = t & 0xFF
+            d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
+            if d & 0x80:
+                continue
+            if d != 0:
+                status = BLOCKED
+                break
+            if s79 >= (c0c & 0xFF):
+                status = BLOCKED
+                break
+            if s60 & 0x40:
+                status = BLOCKED
+                break
+            if ((c6e | c67) & 0x80) == 0:
+                if (s30 & 0x80) == 0:  # looking up -> rejected
+                    status = BLOCKED
+                    break
+            if tx == (ox & 0xFF) and ty == (oy & 0xFF):
+                continue
+            status = LOS_CLEAR
+            break
+
         slope = b & 0x0F
         z = (b >> 4) & 0x0F
         if slope == 0:
@@ -318,91 +432,26 @@ def march(
             if d & 0x80:
                 continue  # tile below the ray -> keep marching
             if d != 0:
-                return (
-                    BLOCKED,
-                    tx,
-                    ty,
-                    px_frac,
-                    px_sub,
-                    px_whole,
-                    pz_frac,
-                    pz_sub,
-                    pz_whole,
-                    py_frac,
-                    py_sub,
-                    py_whole,
-                    steps,
-                )
+                status = BLOCKED
+                break
             if s79 >= 0x80:
-                return (
-                    BLOCKED,
-                    tx,
-                    ty,
-                    px_frac,
-                    px_sub,
-                    px_whole,
-                    pz_frac,
-                    pz_sub,
-                    pz_whole,
-                    py_frac,
-                    py_sub,
-                    py_whole,
-                    steps,
-                )
+                status = BLOCKED
+                break
             if (c6e & 0x80) == 0:
                 if (s30 & 0x80) == 0:  # looking up -> rejected
-                    return (
-                        BLOCKED,
-                        tx,
-                        ty,
-                        px_frac,
-                        px_sub,
-                        px_whole,
-                        pz_frac,
-                        pz_sub,
-                        pz_whole,
-                        py_frac,
-                        py_sub,
-                        py_whole,
-                        steps,
-                    )
+                    status = BLOCKED
+                    break
             if tx == (ox & 0xFF) and ty == (oy & 0xFF):
                 continue  # same tile as the observer -> keep going
-            return (
-                LOS_CLEAR,
-                tx,
-                ty,
-                px_frac,
-                px_sub,
-                px_whole,
-                pz_frac,
-                pz_sub,
-                pz_whole,
-                py_frac,
-                py_sub,
-                py_whole,
-                steps,
-            )
+            status = LOS_CLEAR
+            break
         else:
             if _check_slope(mem, tx, ty, z, px_sub, py_sub, pz_sub, pz_whole) == 0:
                 continue  # ray above the slope -> keep marching
-            return (
-                BLOCKED,
-                tx,
-                ty,
-                px_frac,
-                px_sub,
-                px_whole,
-                pz_frac,
-                pz_sub,
-                pz_whole,
-                py_frac,
-                py_sub,
-                py_whole,
-                steps,
-            )
+            status = BLOCKED
+            break
     return (
-        BLOCKED,
+        status,
         tx,
         ty,
         px_frac,
@@ -414,5 +463,7 @@ def march(
         py_frac,
         py_sub,
         py_whole,
+        c56,
+        cdd,
         steps,
     )
