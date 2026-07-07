@@ -131,7 +131,7 @@ def execute_live(
                 mem = core.live_image(ex.bm)
         else:
             mem = core.live_image(ex.bm)
-        return plan_game.Game.from_mem(
+        return plan_game.PlanGame.from_mem(
             mem, landscape, seed_built_columns=seed_built_columns
         )
 
