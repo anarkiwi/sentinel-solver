@@ -109,9 +109,9 @@ def call(cpu, mem, addr, a=0, x=0, y=0, maxins=40_000_000, state=None, stop_pc=N
     return n
 
 
-def generate(landscape):
-    """Run the real play-setup sequence for `landscape` and return the memory
-    image: seed -> generate terrain -> place enemies -> place player + trees."""
+def generate_machine(landscape):
+    """Run the real play-setup sequence for `landscape` and return the live
+    (cpu, mem, state): seed -> terrain -> place enemies -> place player + trees."""
     cpu, mem, state = fresh_machine()
     lo, hi = landscape & 0xFF, (landscape >> 8) & 0xFF
     call(cpu, mem, RESET, state=state)
@@ -123,4 +123,41 @@ def generate(landscape):
     call(cpu, mem, INIT_ENEMIES, state=state)
     state["stop"] = False
     call(cpu, mem, INIT_PLAYER, state=state)
-    return mem
+    return cpu, mem, state
+
+
+def generate(landscape):
+    """The `generate_machine` memory image alone (the play-setup result)."""
+    return generate_machine(landscape)[1]
+
+
+# --- round-by-round enemy driver -------------------------------------------
+TICK_COOLDOWNS = 0x1317  # update_enemy_cooldowns
+UPDATE_ENEMIES = 0x16B5  # update_enemies
+# Rendering/sound entry points reached from update_enemies -- stubbed with RTS so
+# the enemy dynamics run headless (they don't change the modelled game state):
+# update_object_on_screen, play_sound, plot_status_bar, start_tune,
+# set_busy_plotting, flush_buffer, start_tune_and_set_viewpoint_has_changed.
+RENDER_STUBS = (0x1F9F, 0x3470, 0x9508, 0x888F, 0x1214, 0x3527, 0x1B84)
+WORLD_BUSY_PLOTTING = (
+    0x0C1F  # bit7 clear => check_if_object_can_be_updated allows updates
+)
+
+
+def prime_enemy_driver(cpu, mem, state):
+    """Stub rendering/sound and prime the cursor/gate so update_enemies can be
+    stepped one game round at a time, matching the pure-sim ``enemies.step``."""
+    for addr in RENDER_STUBS:
+        mem[addr] = 0x60  # RTS
+    mem[WORLD_BUSY_PLOTTING] = 0x00
+    mem[0x0090] = 7  # cursor
+    mem[0x0C50] = 0  # cooldown gate
+    del cpu, state
+
+
+def step_enemy_round(cpu, mem, state):
+    """One game round on the real 6502: update_enemy_cooldowns + update_enemies."""
+    state["stop"] = False
+    call(cpu, mem, TICK_COOLDOWNS, state=state)
+    state["stop"] = False
+    call(cpu, mem, UPDATE_ENEMIES, state=state)

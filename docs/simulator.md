@@ -49,23 +49,34 @@ harness, then the ROM captures are frozen as JSON goldens replayed by CI:
 | `golden_landscape.json` | full board generation (terrain + object tables + PRNG state) |
 | `golden_relative.json` | relative geometry + enemy full-visibility |
 | `golden_enemies.json` | enemy-array trajectories over 400 rounds |
+| `golden_meanie.json` | the full meanie lifecycle + the failed-attempt path |
 
 Bit-exact results established during the port: PRNG and LOS 12,800/12,800; landscape
 generation byte-for-byte; `divide_and_arctan` 0/4040, relative angles 0/376,
 vertical angle 0/3000, enemy full-visibility 0/496; the enemy round advance
-0-divergence over 400 rounds on validated landscapes.
+0-divergence over 400 rounds on validated landscapes. The meanie lifecycle is
+validated over the full object + enemy/meanie state (object table, PRNG, tiles,
+player/energy, death/hyperspace flags) round for round through spawn, hunt, forced
+hyperspace and a drain-death (landscape 2024, 2,486 rounds) plus the failed-attempt
+path (landscape 49); a 48-landscape / 700-round sweep of the whole enemy update is
+0-divergence.
 
 The arctan (`$3B00/$3C01`) and hypotenuse (`$3D02`) coefficient tables are
 reproduced from closed-form expressions (verified byte-exact vs the ROM), so no
 game data is embedded.
 
+The two-probe `$0014` exposure byte (`$80` full / `$40` partial / `0` unseen) is
+reconstructed and validated bit-exact against the ROM: it is the trigger the meanie
+lifecycle turns on (an enemy that sees the player partially arms a meanie), so the
+0-divergence meanie runs above exercise it across rotated enemy angles.
+
+The meanie lifecycle (tree → meanie → forced hyperspace → player relocation, energy
+spend or death) is modelled as a stateful side effect of `enemies.step()` and pinned
+by `golden_meanie.json`; `enemies.meanie_threat()` is only a planner-facing query
+over the same partial-visibility test.
+
 ## Known approximations
 
-- The two-probe `$0014` exposure byte stores a full/partial classification whose
-  exact multi-probe bit-plumbing is not fully reconstructed; a rare rotated-angle
-  target may be classed partial where the ROM classes it fully visible.
-- The meanie lifecycle (tree → meanie → forced hyperspace) is exposed as the
-  `enemies.meanie_threat()` capability query rather than a stateful side effect.
-- The rendering/sound side effects of the enemy update (re-plotting, the
-  energy-discharge that scatters trees when an enemy is absorbed) are not modelled;
-  they do not change the gameplay state a strategy search reasons about.
+- The rendering/sound side effects of the enemy update (re-plotting, sound, the
+  "object being plotted" update guard) are not modelled; they do not change the
+  gameplay state a strategy search reasons about.
