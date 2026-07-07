@@ -40,12 +40,12 @@ def test_aim_rounds_zero_when_no_view():
 
 
 def test_aim_rounds_known_nonzero():
-    # bearing 0 -> 64 = 8 lattice steps (no U-turn) * 16 = 128; pitch 0x10 -> 0x20 = 4
-    # steps * 8 = 32; total 160.
+    # bearing 0 -> 64 = 8 lattice steps (no U-turn); pitch 0x10 -> 0x20 = 4 steps.
     view = {"h_angle": 64, "v_angle": 0x20}
-    assert cost.aim_rounds(0, 0x10, view) == 160.0
+    expected = 8 * cost.ROUNDS_PER_H_STEP + 4 * cost.ROUNDS_PER_V_STEP
+    assert cost.aim_rounds(0, 0x10, view) == expected
     # pitch ignored when the start pitch is unknown.
-    assert cost.aim_rounds(0, None, view) == 128.0
+    assert cost.aim_rounds(0, None, view) == 8 * cost.ROUNDS_PER_H_STEP
 
 
 def _move_vs_execute(use_boulder):

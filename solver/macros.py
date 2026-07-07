@@ -326,19 +326,26 @@ def expand_refuel(n, gaze, need=cost.NEXT_COST_FLOOR + 2):
 def endgame_child(n, plat, plat_ground) -> Optional[Node]:
     """Endgame macro (T2.3): from a launch-ready node, drive-through absorb the
     Sentinel then build+transfer onto the platform for the win.  Returns the winning
-    child Node, or None if the geometric/feasibility/terminal gate fails."""
+    child Node, or None if the aim/feasibility/terminal gate fails.
+
+    The win shot is the player looking DOWN onto the platform, so the precondition is a
+    real KEYBOARD-aimable down-look view (``los.landable_view`` with the body-pitch band),
+    NOT mere geometric LOS: the sim absorbs by slot regardless of aim, but the live driver
+    aims BY this view, so a geometric-only launch fires blind and misses live (the coarse
+    ``visibility_sweep`` drops the far down-look platform tile -- the cursor-cy sweep bug).
+    The resolved view is attached to every platform-targeting step so the plan is aim-exact.
+    """
     if not launch.endgame_ready(n.g, plat, plat_ground):
         return None
     plat = tuple(plat)
     g = n.g.clone()
     seye = int(g.eye) + (1 if g.eye > int(g.eye) else 0)
-    sw = plan_game.visibility_sweep(g.mem, g.player, seye, max_steps=200)
-    # Down-look LOS to the platform is the direct geometric march (which
-    # ``endgame_ready`` already asserts); the coarse keyboard sweep drops far
-    # down-look tiles, so gate on the march and use the sweep's view when present.
-    if plat not in sw and not plan_game.sees_tile(g.mem, plat, g.player, seye):
+    view = los.landable_view(g.state, plat, g.player, eye_z=seye, v_band=True)
+    if (
+        view is None
+    ):  # no keyboard aim lands on the platform from here -- not launchable
         return None
-    view = sw.get(plat)
+    view = {**view, "cursor": list(view["cursor"])}
     sent = g.state.slot_of_type(mm.T_SENTINEL)
     if sent is not None:
         g.absorb(sent, view, "absorb Sentinel")  # drive-through

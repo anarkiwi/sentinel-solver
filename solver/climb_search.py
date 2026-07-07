@@ -591,8 +591,14 @@ DEFAULT_BEAM = 3  # top-N candidates expanded per node, independent of depth (se
 # the enemies rotate much further while the view swings across the map than while it tilts,
 # which the old single flat per-move constant could not express. Overridable so a diverging
 # live run can be recalibrated from its own telemetry without a code change (sec.9 step 4).
-ROUNDS_PER_H_STEP = float(os.environ.get("ROUNDS_PER_H_STEP", "16"))
-ROUNDS_PER_V_STEP = float(os.environ.get("ROUNDS_PER_V_STEP", "8"))
+# Scroll frames -> enemy-round ticks via the shared $130C/$1335 Bresenham factor
+# (actioncost.FRAME_TICKS == 0.80); the scene replot is folded into those frames.
+ROUNDS_PER_H_STEP = float(
+    os.environ.get("ROUNDS_PER_H_STEP", str(actioncost.FRAME_TICKS * 16))
+)
+ROUNDS_PER_V_STEP = float(
+    os.environ.get("ROUNDS_PER_V_STEP", str(actioncost.FRAME_TICKS * 8))
+)
 ROUNDS_PER_ACTION = float(os.environ.get("ROUNDS_PER_ACTION", "16"))
 # A U-turn (EOR $80) flips the bearing 180 degrees in ONE keystroke, so a far-bearing swing
 # costs one U-turn + a short +-8 correction instead of up to sixteen +-8 pans -- which the
@@ -600,7 +606,9 @@ ROUNDS_PER_ACTION = float(os.environ.get("ROUNDS_PER_ACTION", "16"))
 # over-charge a big bearing swing the driver will actually shortcut (~one keystroke's worth
 # of plot; kept equal to a bearing pan step so the keystroke and rounds crossovers coincide
 # at a bearing >= 72 units).
-ROUNDS_PER_UTURN = float(os.environ.get("ROUNDS_PER_UTURN", "16"))
+ROUNDS_PER_UTURN = float(
+    os.environ.get("ROUNDS_PER_UTURN", str(actioncost.FRAME_TICKS * 16))
+)
 
 # ticks_until_seen / meanie forward-sim horizons: bounded so the per-decision search
 # stays inside the 60s script budget. The safety margin only needs to distinguish
@@ -653,6 +661,13 @@ _ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "1") == "1"
 # move whose window drains the player to death). Default ON so the offline planner's
 # forecast matches the tick-accurate runner's real drain.
 _SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "1") == "1"
+# Advance the COMMITTED enemy state by each move's real tick cost (not just refuel), so
+# the planner's own rotation forecast matches the game's. When ON, plan_search's Sentinel
+# facing tracks reality (h=248 at the (11,8) node, matching the sim/live runners) and the
+# offline climb HONESTLY dead-ends in the same (11,8) drain-trap instead of false-winning
+# against a slow enemy clock. Default OFF pending the routing overhaul that avoids the trap
+# (a real win under honest timing needs the human-style low-exposure route, not this fix).
+_COMMIT_MOVE_TICKS = os.environ.get("COMMIT_MOVE_TICKS", "0") == "1"
 # REFUEL-DRAIN: charge the drain incurred while RE-AIMING at each fuel object. A refuel is
 # not free -- every absorb needs a keyboard pan onto the target, and if the Sentinel is
 # currently draining the player, that pan bleeds energy the whole time. So absorbing trees
@@ -1130,7 +1145,18 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
     T2, use_b, h_after, view = move
     ctx["visited"].add((T2, round(h_after, 2)))
     ctx["tiles_used"].add(T2)
+    # Advance the COMMITTED enemy state by this move's real duration (aim + build +
+    # transfer + return-pan), the SAME tick cost the lookahead priced on its clones
+    # (_move_cost / _advance_enemies at the eval ply). Without this the committed clock
+    # ran slow -- it ticked enemies only on refuel, never on the move itself -- so the
+    # planner's own g drifted behind the true Sentinel rotation and it committed routes
+    # that die once the enemy actually turns (the (11,8) live/sim dead-end). Priced from
+    # the PRE-move state (player still on the departed tile).
+    if _COMMIT_MOVE_TICKS:
+        mticks, _, _ = _move_cost(g, move, root_h, root_v)
     _apply(g, T2, use_b, view)
+    if _COMMIT_MOVE_TICKS:
+        _advance_enemies(g.state, mticks, apply_drain=_SEEN_DRAIN)
     log(
         f"  {'step' if use_b else 'hop '} -> {T2} eye {g.eye} "
         f"(d={cheb(g.player_xy(), plat)}) edge={edge_dist(T2):.0f} energy {g.energy} "
