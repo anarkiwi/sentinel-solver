@@ -20,15 +20,20 @@ Landscape-energy conservation IS modelled: every drain banks a unit on the enemy
 ($1A5D) returns to the board as a tree on a random flat tile -- so a Sentinel that
 drains the player over the time an action takes scatters trees exactly as the live
 ROM does.  The purely rendering-coupled side effects (object re-plotting, sound) do
-not change the gameplay state and are not modelled; the meanie lifecycle is exposed
-separately via :func:`meanie_threat`.
+not change the gameplay state and are not modelled.
 
-The cooldown, rotation, targeting and drain machinery reproduces the ROM round for
-round (validated bit-exact over the enemy arrays for hundreds of rounds). The one
-approximation is the exposure byte stored for a target: the ROM's two-probe
-$0014 accumulates a full ($80) / partial ($40) classification whose multi-probe
-bit-plumbing is not fully reconstructed, so a rare rotated-angle target may be
-classed partial where the ROM classes it fully visible.
+The full meanie lifecycle is a stateful side effect of the round advance, not a
+side-channel: when an enemy sees the player only partially ($0014 == $40, head but
+not base) it arms a meanie, ``_consider_creating_meanie`` ($197D) turns a nearby
+tree into one, ``_update_meanie`` ($16F2) rotates it round to face the player, and
+``do_hyperspace`` ($2156) relocates the player (spending energy) or kills them.
+:func:`meanie_threat` is only a planner-facing query over the same visibility test.
+
+The cooldown, rotation, targeting, drain and meanie machinery reproduce the ROM
+round for round, validated bit-exact against the py65 oracle over the full state
+(object table, enemy + meanie arrays, player/energy, PRNG, tiles, death/hyperspace
+flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
+later drain-death -- as well as the failed-attempt path.
 """
 
 from sentinel import memmap as mm, relative, actions, terrain
@@ -139,7 +144,10 @@ def _target_object(state, enemy, target, exposure):
         return
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
+        killed = target == mem[mm.PLAYER_OBJECT] and state.energy == 0
         _reduce_object_energy(state, target, enemy)
+        if killed:  # kill_player $1A00 unwinds the stack -> no update-cooldown reload
+            return
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         return
     # enemy_can't_drain_object $184D: the player is only partially visible.  Try to
@@ -159,11 +167,12 @@ def _target_object(state, enemy, target, exposure):
 # ---------------------------------------------------------------------------
 def _rotate_enemy(state, enemy):
     """$1805: add the per-enemy rotation step to its facing; reload the rotation
-    cooldown to 200."""
+    cooldown to 200; re-arm the meanie hunt ($1818)."""
     mem = state.mem
     step = mem[mm.ROTATION_SPEED_TABLE + enemy]
     state.obj_h_angle[enemy] = (state.obj_h_angle[enemy] + step) & 0xFF
     mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = ROTATION_COOLDOWN_RELOAD
+    _initialise_enemy_meanie_variables(state, enemy)  # $1818
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +197,21 @@ def _consider_enemy_state(state, enemy):
     if _consider_discharging_enemy_energy(state, enemy):
         return
 
-    mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (
-        mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
-    )
+    # $177F: only while mid meanie-hunt (considering_meanie bit7 set) does the enemy
+    # act on the flag -- first draining a boulder/stacked tree it can fully see, which
+    # re-arms its tree search ($178B); otherwise it shifts the flag down ($1792). With
+    # the top bit already clear the flag is left untouched ($1782 BPL -> $1795), so a
+    # considering byte decays exactly once (0x80 -> 0x40) and then sticks.
+    if mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] & 0x80:
+        tb = _find_drainable_boulder_or_tree(state, enemy)
+        if tb is not None:
+            mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40
+            _reduce_object_energy(state, tb, enemy)  # never the player -> no kill
+            mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
+            return
+        mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (
+            mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
+        )
     # Re-check a held target ($178C): keep it while it is visible AT ALL (a
     # partially-visible player stays targeted so its drain timer runs down to the
     # meanie-creation point $184D); drop it only when out of sight.
@@ -212,7 +233,7 @@ def _consider_enemy_state(state, enemy):
         if exposure == 0:  # $17B6: not visible at all -> next slot
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
-            _target_object(state, enemy, y, 0x80)
+            _target_object(state, enemy, y, exposure)
             return
         if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial_player = y
