@@ -16,3 +16,7 @@ __pycache__/
 /.vice-home/
 /out/*.json
 /out/*.jsonl
+
+# editor swap files
+*.swp
+*.swo

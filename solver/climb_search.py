@@ -28,19 +28,11 @@ os.chdir(os.path.join(HERE, ".."))
 
 from solver import plan_game as NG
 from solver.plan_game import (
-    PlanGame as Game,
+    PlanGame,
     cheb,
     visibility_sweep,
     sees_tile,
     terrain_z,
-    OBJ_X,
-    OBJ_Y,
-    OBJ_Z,
-    OBJ_TYPE,
-    OBJ_ZF,
-    OBJ_FLAGS,
-    OBJ_HANG,
-    OBJ_VANG,
 )
 from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost, actions
 from sentinel import memmap as mm
@@ -84,12 +76,12 @@ def _top_type(g, tile):
     terrain or on another boulder (type 3), never on a synthoid (0) / tree (2)."""
     top, topz = None, -1
     for s in range(64):
-        if g.mem[OBJ_FLAGS + s] & 0x80:
+        if g.mem[mm.OBJECTS_FLAGS + s] & 0x80:
             continue
-        if (g.mem[OBJ_X + s], g.mem[OBJ_Y + s]) == tile:
-            z = g.mem[OBJ_Z + s] * 256 + g.mem[OBJ_ZF + s]
+        if (g.mem[mm.OBJECTS_X + s], g.mem[mm.OBJECTS_Y + s]) == tile:
+            z = g.mem[mm.OBJECTS_Z_HEIGHT + s] * 256 + g.mem[mm.OBJECTS_Z_FRACTION + s]
             if z > topz:
-                topz, top = z, g.mem[OBJ_TYPE + s]
+                topz, top = z, g.mem[mm.OBJECTS_TYPE + s]
     return top
 
 
@@ -213,26 +205,26 @@ def _boulder_centre_feasible(g, T2, view, max_steps=2000):
         return False
     mem = bytearray(g.mem)
     slot = g.free[-1]
-    tb = mem[0x0400 + NG.TIDX(*T2)]
+    tb = mem[0x0400 + mm.tidx(*T2)]
     if tb >= 0xC0:  # stacking a boulder onto an existing boulder/platform
         below = tb & 0x3F
-        btype = mem[OBJ_TYPE + below]
+        btype = mem[mm.OBJECTS_TYPE + below]
         if btype not in (3, 6):
             return False
-        t = mem[OBJ_ZF + below] + 0x80
+        t = mem[mm.OBJECTS_Z_FRACTION + below] + 0x80
         zf = t & 0xFF
-        z = mem[OBJ_Z + below] + (t >> 8)
-        mem[OBJ_FLAGS + slot] = 0x40 | below
+        z = mem[mm.OBJECTS_Z_HEIGHT + below] + (t >> 8)
+        mem[mm.OBJECTS_FLAGS + slot] = 0x40 | below
     else:  # bare terrain
         zf = 0xE0
         z = tb >> 4
-        mem[OBJ_FLAGS + slot] = 0x00
-    mem[0x0400 + NG.TIDX(*T2)] = 0xC0 | slot
-    mem[OBJ_X + slot] = T2[0]
-    mem[OBJ_Y + slot] = T2[1]
-    mem[OBJ_Z + slot] = z & 0xFF
-    mem[OBJ_ZF + slot] = zf & 0xFF
-    mem[OBJ_TYPE + slot] = 3
+        mem[mm.OBJECTS_FLAGS + slot] = 0x00
+    mem[0x0400 + mm.tidx(*T2)] = 0xC0 | slot
+    mem[mm.OBJECTS_X + slot] = T2[0]
+    mem[mm.OBJECTS_Y + slot] = T2[1]
+    mem[mm.OBJECTS_Z_HEIGHT + slot] = z & 0xFF
+    mem[mm.OBJECTS_Z_FRACTION + slot] = zf & 0xFF
+    mem[mm.OBJECTS_TYPE + slot] = 3
     return (
         NG.centre_view_for(mem, T2, g.player, int(g.eye), max_steps=max_steps)
         is not None
@@ -310,8 +302,10 @@ def _apply(g, T2, use_b, view):
     sw = visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200, coarse=True)
     if (
         prev_tile in sw
-        and g.mem[OBJ_TYPE + prev_slot] == 0
-        and g.mem[OBJ_Z + prev_slot] + g.mem[OBJ_ZF + prev_slot] / 256.0 <= g.eye + 1e-9
+        and g.mem[mm.OBJECTS_TYPE + prev_slot] == 0
+        and g.mem[mm.OBJECTS_Z_HEIGHT + prev_slot]
+        + g.mem[mm.OBJECTS_Z_FRACTION + prev_slot] / 256.0
+        <= g.eye + 1e-9
     ):
         g.absorb(prev_slot, sw[prev_tile], "reabsorb prior shell")
 
@@ -331,7 +325,6 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     committed state; the lookahead search passes a coarser/shorter sweep (it only needs
     an APPROXIMATE recovered-energy figure for affordability, and this sweep dominates its
     per-node cost)."""
-    from solver.plan_game import ENERGY
 
     gained = 0
     cur = g.player_xy()
@@ -341,12 +334,12 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     # absorb topmost-first per tile (matches the ROM gate) so stacks unwind cleanly.
     cand = []
     for slot in range(64):
-        if (g.mem[OBJ_FLAGS + slot] & 0x80) or slot == g.player:
+        if (g.mem[mm.OBJECTS_FLAGS + slot] & 0x80) or slot == g.player:
             continue
-        ot = g.mem[OBJ_TYPE + slot]
+        ot = g.mem[mm.OBJECTS_TYPE + slot]
         if ot not in (0, 1, 2, 3):  # synthoid/sentry/tree/boulder = fuel
             continue
-        tile = (g.mem[OBJ_X + slot], g.mem[OBJ_Y + slot])
+        tile = (g.mem[mm.OBJECTS_X + slot], g.mem[mm.OBJECTS_Y + slot])
         if tile == cur or tile not in sweep:  # not your own column; must be in LOS
             continue
         # must look DOWN on the object: its FULL top (z_height + z_frac/256) must be at or
@@ -354,9 +347,21 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
         # top (e.g. a tree at 5.875 vs eye 5.0) sits ABOVE the eye slip through -- the real
         # ROM's looking-up check ($1D2E, full height) then REJECTS that absorb, so the native
         # energy over-counts. Compare full heights so the plan only absorbs what the ROM will.
-        if g.mem[OBJ_Z + slot] + g.mem[OBJ_ZF + slot] / 256.0 > g.eye + 1e-9:
+        if (
+            g.mem[mm.OBJECTS_Z_HEIGHT + slot]
+            + g.mem[mm.OBJECTS_Z_FRACTION + slot] / 256.0
+            > g.eye + 1e-9
+        ):
             continue
-        cand.append((g.mem[OBJ_Z + slot] * 256 + g.mem[OBJ_ZF + slot], slot, ot, tile))
+        cand.append(
+            (
+                g.mem[mm.OBJECTS_Z_HEIGHT + slot] * 256
+                + g.mem[mm.OBJECTS_Z_FRACTION + slot],
+                slot,
+                ot,
+                tile,
+            )
+        )
     # only the TOPMOST object per tile: `sweep[tile]`'s view/aim was computed for
     # whatever was on top when the sweep ran. A live keyboard aim centres on the
     # target's own height, so it does NOT carry over once the top object is gone --
@@ -376,7 +381,7 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     # Sentinel comes around mid-pass the cheap local energy is already secured. Default
     # order (exposed-first, height-first) is preserved when pan cost is off.
     comfort = RESERVE + 6  # energy buffer above which far-bearing fuel is skipped (PAN)
-    ch, cv = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
+    ch, cv = g.mem[mm.OBJECTS_H_ANGLE + g.player], g.mem[mm.OBJECTS_V_ANGLE + g.player]
     if _PAN_COST:
         order = sorted(
             cand,
@@ -397,7 +402,7 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     for _z, slot, ot, tile in order:
         if tile in tiles_done:
             continue
-        if g.mem[OBJ_FLAGS + slot] & 0x80:  # already gone (stack collapsed)
+        if g.mem[mm.OBJECTS_FLAGS + slot] & 0x80:  # already gone (stack collapsed)
             continue
         # skip a far-bearing non-exposed grab once a comfortable buffer is banked: the long
         # pan to reach it would be drained for fuel not needed this pass (grab it later,
@@ -437,10 +442,10 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
             # value, the absorb nets <= 0 -- refuelling here loses energy. Stop the pass
             # (the player is seen; every further absorb bleeds too) rather than fund the
             # plan on a phantom bank. On a SAFE tile no drain fires, so this never trips.
-            if e_pre - g.energy >= ENERGY[ot]:
+            if e_pre - g.energy >= mm.ENERGY_IN_OBJECTS[ot]:
                 break
         g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
-        gained += ENERGY[ot]
+        gained += mm.ENERGY_IN_OBJECTS[ot]
         tiles_done.add(tile)
         log(f"    +fuel: absorbed {_FUEL_NAME[ot]} {tile}, energy {g.energy}")
     return g.energy - e_start if drain_aim else gained
@@ -1083,8 +1088,11 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
     # pan is costed from where the view actually points. Live this is the resynced real
     # heading; offline it is the generator's starting facing. The search threads the ending
     # heading of each committed move onward (see _move_cost), so deeper plies never depend
-    # on RAM (native create/absorb don't write OBJ_HANG) -- only this root read touches it.
-    root_h, root_v = g.mem[OBJ_HANG + g.player], g.mem[OBJ_VANG + g.player]
+    # on RAM (native create/absorb don't write mm.OBJECTS_H_ANGLE) -- only this root read touches it.
+    root_h, root_v = (
+        g.mem[mm.OBJECTS_H_ANGLE + g.player],
+        g.mem[mm.OBJECTS_V_ANGLE + g.player],
+    )
     score, move = _lookahead(
         g, ctx, blocked, depth, beam, stats, cur_h=root_h, cur_v=root_v
     )
@@ -1137,7 +1145,7 @@ def plan_search(
     _evaluate's proximity term, and toward_plat gates the ROM-infeasible on-distant-
     boulder synthoid in the steep platform ring (_candidates)."""
     t0 = time.time()
-    g = Game(landscape)
+    g = PlanGame(landscape)
     if start_energy is not None:
         g.energy = start_energy
     log = lambda *a: verbose and print(*a)

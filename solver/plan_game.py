@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Adapter presenting the legacy ``native_game.Game`` surface on a bit-exact
-``sentinel.State``.
+"""The solver's mutable planning state on a bit-exact ``sentinel.State``.
 
-``PlanGame`` is a drop-in for the climb planner (climb_search):
-same attributes (``mem``, ``player``, ``energy``, ``free``, ``eye``, ``col``,
-``plat``, ``plat_ground``, ``sentinel_slot``, ``steps``, ``native_won``) and the
-same methods (``player_xy``, ``top_of``, ``feasible``, ``create``, ``transfer``,
-``absorb``, ``clone``), but every mechanic is delegated to the ``sentinel``
-package so the plan is ROM-faithful.  The module also re-exports the line-of-sight
-helpers and object-array address constants the climb planners use, under the same
-names the earlier hand-written model exposed.
+``PlanGame`` tracks the planner's derived view of the climb -- ``col`` (tile ->
+object-stack top height), ``eye``, ``steps``, and feasibility -- while every
+mechanic is delegated to the ``sentinel`` package so the plan is ROM-faithful.
+The module also provides the line-of-sight sweep wrappers the climb planner uses.
 """
 
 from sentinel import landscape as _landscape
@@ -19,28 +14,8 @@ from sentinel.state import State
 
 N = mm.N
 
-# --- native_game address aliases (identical to the ROM layout) --------------
-OBJ_X = mm.OBJECTS_X
-OBJ_Y = mm.OBJECTS_Y
-OBJ_Z = mm.OBJECTS_Z_HEIGHT
-OBJ_ZF = mm.OBJECTS_Z_FRACTION
-OBJ_TYPE = mm.OBJECTS_TYPE
-OBJ_FLAGS = mm.OBJECTS_FLAGS
-OBJ_HANG = mm.OBJECTS_H_ANGLE
-OBJ_VANG = mm.OBJECTS_V_ANGLE
-ENERGY = mm.ENERGY_IN_OBJECTS
-
-CUR_CX = los.SIGHTS_CX
-CUR_CY = los.SIGHTS_CY
-_VBAND = los.PITCH_BAND
-
 ROBOT_EYE_FUDGE = 2  # build-height slack: top <= eye+2 ($1F38 sightline)
 _OBJECT_TILE = mm.OBJECT_TILE
-
-
-def TIDX(x, y):
-    """Index into tiles_table for tile (x, y) (interleaved ROM layout)."""
-    return mm.tidx(x, y)
 
 
 def cheb(a, b):
@@ -54,7 +29,7 @@ def terrain_z(mem_or_state, x, y):
     if not (0 <= x < N and 0 <= y < N):
         return None
     mem = getattr(mem_or_state, "mem", mem_or_state)
-    b = mem[mm.TILES_TABLE + TIDX(x, y)]
+    b = mem[mm.TILES_TABLE + mm.tidx(x, y)]
     return (b >> 4) if b < _OBJECT_TILE else None
 
 
@@ -134,7 +109,7 @@ class PlanGame:
         if seed_built_columns:
             for ty in range(N):
                 for tx in range(N):
-                    b = self.mem[mm.TILES_TABLE + TIDX(tx, ty)]
+                    b = self.mem[mm.TILES_TABLE + mm.tidx(tx, ty)]
                     if b >= _OBJECT_TILE:
                         top = b & 0x3F
                         self.col[(tx, ty)] = (
@@ -198,12 +173,12 @@ class PlanGame:
         separately by the sweep."""
         if tuple(tile) == self.player_xy():
             return False  # cannot build on your own tile ($1F38)
-        if self.energy < ENERGY[otype] or not self.free:
+        if self.energy < mm.ENERGY_IN_OBJECTS[otype] or not self.free:
             return False
-        tb = self.mem[mm.TILES_TABLE + TIDX(tile[0], tile[1])]
+        tb = self.mem[mm.TILES_TABLE + mm.tidx(tile[0], tile[1])]
         if tb >= _OBJECT_TILE:  # occupied tile: create only on boulder/plat
             below = tb & 0x3F
-            if self.mem[OBJ_TYPE + below] not in (mm.T_BOULDER, mm.T_PLATFORM):
+            if self.mem[mm.OBJECTS_TYPE + below] not in (mm.T_BOULDER, mm.T_PLATFORM):
                 return False  # $1F38 leave_with_carry_set
             top = self.top_of(tile)
             if top is not None and top > self.eye + ROBOT_EYE_FUDGE:
@@ -288,7 +263,3 @@ class PlanGame:
         g.steps = list(self.steps)
         g.native_won = self.native_won
         return g
-
-
-# native_game exported its class as ``Game``; keep the alias for the drop-in.
-Game = PlanGame

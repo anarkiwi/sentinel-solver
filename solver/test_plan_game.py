@@ -6,7 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from solver.plan_game import PlanGame, cheb, terrain_z, TIDX, N  # noqa: E402
+from solver.plan_game import PlanGame, cheb, terrain_z, N  # noqa: E402
+from sentinel import memmap as mm  # noqa: E402
 
 
 def _adjacent_bare_tile(g):
@@ -57,7 +58,7 @@ def test_module_helpers():
     g = PlanGame(0)
     px, py = g.player_xy()
     assert terrain_z(g.mem, px, py) == terrain_z(g.state, px, py)
-    assert TIDX(px, py) == ((px & 3) * 256 + ((px >> 2) & 7) * 32 + py)
+    assert mm.tidx(px, py) == ((px & 3) * 256 + ((px >> 2) & 7) * 32 + py)
 
 
 def test_create_transfer_raises_eye_and_records_step():

@@ -192,7 +192,7 @@ def run(landscape, depth, beam, toward_plat, near_plat_radius, max_iterations, l
     # including any drain/downgrade the ticks applied). seed_built_columns stays
     # False until a create has actually landed -- same rule as the live loop.
     def resync(seed_built):
-        return plan_game.Game.from_mem(
+        return plan_game.PlanGame.from_mem(
             bytes(world.mem), landscape, seed_built_columns=seed_built
         )
 
