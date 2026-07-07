@@ -20,6 +20,7 @@ Every integer is kept in a Python-int-width (int64) register and masked with
 ``& 0xFF`` exactly where the 6502 truncates, so uint8 wrap never corrupts a byte.
 """
 
+import numpy as np
 from numba import njit
 
 LOS_CLEAR = 1
@@ -467,3 +468,97 @@ def march(
         cdd,
         steps,
     )
+
+
+@njit(cache=True)
+def march_batch(
+    mem,
+    ax_lo,
+    ax_hi,
+    az_lo,
+    az_hi,
+    ay_lo,
+    ay_hi,
+    s30,
+    px_frac0,
+    px_sub0,
+    px_whole0,
+    pz_frac0,
+    pz_sub0,
+    pz_whole0,
+    py_frac0,
+    py_sub0,
+    py_whole0,
+    ox,
+    oy,
+    c6e,
+    c58,
+    c56,
+    cdd,
+    max_steps,
+):
+    """March a whole PRECOMPUTED lattice of ray vectors against one memory snapshot in
+    a single numba call (the v-complete keyboard-aim sweep).  ``ax_lo..s30`` are equal-
+    length arrays of per-aim vector components (state-INDEPENDENT -- built once from the
+    aim params, see :func:`sentinel.los._lattice_vectors`); every ray starts from the
+    SAME seed position (``px_frac0`` .. ``py_whole0``, from get_object_details $1ECC) and
+    is marched by :func:`march`.  Returns per-ray ``(status, tx, ty, centre)`` where
+    ``centre`` is the final tile-centre fraction ($1EAF).
+
+    Bit-for-bit identical to calling :func:`march` per aim: the $0C56/$0CDD trackers are
+    seeded fresh (not threaded through memory between rays), which never changes the
+    ``(status, tx, ty)`` verdict -- within a single march they feed only the $0CDD tree
+    marker, not the LOS result."""
+    n = ax_lo.shape[0]
+    status = np.empty(n, dtype=np.int64)
+    tx = np.empty(n, dtype=np.int64)
+    ty = np.empty(n, dtype=np.int64)
+    centre = np.empty(n, dtype=np.int64)
+    for i in range(n):
+        (
+            st,
+            txi,
+            tyi,
+            _pxf,
+            pxs,
+            _pxw,
+            _pzf,
+            _pzs,
+            _pzw,
+            _pyf,
+            pys,
+            _pyw,
+            _c56,
+            _cdd,
+            _steps,
+        ) = march(
+            mem,
+            ax_lo[i],
+            ax_hi[i],
+            az_lo[i],
+            az_hi[i],
+            ay_lo[i],
+            ay_hi[i],
+            s30[i],
+            px_frac0,
+            px_sub0,
+            px_whole0,
+            pz_frac0,
+            pz_sub0,
+            pz_whole0,
+            py_frac0,
+            py_sub0,
+            py_whole0,
+            ox,
+            oy,
+            c6e,
+            c58,
+            c56,
+            cdd,
+            max_steps,
+        )
+        status[i] = st
+        tx[i] = txi
+        ty[i] = tyi
+        centre[i] = _min_xy(pxs, pys)
+    return status, tx, ty, centre

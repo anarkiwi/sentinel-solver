@@ -1065,6 +1065,165 @@ KBD_V_ANGLE = 0xF5
 CURSOR_CX = list(range(17, 144, 9))  # [17,26,...,143], centre 80
 CURSOR_CY = list(range(32, 159, 9))  # [32,41,...,158], centre 95
 
+# The COMPLETE keyboard aim has THREE pitch controls, not one: the body v_angle (over
+# PITCH_BAND) AND the sights cursor cy.  Fixing v_angle at $F5 is SOUND but INCOMPLETE --
+# the player also pitches the BODY down to aim at near/below tiles (the ls335 opening
+# (11,17)->(11,18) adjacent build was fired at v=225).  landable_views/_sweep_with_centres
+# therefore sweep the body v_angle too.  KBD_V_ANGLE is kept FIRST in the sweep order so
+# every tile already landable at v=$F5 keeps its exact old (h, v, cursor) view (0-trajectory
+# change for those tiles); only tiles reachable ONLY via a pitched body get a pitched view.
+_V_PRIORITY = [KBD_V_ANGLE] + [v for v in PITCH_BAND if v != KBD_V_ANGLE]
+
+# LATTICE REDUCTION (perf): the full 15x15 sights-cursor grid at EVERY one of the 27 body
+# pitches is ~27x the old lattice -- ~2.2s per sweep, and with ~21 sweeps + the downstream
+# search cost the ls0 offline solve blows the 60s CPU budget.  The body v_angle already gives
+# coarse pitch AND the 8-notch body h gives coarse azimuth, so at a PITCHED body the cursor
+# only needs to FILL the gaps, not resolve them finely.  So: at the primary pitch ($F5, the
+# level default every previously-landable tile used) keep the FULL 15x15 cursor grid (exact
+# old behaviour, 0 regressions); at the 26 PITCHED body angles sweep a COARSER cursor grid
+# (every 2nd cx, every 3rd cy).  Validated (tests/test_landable.py): this keeps the ls335
+# pitched-down (11,17)->(11,18) build and EVERY ls0 forward build landable (the hard
+# completeness bar); it costs one marginal ls0-start extra vs the full pitched grid (48 vs 49
+# tiles), the price of fitting the 60s budget with margin (~51s CPU vs ~58s at the full grid).
+CURSOR_CX_PITCHED = CURSOR_CX[::2]  # [17,35,...,143], 8 of 15 -- coarse azimuth fill
+CURSOR_CY_PITCHED = CURSOR_CY[::3]  # [32,59,86,113,140], 5 of 15 -- coarse pitch fill
+
+# Precomputed lattice ray vectors, keyed by the (h, v, cx, cy) grid.  The ray vector for an
+# aim depends ONLY on the aim params (prepare_vector_from_player_sights reads neither `state`
+# nor `slot`), so the whole lattice is built ONCE and reused for every state/sweep -- the
+# only per-state work left is the march itself (batched in los_jit.march_batch).
+_VEC_CACHE = {}
+
+
+def _lattice_vectors(
+    hgrid, vgrid, cxs_primary, cys_primary, cxs_pitched, cys_pitched, primary_v
+):
+    """Build (or fetch cached) the per-aim ray-vector arrays for the keyboard lattice, nested
+    ``for v in vgrid: for h in hgrid: for cx: for cy``, where the sights-cursor grid is the
+    FULL ``(cxs_primary, cys_primary)`` when ``v == primary_v`` and the coarser
+    ``(cxs_pitched, cys_pitched)`` otherwise (the reduction documented at
+    :data:`CURSOR_CX_PITCHED`/:data:`CURSOR_CY_PITCHED`).  Returns ``(vx_lo, vx_hi, vz_lo,
+    vz_hi, vy_lo, vy_hi, s30, meta)``: the six int16 arrays + s30 feed
+    :func:`los_jit.march_batch`, and `meta` is the parallel list of ``(h, v, cx, cy)`` for
+    reconstructing each landing's build view."""
+    key = (
+        tuple(hgrid),
+        tuple(vgrid),
+        tuple(cxs_primary),
+        tuple(cys_primary),
+        tuple(cxs_pitched),
+        tuple(cys_pitched),
+        primary_v,
+    )
+    cached = _VEC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    n = len(hgrid) * (
+        len(cxs_primary) * len(cys_primary)
+        + (len(vgrid) - 1) * len(cxs_pitched) * len(cys_pitched)
+    )
+    vx_lo = np.empty(n, dtype=np.int16)
+    vx_hi = np.empty(n, dtype=np.int16)
+    vz_lo = np.empty(n, dtype=np.int16)
+    vz_hi = np.empty(n, dtype=np.int16)
+    vy_lo = np.empty(n, dtype=np.int16)
+    vy_hi = np.empty(n, dtype=np.int16)
+    s30 = np.empty(n, dtype=np.int16)
+    meta = [None] * n
+    i = 0
+    for v in vgrid:
+        primary = v == primary_v
+        cxs = cxs_primary if primary else cxs_pitched
+        cys = cys_primary if primary else cys_pitched
+        for h in hgrid:
+            for cx in cxs:
+                for cy in cys:
+                    vec = prepare_vector_from_player_sights(None, h, v, cx, cy, 0)
+                    vx_lo[i] = vec.vx_lo
+                    vx_hi[i] = vec.vx_hi
+                    vz_lo[i] = vec.vz_lo
+                    vz_hi[i] = vec.vz_hi
+                    vy_lo[i] = vec.vy_lo
+                    vy_hi[i] = vec.vy_hi
+                    s30[i] = vec.s30
+                    meta[i] = (h, v, cx, cy)
+                    i += 1
+    cached = (vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30, meta)
+    _VEC_CACHE[key] = cached
+    return cached
+
+
+def _seed_position(state, slot, eye_z):
+    """The ray seed (get_object_details $1ECC) shared by every aim in a sweep:
+    ``(px_frac, px_sub, px_whole, pz_frac, pz_sub, pz_whole, py_frac, py_sub, py_whole)``.
+    """
+    z = state.obj_z_height[slot] if eye_z is None else (eye_z & 0xFF)
+    return (
+        0,
+        0x80,
+        state.obj_x[slot] & 0xFF,
+        0,
+        state.obj_z_frac[slot] & 0xFF,
+        z & 0xFF,
+        0,
+        0x80,
+        state.obj_y[slot] & 0xFF,
+    )
+
+
+def _landable_batch(
+    state,
+    slot,
+    eye_z,
+    max_steps,
+    hgrid,
+    vgrid,
+    cxs_primary,
+    cys_primary,
+    cxs_pitched,
+    cys_pitched,
+    primary_v,
+):
+    """Run the whole keyboard-aim lattice against `state` in ONE numba call and return
+    ``(status, tx, ty, centre, meta)`` arrays (per-aim), first-hit order = lattice order.
+    """
+    vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30, meta = _lattice_vectors(
+        hgrid, vgrid, cxs_primary, cys_primary, cxs_pitched, cys_pitched, primary_v
+    )
+    px_f, px_s, px_w, pz_f, pz_s, pz_w, py_f, py_s, py_w = _seed_position(
+        state, slot, eye_z
+    )
+    mem_np = np.frombuffer(state.mem, dtype=np.uint8)
+    c56 = (state.mem[0x0C56] >> 1) & 0xFF
+    cdd = (state.mem[0x0CDD] >> 1) & 0xFF
+    status, tx, ty, centre = los_jit.march_batch(
+        mem_np,
+        vx_lo,
+        vx_hi,
+        vz_lo,
+        vz_hi,
+        vy_lo,
+        vy_hi,
+        s30,
+        px_f,
+        px_s,
+        px_w,
+        pz_f,
+        pz_s,
+        pz_w,
+        py_f,
+        py_s,
+        py_w,
+        state.obj_x[slot] & 0xFF,
+        state.obj_y[slot] & 0xFF,
+        state.mem[0x0C6E] & 0x7F,
+        state.mem[0x0C58] & 0xFF,
+        c56,
+        cdd,
+        max_steps,
+    )
+    return status, tx, ty, centre, meta
+
 
 def landable_views(state, slot=None, eye_z=None, max_steps=6000):
     """Every tile a real KEYBOARD aim can land the sights on with line of sight from the
@@ -1075,31 +1234,88 @@ def landable_views(state, slot=None, eye_z=None, max_steps=6000):
     on each tile (first LOS hit per tile).
 
     This is the planner's buildability oracle: AIM-landability, not mere geometric
-    visibility. One sweep (~7200 rays) yields the whole landable set and its build views
-    at once -- far cheaper, and more correct, than a per-candidate targeted search."""
+    visibility.  The sweep now covers the body v_angle DOF too (over :data:`_V_PRIORITY`,
+    $F5 first) so it returns every tile ANY keyboard aim lands on -- including near/below
+    tiles the player pitches the body down for (the ls335 (11,18) adjacent build).  One
+    batched numba march over the precomputed lattice yields the whole landable set at once.
+    """
     if slot is None:
         slot = state.player
-    seen = {}
-    for h in range(0, 256, AZIMUTH_STEP):
-        for cx in CURSOR_CX:
-            for cy in CURSOR_CY:
-                tx, ty, los = aim_target(
-                    state,
-                    h,
-                    KBD_V_ANGLE,
-                    cx,
-                    cy,
-                    slot,
-                    eye_z=eye_z,
-                    max_steps=max_steps,
-                )
-                if los and (tx, ty) not in seen:
-                    seen[(tx, ty)] = {
-                        "h_angle": h,
-                        "v_angle": KBD_V_ANGLE,
-                        "cursor": [cx, cy],
-                    }
-    return seen
+    return _landable_sweep(state, slot, eye_z, max_steps, want_centres=False)[0]
+
+
+def _landable_sweep(state, slot, eye_z, max_steps, want_centres):
+    """Shared body of :func:`landable_views` / :func:`landable_sweep_with_centres`: sweep the
+    full keyboard aim lattice (h notches x body v_angle over :data:`_V_PRIORITY` x sights
+    cursor 9px grid) and return ``(views, centres)`` -- first-LOS view per tile (lattice
+    order) and the min tile-centre fraction per tile.  Uses the batched numba march when
+    numba is present, else a per-aim :func:`aim_target` fallback (bit-identical, slower).
+    """
+    hgrid = list(range(0, 256, AZIMUTH_STEP))
+    if not _HAVE_JIT:
+        return _landable_sweep_py(
+            state, slot, eye_z, max_steps, hgrid, _V_PRIORITY, want_centres
+        )
+    status, tx, ty, centre, meta = _landable_batch(
+        state,
+        slot,
+        eye_z,
+        max_steps,
+        hgrid,
+        _V_PRIORITY,
+        CURSOR_CX,
+        CURSOR_CY,
+        CURSOR_CX_PITCHED,
+        CURSOR_CY_PITCHED,
+        KBD_V_ANGLE,
+    )
+    views = {}
+    centres = {}
+    for i in range(status.shape[0]):
+        if status[i] != los_jit.LOS_CLEAR:
+            continue
+        tile = (int(tx[i]), int(ty[i]))
+        if tile not in views:
+            h, v, cx, cy = meta[i]
+            views[tile] = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+        if want_centres:
+            c = int(centre[i])
+            if tile not in centres or c < centres[tile]:
+                centres[tile] = c
+    return views, centres
+
+
+def _landable_sweep_py(state, slot, eye_z, max_steps, hgrid, vgrid, want_centres):
+    """Numba-absent fallback for :func:`_landable_sweep`: the same (reduced) lattice via
+    per-aim :func:`aim_target` (bit-identical results, no batched march)."""
+    views = {}
+    centres = {}
+    for v in vgrid:
+        primary = v == KBD_V_ANGLE
+        cxs = CURSOR_CX if primary else CURSOR_CX_PITCHED
+        cys = CURSOR_CY if primary else CURSOR_CY_PITCHED
+        for h in hgrid:
+            for cx in cxs:
+                for cy in cys:
+                    tx, ty, los, centre = aim_target(
+                        state,
+                        h,
+                        v,
+                        cx,
+                        cy,
+                        slot,
+                        eye_z=eye_z,
+                        max_steps=max_steps,
+                        return_centre=True,
+                    )
+                    if not los:
+                        continue
+                    tile = (tx, ty)
+                    if tile not in views:
+                        views[tile] = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+                    if want_centres and (tile not in centres or centre < centres[tile]):
+                        centres[tile] = centre
+    return views, centres
 
 
 def landable_sweep_with_centres(state, slot=None, eye_z=None, max_steps=6000):
@@ -1109,37 +1325,12 @@ def landable_sweep_with_centres(state, slot=None, eye_z=None, max_steps=6000):
       centres: {(tx,ty): min tile-centre fraction seen}    for the on-boulder centre gate
                                                            ($1E48 needs fraction < $40)
     The buildability oracle for the planner -- aim-landability, not the centred-cursor
-    geometric visibility of sweep_with_centres (which over/under-reports far builds)."""
+    geometric visibility of sweep_with_centres (which over/under-reports far builds).  Sweeps
+    the body v_angle DOF too (:data:`_V_PRIORITY`, $F5 first) so near/below builds are covered.
+    """
     if slot is None:
         slot = state.player
-    views = {}
-    centres = {}
-    for h in range(0, 256, AZIMUTH_STEP):
-        for cx in CURSOR_CX:
-            for cy in CURSOR_CY:
-                tx, ty, los, centre = aim_target(
-                    state,
-                    h,
-                    KBD_V_ANGLE,
-                    cx,
-                    cy,
-                    slot,
-                    eye_z=eye_z,
-                    max_steps=max_steps,
-                    return_centre=True,
-                )
-                if not los:
-                    continue
-                tile = (tx, ty)
-                if tile not in views:
-                    views[tile] = {
-                        "h_angle": h,
-                        "v_angle": KBD_V_ANGLE,
-                        "cursor": [cx, cy],
-                    }
-                if tile not in centres or centre < centres[tile]:
-                    centres[tile] = centre
-    return views, centres
+    return _landable_sweep(state, slot, eye_z, max_steps, want_centres=True)
 
 
 def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=False):
@@ -1163,15 +1354,23 @@ def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=Fal
     hgrid = sorted(range(0, 256, AZIMUTH_STEP), key=lambda h: _angle_dist(h0, h))
     cxs = sorted(CURSOR_CX, key=lambda c: abs(c - SIGHTS_CX))
     cys = sorted(CURSOR_CY, key=lambda c: abs(c - SIGHTS_CY))
+    # PITCHED-body probes use the same reduced cursor grid as the batched sweep (the body
+    # v_angle supplies the pitch, the cursor only fills gaps -- see CURSOR_CX/CY_PITCHED), so
+    # this single-tile query stays consistent with landable_views and the v_band MISS (full
+    # lattice exhaust) is ~4x cheaper.
+    cxs_p = sorted(CURSOR_CX_PITCHED, key=lambda c: abs(c - SIGHTS_CX))
+    cys_p = sorted(CURSOR_CY_PITCHED, key=lambda c: abs(c - SIGHTS_CY))
     vgrid = (
         sorted(PITCH_BAND, key=lambda v: _angle_dist(KBD_V_ANGLE, v))
         if v_band
         else [KBD_V_ANGLE]
     )
     for v in vgrid:
+        vcxs = cxs if v == KBD_V_ANGLE else cxs_p
+        vcys = cys if v == KBD_V_ANGLE else cys_p
         for h in hgrid:
-            for cx in cxs:
-                for cy in cys:
+            for cx in vcxs:
+                for cy in vcys:
                     tx, ty, los = aim_target(
                         state, h, v, cx, cy, slot, eye_z=eye_z, max_steps=max_steps
                     )
