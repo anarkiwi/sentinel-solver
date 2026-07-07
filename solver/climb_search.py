@@ -61,13 +61,63 @@ def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
     return threat.exposed_tiles(g.state, set(tiles))
 
 
-def _lattice_sweep(g, eye):
-    """ONE keyboard-lattice sweep (h ≡ 0 mod 8, v in the pan band, centre cursor)
-    returning {tile: first-LOS view} plus {tile: min tile-centre fraction}. The centre
-    map is the keyboard-feasibility gate for on-boulder synthoids ($1E48 needs the
-    tile-centre fraction < $40). Same order/params as visibility_sweep(coarse) so the
-    chosen views are identical."""
-    return los.sweep_with_centres(g.state, g.player, eye, max_steps=200)
+def _visible_footholds(g, eye):
+    """The COMPLETE set of bare-terrain foothold tiles the player can see from `eye`,
+    via the ROM's direct observer->tile geometric march (threat.player_visible_footholds
+    / relative.can_see_object, the mirror of the enemy-exposure test). This is a strict
+    superset of the old fixed-cursor sights sweep (los.sweep_with_centres), which found
+    only the handful of tiles a CENTRED cursor happens to land on and so stalled the climb
+    -- it missed every far/high foothold a diagonally-driven cursor reaches (ls0's launch
+    tiles among them). The per-tile aim `view` used to price the pan and aim the create is
+    generated LATER, only for the few shortlisted candidates (_foothold_view)."""
+    return threat.player_visible_footholds(g.state, g.player, eye)
+
+
+def _foothold_view(g, cur, eye, T2, cur_v=None):
+    """A keyboard-aim view onto `T2` for pan pricing + the create aim. Try a BOUNDED
+    targeted sights search (h on the +-8 lattice near the analytic bearing, v over the
+    pitch band, centre cursor) for a ray that lands EXACTLY on T2 with LOS -- the real
+    keyboard-reachable view when the sights can reach the tile. The direct-march visible
+    set is a superset of the sights-reachable set, so many far footholds have no exact
+    centred keyboard landing; for those, fall back to a synthetic analytic-bearing view so
+    the candidate is still PRICED (not dropped -- the true build feasibility is re-checked
+    by _boulder_centre_feasible at the committed root ply). Returns the view dict or None.
+    """
+    ex, ey = cur
+    h0 = ac.bearing_to(ex, ey, T2[0], T2[1])
+    if h0 is None:
+        return None
+    hgrid = sorted(range(0, 256, los.AZIMUTH_STEP), key=lambda h: ac.angle_dist(h0, h))
+    vgrid = (
+        los.PITCH_BAND
+        if cur_v is None
+        else sorted(los.PITCH_BAND, key=lambda v: ac.angle_dist(cur_v, v))
+    )
+    for h in hgrid[:_AIM_HSPAN]:
+        for v in vgrid:
+            rx, ry, hit = los.aim_target(
+                g.state,
+                h,
+                v,
+                los.SIGHTS_CX,
+                los.SIGHTS_CY,
+                g.player,
+                eye_z=eye,
+                max_steps=_AIM_MAX_STEPS,
+            )
+            if hit and (rx, ry) == T2:
+                return {
+                    "h_angle": h,
+                    "v_angle": v,
+                    "cursor": [los.SIGHTS_CX, los.SIGHTS_CY],
+                }
+    # no centred keyboard landing: analytic-bearing view (snap to the +-8 lattice; the
+    # $F5 pitch is every body's canonical v_angle, put_object_in_tile $1F7E).
+    return {
+        "h_angle": (int(round(h0 / los.AZIMUTH_STEP)) * los.AZIMUTH_STEP) & 0xFF,
+        "v_angle": 0xF5,
+        "cursor": [los.SIGHTS_CX, los.SIGHTS_CY],
+    }
 
 
 def _top_type(g, tile):
@@ -87,6 +137,12 @@ def _top_type(g, tile):
 
 N = 32
 CENTRE = (N - 1) / 2.0  # 15.5
+# targeted per-candidate keyboard-aim search bound (_foothold_view): the +-8 bearing
+# lattice notches nearest the analytic bearing to probe, and the ray-march cap. A real
+# sights landing (when one exists) is at/near the true bearing, so a few notches suffice;
+# an unreachable tile bails to the synthetic bearing view after this bounded miss.
+_AIM_HSPAN = int(os.environ.get("AIM_HSPAN", "5"))
+_AIM_MAX_STEPS = int(os.environ.get("AIM_MAX_STEPS", "200"))
 # energy the planner keeps in reserve above each build's up-front cost: live enemies
 # rotate and drain -1/tick during the minutes of aiming, so planned +3 shell refunds
 # silently become +2/+1/0 (drained robots downgrade). Reserve absorbs that loss.
@@ -233,8 +289,12 @@ def _boulder_centre_feasible(g, T2, view, max_steps=2000):
 
 def _candidates(g, cur, eye):
     """All (T2, use_boulder, eye_after_float, view) footholds reachable with LOS, as a
-    hop (synthoid) or a boulder-step (centre-aimed, climbs). Coarse sweep is fine --
-    views are recomputed at validate time.
+    hop (synthoid) or a boulder-step (climbs). Visibility is the COMPLETE direct-march
+    set (_visible_footholds) -- the fixed-cursor sights sweep the old code used saw only
+    a fraction of the truly visible tiles and stalled the climb. The per-tile `view` is
+    DEFERRED (None here): it is generated only for the few candidates the caller
+    shortlists (_gen_candidates), since a view is only needed to price the aim pan and as
+    the create aim, not to enumerate footholds.
 
     RULE 2: footholds are NOT filtered by Chebyshev distance to the platform. A
     boulder-step whose on-boulder synthoid has no ROM-reachable centre-aim in steep
@@ -243,11 +303,11 @@ def _candidates(g, cur, eye):
     distance heuristic. So this offers every LOS-reachable foothold and lets the true
     keyboard/LOS feasibility (and the gaze/exposure safety in `_gen_candidates`) decide.
     """
-    sweep, centres = _lattice_sweep(g, eye)
     out = []
-    for T2, view in sweep.items():
+    for T2 in _visible_footholds(g, eye):
         if T2 == cur:
             continue
+        # _visible_footholds already restricts to bare terrain; guard defensively.
         if terrain_z(g.mem, *T2) is None:
             continue
         # You can only build (boulder OR synthoid) on BARE TERRAIN or on top of a
@@ -256,18 +316,12 @@ def _candidates(g, cur, eye):
         top = _top_type(g, T2)
         if top is not None and top != 3:  # synthoid/tree on top -> nothing
             continue
-        # A3: building on an ALREADY-occupied (boulder-topped) tile needs a keyboard
-        # CENTRE-aim (tile-centre fraction < $40, $1E48). Gate such tiles on a
-        # centre-cursor lattice view that centres; bare-terrain targets need no centre
-        # (the first object on terrain is not centre-gated) -- their on-boulder synthoid
-        # feasibility is enforced by the ROM validator (A4) after the boulder lands.
-        centre_ok = (top != 3) or centres.get(T2, 0xFF) < 0x40
         he = _foothold_eye(g, T2, False)
-        if he is not None and len(g.free) >= 1 and centre_ok:  # hop needs one free slot
-            out.append((T2, False, he, view))  # synthoid on terrain/boulder
+        if he is not None and len(g.free) >= 1:  # hop needs one free slot
+            out.append((T2, False, he, None))  # synthoid on terrain/boulder
         hb = _foothold_eye(g, T2, True)
-        if hb is not None and len(g.free) >= 2 and centre_ok:  # boulder + synthoid
-            out.append((T2, True, hb, view))
+        if hb is not None and len(g.free) >= 2:  # boulder + synthoid
+            out.append((T2, True, hb, None))
     # deterministic order: visibility_sweep yields tiles in hash-seed-dependent order, so
     # max(pool, key=...) would break ties (equal height / equal cheb-to-platform) by which
     # tile happened to come first -- making the whole plan depend on PYTHONHASHSEED. Sort by
@@ -862,6 +916,14 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
 
     pool.sort(key=_base, reverse=True)
     head = pool[: beam + _SHORTLIST]
+    # Generate the per-tile aim view ONLY for this shortlist (the committed move comes
+    # from here): it prices the pan tie-break below and becomes the create aim. The tail
+    # keeps view=None -- never priced unless it is later expanded, and _apply/_move_cost
+    # handle a None view (the sim resolves the create aim from live memory).
+    head = [
+        (c[0], c[1], c[2], _foothold_view(g, cur, eye, tuple(c[0]), cur_v))
+        for c in head
+    ]
     safety = {
         tuple(c[0]): threat.ticks_until_seen(
             state, c[0][0], c[0][1], horizon=_SAFETY_HORIZON

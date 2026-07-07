@@ -143,6 +143,38 @@ def player_sees_tile(state, tile, observer_slot, eye_z=None):
     )
 
 
+def player_visible_footholds(state, observer_slot, eye_z, bare_only=True):
+    """Every tile the observer at `observer_slot` (from `eye_z`) can see, as a set --
+    the observer->tile geometric line of sight (the mirror of :func:`exposed_tiles`,
+    and the batched form of :func:`player_sees_tile`). `bare_only` restricts to
+    build-legal bare-terrain footholds (object-topped tiles excluded). Clones ONCE and
+    reuses a single free slot across the whole board (the planner hot path), so it is
+    far cheaper than a per-tile :func:`player_sees_tile` (one 64 KB clone, not 1024)."""
+    clone = state.clone()
+    if eye_z is not None:
+        clone.obj_z_height[observer_slot] = int(eye_z) & 0xFF
+    slot = _free_slot(clone)
+    out = set()
+    if slot is None:
+        return out
+    for x in range(mm.N):
+        for y in range(mm.N):
+            b = terrain.tile_byte(clone, x, y)
+            if bare_only and b >= mm.OBJECT_TILE:
+                continue
+            if not _place_phantom(clone, (x, y), slot):
+                continue
+            if (
+                relative.can_see_object(
+                    clone, observer_slot, slot, mm.T_ROBOT, FOV_FULL
+                )["exposure"]
+                > 0
+            ):
+                out.add((x, y))
+            _restore_tile(clone, (x, y), b, slot)
+    return out
+
+
 def gaze_distance(state, tiles):
     """For each tile, the minimum angular distance (0..128) from any enemy's
     CURRENT facing to the bearing toward that tile. 128 when there is no enemy.
