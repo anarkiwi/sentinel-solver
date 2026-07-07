@@ -271,21 +271,21 @@ python3 scripts/run_plan_simulated.py 0     # reports WON / lost + the climb log
 python3 scripts/run_plan_live.py --digits 0000
 ```
 
-Sharing one loop makes the two runners a controlled comparison. Both price each
-action from one first-principles cost model (`sentinel/actioncost.py`): the enemy
-rounds elapsed while an action executes, derived from the ROM's own frame cadence
-(scroll steps per pan notch, object-dither / hyperspace-tune animation length, the
-`plot_world` redraw) rather than a flat per-move constant. `sentinel.enemies.step`
-now models the meanie forced-hyperspace side channel as well as drain / rotation /
-downgrade, and the planner (`solver.climb_search`) forecasts moves with the same
-`actioncost` so its route survives the real drain.
+Sharing one loop makes the two runners a controlled comparison: `run_plan_live`
+(`scripts/`) is now just glue — it wires the solver's decision to the driver's
+booted-game session (`driver.core.boot_and_play`) and per-step keyboard executor
+(`driver.sentinel_execute.perform_step`), owning no emulator driving itself.
 
-On landscape 0 the two runners now take the **same** route, and the simulator wins;
-live still loses to a meanie at the final far-corner build. Open thread: most of the
-measured per-action cost is live-driver verify overhead (not intrinsic game cost),
-which gives the Sentinel time to rotate and spawn a meanie — so the fix is a faster
-driver / cheaper actions, not just a faithful cost. See
-`docs/` and the climb logs for detail.
+**Status: the solver does not yet win.** The current `climb_search` is a
+receding-horizon best-first search whose objective is height with a stack of soft cost
+penalties. That model does not reproduce how the game is actually won — a recovered
+human ls0 win shows a **deterministic, never-seen** strategy (gaze-gap timing, not the
+static "ever-visible" mask; aim-coherent ping-pong so every aim is one U-turn; height
+from cheap transfers to naturally-high terrain with minimal, *distant* builds; fuel
+deferred by visibility; launch from afar). The next step is to replace the cost-weighted
+search with a **deterministic constructive plan model** (gaze oracle as a hard
+constraint, distance-priced aim, offline plan + live re-schedule, missed-aim-is-a-crash).
+Full write-up and the plan-model spec: [docs/outstanding-issues.md](docs/outstanding-issues.md).
 
 ## Tests
 

@@ -28,7 +28,7 @@ import subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from vice_driver import BinMon, keys
+from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from sentinel.state import State
 from sentinel import los
@@ -256,6 +256,169 @@ def connect_binmon(container, log=print):
     bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
     bm.exit()
     return bm
+
+
+class GameSession:
+    """A booted, in-play asid-vice game handed to the plan runner: the live BinMon,
+    the entered landscape, the entry-match check, the record start time and the AVI
+    host path. Constructed by :func:`boot_and_play`; the runner builds its own
+    ``Executor``/``KbdDriver`` on ``bm``."""
+
+    def __init__(self, bm, landscape, t_start, entry_match, state0, video_host):
+        self.bm = bm
+        self.landscape = landscape
+        self.t_start = t_start
+        self.entry_match = entry_match
+        self.state0 = state0
+        self.video_host = video_host
+
+
+def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, result):
+    """Boot asid-vice into ``typed_digits``' landscape in play, optionally record an
+    AVI, and hand a :class:`GameSession` to ``play_fn`` -- the emulator-side glue the
+    live runner should NOT own. Handles container lifecycle, boot retries, binmon
+    connect (bridge IP), title-menu navigation with the cached code-entry snapshot,
+    the in-play check, and video start/stop. ``play_fn(session)`` runs the actual plan
+    loop; ``result`` accumulates its output (and gates the retry: a mid-run drop after
+    real actions is returned, not retried). Returns ``result``."""
+    if not os.path.exists(tap):
+        raise FileNotFoundError(
+            f"{tap} missing: place the game tape image there (not distributed)"
+        )
+    landscape = landscape_from_digits(typed_digits)
+    log(f"LIVE replanning mode: landscape {landscape}")
+    os.makedirs(renders_host, exist_ok=True)
+    video_host = os.path.join(renders_host, video_name)
+    result.setdefault("video", video_host)
+    if os.path.exists(video_host):
+        try:
+            os.remove(video_host)
+        except OSError:
+            pass
+
+    boot_tries = 8
+    for boot_try in range(boot_tries):
+        free_stale_containers(log)
+        container = ViceContainer(
+            autostart="/work/sentinel.tap",
+            mounts=[
+                DiskMount(tap, "/work/sentinel.tap", read_only=True),
+                DiskMount(renders_host, "/renders", read_only=False),
+            ],
+            warp=True,
+            silent=True,
+        )
+        t_start = time.time()
+        try:
+            with container:
+                # Host -p publishing is broken here (127.0.0.1:6502 unreachable); connect
+                # via the started container's docker bridge IP. BINMON_HOST env overrides.
+                time.sleep(2)
+                bm_host = os.environ.get("BINMON_HOST") or bridge_ip(
+                    container.container_id, log
+                )
+                if not bm_host:
+                    log(
+                        "  could not determine container bridge IP; falling back to 127.0.0.1"
+                    )
+                    bm_host = "127.0.0.1"
+                bm_port = int(os.environ.get("BINMON_PORT", "6502"))
+                log(f"  connecting to binmon at {bm_host}:{bm_port} (bridge IP)")
+                bm = BinMon(bm_host, bm_port)
+                try:
+                    bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
+                except (ConnectionError, OSError, TimeoutError) as e:
+                    log(
+                        f"  connect to {bm_host}:{bm_port} failed ({type(e).__name__}: {e})"
+                        f" -- is the port reachable from this network namespace? "
+                        f"set BINMON_HOST to the container bridge IP."
+                    )
+                    raise
+                bm.exit()
+
+                # navigate auto-caches the code-entry snapshot on the mounted /renders
+                # volume: it restores renders/vice_code_entry.vsf when present (skipping
+                # the ~50s tape boot) and saves it after the code-check patches when
+                # absent -- landscape-agnostic (the digits are typed after restore).
+                navigate(
+                    bm,
+                    typed_digits,
+                    log,
+                    snapshot_container="/renders/" + CODE_ENTRY_SNAP,
+                    snapshot_host=os.path.join(renders_host, CODE_ENTRY_SNAP),
+                )
+                st = gs.read_game_state(gs.ViceSource(bm))
+                if st.player is None:
+                    log(f"boot try {boot_try}: not in play (no player); restart")
+                    continue
+                entry_match = gs.verify_entry(bm, landscape, log)
+
+                record = os.environ.get("NO_RECORD") != "1"
+                if record:
+                    log(f"-- starting AVI recording -> {video_host} --")
+                    try:
+                        bm.video_record(f"/renders/{video_name}")
+                    except Exception as e:
+                        log(f"  video_record failed: {e}")
+                    time.sleep(1.0)
+                else:
+                    log("-- NO_RECORD=1: skipping AVI (warp stays on) --")
+
+                session = GameSession(
+                    bm, landscape, t_start, entry_match, st, video_host
+                )
+                play_fn(session)
+                time.sleep(1.5)
+
+                log("-- stopping AVI recording (finalize) --")
+                try:
+                    if record:
+                        bm.video_stop()
+                    time.sleep(1.5)
+                except Exception as e:
+                    log(f"  video_stop failed: {e}")
+                result["wall_seconds"] = round(time.time() - t_start, 1)
+                bm.close()
+            return result
+        except Exception as e:
+            import traceback
+
+            log(f"boot try {boot_try}: container/boot error: {type(e).__name__}: {e}")
+            if boot_try == 0:
+                traceback.print_exc()
+            if result.get("actions"):
+                result["divergence"] = result.get("divergence") or f"mid-run drop: {e}"
+                return result
+            time.sleep(2)
+    result["divergence"] = f"could not boot into play after {boot_tries} tries"
+    return result
+
+
+def validate_avi(path):
+    """Sanity-check a recorded AVI: RIFF/AVI header + at least one video frame in the
+    'movi' list. Returns (ok, size_bytes, n_frames, message)."""
+    import struct
+
+    if not os.path.exists(path):
+        return False, 0, 0, "missing"
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[0:4] != b"RIFF" or data[8:12] != b"AVI ":
+        return False, size, 0, "not RIFF/AVI"
+    movi = data.find(b"movi")
+    if movi == -1:
+        return False, size, 0, "no movi list"
+    n, p = 0, movi + 4
+    while p + 8 <= len(data):
+        cid = data[p : p + 4]
+        sz = struct.unpack("<I", data[p + 4 : p + 8])[0]
+        if cid == b"idx1":
+            break
+        if cid[2:4] in (b"dc", b"db"):
+            n += 1
+        p += 8 + sz + (sz & 1)
+    return n > 0, size, n, "ok" if n > 0 else "no frames"
 
 
 # ============================================================================

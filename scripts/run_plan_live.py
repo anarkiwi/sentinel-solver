@@ -32,20 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from vice_driver import BinMon, DiskMount, ViceContainer
-
-from driver import sentinel_state as gs
-from driver.sentinel_execute import (
-    Executor,
-    CREATE_KEY,
-    K_ABSORB,
-    K_TRANSFER,
-    K_HYPERSPACE,
-    otype_cost,
-    verify,
-)
+from driver.sentinel_execute import Executor, perform_step, fire_hyperspace
 from driver import kbd_aim
-from solver import plan_game
 from driver import core
 
 TAP = os.path.join(ROOT, "sentinel-gold.tap")
@@ -57,375 +45,32 @@ def run(
     log,
     video_name="solver_run_0042.avi",
 ):
-    if not os.path.exists(TAP):
-        raise FileNotFoundError(
-            f"{TAP} missing: place the game tape image there (not distributed)"
-        )
-    landscape = core.landscape_from_digits(typed_digits)
-    log(f"LIVE replanning mode: landscape {landscape}")
-
+    """Glue: boot the real game (driver.core.boot_and_play), then run the plan loop
+    (execute_live) inside the booted session. All emulator driving -- container, boot
+    retries, binmon connect, landscape entry, video record -- lives in the driver."""
     renders_host = os.path.join(ROOT, "renders")
-    os.makedirs(renders_host, exist_ok=True)
-    video_host = os.path.join(renders_host, video_name)
-    if os.path.exists(video_host):
-        try:
-            os.remove(video_host)
-        except OSError:
-            pass
-
     result = {
         "won": False,
-        "video": video_host,
         "actions": [],
         "divergence": None,
         "energy_curve": [],
     }
-    BOOT_TRIES = 8
-    for boot_try in range(BOOT_TRIES):
-        core.free_stale_containers(log)
-        container = ViceContainer(
-            autostart="/work/sentinel.tap",
-            mounts=[
-                DiskMount(TAP, "/work/sentinel.tap", read_only=True),
-                DiskMount(renders_host, "/renders", read_only=False),
-            ],
-            warp=True,
-            silent=True,
-        )
-        t_start = time.time()
-        try:
-            with container:
-                # Host -p publishing is broken here (127.0.0.1:6502 unreachable); connect
-                # via the started container's docker bridge IP. BINMON_HOST env overrides.
-                time.sleep(2)
-                bm_host = os.environ.get("BINMON_HOST") or core.bridge_ip(
-                    container.container_id, log
-                )
-                if not bm_host:
-                    log(
-                        "  could not determine container bridge IP; falling back to 127.0.0.1"
-                    )
-                    bm_host = "127.0.0.1"
-                bm_port = int(os.environ.get("BINMON_PORT", "6502"))
-                log(f"  connecting to binmon at {bm_host}:{bm_port} (bridge IP)")
-                bm = BinMon(bm_host, bm_port)
-                try:
-                    bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
-                except (ConnectionError, OSError, TimeoutError) as e:
-                    log(
-                        f"  connect to {bm_host}:{bm_port} failed ({type(e).__name__}: {e})"
-                        f" -- is the port reachable from this network namespace? "
-                        f"set BINMON_HOST to the container bridge IP."
-                    )
-                    raise
-                bm.exit()
 
-                # navigate auto-caches the code-entry snapshot on the mounted /renders
-                # volume: it restores renders/vice_code_entry.vsf when present (skipping
-                # the ~50s tape boot) and saves it after the code-check patches when
-                # absent -- landscape-agnostic (the digits are typed after restore).
-                core.navigate(
-                    bm,
-                    typed_digits,
-                    log,
-                    snapshot_container="/renders/" + core.CODE_ENTRY_SNAP,
-                    snapshot_host=os.path.join(renders_host, core.CODE_ENTRY_SNAP),
-                )
-                st = gs.read_game_state(gs.ViceSource(bm))
-                if st.player is None:
-                    log(f"boot try {boot_try}: not in play (no player); restart")
-                    continue
-                result["entry_match"] = gs.verify_entry(bm, landscape, log)
-                ex = Executor(bm, log)
-                plat = ex.platform()
-                log(
-                    f"IN PLAY: slot {st.player_slot} @ ({st.player.x},{st.player.y}) "
-                    f"energy {st.player_energy} objs {len(st.objects)} platform {plat}"
-                )
-
-                record = os.environ.get("NO_RECORD") != "1"
-                if record:
-                    log(f"-- starting AVI recording -> {video_host} --")
-                    try:
-                        bm.video_record(f"/renders/{video_name}")
-                    except Exception as e:
-                        log(f"  video_record failed: {e}")
-                    time.sleep(1.0)
-                else:
-                    log("-- NO_RECORD=1: skipping AVI (warp stays on) --")
-
-                won = execute_live(
-                    ex,
-                    log,
-                    result,
-                    t_start,
-                    max_seconds,
-                    landscape,
-                )
-                result["won"] = won
-                time.sleep(1.5)
-
-                log("-- stopping AVI recording (finalize) --")
-                try:
-                    if record:
-                        bm.video_stop()
-                    time.sleep(1.5)
-                except Exception as e:
-                    log(f"  video_stop failed: {e}")
-                result["wall_seconds"] = round(time.time() - t_start, 1)
-                bm.close()
-            return result
-        except Exception as e:
-            import traceback
-
-            log(f"boot try {boot_try}: container/boot error: {type(e).__name__}: {e}")
-            if boot_try == 0:
-                traceback.print_exc()
-            if result["actions"]:
-                result["divergence"] = result.get("divergence") or f"mid-run drop: {e}"
-                return result
-            time.sleep(2)
-    result["divergence"] = f"could not boot into play after {BOOT_TRIES} tries"
-    return result
-
-
-def perform_step(ex, drv, label, stp, log, result):
-    """Fire ONE plan step (verb/otype/target/view) against the live game via a real
-    keystroke, verify the memory delta, and report the outcome. Used by the live
-    replanning loop. Returns one of:
-      "ok"               -- verified success
-      "best_effort_miss" -- a non-Sentinel absorb missed (fuel recovery; non-fatal)
-      "drained"          -- energy already below a create's cost before firing (no keys sent)
-      "aim_miss"         -- the aim never reached the requested view (nothing fired)
-      "fail"             -- verify() rejected the step (wrong-tile/count/energy delta)
-    """
-    verb, tile, otype = stp["verb"], tuple(stp["target"]), stp["otype"]
-    plan_view = stp.get("view")
-
-    before = ex.state()
-    e0 = before.player_energy
-    objs0 = len(before.objects_at(*tile))
-    slot0 = before.player_slot
-    result["energy_curve"].append({"step": label, "verb": verb, "energy_before": e0})
-
-    # D7: proactive drain watch -- if the live budget before a CREATE has already
-    # fallen below its cost, enemies drained us during aiming; flag it explicitly
-    # rather than letting the create silently energy-block.
-    if verb == "create" and e0 < otype_cost(otype):
+    def play(session):
+        ex = Executor(session.bm, log)
+        st = session.state0
+        result["entry_match"] = session.entry_match
         log(
-            f"[{label}] create {tile}: DRAINED -- energy {e0} < cost {otype_cost(otype)}"
+            f"IN PLAY: slot {st.player_slot} @ ({st.player.x},{st.player.y}) "
+            f"energy {st.player_energy} objs {len(st.objects)} platform {ex.platform()}"
         )
-        result["energy_block"] = {
-            "step": label,
-            "tile": list(tile),
-            "otype": otype,
-            "energy_before": e0,
-        }
-        return "drained"
-
-    # A view of None means the planner deferred the aim (an on-boulder synthoid re-
-    # aims after the boulder just landed; an absorb whose coarse candidate sweep
-    # didn't resolve one). Resolve a live centre-aimed view here (plan_game.
-    # centre_view_for against CURRENT memory, e.g. post-boulder) before firing.
-    if verb in ("create", "absorb") and plan_view is None:
-        mem = core.live_image(ex.bm)
-        ps = mem[0x000B]
-        eye_z = mem[plan_game.OBJ_Z + ps]
-        plan_view = plan_game.centre_view_for(bytes(mem), tile, ps, eye_z)
-        if plan_view is None:
-            log(
-                f"[{label}] {verb} {tile}: no live keyboard view (no LOS); "
-                "firing blind, verify() decides"
-            )
-
-    # --- KEYBOARD AIM: DRIVE the given view. Create/absorb steps carry a keyboard-
-    # lattice view (h%8==0, v%4==1 in the pan band); drive the real keys to those
-    # angles sights-off, then the cursor sights-on, and CONFIRM the live LOS ray. ---
-    aim_info = None
-    if verb in ("create", "absorb") and plan_view is not None:
-        view = plan_view
-        # AIM is pre-action and idempotent (drives the cursor to ABSOLUTE angles, reads
-        # probes -- no game action fires). A best-effort fuel absorb at an extreme angle
-        # can leave the monitor checkpoint desynced (CPU stopped / PC never recurs), and
-        # the raw driver calls do not catch that -- an unhandled socket TimeoutError would
-        # otherwise crash the whole run into the boot-retry. Reconnect + re-aim instead.
-        okh = okv = okc = False
-        rx = ry = centre = 0
-        los = False
-        ach = {"h": 0, "v": 0, "cur": (0, 0)}
-        for _aim_try in range(3):
-            try:
-                if not drv.sights_set(False):
-                    log(f"[{label}] {verb} {tile}: sights would not turn OFF")
-                    return "fail"
-                okh = drv.coarse_h(view["h_angle"])
-                okv = drv.coarse_v(view["v_angle"])
-                if not (okh and okv):
-                    okh = drv.coarse_h(view["h_angle"])
-                    okv = drv.coarse_v(view["v_angle"])
-                # Read the h/v angles WHILE SIGHTS ARE STILL OFF. objects_h_angle
-                # ($09C0+slot) is only settled at the $365D pan checkpoint; once sights
-                # are ON the per-frame pan_viewpoint dance ($10B7: +$14 -> plot -> -$0C)
-                # leaves it transiently off-lattice, so a sights-ON read of hang() can
-                # catch garbage (e.g. $73 for a committed $60) and fire a FALSE aim miss
-                # (re-sentinel disasm INPUT.md sec.3-4). coarse_h/coarse_v already land
-                # via the $365D-synced pan, so read them here, sights-off and stable.
-                ach_h, ach_v = drv.hang(), drv.vang()
-                if not drv.sights_on():
-                    log(f"[{label}] {verb} {tile}: sights would not turn ON")
-                    return "fail"
-                okc = drv.fine_cursor(
-                    *view["cursor"]
-                )  # sights-on re-centred it; drive persisted
-                rx, ry, los, centre = core.probe_tile(ex.bm)
-                # cursor is stable sights-on; h/v come from the sights-OFF read above.
-                ach = {"h": ach_h, "v": ach_v, "cur": drv.cur()}
-                break
-            except (TimeoutError, OSError, ConnectionError) as e:
-                log(
-                    f"[{label}] {verb} {tile}: aim monitor drop "
-                    f"({type(e).__name__}); reconnecting + re-aiming"
-                )
-                core.reconnect(ex.bm, log)
-        else:
-            log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
-            return "fail"
-        aim_info = {
-            "ach": ach,
-            "want": view,
-            "probe": (rx, ry, los, centre),
-            "ok": {"h": okh, "v": okv, "cur": okc},
-        }
-        log(
-            f"[{label}] {verb} {tile}: drove view h=${view['h_angle']:02x} "
-            f"v=${view['v_angle']:02x} cur={view['cursor']} -> ach h=${ach['h']:02x} "
-            f"v=${ach['v']:02x} cur={ach['cur']} probe=({rx},{ry}) los={los} "
-            f"centre=${centre:02x}"
-        )
-        # The sentinel.los probe is ADVISORY only: the arbiter is the real ROM's
-        # object-count/energy delta (verify() below). Drive the view and let the game
-        # decide; only note a probe miss. drove_ok comes from the already-read ach (no
-        # extra monitor round-trips -- fewer socket ops = fewer flaky-idle drops).
-        drove_ok = (
-            ach["h"] == view["h_angle"]
-            and ach["v"] == view["v_angle"]
-            and ach["cur"] == tuple(view["cursor"])
-        )
-        # GUARD: never fire when the aim did NOT reach the requested view. The angles read
-        # back (ach) not matching the request means a pan clamped or could not converge, so
-        # the sights are pointing somewhere other than `tile` -- firing here is exactly the
-        # "acted on the wrong tile" failure that drained energy and desynced the model. Skip
-        # the action and report a miss so the loop resyncs and re-plans (re-snaps a view, or
-        # picks a different foothold) instead. The native-LOS probe stays ADVISORY: with the
-        # angles correct it can still disagree with the ROM, so a probe-only mismatch is NOT
-        # a reason to withhold the action (that would skip valid actions forever).
-        if not drove_ok:
-            log(
-                f"[{label}] {verb} {tile}: aim did NOT reach view (want h=${view['h_angle']:02x} "
-                f"v=${view['v_angle']:02x} cur={view['cursor']}, got h=${ach['h']:02x} "
-                f"v=${ach['v']:02x} cur={ach['cur']}); NOT firing -- resync + re-plan"
-            )
-            return "aim_miss"
-        if (rx, ry) != tile or not los:
-            log(
-                f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los} but angles "
-                f"reached; firing, verify() decides"
-            )
-
-    # --- ACTION KEY (deterministic, scan-consumed) ---
-    if verb == "create":
-        key = CREATE_KEY[otype]
-    elif verb == "transfer":
-        key = K_TRANSFER
-    elif verb == "absorb":
-        key = K_ABSORB
-    else:
-        log(f"[{label}] unknown verb {verb}; abort")
-        return "fail"
-    # consider_player_action ($12D9) requires sights active for create/absorb AND
-    # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
-    # false-negative latch -- a second create/absorb would stack an extra object). The
-    # object-count/energy/slot delta in verify() is the real arbiter of success.
-    if verb in ("create", "absorb", "transfer"):
-        for _s_try in range(3):
-            try:
-                drv.sights_on()
-                break
-            except (TimeoutError, OSError, ConnectionError) as e:
-                log(
-                    f"[{label}] {verb} {tile}: sights-on monitor drop "
-                    f"({type(e).__name__}); reconnecting"
-                )
-                core.reconnect(ex.bm, log)
-    latched = drv.tap_action(key)
-    if not latched:
-        log(
-            f"[{label}] {verb} {tile}: action key {key} latch not observed; verify() decides"
+        result["won"] = execute_live(
+            ex, log, result, session.t_start, max_seconds, session.landscape
         )
 
-    after = ex.state()
-    e1 = after.player_energy
-    objs1 = len(after.objects_at(*tile))
-    slot1 = after.player_slot
-
-    ok, msg = verify(
-        verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1
+    return core.boot_and_play(
+        TAP, renders_host, typed_digits, video_name, log, play, result
     )
-    result["actions"].append(
-        {
-            "step": label,
-            "verb": verb,
-            "tile": list(tile),
-            "otype": otype,
-            "ok": ok,
-            "msg": msg,
-            "energy": [e0, e1],
-            "aim": aim_info,
-        }
-    )
-    log(f"[{label}] {verb:8} {tile} otype={otype}: {'OK ' if ok else 'FAIL'} {msg}")
-    if ok:
-        return "ok"
-    # BEST-EFFORT ABSORBS: trail/fuel absorbs (otype != 5, the Sentinel) are energy
-    # recovery -- a miss is NOT fatal.
-    if verb == "absorb" and otype != 5:
-        log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
-        return "best_effort_miss"
-    if verb == "create" and e0 <= otype_cost(otype):
-        result["energy_block"] = {
-            "step": label,
-            "tile": list(tile),
-            "otype": otype,
-            "energy_before": e0,
-        }
-        log(
-            f"    >>> ENERGY BLOCK: build at {label} needs more energy than the {e0} available"
-        )
-    return "fail"
-
-
-def fire_hyperspace(ex, drv, plat, log, result):
-    """Final hyperspace attempt from the platform tile; verified by the ROM's own
-    landscape-complete flag ($0CDE bit6)."""
-    p = ex.state().player
-    pcur = (p.x, p.y)
-    done0 = ex.landscape_done()
-    log(f"-- FINAL HYPERSPACE (H) from {pcur} platform {plat}; $0CDE=${done0:02x} --")
-    if pcur != plat:
-        log(f"   WARNING: player tile {pcur} != platform {plat}")
-    won = False
-    for attempt in range(4):
-        drv.tap_action(K_HYPERSPACE)
-        done1 = ex.landscape_done()
-        log(
-            f"   H attempt {attempt}: $0CDE=${done1:02x} "
-            f"bit6={'SET' if done1 & 0x40 else 'clear'}"
-        )
-        if done1 & 0x40:
-            won = True
-            break
-    result["landscape_done"] = ex.landscape_done()
-    return won
 
 
 def execute_live(
@@ -605,31 +250,6 @@ def execute_live(
     return fire_hyperspace(ex, drv, ctx["plat"], log, result)
 
 
-def validate_avi(path):
-    import struct
-
-    if not os.path.exists(path):
-        return False, 0, 0, "missing"
-    size = os.path.getsize(path)
-    with open(path, "rb") as f:
-        data = f.read()
-    if data[0:4] != b"RIFF" or data[8:12] != b"AVI ":
-        return False, size, 0, "not RIFF/AVI"
-    movi = data.find(b"movi")
-    if movi == -1:
-        return False, size, 0, "no movi list"
-    n, p = 0, movi + 4
-    while p + 8 <= len(data):
-        cid = data[p : p + 4]
-        sz = struct.unpack("<I", data[p + 4 : p + 8])[0]
-        if cid == b"idx1":
-            break
-        if cid[2:4] in (b"dc", b"db"):
-            n += 1
-        p += 8 + sz + (sz & 1)
-    return n > 0, size, n, "ok" if n > 0 else "no frames"
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--digits", default="0042")
@@ -651,7 +271,7 @@ def main():
 
     vid = result.get("video")
     if vid:
-        ok, size, nfr, msg = validate_avi(vid)
+        ok, size, nfr, msg = core.validate_avi(vid)
         result["video_valid"] = ok
         result["video_size"] = size
         result["video_frames"] = nfr

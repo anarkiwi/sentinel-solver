@@ -42,6 +42,7 @@ from solver.plan_game import (
     OBJ_VANG,
 )
 from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost, actions
+from sentinel import memmap as mm
 
 # --- shared climb mechanics (keyboard-faithful, validated against plan_game) --------
 # These were the reusable core the greedy picker and this search both drove; they now
@@ -444,6 +445,27 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
     return g.energy - e_start if drain_aim else gained
 
 
+def _launch_tiles(g, plat_ground):
+    """The set of tiles with a CLEAR DIAGONAL to the plinth (README strategy 3): tiles that
+    can see the platform tile from launch height. Computed as ONE reverse visibility sweep
+    from the platform's own vantage at launch eye (plat_ground+1) -- terrain LOS is ~symmetric,
+    so the tiles the plinth vantage sees are the tiles that can fire the endgame absorb at it.
+
+    This is the climb's DIRECTION signal: it separates the winning side of the map (a foothold
+    from which the plinth is reachable) from an equally-high DEAD-END corner that can never see
+    it (the ls0 failure: the search fled to the tallest corner (5,16), launch_ready=False,
+    instead of the corridor toward (12,4), launch_ready=True). Being a set membership, it does
+    NOT create a distance gradient that would drag the climb off its covered edge into the
+    exposed centre (the reason cheb-distance is the WRONG pull) -- edge_dist still governs cover.
+    Empty when the platform slot is unavailable (bonus off -> prior height-only behaviour).
+    """
+    ps = g.state.slot_of_type(mm.T_PLATFORM)
+    if ps is None:
+        return frozenset()
+    views = los.visible_tiles(g.state, ps, eye_z=plat_ground + 1, max_steps=200)
+    return frozenset(views.keys())
+
+
 def climb_ctx(g, toward_plat=False, near_plat_radius=0):
     """Fixed climb parameters + mutable progress state for the climb decision
     (search_iterate), derived from g's CURRENT state (so it works whether g is a fresh
@@ -454,6 +476,7 @@ def climb_ctx(g, toward_plat=False, near_plat_radius=0):
         "plat": plat,
         "plat_ground": plat_ground,
         "target_z": plat_ground + 1,
+        "launch_tiles": _launch_tiles(g, plat_ground),
         "toward_plat": toward_plat,
         "near_plat_radius": near_plat_radius,
         "visited": set(),
@@ -813,11 +836,25 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     # the full pool only when nothing is meanie-safe (better a risky climb than none).
     safe = [c for c in pool if threat.meanie_safe(state, tuple(c[0]))]
     pool = safe or pool
-    # cheap HEIGHT-first order (biggest eye gain wins; platform proximity only breaks
-    # equal-height ties), then compute the enemy safety margin for the top shortlist and
-    # re-rank those. Mirrors _evaluate so the beam keeps the highest-climbing lines.
+    # cheap best-first order MIRRORING _evaluate so the beam keeps the winning lines, not just
+    # the highest-climbing ones: capped height + LAUNCH-READINESS (clear diagonal to the plinth)
+    # dominate, so a launch-ready corridor foothold is kept over a taller DEAD-END corner; edge
+    # cover and the tiny cheb pull are low-order tie-breaks. Then compute the enemy safety
+    # margin for the top shortlist and re-rank those.
     plat = ctx["plat"]
-    pool.sort(key=lambda c: (c[2], -cheb(c[0], plat), edge_dist(c[0])), reverse=True)
+    launch = ctx["launch_tiles"]
+    tz = ctx["target_z"]
+
+    def _base(c):
+        t = tuple(c[0])
+        return (
+            min(c[2], tz) * _W_EYE
+            + (_W_LAUNCH if t in launch else 0.0)
+            - cheb(t, plat) * _W_PLAT
+            + edge_dist(t) * _W_EDGE
+        )
+
+    pool.sort(key=_base, reverse=True)
     head = pool[: beam + _SHORTLIST]
     safety = {
         tuple(c[0]): threat.ticks_until_seen(
@@ -830,19 +867,12 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     # equal candidates: aiming a far-bearing target holds the player exposed on its current
     # tile for the whole scroll, and lets the Sentinel rotate further onto it.
     pan = {tuple(c[0]): _pan_rounds(cur_h, cur_v, c[3]) for c in head}
-    # Order best-first (matches _evaluate): biggest height gain, then TOWARD the platform
-    # (goal-direction gradient, so the climb heads to a launch-capable tile rather than a
-    # far safe dead-end corner), then safety (gaze), then least panning. The genuinely
-    # deadly near-platform moments are handled by the gaze-filtered exposure set + the
-    # _SEEN_DRAIN death-pruning, not by steering away on distance (RULE 2).
+    # add the safety (gaze) margin and least-pan preference as sub-tie-breaks below the base
+    # score, so among near-equal launch/height footholds the safer, cheaper-to-aim one wins.
     head.sort(
-        key=lambda c: (
-            c[2],
-            -cheb(c[0], plat),
-            safety[tuple(c[0])],
-            -pan[tuple(c[0])],
-            edge_dist(c[0]),
-        ),
+        key=lambda c: _base(c)
+        + min(safety[tuple(c[0])], 255) * _W_SAFETY
+        - pan[tuple(c[0])] * _W_PAN,
         reverse=True,
     )
     return head + pool[beam + _SHORTLIST :]
@@ -855,7 +885,16 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
 # can see the platform for the endgame hop, never enough to trade a height gain for it.
 # (An earlier version weighted cheb-to-plat == height and produced timid +0.5 creeping
 # moves through the meanie ring -- exactly the failure the user called out.)
-_W_EYE = 1_000_000_000.0  # height reached: strictly dominant
+_W_EYE = 1_000_000_000.0  # height reached (capped at launch height): strictly dominant
+# LAUNCH-READINESS (README strategy 3, the climb's DIRECTION signal): a tile with a clear
+# diagonal to the plinth (ctx["launch_tiles"], the reverse-sweep set) is worth ~1.5 height
+# units, so a launch-ready foothold outscores a DEAD-END corner up to ~1.5 units taller that
+# can never see the plinth -- the ls0 fix (the search was fleeing to the tallest corner and
+# stranding). Paired with the height CAP at target_z below: over-climbing a non-ready corner
+# past launch height earns nothing, so raw height can't out-run launch-readiness near the top.
+# Height still dominates when the gap is large (a launch-ready tile >1.5 units lower than the
+# best non-ready option loses), so the climb never stalls low on the ready side. Set > _W_EYE.
+_W_LAUNCH = float(os.environ.get("CLIMB_W_LAUNCH", "1500000000"))
 # LOS-to-platform launch-readiness: a high tile is only useful if it can SEE the plinth
 # (README strategy 3 -- a clear line to the platform, not raw height). Worth ~0.4 units of
 # eye, so near launch height it redirects the climb from a dead-end high ridge with no
@@ -865,11 +904,16 @@ _W_LOS_PLAT = 400_000_000.0
 # platform-ward pull: a goal-direction gradient (which way the launch is) among near-equal
 # heights, weighted well below a real 0.5-unit height gain (5e8) over the ~30-tile span so
 # height still dominates. NOT a distance safety gate (RULE 2 -- exposure safety is the
-# gaze/drain model, never distance to the plinth).
+# gaze/drain model, never distance to the plinth). Kept TINY: a strong distance pull would
+# drag the climb off its covered edge/corner into the exposed centre (README strategy 3);
+# the real direction signal is LOS-to-platform (clear diagonal), _W_LAUNCH below, not cheb.
 _W_PLAT = 1_000_000.0
 _W_SAFETY = 100.0  # max span 255*1e2 = 2.55e4
 _W_EDGE = 1.0  # max span ~62
 _W_ENERGY = 0.01
+_W_PAN = (
+    0.1  # least-pan preference; kept below one safety tick (100) so safety wins first
+)
 
 
 def _sees_plat(g, plat):
@@ -900,8 +944,13 @@ def _evaluate(g, ctx):
     los_bonus = 0.0
     if abs(g.eye - ctx["plat_ground"]) <= 2.5 and _sees_plat(g, plat):
         los_bonus = _W_LOS_PLAT
+    # DIRECTION signal: a foothold with a clear diagonal to the plinth (README strategy 3).
+    # Worth > 1 height unit so it outranks a taller dead-end corner, but height is CAPPED at
+    # target_z so over-climbing a non-ready corner earns nothing past launch height.
+    launch_bonus = _W_LAUNCH if cur in ctx["launch_tiles"] else 0.0
     return (
-        g.eye * _W_EYE
+        min(g.eye, ctx["target_z"]) * _W_EYE
+        + launch_bonus
         + los_bonus
         - cheb(cur, plat) * _W_PLAT
         + min(safety, 255) * _W_SAFETY
