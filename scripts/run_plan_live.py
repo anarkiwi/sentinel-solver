@@ -263,6 +263,14 @@ def perform_step(ex, drv, label, stp, log, result):
                 if not (okh and okv):
                     okh = drv.coarse_h(view["h_angle"])
                     okv = drv.coarse_v(view["v_angle"])
+                # Read the h/v angles WHILE SIGHTS ARE STILL OFF. objects_h_angle
+                # ($09C0+slot) is only settled at the $365D pan checkpoint; once sights
+                # are ON the per-frame pan_viewpoint dance ($10B7: +$14 -> plot -> -$0C)
+                # leaves it transiently off-lattice, so a sights-ON read of hang() can
+                # catch garbage (e.g. $73 for a committed $60) and fire a FALSE aim miss
+                # (re-sentinel disasm INPUT.md sec.3-4). coarse_h/coarse_v already land
+                # via the $365D-synced pan, so read them here, sights-off and stable.
+                ach_h, ach_v = drv.hang(), drv.vang()
                 if not drv.sights_on():
                     log(f"[{label}] {verb} {tile}: sights would not turn ON")
                     return "fail"
@@ -270,7 +278,8 @@ def perform_step(ex, drv, label, stp, log, result):
                     *view["cursor"]
                 )  # sights-on re-centred it; drive persisted
                 rx, ry, los, centre = core.probe_tile(ex.bm)
-                ach = {"h": drv.hang(), "v": drv.vang(), "cur": drv.cur()}
+                # cursor is stable sights-on; h/v come from the sights-OFF read above.
+                ach = {"h": ach_h, "v": ach_v, "cur": drv.cur()}
                 break
             except (TimeoutError, OSError, ConnectionError) as e:
                 log(

@@ -59,12 +59,12 @@ def test_cost_and_ticks_monotone():
     g = plan_game.PlanGame(0)
     hop = ((1, 2), False, 6.0, None)
     boulder = ((1, 2), True, 6.0, None)
-    assert CS._cost(boulder, set()) > CS._cost(hop, set())
+    assert CS._cost(g, boulder, set()) > CS._cost(g, hop, set())
     hop_ticks, _, _ = CS._move_cost(g, hop, None, None)
     boulder_ticks, _, _ = CS._move_cost(g, boulder, None, None)
     assert boulder_ticks > hop_ticks
     # exposure adds reserve to the up-front cost
-    assert CS._cost(hop, {(1, 2)}) > CS._cost(hop, set())
+    assert CS._cost(g, hop, {(1, 2)}) > CS._cost(g, hop, set())
 
 
 def test_move_cost_prices_return_pan_and_geometry():
@@ -151,6 +151,80 @@ def test_search_climbs_without_height_regression():
     assert all(
         b >= a - 1e-9 for a, b in zip(eyes, eyes[1:])
     ), f"height regressed across committed steps: {eyes}"
+
+
+def test_refuel_drain_charges_full_absorb_cost():
+    """A drain-aware refuel must advance the world by the WHOLE cost of each absorb --
+    the aim pan PLUS the execute/settle (sentinel.actioncost) -- not the pan alone.
+    Charging only the pan let a nearby tree's tiny pan skip the drain cooldown, so every
+    tree booked a phantom +1 even while the player was being drained (the fruitless
+    seen-tile refuel the fix removes). On a SAFE start tile no drain fires over that
+    window, so the absorb still nets its full +1 (legitimate refuel preserved)."""
+    from solver import climb_search as CS
+    from solver import plan_game
+    from sentinel import actioncost, actions
+
+    prev = CS._REFUEL_DRAIN
+    CS._REFUEL_DRAIN = True
+    try:
+        g = plan_game.PlanGame(0)
+        ticks = {"n": 0}
+        real = CS._advance_enemies
+
+        def spy(state, t, apply_drain):
+            ticks["n"] += t
+            return real(state, t, apply_drain)
+
+        CS._advance_enemies = spy
+        try:
+            e0 = g.energy
+            gained = CS._refuel(g, lambda *a: None)
+        finally:
+            CS._advance_enemies = real
+    finally:
+        CS._REFUEL_DRAIN = prev
+    # at least one absorb happened on the ls0 start refuel...
+    assert gained > 0 and g.energy > e0
+    # ...and the world was advanced by at least the absorb SETTLE floor per absorb --
+    # proof the execute time is charged (pan-only would be a small fraction of this).
+    assert ticks["n"] >= actioncost.SETTLE["absorb"]
+    assert not actions.player_dead(g.state)  # safe tile: refuel does not kill
+
+
+def test_refuel_drain_stops_when_drained_to_death():
+    """If the drain-honest window kills the player mid-refuel (seen tile, drained faster
+    than trees bank), the refuel must STOP crediting absorbs and search_iterate must end
+    the climb as 'stuck' -- never loop retries or hand a dead state to the endgame (a
+    false win). Modelled by forcing the death flag inside the world advance."""
+    from solver import climb_search as CS
+    from solver import plan_game
+    from sentinel import actions
+    from sentinel import memmap as mm
+
+    prev = CS._REFUEL_DRAIN
+    CS._REFUEL_DRAIN = True
+    try:
+        g = plan_game.PlanGame(0)
+        real = CS._advance_enemies
+
+        def kill(state, t, apply_drain):
+            state.mem[mm.PLAYER_DIED_BY_DRAINING] |= 0x80  # drained to death mid-window
+
+        CS._advance_enemies = kill
+        try:
+            e_before = g.energy
+            CS._refuel(g, lambda *a: None)
+            assert actions.player_dead(g.state)
+            assert g.energy == e_before  # no absorb credited after death
+
+            g2 = plan_game.PlanGame(0)
+            ctx = CS.climb_ctx(g2, toward_plat=False)
+            status = CS.search_iterate(g2, ctx, set(), lambda *a: None, depth=2, beam=2)
+            assert status == "stuck"
+        finally:
+            CS._advance_enemies = real
+    finally:
+        CS._REFUEL_DRAIN = prev
 
 
 @pytest.mark.skipif(

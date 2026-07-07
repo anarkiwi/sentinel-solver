@@ -146,19 +146,52 @@ def edge_dist(t):
     return abs(t[0] - CENTRE) + abs(t[1] - CENTRE)
 
 
+def _boulder_batch(g, T2):
+    """RULE 5 (batch boulders): how many boulders can be stacked on T2 in ONE dwell,
+    and the resulting synthoid-top eye, given the current eye. The ROM build-height gate
+    ($1F38, plan_game.feasible) caps an object built on an ALREADY-occupied column at
+    top <= eye + ROBOT_EYE_FUDGE; the first boulder on bare terrain is uncapped. So stack
+    boulders while the next one -- and the capping synthoid on top -- still fit under the
+    cap. Returns (n_boulders, final_eye), or (0, None) if not even a single boulder-step
+    is feasible here. Batching gains the full ~2-unit slack per transfer, so the climb
+    reaches launch height in far fewer (exposed) transfers -- before the Sentinel's gaze
+    precesses onto the player."""
+    base = g.top_of(T2)
+    if base is None:
+        return 0, None
+    first = T2 not in g.col
+    cap = g.eye + NG.ROBOT_EYE_FUDGE
+    top = base + (0.875 if first else 0.5)  # first boulder
+    if top + 0.5 > cap + 1e-9:  # no room for even the capping synthoid
+        return 0, None
+    # how many boulders the build-height SLACK allows (each +0.5, room for the synthoid).
+    n_slack = 1
+    while (top + 0.5) + 0.5 <= cap + 1e-9:
+        top += 0.5
+        n_slack += 1
+    # ...but cap the batch by AFFORDABILITY: a batch costs 2*n + 3 (+ RESERVE) up front, so
+    # maxing boulders can price the step out of a low buffer and drop it entirely -- exactly
+    # when a CHEAPER 1-2 boulder step would still reach launch height. Keep the tallest batch
+    # the current energy can pay for (>=1 so a genuinely unaffordable tile is still offered
+    # and dropped by the affordability filter, not silently mis-sized).
+    n_afford = int((g.energy - RESERVE - 3) // 2)
+    n = max(1, min(n_slack, n_afford))
+    return n, base + (0.875 if first else 0.5) + 0.5 * (n - 1) + 0.5
+
+
 def _foothold_eye(g, T2, use_b):
     """TRUE resulting eye (float) of moving onto T2, using Game.create's exact ROM
     height increments: first object on terrain = +0.875 (boulder) then synthoid +0.5;
-    stacking onto an existing column (T2 already in g.col) = +0.5 each. This captures
-    the FRACTIONAL staircase gain (re-stacking an already-used tile climbs +0.5-1),
-    which a flat terrain+1 model misses."""
+    stacking onto an existing column (T2 already in g.col) = +0.5 each. A boulder-step
+    BATCHES boulders (RULE 5, _boulder_batch) to gain the full slack in one transfer.
+    This captures the FRACTIONAL staircase gain (re-stacking an already-used tile climbs
+    +0.5-1), which a flat terrain+1 model misses."""
     cur = g.top_of(T2)
     if cur is None:
         return None
     first = T2 not in g.col
     if use_b:
-        boulder_top = cur + (0.875 if first else 0.5)
-        return boulder_top + 0.5  # synthoid on the boulder
+        return _boulder_batch(g, T2)[1]  # batched boulders + capping synthoid
     return cur + (0.875 if first else 0.5)  # synthoid on terrain/column
 
 
@@ -204,20 +237,18 @@ def _boulder_centre_feasible(g, T2, view, max_steps=2000):
     )
 
 
-def _candidates(g, cur, eye, adj_boulder=False, plat=None, near_plat_radius=0):
+def _candidates(g, cur, eye):
     """All (T2, use_boulder, eye_after_float, view) footholds reachable with LOS, as a
-    hop (synthoid) or an adjacent boulder-step (centre-aimed, climbs). Coarse sweep is
-    fine -- views are recomputed at validate time.
+    hop (synthoid) or a boulder-step (centre-aimed, climbs). Coarse sweep is fine --
+    views are recomputed at validate time.
 
-    A FAR boulder-step (boulder on a distant LOS tile + synthoid CENTRE-AIMED on top,
-    $1E48) is rejected by the real $1B46 gate in the tight, steep platform ring -- the
-    on-boulder synthoid has NO acceptable centre-aim there ((18,9)->(18,6), cheb-3, fails
-    even with _centre_aim_search). So a boulder-step whose TARGET tile T2 lies within
-    `near_plat_radius` of `plat` is restricted to ADJACENT (cheb<=1 to the player); this
-    gates on the BUILD TILE's proximity (the geometry that actually fails), not the
-    player's. Far from the platform the open terrain accepts far steps (needed for the
-    low-pocket break-out), so they stay available there. adj_boulder=True forces ADJACENT
-    everywhere (legacy)."""
+    RULE 2: footholds are NOT filtered by Chebyshev distance to the platform. A
+    boulder-step whose on-boulder synthoid has no ROM-reachable centre-aim in steep
+    terrain is caught by the real LOS feasibility probe (`_boulder_centre_feasible`, run
+    at the committed root ply) -- a line-of-sight gate on the specific tile, not a
+    distance heuristic. So this offers every LOS-reachable foothold and lets the true
+    keyboard/LOS feasibility (and the gaze/exposure safety in `_gen_candidates`) decide.
+    """
     sweep, centres = _lattice_sweep(g, eye)
     out = []
     for T2, view in sweep.items():
@@ -240,17 +271,9 @@ def _candidates(g, cur, eye, adj_boulder=False, plat=None, near_plat_radius=0):
         he = _foothold_eye(g, T2, False)
         if he is not None and len(g.free) >= 1 and centre_ok:  # hop needs one free slot
             out.append((T2, False, he, view))  # synthoid on terrain/boulder
-        # boulder-step: forbid only when the BUILD TILE is near the platform AND the step
-        # is non-adjacent (the ROM-infeasible on-distant-boulder synthoid in the ring), or
-        # when adj_boulder forces adjacent everywhere.
-        far = cheb(T2, cur) > 1
-        near_ring = (
-            plat is not None and near_plat_radius and cheb(T2, plat) <= near_plat_radius
-        )
-        if not (far and (adj_boulder or near_ring)):
-            hb = _foothold_eye(g, T2, True)
-            if hb is not None and len(g.free) >= 2 and centre_ok:  # boulder + synthoid
-                out.append((T2, True, hb, view))
+        hb = _foothold_eye(g, T2, True)
+        if hb is not None and len(g.free) >= 2 and centre_ok:  # boulder + synthoid
+            out.append((T2, True, hb, view))
     # deterministic order: visibility_sweep yields tiles in hash-seed-dependent order, so
     # max(pool, key=...) would break ties (equal height / equal cheb-to-platform) by which
     # tile happened to come first -- making the whole plan depend on PYTHONHASHSEED. Sort by
@@ -268,7 +291,9 @@ def _apply(g, T2, use_b, view):
     synthoid(3) - reabsorbed shell(3) = 2; a hop is synthoid(3) - 3 = 0."""
     prev_slot, prev_tile = g.player, g.player_xy()
     if use_b:
-        g.create(3, T2, view, "climb boulder")
+        n, _ = _boulder_batch(g, T2)  # RULE 5: stack the whole batch in one dwell
+        for i in range(max(1, n)):
+            g.create(3, T2, view if i == 0 else None, "climb boulder")
         s = g.create(0, T2, None, "climb synthoid")  # centre-aim view at validate
     else:
         s = g.create(0, T2, view, "hop synthoid")
@@ -383,12 +408,35 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
         ):
             continue
         if drain_aim:
-            _advance_enemies(
-                g.state, int(round(_pan_rounds(ch, cv, sweep[tile]))), apply_drain=True
-            )
             view = sweep[tile]
+            # Charge the WHOLE cost of one absorb: the aim pan (view scrolls onto the
+            # fuel bearing) AND the execute/settle the action then spends before it is
+            # confirmed (actioncost, the same figure run_plan_simulated advances the
+            # real world by). While the player is seen the Sentinel drains -1 roughly
+            # every drain-cooldown period THROUGHOUT that window, so a single tree
+            # absorb (+1) taken while drained nets NEGATIVE -- absorbing "one tree at a
+            # time while being drained" cannot climb out of a deficit, it dies.
+            # Charging only the pan (as before) omitted the settle, so a nearby tree's
+            # tiny pan let the drain cooldown never elapse and every tree booked a
+            # phantom +1 -- the fabricated fuel that made the planner sit on a seen
+            # tile refuelling fruitlessly. On a SAFE (unseen) tile no drain fires over
+            # the same window, so legitimate refuelling still nets the full +1/tree.
+            rounds = _pan_rounds(ch, cv, view) + actioncost.action_rounds(
+                g.mem, "absorb", view
+            )
+            e_pre = g.energy
+            _advance_enemies(g.state, int(round(rounds)), apply_drain=True)
             ch = view.get("h_angle", ch) if view else ch
             cv = view.get("v_angle", cv) if view else cv
+            if actions.player_dead(g.state):
+                break  # drained to death mid-refuel: credit no further absorb
+            # RULE 3: you cannot recover energy by absorbing while drained. If the drain
+            # over this absorb's aim+settle window already meets or exceeds the object's
+            # value, the absorb nets <= 0 -- refuelling here loses energy. Stop the pass
+            # (the player is seen; every further absorb bleeds too) rather than fund the
+            # plan on a phantom bank. On a SAFE tile no drain fires, so this never trips.
+            if e_pre - g.energy >= ENERGY[ot]:
+                break
         g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
         gained += ENERGY[ot]
         tiles_done.add(tile)
@@ -451,8 +499,14 @@ def endgame(g, plat, log):
             g.create(0, plat, None, "platform synthoid"),
             "hyperspace onto platform (WIN)",
         )
-        log(f"  WIN: synthoid on platform {plat} + transfer")
-        return True
+        # RULE 1: the win is real only if the ROM win condition actually holds -- the
+        # player must be standing on the platform tile ($3F in the flags chain). A
+        # transfer that did NOT land on the platform (create failed, drained to death,
+        # etc.) is NOT a win. Never declare native_won on the strength of "we fired the
+        # sequence"; gate it on actions.on_platform of the real resulting state.
+        if actions.on_platform(g.state) and not actions.player_dead(g.state):
+            log(f"  WIN: synthoid on platform {plat} + transfer")
+            return True
     return False
 
 
@@ -524,35 +578,34 @@ _SHORTLIST = 4
 # a tile in its current/imminent view is avoided. This is the human ls0 win's actual
 # tactic: not "avoid what it could see" but "be where it isn't looking". Pair with a
 # larger CLIMB_EXPOSURE_RESERVE (now safe: it hits only currently-unsafe tiles).
-_GAZE_AWARE_COST = os.environ.get("GAZE_AWARE_COST", "0") == "1"
+# RULE 4: gaze is deterministic and schedulable. Default ON. The static
+# _enemy_exposed_tiles mask ("could the Sentinel EVER see this tile at any rotation") is
+# far too pessimistic near good high ground -- on ls0 nearly every high tile is
+# ever-visible in principle yet has ticks_until_seen == horizon (the actual gaze
+# precession never sweeps to its bearing for a long time). Gating on the FORECAST gaze
+# (ticks_until_seen < horizon) instead keeps a briefly-visible high foothold usable
+# during its long safe windows, exactly the lever README strategy 4 describes.
+_GAZE_AWARE_COST = os.environ.get("GAZE_AWARE_COST", "1") == "1"
 _GAZE_COST_HORIZON = int(os.environ.get("GAZE_COST_HORIZON", "250"))
-# HARD no-build ring: forbid CREATE footholds within this Chebyshev radius of the
-# platform during the climb. A boulder/synthoid built in the Sentinel's face (cheb<=2)
-# sits in its view cone and is absorbed on the next scan -- which spawns meanies and
-# drains the player even when the player itself is unseen (gaze-timing can't help; the
-# hazard is the OBJECT's exposure, not the player's). The human ls0 win never built in
-# the ring: it climbed to launch height at a far tile (cheb-10) and struck from range.
-# This forces launch tiles to cheb>radius, replicating that as a constraint (cheb>radius
-# tiles stay available, so unlike a cost crank it won't collapse the candidate set).
-# Plain hops onto EXISTING ring objects stay allowed; the endgame (absorb Sentinel +
-# platform synthoid, fired after the Sentinel is gone) runs in endgame() and is not
-# gated here. 0 = off (default).
-_RING_NOBUILD_RADIUS = int(os.environ.get("RING_NOBUILD_RADIUS", "0"))
 # Treat a FRACTIONAL eye above the platform ground as launch-ready. The default gate is
 # int(eye) > plat_ground, which discards the 0.875/0.5 fraction: a climb that tops out at
 # eye 8.875 (genuinely above a z8 platform, LOS intact) is rejected and the search creeps
 # on -- into the ring -- chasing int(eye)>=9. With the no-build ring closing that off, the
 # far staircase strands at 8.875. Comparing the true float (8.875 > 8) recognises it as a
-# valid long-range launch. Off by default (keeps the ROM-validated ls42 int gate).
-_ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "0") == "1"
+# valid long-range launch. RULE 5 (gain height): a natural z8 terrain tile already gives
+# eye 8.875 > a z8 platform ground, so recognising the fraction lets the climb launch from
+# natural high ground without over-building into the exposed ring. Default ON.
+_ENDGAME_FRAC_EYE = os.environ.get("ENDGAME_FRAC_EYE", "1") == "1"
 # SEEN-DRAIN: model being seen as a COSTED, survivable state rather than a hard veto. As
 # the search simulates each move it debits the energy the player would actually lose while
 # dwelling at the destination during that move (sentinel.enemies.step: 1 energy per
 # ~120 seen ticks, nothing for a quick transit). Routes that linger in view bleed energy
 # and score lower; brief crossings are free -- so the planner can TRANSIT unavoidable seen
-# tiles (multi-sentry landscapes) and is pushed to reach a safe tile fast. Off by default
-# (keeps the ROM-validated ls42 energy accounting; ls0 relies on avoidance knobs instead).
-_SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "0") == "1"
+# tiles (multi-sentry landscapes) and is pushed to reach a safe tile fast. RULES 1 & 3:
+# exposure is a timed, survivable energy cost -- the lookahead must price it (and prune a
+# move whose window drains the player to death). Default ON so the offline planner's
+# forecast matches the tick-accurate runner's real drain.
+_SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "1") == "1"
 # REFUEL-DRAIN: charge the drain incurred while RE-AIMING at each fuel object. A refuel is
 # not free -- every absorb needs a keyboard pan onto the target, and if the Sentinel is
 # currently draining the player, that pan bleeds energy the whole time. So absorbing trees
@@ -561,11 +614,10 @@ _SEEN_DRAIN = os.environ.get("SEEN_DRAIN", "0") == "1"
 # wrong -- it fabricated the energy that funded the ls0 energy-1 endgame the live player
 # (drained the whole time) can never bank. When on, the COMMITTED refuel steps the enemy
 # state (bit-exact drain) over each re-aim pan before crediting the absorb, so the planner's
-# banked energy is what the drained player could REALLY earn. OFF by default (the offline
-# plan_search is deliberately rotation-only / energy-restored -- SEEN_DRAIN off -- so it must
-# not leak real drain into its refuel); the tick-accurate runner (run_plan_simulated) turns
-# it ON so its planner forecast matches its real-drain execution.
-_REFUEL_DRAIN = os.environ.get("REFUEL_DRAIN", "0") == "1"
+# banked energy is what the drained player could REALLY earn. RULE 3: you cannot recover
+# by absorbing low-value trees while drained (each absorb spans multiple drain periods ->
+# net negative), so the planner must not fabricate that energy. Default ON.
+_REFUEL_DRAIN = os.environ.get("REFUEL_DRAIN", "1") == "1"
 
 
 def _pan_rounds(cur_h, cur_v, view):
@@ -607,13 +659,22 @@ def _move_cost(g, c, cur_h, cur_v):
     # the simulated runner's world advance so the enemy forward-sim rotates/drains by
     # the SAME amount the real action costs -- the flat ROUNDS_PER_ACTION under-counted
     # a fire ~15x, so the planner forecast a route the real drain could not survive.
-    settle = actioncost.SETTLE["create"]  # the synthoid create (always fired)
+    # A stacked create (on an occupied column) costs STACK_CREATE more (taller redraw).
     if use_b:
+        n, _ = _boulder_batch(g, T2)  # RULE 5: the whole boulder batch is priced
+        n = max(1, n)
         rounds += ROUNDS_PER_H_STEP + ROUNDS_PER_V_STEP  # re-centre on-boulder synthoid
-        settle += actioncost.SETTLE["create"]  # boulder create
-        # the synthoid stacks ON the boulder -> taller redraw, ~STACK_CREATE more rounds
-        # (the dominant per-move cost the flat model missed; see actioncost).
-        settle += actioncost.STACK_CREATE
+        first_stacked = T2 in g.col  # first boulder stacks if the tile is already built
+        settle = actioncost.SETTLE["create"] + (
+            actioncost.STACK_CREATE if first_stacked else 0.0
+        )
+        # boulders 2..n and the capping synthoid all stack -> STACK_CREATE each.
+        settle += n * (actioncost.SETTLE["create"] + actioncost.STACK_CREATE)
+    else:
+        settle = actioncost.SETTLE["create"]  # a lone synthoid on terrain/column
+    settle += actioncost.SETTLE[
+        "transfer"
+    ]  # the transfer up (was omitted -> under-count)
     end_h, end_v = vh, vv
     back_h = ac.bearing_to(T2[0], T2[1], prev[0], prev[1])  # look back at departed tile
     if back_h is not None and end_h is not None:
@@ -626,15 +687,16 @@ def _move_cost(g, c, cur_h, cur_v):
     return ticks, end_h, end_v
 
 
-def _cost(c, exposed):
-    """Up-front energy a candidate needs before the shell-reabsorb refund: boulder-step
-    5 (boulder 2 + synthoid 3), hop 3, plus RESERVE, plus EXPOSURE_RESERVE when the
-    destination is enemy-exposed."""
-    return (
-        (5 if c[1] else 3)
-        + RESERVE
-        + (EXPOSURE_RESERVE if tuple(c[0]) in exposed else 0)
-    )
+def _cost(g, c, exposed):
+    """Up-front energy a candidate needs before the shell-reabsorb refund: a boulder-step
+    of n batched boulders costs 2*n + 3 (n boulders at 2 + synthoid at 3), a hop 3, plus
+    RESERVE, plus EXPOSURE_RESERVE when the destination is enemy-exposed."""
+    if c[1]:
+        n, _ = _boulder_batch(g, tuple(c[0]))
+        base = 2 * max(1, n) + 3
+    else:
+        base = 3
+    return base + RESERVE + (EXPOSURE_RESERVE if tuple(c[0]) in exposed else 0)
 
 
 def _read_state(g):
@@ -699,13 +761,7 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     entries; it does its own `beam` truncation."""
     cur = g.player_xy()
     eye = int(g.eye)
-    raw = _candidates(
-        g,
-        cur,
-        eye,
-        plat=(ctx["plat"] if ctx["toward_plat"] else None),
-        near_plat_radius=ctx["near_plat_radius"],
-    )
+    raw = _candidates(g, cur, eye)
     if not raw:
         return []
     # NON-REGRESSION (SEARCH_REDESIGN.md sec.1/sec.9): only ever consider footholds whose
@@ -727,18 +783,11 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     raw = [c for c in raw if (tuple(c[0]), round(c[2], 2)) not in ctx["visited"]]
     if not raw:
         return []
-    # HARD no-build ring: drop CREATE footholds (c[1] is use_boulder) inside the deadly
-    # cheb<=_RING_NOBUILD_RADIUS zone -- an object built there is absorbed by the Sentinel
-    # and spawns meanies regardless of player exposure. Plain hops (c[1] False) onto
-    # existing objects stay. Forces the launch stack to a safer far tile (the human route).
-    if _RING_NOBUILD_RADIUS > 0:
-        raw = [
-            c
-            for c in raw
-            if not (c[1] and cheb(c[0], ctx["plat"]) <= _RING_NOBUILD_RADIUS)
-        ]
-        if not raw:
-            return []
+    # RULE 2: there is NO distance "danger ring". A foothold's safety is decided purely by
+    # line of sight / the Sentinel's forecast gaze to that specific tile (below, via the
+    # gaze-filtered `exposed` set + meanie_safe), never by Chebyshev distance to the plinth
+    # -- a boulder built adjacent to the platform while the Sentinel faces away is safe and
+    # is a valid penultimate winning position. So no cheb-radius create filter here.
     # affordability + blocklist (cheap, no sweeps). The exposure set is either the static
     # could-ever-be-seen LOS mask (default) or, when gaze-aware, only the subset the
     # Sentinel is actually looking toward within a build/rotation window (see _cost notes).
@@ -753,7 +802,7 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     pool = [
         c
         for c in raw
-        if g.energy >= _cost(c, exposed)
+        if g.energy >= _cost(g, c, exposed)
         and (tuple(c[0]), c[1]) not in blocked
         and (tuple(c[0]), c[1]) not in ctx["runtime_blocked"]
     ]
@@ -781,33 +830,21 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
     # equal candidates: aiming a far-bearing target holds the player exposed on its current
     # tile for the whole scroll, and lets the Sentinel rotate further onto it.
     pan = {tuple(c[0]): _pan_rounds(cur_h, cur_v, c[3]) for c in head}
-    if _GAZE_AWARE_COST:
-        # Among EQUAL-height candidates, prefer the one the Sentinel is NOT looking at
-        # (safety) and the one that needs the least panning (least mid-aim exposure) OVER
-        # the one closest to the platform. The default order prefers proximity, which --
-        # since both a ring tile and a far tile at the Sentinel's height reach the endgame
-        # trigger (both score INF) -- makes the search launch from the exposed ring.
-        head.sort(
-            key=lambda c: (
-                c[2],
-                safety[tuple(c[0])],
-                -pan[tuple(c[0])],
-                -cheb(c[0], plat),
-                edge_dist(c[0]),
-            ),
-            reverse=True,
-        )
-    else:
-        head.sort(
-            key=lambda c: (
-                c[2],
-                -cheb(c[0], plat),
-                safety[tuple(c[0])],
-                -pan[tuple(c[0])],
-                edge_dist(c[0]),
-            ),
-            reverse=True,
-        )
+    # Order best-first (matches _evaluate): biggest height gain, then TOWARD the platform
+    # (goal-direction gradient, so the climb heads to a launch-capable tile rather than a
+    # far safe dead-end corner), then safety (gaze), then least panning. The genuinely
+    # deadly near-platform moments are handled by the gaze-filtered exposure set + the
+    # _SEEN_DRAIN death-pruning, not by steering away on distance (RULE 2).
+    head.sort(
+        key=lambda c: (
+            c[2],
+            -cheb(c[0], plat),
+            safety[tuple(c[0])],
+            -pan[tuple(c[0])],
+            edge_dist(c[0]),
+        ),
+        reverse=True,
+    )
     return head + pool[beam + _SHORTLIST :]
 
 
@@ -819,10 +856,29 @@ def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
 # (An earlier version weighted cheb-to-plat == height and produced timid +0.5 creeping
 # moves through the meanie ring -- exactly the failure the user called out.)
 _W_EYE = 1_000_000_000.0  # height reached: strictly dominant
-_W_PLAT = 1_000.0  # platform proximity: equal-height tie-break only (max span 6.2e4)
+# LOS-to-platform launch-readiness: a high tile is only useful if it can SEE the plinth
+# (README strategy 3 -- a clear line to the platform, not raw height). Worth ~0.4 units of
+# eye, so near launch height it redirects the climb from a dead-end high ridge with no
+# platform line to a slightly-lower tile that overlooks the plinth, but never overrides a
+# genuine >=0.5-unit height gain.
+_W_LOS_PLAT = 400_000_000.0
+# platform-ward pull: a goal-direction gradient (which way the launch is) among near-equal
+# heights, weighted well below a real 0.5-unit height gain (5e8) over the ~30-tile span so
+# height still dominates. NOT a distance safety gate (RULE 2 -- exposure safety is the
+# gaze/drain model, never distance to the plinth).
+_W_PLAT = 1_000_000.0
 _W_SAFETY = 100.0  # max span 255*1e2 = 2.55e4
 _W_EDGE = 1.0  # max span ~62
 _W_ENERGY = 0.01
+
+
+def _sees_plat(g, plat):
+    """Whether the player at its current tile/eye has line of sight to the platform tile
+    (the endgame-launch precondition). A fractional eye above plat sees DOWN onto it, so
+    the observer is ceil'd when the eye carries a fraction (matches endgame's seye)."""
+    ie = int(g.eye)
+    seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
+    return plat in visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
 
 
 def _evaluate(g, ctx):
@@ -831,15 +887,24 @@ def _evaluate(g, ctx):
     / energy purely as tie-breaks among equal-height leaves (SEARCH_REDESIGN.md sec.7).
     """
     cur = g.player_xy()
+    plat = ctx["plat"]
     state = _read_state(g)
     safety = threat.ticks_until_seen(state, cur[0], cur[1], horizon=_SAFETY_HORIZON)
-    # gaze-aware: SAFETY outranks platform-proximity among equal-height leaves (still far
-    # below height). Default: proximity outranks safety (the ROM-validated ls42 order).
-    w_safety = 100_000.0 if _GAZE_AWARE_COST else _W_SAFETY
+    # Reward LINE OF SIGHT to the platform (launch-readiness) once the climb is near launch
+    # height -- a high tile is only useful if it overlooks the plinth (README strategy 3),
+    # so this redirects the late climb from a dead-end high ridge with no platform line to a
+    # tile that can actually fire the endgame. Only computed near plat_ground (cost bound),
+    # and worth < a 0.5-unit height gain so it never trades away real height. Among EQUAL-
+    # height leaves, proximity is a mild goal-direction gradient (not a safety gate -- RULE
+    # 2: safety is the gaze-filtered exposure set + drain, never distance to the plinth).
+    los_bonus = 0.0
+    if abs(g.eye - ctx["plat_ground"]) <= 2.5 and _sees_plat(g, plat):
+        los_bonus = _W_LOS_PLAT
     return (
         g.eye * _W_EYE
-        - cheb(cur, ctx["plat"]) * _W_PLAT
-        + min(safety, 255) * w_safety
+        + los_bonus
+        - cheb(cur, plat) * _W_PLAT
+        + min(safety, 255) * _W_SAFETY
         + edge_dist(cur) * _W_EDGE
         + g.energy * _W_ENERGY
     )
@@ -937,6 +1002,14 @@ def search_iterate(g, ctx, blocked, log, depth=DEFAULT_DEPTH, beam=DEFAULT_BEAM)
     eye = int(g.eye)
     # bank fuel first (same as greedy): a deliberate absorb streak counts as progress.
     gained = _refuel(g, log)
+    # A refuel that the drain-honest model runs the player out of energy (seen tile,
+    # drained faster than trees bank) is a LOST game, not progress: don't loop retries
+    # on it and don't hand a dead state to the endgame (which would report a false win).
+    if _REFUEL_DRAIN and actions.player_dead(g.state):
+        log(
+            f"  refuel drained player to death at {cur} (seen while banking fuel); stuck"
+        )
+        return "stuck"
     if g.eye > ctx["peak_eye"] + 1e-9:
         ctx["peak_eye"] = g.eye
         ctx["no_gain"] = 0
