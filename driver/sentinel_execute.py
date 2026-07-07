@@ -325,6 +325,30 @@ def perform_step(ex, drv, label, stp, log, result):
     if verb == "absorb" and otype != 5:
         log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
         return "best_effort_miss"
+    # A verify() failure whose PRIMARY on-tile effect DID happen -- the object landed on
+    # the target tile (create/absorb) or the player moved (transfer) -- but a SECONDARY
+    # invariant diverged (a concurrent meanie spawn / tree discharge changed the GLOBAL
+    # object count, or an in-window drain changed energy) is a LIVE WORLD-DIVERGENCE, not
+    # a wrong-tile aim: the aim was exact, the world moved under it. The caller resyncs +
+    # replans on "diverge"; only a genuine wrong-tile landing stays "fail" (the aim-exact
+    # crash the live contract raises on).
+    primary_ok = (
+        (verb == "create" and objs1 == objs0 + 1)
+        or (verb == "absorb" and objs1 == objs0 - 1)
+        or (
+            verb == "transfer"
+            and (
+                slot1 != slot0
+                or bool(after.player and (after.player.x, after.player.y) == tile)
+            )
+        )
+    )
+    if primary_ok:
+        log(
+            f"    (world-divergence at {label}: aim landed on {tile}, "
+            f"state diverged [{msg}]; resync + replan)"
+        )
+        return "diverge"
     if verb == "create" and e0 <= otype_cost(otype):
         result["energy_block"] = {
             "step": label,
