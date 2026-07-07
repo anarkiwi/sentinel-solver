@@ -4,12 +4,17 @@ verified by the ROM's own win flag ($0CDE bit6), optionally recorded to an AVI. 
 the glue that wires the solver (solver/) to the driver (driver/); it plans and verifies
 nothing itself beyond executing steps.
 
-It is the live counterpart of scripts/run_plan_simulated.py: the SAME bare loop --
-resync the planner from the real game, ask the solver (climb_search's receding-horizon
-lookahead) for the next move, drive it, replan -- with NO avoidance tricks or tuning
-overrides layered on top. The only difference from the simulated version is the "real
-game" here is asid-vice instead of the bit-exact simulator, so real timing / enemy /
-meanie divergence self-heals (or defeats the plan) on the next resync.
+It is the live counterpart of scripts/run_plan_simulated.py, mirroring its structure on
+asid-vice instead of the bit-exact simulator: RESYNC a PlanGame from live memory, compute
+one full HIDDEN offline plan (solver.astar_planner.plan) whose steps already END with the
+endgame (absorb Sentinel -> create platform synthoid -> transfer onto it), execute those
+steps one at a time (driver.sentinel_execute.perform_step), and on a step the live game
+made infeasible (aim could not be driven / drained below a build cost) RESYNC + re-plan()
+from the true live state, capped at --max-replans. A step whose fire verify() REJECTS
+(wrong tile / count / energy delta) is a CRASH: the offline plan is aim-exact, so a
+wrong-target fire means the model diverged from the ROM -- it raises, it does not smooth
+over or replan. On a clean run of every step, the final hyperspace fires from the platform
+tile (the endgame transfer landed the player there) and sets the ROM win flag.
 
 NO PIXELS: aim and verification are entirely from MEMORY reads. Aiming uses the driver's
 keyboard sights-cursor path (kbd_aim.KbdDriver): drive the view angles sights-off
@@ -18,12 +23,11 @@ probe (sentinel.los on a RAM snapshot) until the target tile is hit with LOS. Th
 a real keystroke (R/B robot/boulder, Q transfer, A absorb, H hyperspace) fired via
 tap_action, which polls the game's own $0CE9 action latch. Reads never change state.
 
-Everything reusable lives in the driver, not here: boot + landscape entry + snapshot
+Everything reusable lives in the driver/solver, not here: boot + landscape entry + snapshot
 caching + monitor-resilience + the 64 KB live-image read + the live sights-ray probe
-(driver/core), reading/comparing the live board (driver/sentinel_state: read_game_state,
-GameState.objects_at, verify_entry) and arbitrating an action's memory delta
-(driver/sentinel_execute: verify, otype_cost, the Executor accessors). This file is just
-the plan-execution loop that wires the solver to those pieces, plus the CLI.
+(driver/core), arbitrating an action's memory delta (driver/sentinel_execute), and the
+offline planner itself (solver/astar_planner). This file is just the plan-execution loop
+that wires the planner to the driver, plus the CLI.
 """
 
 import os, sys, time, argparse
@@ -44,6 +48,7 @@ def run(
     max_seconds,
     log,
     video_name="solver_run_0042.avi",
+    max_replans=4,
 ):
     """Glue: boot the real game (driver.core.boot_and_play), then run the plan loop
     (execute_live) inside the booted session. All emulator driving -- container, boot
@@ -65,7 +70,13 @@ def run(
             f"energy {st.player_energy} objs {len(st.objects)} platform {ex.platform()}"
         )
         result["won"] = execute_live(
-            ex, log, result, session.t_start, max_seconds, session.landscape
+            ex,
+            log,
+            result,
+            session.t_start,
+            max_seconds,
+            session.landscape,
+            max_replans=max_replans,
         )
 
     return core.boot_and_play(
@@ -80,52 +91,43 @@ def execute_live(
     t_start,
     max_seconds,
     landscape,
-    max_iterations=200,
+    max_replans=4,
 ):
-    """Closed-loop climb: at each iteration, RESYNC the native climb model from live
-    memory (ground truth, including any real enemy/meanie activity since the last
-    look), compute the next foothold move fresh (climb_search.search_iterate), and
-    drive it via real keystrokes immediately -- so a step that a stale precomputed
-    plan assumed would land cleanly, but which real timing/enemies made infeasible,
-    self-heals on the NEXT iteration (a fresh resync never has the failed object,
-    so the planner routes around it) instead of cascading into a run-ending
-    divergence."""
+    """Live offline-plan loop, the asid-vice counterpart of run_plan_simulated.run.
+
+    RESYNC a PlanGame from live memory, compute one full HIDDEN offline plan
+    (solver.astar_planner.plan) whose steps already END with the endgame (absorb
+    Sentinel -> create platform synthoid -> transfer onto the platform tile), then
+    execute those steps one at a time via driver.sentinel_execute.perform_step:
+
+      * "ok"/"best_effort_miss" -- continue (a landed create seeds built columns).
+      * "aim_miss"/"drained"    -- the live view could not be driven / energy fell
+                                   below a build cost, so NOTHING landed on a wrong
+                                   tile; RESYNC + re-plan() from the true live state
+                                   and restart, capped at ``max_replans``.
+      * "fail"                  -- verify() rejected the fire (wrong tile / count /
+                                   energy delta). The offline plan is aim-exact, so a
+                                   rejected fire means the MODEL diverged from the ROM:
+                                   raise RuntimeError. Do NOT smooth it over or replan.
+
+    On a clean run of every step the endgame transfer has landed the player ON the
+    platform tile, so fire the final hyperspace from there (fire_hyperspace sets the
+    ROM win flag $0CDE bit6 and is the sole win arbiter). A plan that reports not-won
+    is a genuine loss: log it loudly, record the divergence, return False (no fake win).
+
+    The emulator CPU is FROZEN across each resync+plan -- planning spends tens of
+    seconds and issues no monitor I/O, so a warped emulator would drift the enemy
+    round / drain the player under the snapshot the plan was built from -- and resumed
+    before any keystroke.
+    """
     from solver import plan_game
-    from solver import climb_search as csearch
-
-    # the same planner config the simulated runner uses (run_plan_simulated defaults):
-    # drive toward the platform, gate the ROM-infeasible on-distant-boulder synthoid in
-    # the steep ring, depth-2 / beam-2 lookahead.
-    # Env-overridable so the live run uses the SAME planner config as the winning
-    # simulated run (run_plan_simulated). Defaults preserve the prior live behaviour.
-    toward_plat = os.environ.get("TOWARD_PLAT", "1") == "1"
-    near_plat_radius = int(os.environ.get("NEAR_PLAT_RADIUS", "2"))
-    search_depth = int(os.environ.get("SEARCH_DEPTH", "2"))
-    search_beam = int(os.environ.get("SEARCH_BEAM", "2"))
-
-    # decision function: the receding-horizon best-first lookahead (climb_search,
-    # SEARCH_REDESIGN.md) which won't commit a move without a continuation within the
-    # horizon (fixes the dead-end/reposition failure of a purely greedy picker).
-    def decide(g, ctx, blocked_set, lg):
-        return csearch.search_iterate(
-            g, ctx, blocked_set, lg, depth=search_depth, beam=search_beam
-        )
-
-    log(f"LIVE decision: lookahead search D{search_depth} B{search_beam}")
+    from solver.astar_planner import plan
 
     drv = kbd_aim.KbdDriver(ex.bm, log)
-    blocked = set()
-    label = 0
-    # The lookahead search spends several real SECONDS per decision. Under warp the
-    # emulator would run millions of cycles in that gap -- enemies rotate, a meanie can
-    # arm/spawn, the player can be drained -- so the state the search read is stale by the
-    # time it acts, and the idle monitor socket goes flaky (the observed aim TimeoutErrors).
-    # FREEZE the CPU across resync+decide (bm.halted() leaves it stopped after the mem read,
-    # and the search issues no monitor I/O, so it stays frozen), then resume before driving
-    # keystrokes. Now meanie_safe decides against the true state at action time.
     halt_during_decide = True
+    label = 0
 
-    def resync(seed_built_columns=True, keep_halted=False):
+    def resync(seed_built_columns, keep_halted):
         if keep_halted:
             with ex.bm.halted():  # read with the CPU LEFT stopped (no auto-resume)
                 mem = core.live_image(ex.bm)
@@ -135,125 +137,96 @@ def execute_live(
             mem, landscape, seed_built_columns=seed_built_columns
         )
 
-    # seed_built_columns must stay False until a create() has ACTUALLY landed in the
-    # real game: before that, the only object standing on the player's tile is the
-    # landscape generator's original spawn placement, which -- like any first-level
-    # object -- carries the ROM's fixed z_fraction=$E0 render offset. Seeding that
-    # into g.col raises eye by 0.875 above the ROM-validated offline baseline and
-    # steers the climb onto different (worse) footholds (see plan_game.Game.from_mem
-    # docstring). Once a real create() lands, the player's tile IS one this model
-    # built, so the full z+zf/256 reconstruction becomes correct.
-    built_anything = False
-    g = resync(seed_built_columns=False)
-    ctx = csearch.climb_ctx(g, toward_plat, near_plat_radius)
-    log(
-        f"LIVE climb start: {g.player_xy()} eye {g.eye} plat {ctx['plat']} energy {g.energy}"
-    )
+    def resume_cpu():
+        if not halt_during_decide:
+            return
+        try:
+            ex.bm.exit()  # resume the CPU (frozen during planning) for the keystrokes
+        except Exception as e:  # noqa: broad-except
+            log(f"    (resume after plan failed: {e}; reconnecting)")
+            core.reconnect(ex.bm, log)
 
-    status = "retry"
-    for it in range(max_iterations):
+    # seed_built_columns must stay False until a create() has ACTUALLY landed in the
+    # real game: before that, the only object on the player's tile is the landscape
+    # generator's original spawn placement, which carries the ROM's fixed z_fraction=$E0
+    # render offset. Seeding that into g.col raises eye by 0.875 above the ROM-validated
+    # offline baseline and steers the plan onto different (worse) footholds. Once a real
+    # create() lands, the player's tile IS one this model built, so seeding is correct.
+    built_anything = False
+
+    for replan in range(max_replans + 1):
         if time.time() - t_start > max_seconds:
-            log(
-                f"TIME BUDGET ({max_seconds}s) exceeded at live iteration {it}; aborting"
-            )
-            result["divergence"] = f"timeout at live iteration {it}"
+            log(f"TIME BUDGET ({max_seconds}s) exceeded at replan {replan}; aborting")
+            result["divergence"] = f"timeout at replan {replan}"
             return False
+
+        # FREEZE the CPU across resync + plan, then resume before any keystroke.
         g = resync(seed_built_columns=built_anything, keep_halted=halt_during_decide)
-        before_n = len(g.steps)
-        status = decide(g, ctx, blocked, log)  # CPU frozen here if halt_during_decide
-        if halt_during_decide:
-            try:
-                ex.bm.exit()  # resume the CPU (frozen during the search) for the keystrokes
-            except Exception as e:
-                log(f"    (resume after search failed: {e}; reconnecting)")
-                core.reconnect(ex.bm, log)
-        new_steps = g.steps[before_n:]
-        blocked_this_round = False
-        built_tiles_this_batch = set()
-        for stp in new_steps:
+        log(
+            f"LIVE plan {replan}: {g.player_xy()} eye {g.eye} plat {g.plat} "
+            f"energy {g.energy}"
+        )
+        result_plan = plan(g)  # CPU frozen here if halt_during_decide
+        resume_cpu()
+
+        if not result_plan.won:
+            log("")
+            log("!!! LIVE PLAN FAILED -- no hidden route found; this is a LOSS !!!")
+            log(f"    failure: {result_plan.failure}")
+            log(f"    stats  : {result_plan.stats}")
+            result["divergence"] = f"plan failed: {result_plan.failure}"
+            return False
+        log(
+            f"  plan {replan}: won route with {len(result_plan.steps)} steps "
+            f"(nodes {result_plan.stats.get('nodes')}, "
+            f"{result_plan.stats.get('wall_s')}s wall)"
+        )
+
+        replan_needed = False
+        for stp in result_plan.steps:
             label += 1
             tile = tuple(stp["target"])
             outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             if outcome in ("ok", "best_effort_miss"):
                 if outcome == "ok" and stp["verb"] == "create":
-                    built_tiles_this_batch.add(tile)
                     built_anything = True
                 continue
-            if outcome == "aim_miss":
-                # the aim couldn't reach the requested view, so NOTHING was fired -- the
-                # tile is still valid, only the view needs another try. Resync + re-plan
-                # (which re-snaps a fresh view) WITHOUT blocking the foothold.
-                log(
-                    f"    LIVE: {stp['verb']} {tile} -> aim_miss (nothing fired); "
-                    "resync + re-plan, tile not blocked"
-                )
-                blocked_this_round = True
+            if outcome in ("aim_miss", "drained"):
+                # NOTHING landed on a wrong tile -- the live view could not be driven, or
+                # energy fell below the build cost. Resync + re-plan() from the true live
+                # state (a fresh plan re-snaps the view / reroutes the climb) and restart.
+                log(f"    LIVE: {stp['verb']} {tile} -> {outcome}; resync + re-plan")
+                replan_needed = True
                 break
-            if stp["verb"] == "create":
-                if tile in built_tiles_this_batch:
-                    # the boulder half of this foothold already landed for real; only
-                    # the synthoid-on-boulder half failed. Don't block the tile -- the
-                    # next resync sees a real boulder there and the natural "hop onto
-                    # an existing boulder" candidate is exactly the correct retry.
-                    log(
-                        f"    LIVE: {stp['verb']} {tile} -> {outcome} (boulder already "
-                        "landed; not blocking, natural hop retry will pick it up)"
-                    )
-                else:
-                    # candidate key is (tile, use_boulder) -- a plain hop is otype 0.
-                    blocked.add((tile, stp["otype"] == 3))
-                    log(
-                        f"    LIVE: {stp['verb']} {tile} -> {outcome}; blocking foothold"
-                    )
-            else:
-                log(
-                    f"    LIVE: {stp['verb']} {tile} -> {outcome}; resyncing and replanning"
-                )
-            blocked_this_round = True
-            break
-        if blocked_this_round:
+            # outcome == "fail": verify() rejected the fire. The offline plan is aim-exact,
+            # so a wrong-tile / wrong-count / wrong-energy delta means the MODEL is wrong.
+            # Do NOT smooth it over, do NOT replan -- CRASH loudly and let it propagate.
+            raise RuntimeError(
+                f"LIVE aim-exact plan fired on the WRONG target: step {stp['verb']} "
+                f"{tile} otype={stp.get('otype')} (label L{label}) -> verify() rejected "
+                f"it (outcome={outcome}). The offline plan is aim-exact; a rejected fire "
+                f"means the model diverged from the ROM."
+            )
+        if replan_needed:
             continue
-        if status in ("no_gain", "stuck"):
-            log(
-                f"  LIVE climb stopped ({status}); attempting endgame from current state"
-            )
-            break
-        if status == "approach":
-            break
-    else:
-        log(
-            f"LIVE climb: hit max_iterations ({max_iterations}) without reaching approach"
-        )
 
-    # ---- ENDGAME: resync once more, then absorb Sentinel + platform synthoid ----
-    g = resync()
-    before_n = len(g.steps)
-    won_native = csearch.endgame(g, ctx["plat"], log)
-    for stp in g.steps[before_n:]:
-        label += 1
-        outcome = perform_step(ex, drv, f"E{label}", stp, log, result)
-        if outcome not in ("ok", "best_effort_miss"):
-            log(
-                f"    LIVE endgame step {stp['verb']} {tuple(stp['target'])}: {outcome}"
-            )
-            result["divergence"] = (
-                f"endgame {stp['verb']} {tuple(stp['target'])}: {outcome}"
-            )
-            return False
-    if not won_native:
-        result["divergence"] = result.get("divergence") or (
-            f"endgame not reachable from final climb state {g.player_xy()} eye {g.eye}"
-        )
-        log(f"  LIVE: endgame not reachable from {g.player_xy()} eye {g.eye}")
-        return False
+        # Every step verified against live memory, including the endgame (absorb
+        # Sentinel -> create platform synthoid -> transfer). That final transfer landed
+        # the player ON the platform tile, so fire the winning hyperspace from there.
+        return fire_hyperspace(ex, drv, g.plat, log, result)
 
-    return fire_hyperspace(ex, drv, ctx["plat"], log, result)
+    log(f"LIVE: replan cap ({max_replans}) reached without a clean execution")
+    result["divergence"] = result.get("divergence") or (
+        f"replan cap ({max_replans}) reached without a clean run"
+    )
+    return False
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--digits", default="0042")
     ap.add_argument("--max-seconds", type=int, default=1500)
+    ap.add_argument("--max-replans", type=int, default=4)
     ap.add_argument("--video-name", default=None)
     args = ap.parse_args()
     video_name = args.video_name or f"solver_run_{args.digits}.avi"
@@ -267,6 +240,7 @@ def main():
         args.max_seconds,
         log,
         video_name=video_name,
+        max_replans=args.max_replans,
     )
 
     vid = result.get("video")

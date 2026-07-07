@@ -229,8 +229,13 @@ def _consider_enemy_state(state, enemy):
     partial_player = None
     for y in range(mm.NUM_SLOTS - 1, -1, -1):
         see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
+        # $17B7 LDA $0C76 ; AND #$40 ; BNE consider_next_object: a non-target tree in
+        # the enemy's sightline to this robot's HEAD hides it -- skip before the
+        # exposure test ($17BE), exactly as the ROM gates the drainable-robot scan.
+        if see["tree_in_los_head"]:
+            continue
         exposure = _exposure_byte(see)
-        if exposure == 0:  # $17B6: not visible at all -> next slot
+        if exposure == 0:  # $17BE/$17C0: not visible at all -> next slot
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
             _target_object(state, enemy, y, exposure)
@@ -510,8 +515,13 @@ def update_enemies(state):
     cursor ($16D9, 7->0 wrap)."""
     mem = state.mem
     x = mem[mm.CURSOR]
-    if state.obj_type[x] in mm.ENEMY_TYPES and not (state.obj_flags[x] & 0x80):
-        _consider_enemy_state(state, x)
+    if state.obj_type[x] in mm.ENEMY_TYPES:  # $16BB type == sentry(1) or Sentinel(5)
+        if not (state.obj_flags[x] & 0x80):  # $16CC BPL: not absorbed -> normal update
+            _consider_enemy_state(state, x)
+        else:
+            # $16CE: a slot still typed as an enemy but flagged absorbed (SLOT_EMPTY)
+            # still returns any residual banked energy to the landscape as a tree.
+            _consider_discharging_enemy_energy(state, x)
     prng = Prng().load(mem)  # $16D6 JSR prnd (advances the stream)
     prng.next()
     prng.store(mem)
