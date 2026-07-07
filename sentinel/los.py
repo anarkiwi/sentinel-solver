@@ -35,6 +35,8 @@ Public entry points:
 `state` is a :class:`sentinel.state.State`.
 """
 
+import math
+
 import numpy as np
 
 from sentinel.terrain import tile_byte
@@ -1050,6 +1052,148 @@ PITCH_BAND = [
 ]
 SIGHTS_CX = 0x50  # centred sights cursor ($1356)
 SIGHTS_CY = 0x5F
+
+# The REAL keyboard aim lattice (the buildability oracle). Unlike visible_tiles, which
+# sweeps body v_angle with the cursor pinned centred, the ROM keyboard fixes v_angle at
+# $F5 for every body and pitches/pans by MOVING the sights cursor on its 9px notch grid
+# (cx 17..143, cy 32..158; centres 80/95 == SIGHTS_CX/CY). Sweeping this lattice is what
+# reproduces where the sights actually LAND -- the tiles a live player can build on.
+# Validated 0-false-negative against human wins (tests/test_landable.py): a plain
+# geometric-visibility test (visible_tiles / relative.can_see_object) OVER-reports vs
+# this, marking tiles buildable that no keyboard aim can land the sights on.
+KBD_V_ANGLE = 0xF5
+CURSOR_CX = list(range(17, 144, 9))  # [17,26,...,143], centre 80
+CURSOR_CY = list(range(32, 159, 9))  # [32,41,...,158], centre 95
+
+
+def landable_views(state, slot=None, eye_z=None, max_steps=6000):
+    """Every tile a real KEYBOARD aim can land the sights on with line of sight from the
+    observer at `slot` (default player), in ONE forward sweep of the keyboard input
+    lattice: body h in :data:`AZIMUTH_STEP` notches x sights cursor (cx, cy) on the 9px
+    grid, v_angle fixed at :data:`KBD_V_ANGLE`. Returns
+    ``{(tx, ty): {"h_angle", "v_angle", "cursor"}}`` -- the keystroke target that BUILDS
+    on each tile (first LOS hit per tile).
+
+    This is the planner's buildability oracle: AIM-landability, not mere geometric
+    visibility. One sweep (~7200 rays) yields the whole landable set and its build views
+    at once -- far cheaper, and more correct, than a per-candidate targeted search."""
+    if slot is None:
+        slot = state.player
+    seen = {}
+    for h in range(0, 256, AZIMUTH_STEP):
+        for cx in CURSOR_CX:
+            for cy in CURSOR_CY:
+                tx, ty, los = aim_target(
+                    state,
+                    h,
+                    KBD_V_ANGLE,
+                    cx,
+                    cy,
+                    slot,
+                    eye_z=eye_z,
+                    max_steps=max_steps,
+                )
+                if los and (tx, ty) not in seen:
+                    seen[(tx, ty)] = {
+                        "h_angle": h,
+                        "v_angle": KBD_V_ANGLE,
+                        "cursor": [cx, cy],
+                    }
+    return seen
+
+
+def landable_sweep_with_centres(state, slot=None, eye_z=None, max_steps=6000):
+    """Keyboard-lattice twin of :func:`sweep_with_centres`: one forward sweep of the REAL
+    aim lattice (h notches x cursor 9px grid, v_angle $F5) returning (views, centres):
+      views:   {(tx,ty): {"h_angle","v_angle","cursor"}}  first LOS landing per tile
+      centres: {(tx,ty): min tile-centre fraction seen}    for the on-boulder centre gate
+                                                           ($1E48 needs fraction < $40)
+    The buildability oracle for the planner -- aim-landability, not the centred-cursor
+    geometric visibility of sweep_with_centres (which over/under-reports far builds)."""
+    if slot is None:
+        slot = state.player
+    views = {}
+    centres = {}
+    for h in range(0, 256, AZIMUTH_STEP):
+        for cx in CURSOR_CX:
+            for cy in CURSOR_CY:
+                tx, ty, los, centre = aim_target(
+                    state,
+                    h,
+                    KBD_V_ANGLE,
+                    cx,
+                    cy,
+                    slot,
+                    eye_z=eye_z,
+                    max_steps=max_steps,
+                    return_centre=True,
+                )
+                if not los:
+                    continue
+                tile = (tx, ty)
+                if tile not in views:
+                    views[tile] = {
+                        "h_angle": h,
+                        "v_angle": KBD_V_ANGLE,
+                        "cursor": [cx, cy],
+                    }
+                if tile not in centres or centre < centres[tile]:
+                    centres[tile] = centre
+    return views, centres
+
+
+def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=False):
+    """The build view for a SINGLE `tile` (short-circuits on the first LOS landing), or
+    None if no keyboard aim lands the sights on it. Orders body h and cursor from the
+    analytic bearing / centre outward so a real landing is usually found in the first few
+    probes.
+
+    `v_band=False` fixes v_angle at $F5 -- the pitch of most (up/level) climb builds, and
+    fast. `v_band=True` ALSO sweeps the body v_angle over PITCH_BAND (ordered from $F5
+    outward): the player pitches the body DOWN to aim at near/below tiles (the human built
+    an adjacent tile at v=225, and looks DOWN onto the platform for the endgame), so the
+    complete oracle needs this DOF. It is ~16x slower on a MISS (full lattice exhausted),
+    so use it only where completeness matters (the endgame launch gate), not in hot scoring.
+    """
+    if slot is None:
+        slot = state.player
+    tx0, ty0 = tile
+    ex, ey = state.obj_x[slot], state.obj_y[slot]
+    h0 = _bearing_notch(ex, ey, tx0, ty0)
+    hgrid = sorted(range(0, 256, AZIMUTH_STEP), key=lambda h: _angle_dist(h0, h))
+    cxs = sorted(CURSOR_CX, key=lambda c: abs(c - SIGHTS_CX))
+    cys = sorted(CURSOR_CY, key=lambda c: abs(c - SIGHTS_CY))
+    vgrid = (
+        sorted(PITCH_BAND, key=lambda v: _angle_dist(KBD_V_ANGLE, v))
+        if v_band
+        else [KBD_V_ANGLE]
+    )
+    for v in vgrid:
+        for h in hgrid:
+            for cx in cxs:
+                for cy in cys:
+                    tx, ty, los = aim_target(
+                        state, h, v, cx, cy, slot, eye_z=eye_z, max_steps=max_steps
+                    )
+                    if los and tx == tx0 and ty == ty0:
+                        return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+    return None
+
+
+def _bearing_notch(ex, ey, tx, ty):
+    """The body-angle notch (0..255, multiple of AZIMUTH_STEP) nearest the bearing from
+    (ex,ey) to (tx,ty); 0 when the target is the observer's own tile."""
+    dx, dy = tx - ex, ty - ey
+    if dx == 0 and dy == 0:
+        return 0
+    ang = int(round(math.atan2(dy, dx) * 128.0 / math.pi)) & 0xFF
+    return (ang + AZIMUTH_STEP // 2) // AZIMUTH_STEP * AZIMUTH_STEP & 0xFF
+
+
+def _angle_dist(a, b):
+    """Shortest angular distance (0..128) between two 8-bit angles."""
+    d = (a - b) & 0xFF
+    return min(d, 256 - d)
 
 
 def aim_target(

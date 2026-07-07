@@ -31,7 +31,6 @@ from solver.plan_game import (
     PlanGame,
     cheb,
     visibility_sweep,
-    sees_tile,
     terrain_z,
 )
 from sentinel import los, threat, enemies as SE, aimcost as ac, actioncost, actions
@@ -62,12 +61,15 @@ def _enemy_exposed_tiles(g, tiles, object_top=threat.ROBOT_EYE):
 
 
 def _lattice_sweep(g, eye):
-    """ONE keyboard-lattice sweep (h ≡ 0 mod 8, v in the pan band, centre cursor)
-    returning {tile: first-LOS view} plus {tile: min tile-centre fraction}. The centre
-    map is the keyboard-feasibility gate for on-boulder synthoids ($1E48 needs the
-    tile-centre fraction < $40). Same order/params as visibility_sweep(coarse) so the
-    chosen views are identical."""
-    return los.sweep_with_centres(g.state, g.player, eye, max_steps=200)
+    """ONE forward sweep of the REAL keyboard aim lattice (h ≡ 0 mod 8, sights cursor on
+    its 9px grid, v_angle $F5) returning {tile: first-LOS view} plus {tile: min tile-centre
+    fraction}. This is AIM-landability -- the tiles the sights actually land on, i.e. the
+    tiles a live player can build on -- NOT the centred-cursor geometric visibility of the
+    old sweep, which over/under-reported far/diagonal builds and let the planner commit
+    footholds no keyboard aim could reach (the ls0 (4,10)/(14,4) mirages). The centre map
+    is the keyboard-feasibility gate for on-boulder synthoids ($1E48 needs fraction < $40).
+    """
+    return los.landable_sweep_with_centres(g.state, g.player, eye)
 
 
 def _top_type(g, tile):
@@ -498,6 +500,22 @@ def climb_ctx(g, toward_plat=False, near_plat_radius=0):
     }
 
 
+def _platform_launch_view(g, plat, v_band=False):
+    """The keyboard-aim view that lands the sights on the platform tile from g's CURRENT
+    position, or None if no aim reaches it. A fractional eye above plat_ground sees DOWN
+    onto the platform; ceil the observer so int(eye)==plat_ground doesn't drop it (matches
+    endgame's seye, only when frac-eye is on). This is the endgame's real precondition:
+    the platform synthoid can only be built where the sights can land on the platform.
+
+    `v_band=True` sweeps the body v_angle too (the endgame looks DOWN onto the platform, a
+    pitch below the $F5 default) -- COMPLETE but slower; used by the hard endgame/approach
+    gate. The default (v=$F5) is the fast approximation for leaf-scoring launch-readiness.
+    """
+    ie = int(g.eye)
+    seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
+    return los.landable_view(g.state, plat, g.player, eye_z=seye, v_band=v_band)
+
+
 def endgame(g, plat, log):
     """Attempt the win sequence (absorb the Sentinel, build a platform synthoid,
     transfer) from g's CURRENT state. Returns True iff the transfer onto the
@@ -514,14 +532,14 @@ def endgame(g, plat, log):
     above = g.eye > g.plat_ground if _ENDGAME_FRAC_EYE else eye > g.plat_ground
     if not above:
         return False
-    # A fractional eye above the platform ground sees DOWN onto it; sweeping at int(eye)
-    # (== plat_ground, the player's own level) drops the platform as not-below. Ceil the
-    # observer to reflect that the viewpoint is genuinely above (only when frac-eye is on).
-    seye = eye + 1 if (_ENDGAME_FRAC_EYE and g.eye > eye) else eye
-    sw = visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
-    if plat not in sw:  # need LOS to the platform to absorb the Sentinel + build on it
+    # Need a keyboard aim that LANDS on the platform to absorb the Sentinel + build the
+    # winning synthoid there -- not mere geometric LOS (which over-reported and let the
+    # endgame "win" from an un-aimable cheb-1 launch in sim, a live failure). None -> the
+    # platform can't be aimed from here; the climb must reach a real launch tile.
+    view = _platform_launch_view(g, plat, v_band=True)
+    if view is None:
         return False
-    g.absorb(g.sentinel_slot, sw.get(plat), "absorb Sentinel")
+    g.absorb(g.sentinel_slot, view, "absorb Sentinel")
     log(f"  absorbed Sentinel from eye {g.eye}, energy {g.energy}")
     if g.feasible(0, plat):
         g.transfer(
@@ -763,17 +781,13 @@ def _reached_approach(g, ctx):
     above = g.eye > g.plat_ground if _ENDGAME_FRAC_EYE else int(g.eye) > g.plat_ground
     if not above:
         return False
-    plat = ctx["plat"]
-    if cheb(g.player_xy(), plat) <= 1:
-        return True
-    # far win: check LOS to the platform. Only reached once the eye is already above the
-    # platform (late climb), so this sweep runs on very few nodes. A fractional eye above
-    # plat_ground sees DOWN onto it; ceil the observer so int(eye)==plat_ground doesn't
-    # drop the platform (matches endgame's seye; only when frac-eye is on).
-    ie = int(g.eye)
-    seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
-    sw = visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
-    return plat in sw
+    # The endgame builds a synthoid ON the platform tile, so the launch position must be
+    # able to AIM at it -- adjacency is NOT sufficient (a cheb<=1 platform is in the sights
+    # foreground, un-aimable; the human ls0 win launched from cheb-9). Gate on the SAME
+    # aim-landability the endgame requires so the handoff never breaks the loop on a launch
+    # the endgame can't actually fire (the (11,3) cheb-1 mirage). Only reached once the eye
+    # is above the platform (late climb), so this per-node sweep runs on very few nodes.
+    return _platform_launch_view(g, ctx["plat"], v_band=True) is not None
 
 
 def _gen_candidates(g, ctx, blocked, state, beam, cur_h=None, cur_v=None):
@@ -923,12 +937,11 @@ _W_PAN = (
 
 
 def _sees_plat(g, plat):
-    """Whether the player at its current tile/eye has line of sight to the platform tile
-    (the endgame-launch precondition). A fractional eye above plat sees DOWN onto it, so
-    the observer is ceil'd when the eye carries a fraction (matches endgame's seye)."""
-    ie = int(g.eye)
-    seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
-    return sees_tile(g.mem, plat, g.player, seye, max_steps=200)
+    """Whether the player at its current tile/eye can AIM at the platform tile (the
+    endgame-launch precondition, and the leaf-scoring launch-readiness signal). Uses the
+    same aim-landability the endgame requires, so the score pulls the climb toward tiles
+    the endgame can actually fire from, not merely tiles with geometric LOS."""
+    return _platform_launch_view(g, plat) is not None
 
 
 def _evaluate(g, ctx):
