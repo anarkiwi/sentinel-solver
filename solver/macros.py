@@ -10,17 +10,21 @@ front, and survivability-gated over the drained window via the true transition.
 
 The climb mechanics (`_top_type`, `_boulder_batch`, `_foothold_eye`,
 `_boulder_centre_feasible`) are ported from the validated ``solver.climb_search``.
-Refuel (T2.2) and endgame (T2.3) macros are separate later tasks; this module
-leaves room for them but implements only the climb expander.
+Refuel (T2.2, :func:`expand_refuel`) and endgame (T2.3, :func:`endgame_child`)
+macros are implemented alongside the climb expander.
 """
 
 import os
 from typing import Optional
 
-from solver import plan_game, cost
+from solver import plan_game, cost, launch
 from solver.search_node import Node
-from sentinel import los, actions
+from sentinel import los, actions, actioncost
 from sentinel import memmap as mm
+
+# Fuel types the refuel macro will absorb (below-eye, in-LOS): synthoid, sentry,
+# tree, boulder.  Meanies/Sentinel/platform are excluded.
+FUEL_TYPES = (mm.T_ROBOT, mm.T_SENTRY, mm.T_TREE, mm.T_BOULDER)
 
 # Energy kept in reserve above a build's up-front cost (env-overridable, ROM-tuned;
 # ported from climb_search): live enemies drain during aiming, so planned refunds
@@ -230,3 +234,128 @@ def expand_climb(n, gaze):
             if child is not None:
                 out.append(child)
     return out
+
+
+def _top_fuel_slot(g, tile):
+    """The topmost live object slot on `tile` if it is below-eye, absorbable fuel;
+    else None.  Picks the highest-z object, then gates it on FUEL_TYPES, full top
+    ``<= g.eye`` (below the player's eye), and ``actions.can_absorb``."""
+    best, bz = None, -1.0
+    for s in range(mm.NUM_SLOTS):
+        if g.state.obj_flags[s] & 0x80:
+            continue
+        if (g.state.obj_x[s], g.state.obj_y[s]) != tile:
+            continue
+        z = _full_top(g, s)
+        if z > bz:
+            bz, best = z, s
+    if best is None:
+        return None
+    if g.state.obj_type[best] not in FUEL_TYPES:
+        return None
+    if _full_top(g, best) > g.eye + 1e-9:  # not below eye
+        return None
+    if not actions.can_absorb(g.state, best):
+        return None
+    return best
+
+
+def _apply_refuel(n, tile, slot, view) -> Optional[Node]:
+    """Concrete refuel macro body: price the aim+absorb window, apply the absorb on
+    a cloned PlanGame, then survivability-gate it over the drained window.  Returns
+    the child Node, or None if the window is not survivable or energy did not rise."""
+    g = n.g.clone()
+    from_tile = g.player_xy()
+    e0 = g.energy
+    window = cost.aim_rounds(n.vh, n.vv, view) + actioncost.SETTLE["absorb"]
+    g.absorb(slot, view, "refuel")
+    ok, ea = cost.survivable(g, from_tile, window)
+    if not ok or ea <= e0:  # must survive and net an energy gain
+        return None
+    end_h = view.get("h_angle") if view else n.vh
+    end_v = view.get("v_angle") if view else n.vv
+    return Node(
+        g=g,
+        t=n.t + int(round(window)),
+        vh=end_h if end_h is not None else n.vh,
+        vv=end_v if end_v is not None else n.vv,
+        cost=n.cost + window,
+        parent=n,
+        macro={"kind": "refuel", "tile": list(tile)},
+    )
+
+
+def expand_refuel(n, gaze, need=cost.NEXT_COST_FLOOR + 2):
+    """Refuel-macro expander (T2.2): only when energy-constrained, absorb below-eye
+    in-LOS fuel to buy the next climb.  Deferred while ``energy >= need``.
+
+    Candidates are the topmost absorbable fuel object on each keyboard-LOS sweep
+    tile.  "Broadly visible" fuel -- fuel whose tile is ALSO seen from a raised
+    observer eye (``eye + ROBOT_EYE_FUDGE``), i.e. exposed on open high ground -- is
+    deferred while any less-visible source exists, and taken only as a last resort
+    (the sole affordable source).  Each accepted candidate is priced (aim + absorb
+    SETTLE), applied, and survivability-gated; only survivable, energy-raising
+    children are emitted."""
+    del gaze  # priced via the true transition (cost.survivable), not the forecast
+    g = n.g
+    if g.energy >= need:  # defer: only refuel when energy-blocked
+        return []
+    sw = plan_game.visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200)
+    hi = plan_game.visibility_sweep(
+        g.mem, g.player, int(g.eye) + plan_game.ROBOT_EYE_FUDGE, max_steps=200
+    )
+    cur = g.player_xy()
+    cands = []  # (tile, slot, view, broadly_visible)
+    for tile, view in sw.items():
+        if tile == cur:
+            continue
+        slot = _top_fuel_slot(g, tile)
+        if slot is not None:
+            cands.append((tile, slot, view, tile in hi))
+    only_broad = bool(cands) and all(c[3] for c in cands)
+    out = []
+    for tile, slot, view, broad in cands:
+        if broad and not only_broad:  # defer broadly-visible fuel
+            continue
+        child = _apply_refuel(n, tile, slot, view)
+        if child is not None:
+            out.append(child)
+    return out
+
+
+def endgame_child(n, plat, plat_ground) -> Optional[Node]:
+    """Endgame macro (T2.3): from a launch-ready node, drive-through absorb the
+    Sentinel then build+transfer onto the platform for the win.  Returns the winning
+    child Node, or None if the geometric/feasibility/terminal gate fails."""
+    if not launch.endgame_ready(n.g, plat, plat_ground):
+        return None
+    plat = tuple(plat)
+    g = n.g.clone()
+    seye = int(g.eye) + (1 if g.eye > int(g.eye) else 0)
+    sw = plan_game.visibility_sweep(g.mem, g.player, seye, max_steps=200)
+    # Down-look LOS to the platform is the direct geometric march (which
+    # ``endgame_ready`` already asserts); the coarse keyboard sweep drops far
+    # down-look tiles, so gate on the march and use the sweep's view when present.
+    if plat not in sw and not plan_game.sees_tile(g.mem, plat, g.player, seye):
+        return None
+    view = sw.get(plat)
+    sent = g.state.slot_of_type(mm.T_SENTINEL)
+    if sent is not None:
+        g.absorb(sent, view, "absorb Sentinel")  # drive-through
+    if not g.feasible(mm.T_ROBOT, plat):
+        return None
+    s = g.create(mm.T_ROBOT, plat, view, "platform synthoid")
+    if s is None:
+        return None
+    g.transfer(s, "hyperspace onto platform (WIN)")
+    if actions.on_platform(g.state) and not actions.player_dead(g.state):
+        return Node(
+            g=g,
+            t=n.t,
+            vh=n.vh,
+            vv=n.vv,
+            cost=n.cost,
+            parent=n,
+            macro={"kind": "endgame"},
+        )
+    return None
