@@ -10,7 +10,7 @@ the tick-accurate runner advances the world by (``run_plan_simulated.execute_ste
 the planner forecasts enemy rotation/drain over exactly the window an action really costs.
 """
 
-from sentinel import aimcost as ac, actioncost
+from sentinel import aimcost as ac, actioncost, actions, enemies
 
 ROUNDS_PER_H_STEP = 16.0
 ROUNDS_PER_V_STEP = 8.0
@@ -55,3 +55,30 @@ def move_rounds(g, t2, use_boulder, n_boulders, view, vh, vv):
         end_h = back_h
         settle += actioncost.SETTLE["absorb"]  # reabsorb-shell confirm
     return r + settle, end_h, end_v
+
+
+NEXT_COST_FLOOR = 3  # keep enough energy for one synthoid after the window
+
+
+def survivable(g_after_actions, from_tile, window_rounds):
+    """Managed-exposure feasibility of a macro over the drained window, via the TRUE
+    transition (no soft penalty, no blanket veto).
+
+    ``g_after_actions`` is a ``PlanGame`` whose builds are already applied but whose
+    world is NOT yet advanced.  Step the real world ``window_rounds`` rounds
+    (drain/rotate/meanie) then test survival.  Returns ``(ok, energy_after)`` where
+    ``ok`` iff the player is not dead AND ``energy_after > 0`` AND
+    ``energy_after >= NEXT_COST_FLOOR``.  A hidden window drains 0 and always passes.
+
+    MUTATES the passed ``PlanGame`` by stepping its ``state`` -- callers pass a clone.
+    ``from_tile`` completes the feasibility signature; the true-transition test reads
+    survival straight off the advanced world, so it is not consulted here.
+    """
+    del from_tile  # part of the feasibility signature; not read by the true transition
+    state = g_after_actions.state
+    for _ in range(int(window_rounds)):
+        enemies.step(state)
+    if actions.player_dead(state):
+        return (False, state.energy)
+    ea = state.energy
+    return (ea > 0 and ea >= NEXT_COST_FLOOR, ea)
