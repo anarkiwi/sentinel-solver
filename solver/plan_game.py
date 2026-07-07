@@ -8,7 +8,7 @@ The module also provides the line-of-sight sweep wrappers the climb planner uses
 """
 
 from sentinel import landscape as _landscape
-from sentinel import actions, los
+from sentinel import actions, los, threat
 from sentinel import memmap as mm
 from sentinel.state import State
 
@@ -54,12 +54,15 @@ def visibility_sweep(mem, player_slot, eye_z, max_steps=320, coarse=False):
 
 def sees_tile(mem, tile, player_slot, eye_z, max_steps=320):
     """Whether the observer has line of sight to a SINGLE ``tile`` from its current
-    position + eye_z.  Equivalent to ``tuple(tile) in visibility_sweep(...)`` (same
-    lattice/params) but short-circuits on the first hit -- the endgame-launch /
-    ``_sees_plat`` query, where only the platform tile matters."""
-    state = _as_state(mem)
-    return los.sees_tile(
-        state, tuple(tile), player_slot, eye_z=eye_z, max_steps=max_steps
+    position + eye_z.  Uses the ROM's direct observer->tile geometric march
+    (``threat.player_sees_tile`` / ``relative.can_see_object``) rather than the coarse
+    fixed-cursor sights-aim sweep -- the sweep steps over the fine fractional sub-angles
+    a diagonally-driven cursor reaches, wrongly reporting far/launch build tiles unseen.
+    ``max_steps`` is accepted for caller compatibility but unused (the march is not a
+    bounded lattice sweep)."""
+    del max_steps  # the geometric march is not a bounded aim sweep
+    return threat.player_sees_tile(
+        _as_state(mem), tuple(tile), player_slot, eye_z=eye_z
     )
 
 

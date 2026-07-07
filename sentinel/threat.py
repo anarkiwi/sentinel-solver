@@ -110,6 +110,39 @@ def exposed_tiles(state, tiles, object_top=ROBOT_EYE):
     return result
 
 
+def player_sees_tile(state, tile, observer_slot, eye_z=None):
+    """True iff the observer at `observer_slot` can see `tile` (x, y) -- the ROM's
+    direct observer->object geometric line of sight (relative.can_see_object with the
+    facing gate dropped), the mirror of :func:`is_exposed`'s enemy->tile test. For an
+    occupied tile (platform/Sentinel/boulder/...) the real object in its slot is tested;
+    for bare terrain a phantom T_ROBOT is placed on the tile and tested. `eye_z`
+    overrides the observer's standing height. Runs on a clone; the caller's state is
+    never mutated."""
+    clone = state.clone()
+    if eye_z is not None:
+        clone.obj_z_height[observer_slot] = int(eye_z) & 0xFF
+    x, y = tile
+    b = terrain.tile_byte(clone, x, y)
+    if b >= mm.OBJECT_TILE:  # occupied -> test the real object in its slot
+        slot = b & 0x3F
+        typ = clone.obj_type[slot]
+        return (
+            relative.can_see_object(clone, observer_slot, slot, typ, FOV_FULL)[
+                "exposure"
+            ]
+            > 0
+        )
+    slot = _free_slot(clone)  # bare terrain -> phantom-place a robot and test it
+    if slot is None or not _place_phantom(clone, (x, y), slot):
+        return False
+    return (
+        relative.can_see_object(clone, observer_slot, slot, mm.T_ROBOT, FOV_FULL)[
+            "exposure"
+        ]
+        > 0
+    )
+
+
 def gaze_distance(state, tiles):
     """For each tile, the minimum angular distance (0..128) from any enemy's
     CURRENT facing to the bearing toward that tile. 128 when there is no enemy.
