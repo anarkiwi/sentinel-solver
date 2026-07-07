@@ -35,7 +35,17 @@ Public entry points:
 `state` is a :class:`sentinel.state.State`.
 """
 
+import numpy as np
+
 from sentinel.terrain import tile_byte
+
+try:
+    from sentinel import los_jit
+
+    _HAVE_JIT = True
+except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
+    los_jit = None
+    _HAVE_JIT = False
 
 
 # ============================================================================
@@ -663,6 +673,11 @@ def check_for_line_of_sight_to_tile(
 ):
     """$1CDD: march the ray; return (tx, ty, los_ok). los_ok True == carry clear.
 
+    Dispatches to the numba fast-march (:func:`_march_jit`) when numba is present,
+    else the reference pure-Python march (:func:`_march_python`).  The two are
+    bit-for-bit identical (see ``tests/test_los_jit.py``); the JIT path is the hot
+    one every LOS sweep runs.
+
     do_los_checks = the $0C6E byte (its top bit cleared by the player path at $1B40);
     we pass 0 (top bit clear), matching handle_player_actions for the player aim.
 
@@ -671,6 +686,13 @@ def check_for_line_of_sight_to_tile(
     near-horizontal "miss" rays (which march thousands of sub-steps to the edge)
     return no-LOS cheaply -- a sound approximation for nearby down-looking aims.
     """
+    if _HAVE_JIT:
+        return _march_jit(vec, state, slot, do_los_checks, eye_z, max_steps)
+    return _march_python(vec, state, slot, do_los_checks, eye_z, max_steps)
+
+
+def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000):
+    """Reference pure-Python march (the bit-exact 6502 transcription)."""
     _get_object_details(vec, state, slot, eye_z=eye_z)
     # $1CDF LSR $0C56 ; $1CE2 LSR $0CDD -- clear top bits (targeted-object trackers).
     # We seed them from live memory and clear bit7 exactly as the ROM does.
@@ -779,6 +801,112 @@ def check_for_line_of_sight_to_tile(
                 return tx, ty, False
             # res == "clear" doesn't happen from slope (it only loops or blocks)
             return tx, ty, False
+    return tx, ty, False
+
+
+def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000):
+    """Numba-accelerated march: drives :func:`sentinel.los_jit.march` for the hot
+    flat/slope terrain steps and falls back to the Python object-stack resolution
+    (:func:`_get_tile_z_from_object`) only when the ray lands on an object tile.
+    Bit-for-bit identical to :func:`_march_python`."""
+    _get_object_details(vec, state, slot, eye_z=eye_z)
+    # $1CDF LSR $0C56 ; $1CE2 LSR $0CDD -- clear top bits (targeted-object trackers).
+    c56 = (state.mem[0x0C56] >> 1) & 0xFF
+    cdd = (state.mem[0x0CDD] >> 1) & 0xFF
+    writable = not isinstance(state.mem, bytes)
+    if writable:
+        state.mem[0x0C56] = c56
+        state.mem[0x0CDD] = cdd
+    c58 = state.mem[0x0C58] & 0xFF
+    c6e = do_los_checks & 0xFF
+    ox = state.obj_x[slot]
+    oy = state.obj_y[slot]
+
+    mem_np = np.frombuffer(state.mem, dtype=np.uint8)
+    steps_left = max_steps
+    ty_in = 0
+    tx = ty = 0
+    while steps_left > 0:
+        (
+            status,
+            tx,
+            ty,
+            vec.px_frac,
+            vec.px_sub,
+            vec.px_whole,
+            vec.pz_frac,
+            vec.pz_sub,
+            vec.pz_whole,
+            vec.py_frac,
+            vec.py_sub,
+            vec.py_whole,
+            used,
+        ) = los_jit.march(
+            mem_np,
+            vec.vx_lo,
+            vec.vx_hi,
+            vec.vz_lo,
+            vec.vz_hi,
+            vec.vy_lo,
+            vec.vy_hi,
+            vec.s30,
+            vec.px_frac,
+            vec.px_sub,
+            vec.px_whole,
+            vec.pz_frac,
+            vec.pz_sub,
+            vec.pz_whole,
+            vec.py_frac,
+            vec.py_sub,
+            vec.py_whole,
+            ox,
+            oy,
+            c6e,
+            ty_in,
+            steps_left,
+        )
+        steps_left -= used
+        if status == los_jit.LOS_CLEAR:
+            return tx, ty, True
+        if status == los_jit.BLOCKED:
+            return tx, ty, False
+        # status == OBJECT: resolve the object stack exactly as $1E3F does, then run
+        # the general (object-aware) check_flat_tile.  $1CFB reset of $0060/$000C/etc.
+        s60 = 0x80
+        c0c_var = 0x80
+        s79 = 0
+        c67 = 0
+        raw = tile_byte(state, tx, ty)  # >= $C0
+        z, s79, c0c_var, c67, c56, cdd, s60 = _get_tile_z_from_object(
+            vec, state, raw, s60, s79, c0c_var, c67, c56, cdd, c58
+        )
+        if writable:
+            state.mem[0x0C56] = c56
+            state.mem[0x0CDD] = cdd
+        # check_flat_tile $1D0D (object surface).
+        tX = z & 0xFF
+        t = s79 - vec.pz_sub
+        s79 = t & 0xFF
+        borrow = 1 if t < 0 else 0
+        d = (tX - vec.pz_whole - borrow) & 0xFF
+        if d & 0x80:
+            ty_in = ty  # tile below -> keep marching from here
+            continue
+        if d != 0:
+            return tx, ty, False
+        if (s79 & 0xFF) >= c0c_var:
+            return tx, ty, False
+        if s60 & 0x40:
+            return tx, ty, False
+        if (c6e | c67) & 0x80:
+            pass
+        else:
+            if not (vec.s30 & 0x80):
+                return tx, ty, False
+        if (tx & 0xFF) == (ox & 0xFF) and (ty & 0xFF) == (oy & 0xFF):
+            ty_in = ty
+            continue
+        return tx, ty, True
     return tx, ty, False
 
 
@@ -1060,6 +1188,34 @@ def sweep_with_centres(state, slot, eye_z, max_steps=200):
             if tile not in centres or centre < centres[tile]:
                 centres[tile] = centre
     return views, centres
+
+
+def sees_tile(
+    state, tile, slot=None, eye_z=None, azimuth_step=AZIMUTH_STEP, max_steps=2000
+):
+    """Whether the observer at `slot` can aim at `tile` with line of sight from its
+    current position.  Equivalent to ``tuple(tile) in visible_tiles(...)`` with the
+    same lattice/order/params, but short-circuits on the first LOS hit instead of
+    building the whole visible-tile map -- the right query when only ONE tile (e.g.
+    the platform) matters."""
+    if slot is None:
+        slot = state.player
+    tx0, ty0 = tile
+    for h in range(0, 256, azimuth_step):
+        for v in PITCH_BAND:
+            tx, ty, los_ok = aim_target(
+                state,
+                h,
+                v,
+                SIGHTS_CX,
+                SIGHTS_CY,
+                slot,
+                eye_z=eye_z,
+                max_steps=max_steps,
+            )
+            if los_ok and tx == tx0 and ty == ty0:
+                return True
+    return False
 
 
 def centre_view(

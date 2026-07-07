@@ -19,6 +19,7 @@ are reproduced here from closed-form expressions (verified to match the ROM byte
 for byte), so no game data is embedded.
 """
 
+import collections
 import math
 
 from sentinel import memmap as mm, los
@@ -343,7 +344,10 @@ def relative_angles(state, observer, target):
     ($001F=$0C78=0, not preview). Returns a dict with the FOV byte ($0C57), the
     horizontal angle ($008A/$008B), the relative z ($0081/$0084), the horizontal
     distance ($007C/$007D) and the target type ($004C)."""
-    zp = {k: 0 for k in range(0x100)}
+    # A zero-page scratch: only a handful of addresses are ever touched, so a
+    # defaultdict(int) (unset reads == 0, exactly like a pre-filled dict) is far
+    # cheaper to allocate than a 256-entry comprehension on this hot enemy-scan path.
+    zp = collections.defaultdict(int)
     otype = state.obj_type[target]
     _relative_xyz(
         zp,

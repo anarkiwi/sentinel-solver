@@ -14,6 +14,7 @@ ROM image.
 | `sentinel/state.py` | the one canonical state: a 64 KB `bytearray` laid out like the game's RAM, with typed object-array views |
 | `sentinel/terrain.py` | height/slope nibble decode and the slope-facet surface |
 | `sentinel/los.py` | the integer line-of-sight ray-march and sights aim vector |
+| `sentinel/los_jit.py` | numba fast-march of the hot LOS inner loop (bit-identical to `los.py`, ~11x faster on full sweeps); auto-used when numba is present, else `los.py` falls back to pure Python |
 | `sentinel/actions.py` | absorb / create / transfer / win and the energy economy |
 | `sentinel/landscape.py` | `generate(landscape) -> State`: the from-scratch board generator |
 | `sentinel/relative.py` | object-relative bearing/distance/vertical angle and the enemy field-of-view + visibility test |

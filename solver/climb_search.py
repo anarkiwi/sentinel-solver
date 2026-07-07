@@ -31,6 +31,7 @@ from solver.plan_game import (
     PlanGame as Game,
     cheb,
     visibility_sweep,
+    sees_tile,
     terrain_z,
     OBJ_X,
     OBJ_Y,
@@ -922,7 +923,7 @@ def _sees_plat(g, plat):
     the observer is ceil'd when the eye carries a fraction (matches endgame's seye)."""
     ie = int(g.eye)
     seye = ie + 1 if (_ENDGAME_FRAC_EYE and g.eye > ie) else ie
-    return plat in visibility_sweep(g.mem, g.player, seye, max_steps=200, coarse=True)
+    return sees_tile(g.mem, plat, g.player, seye, max_steps=200)
 
 
 def _evaluate(g, ctx):

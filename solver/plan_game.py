@@ -77,6 +77,17 @@ def visibility_sweep(mem, player_slot, eye_z, max_steps=320, coarse=False):
     return views
 
 
+def sees_tile(mem, tile, player_slot, eye_z, max_steps=320):
+    """Whether the observer has line of sight to a SINGLE ``tile`` from its current
+    position + eye_z.  Equivalent to ``tuple(tile) in visibility_sweep(...)`` (same
+    lattice/params) but short-circuits on the first hit -- the endgame-launch /
+    ``_sees_plat`` query, where only the platform tile matters."""
+    state = _as_state(mem)
+    return los.sees_tile(
+        state, tuple(tile), player_slot, eye_z=eye_z, max_steps=max_steps
+    )
+
+
 def centre_view_for(mem, tile, player_slot, eye_z, hstep=8, max_steps=2000):
     """The best sights view landing on ``tile`` with line of sight (closest to the
     tile centre), or None when no reachable view sees it."""
