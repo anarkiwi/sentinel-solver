@@ -12,6 +12,7 @@ NUM_SLOTS = 64  # the object arrays are 64 entries each
 MEM_SIZE = 0x10000  # full 64 KB address space
 
 # ---- scalars --------------------------------------------------------------
+OBJECT_EXPOSURE = 0x0014  # $0014: enemy can-see exposure ($80 base/full, $40 head only)
 PLAYER_OBJECT = 0x000B  # index of the player's object slot
 CURSOR = 0x0090  # which enemy slot update_enemies processes this round (7->0)
 MAX_ENEMIES = 0x0C07  # maximum_number_of_enemies
@@ -56,6 +57,9 @@ ROTATION_SPEED_TABLE = 0x9D37  # per-enemy rotation step (+$14 / $EC), indexed b
 COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
 TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
 FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
+TARGETED_OBJECT_IN_LOS = 0x0C56  # march sets bit7 when the ray reaches the target
+TREE_IN_LOS = 0x0CDD  # march sets bit7 when a non-target tree lay in the sightline
+TREE_IN_LOS_TO_HEAD = 0x0C76  # bit6 == a tree lay in the LOS to a robot's head ($17B7)
 
 # ---- the PRNG state -------------------------------------------------------
 PRND_STATE = 0x0C7B  # 5-byte LFSR state $0C7B-$0C7F (prnd $31CA)

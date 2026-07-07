@@ -402,8 +402,12 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         "in_fov": False,
         "full": False,
         "exposure": 0,
+        "tree_in_los_head": False,
         "probes": [],
     }
+    # $188F LDA #0 ; $1891 STA $0014 -- object_exposure is cleared before any early
+    # exit, so even a rejected slot leaves $0014 == 0 (the robot scan then skips it).
+    state.mem[0x0014] = 0
     if state.obj_flags[target] & 0x80:  # empty slot
         return out
     if state.obj_type[target] != expected_type:  # wrong type
@@ -435,8 +439,19 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     base_hi = (z_hi - (1 if z_lo < 0xE0 else 0)) & 0xFF
     probes.append((base_lo, base_hi, 0x00))
 
-    # object_exposure ($0014) starts at 0 ($188A) and each probe shifts one bit in.
-    exposure = 0
+    # object_exposure ($0014) was cleared above; each probe rotates one bit in via the
+    # $18F9-$1901 four-rotate chained-carry cascade:
+    #   $18F9 ROL $0C56   carry_in = no-LOS ;          carry_out = old $0C56 bit7
+    #   $18FC ROR $0014   carry_in = old $0C56 bit7 ;  carry_out = old $0014 bit0
+    #   $18FE ROL $0CDD   carry_in = old $0014 bit0 ;  carry_out = old $0CDD bit7
+    #   $1901 ROR $0C76   carry_in = old $0CDD bit7 ;  carry_out discarded
+    # The march writes $0C56 bit7 when the ray reaches the targeted object's own tile
+    # un-occluded ($1E13, gated on $0C58) and $0CDD bit7 when a non-target tree lay in
+    # the sightline ($1E96 is_tree).  So the target's tree-in-sightline flag rotates
+    # through $0CDD into $0C76: over the two probes (head first, base second) $0C76
+    # ends with bit7 = base-probe tree flag, bit6 = HEAD-probe tree flag -- the byte
+    # find_drainable_robot_loop reads at $17B7 to skip a robot with a tree in front of
+    # its head.
     for plo, phi, do_los in probes:
         zp[0x80] = plo
         _vertical_angle(zp, phi, v_angle_obs)  # sets zp[$8A]/zp[$8B] = vertical bearing
@@ -445,19 +460,24 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         _tx, _ty, los_ok = los.check_for_line_of_sight_to_tile(
             vec, state, observer, do_los_checks=do_los, max_steps=max_steps
         )
-        # $18F9 ROL $0C56 (carry in = no-LOS) then $18FC ROR $0014 (carry out = the
-        # OLD $0C56 bit7).  The march sets $0C56 bit7 when it steps onto the targeted
-        # object's own tile un-occluded ($1E13, gated on $0C58) -- so "reached", not
-        # "the ray ended on the tile", is what marks the object visible.  A ray that
-        # clears intervening terrain and passes over the target's head still reaches
-        # its tile, which is how an enemy sees a robot standing above its eye.
-        c56 = state.mem[0x0C56]
-        reached = (c56 >> 7) & 1
+        # The march writes the marched-out $0C56/$0CDD trackers back to memory, so read
+        # them here exactly as the cascade does.
+        c56 = state.mem[0x0C56]  # $18F9 ROL $0C56
+        reached = (c56 >> 7) & 1  # carry out == old $0C56 bit7
         state.mem[0x0C56] = ((c56 << 1) | (0 if los_ok else 1)) & 0xFF
-        exposure = ((exposure >> 1) | (reached << 7)) & 0xFF
+        c14 = state.mem[0x0014]  # $18FC ROR $0014
+        c14_out = c14 & 1  # carry out == old $0014 bit0
+        state.mem[0x0014] = ((reached << 7) | (c14 >> 1)) & 0xFF
+        cdd = state.mem[0x0CDD]  # $18FE ROL $0CDD
+        tree_flag = (cdd >> 7) & 1  # carry out == old $0CDD bit7 (tree in sightline)
+        state.mem[0x0CDD] = ((cdd << 1) | c14_out) & 0xFF
+        c76 = state.mem[0x0C76]  # $1901 ROR $0C76
+        state.mem[0x0C76] = ((tree_flag << 7) | (c76 >> 1)) & 0xFF
         out["probes"].append(bool(reached))
-    state.mem[0x0014] = exposure
+    exposure = state.mem[0x0014]
     out["exposure"] = exposure
     # $0014 top bit == fully visible (base reached for a robot, the sole probe else).
     out["full"] = bool(exposure & 0x80)
+    # $0C76 bit6 == a non-target tree lay in the enemy's sightline to the (robot) head.
+    out["tree_in_los_head"] = bool(state.mem[0x0C76] & 0x40)
     return out
