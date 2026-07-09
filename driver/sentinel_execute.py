@@ -9,7 +9,7 @@ and an Executor exposing raw memory reads (`rd`) and a decoded live GameState
 from driver import sentinel_state as gs
 from driver import core
 from sentinel import memmap as mm
-from sentinel import los
+from sentinel import aim
 from sentinel.state import State
 from sentinel.memmap import T_BOULDER, T_ROBOT, T_TREE
 
@@ -114,16 +114,14 @@ class Executor:
 
 
 def _live_centre_view(bm, tile, log, label, verb):
-    """Resolve a deferred aim (plan view None) against CURRENT live memory: the best
-    keyboard centre-aimed sights view onto ``tile`` (sentinel.los on a RAM snapshot).
-    Returns the view dict (cursor as a list) or None when there is no live LOS."""
+    """Resolve a deferred aim (plan view None) against CURRENT live memory via the
+    SHARED aim proposer (``sentinel.aim.propose`` at the player's TRUE eye) on a RAM
+    snapshot -- the same proposer the planner and sim use, so the three never diverge
+    on how a tile is aimed. Returns the view dict (cursor as a list) or None when no
+    keyboard aim lands on ``tile``."""
     mem = core.live_image(bm)
-    ps = mem[mm.PLAYER_OBJECT]
-    eye_z = mem[mm.OBJECTS_Z_HEIGHT + ps]
-    view = los.centre_view(State.from_mem(mem), tile, ps, eye_z=eye_z)
-    if view is not None:
-        view["cursor"] = list(view["cursor"])
-    else:
+    view = aim.propose(State.from_mem(mem), tile, eye_z=None)
+    if view is None:
         log(
             f"[{label}] {verb} {tile}: no live keyboard view (no LOS); "
             "firing blind, verify() decides"
@@ -325,6 +323,30 @@ def perform_step(ex, drv, label, stp, log, result):
     if verb == "absorb" and otype != 5:
         log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
         return "best_effort_miss"
+    # A verify() failure whose PRIMARY on-tile effect DID happen -- the object landed on
+    # the target tile (create/absorb) or the player moved (transfer) -- but a SECONDARY
+    # invariant diverged (a concurrent meanie spawn / tree discharge changed the GLOBAL
+    # object count, or an in-window drain changed energy) is a LIVE WORLD-DIVERGENCE, not
+    # a wrong-tile aim: the aim was exact, the world moved under it. The caller resyncs +
+    # replans on "diverge"; only a genuine wrong-tile landing stays "fail" (the aim-exact
+    # crash the live contract raises on).
+    primary_ok = (
+        (verb == "create" and objs1 == objs0 + 1)
+        or (verb == "absorb" and objs1 == objs0 - 1)
+        or (
+            verb == "transfer"
+            and (
+                slot1 != slot0
+                or bool(after.player and (after.player.x, after.player.y) == tile)
+            )
+        )
+    )
+    if primary_ok:
+        log(
+            f"    (world-divergence at {label}: aim landed on {tile}, "
+            f"state diverged [{msg}]; resync + replan)"
+        )
+        return "diverge"
     if verb == "create" and e0 <= otype_cost(otype):
         result["energy_block"] = {
             "step": label,

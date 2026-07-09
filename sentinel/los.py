@@ -1074,19 +1074,19 @@ CURSOR_CY = list(range(32, 159, 9))  # [32,41,...,158], centre 95
 # change for those tiles); only tiles reachable ONLY via a pitched body get a pitched view.
 _V_PRIORITY = [KBD_V_ANGLE] + [v for v in PITCH_BAND if v != KBD_V_ANGLE]
 
-# LATTICE REDUCTION (perf): the full 15x15 sights-cursor grid at EVERY one of the 27 body
-# pitches is ~27x the old lattice -- ~2.2s per sweep, and with ~21 sweeps + the downstream
-# search cost the ls0 offline solve blows the 60s CPU budget.  The body v_angle already gives
-# coarse pitch AND the 8-notch body h gives coarse azimuth, so at a PITCHED body the cursor
-# only needs to FILL the gaps, not resolve them finely.  So: at the primary pitch ($F5, the
-# level default every previously-landable tile used) keep the FULL 15x15 cursor grid (exact
-# old behaviour, 0 regressions); at the 26 PITCHED body angles sweep a COARSER cursor grid
-# (every 2nd cx, every 3rd cy).  Validated (tests/test_landable.py): this keeps the ls335
-# pitched-down (11,17)->(11,18) build and EVERY ls0 forward build landable (the hard
-# completeness bar); it costs one marginal ls0-start extra vs the full pitched grid (48 vs 49
-# tiles), the price of fitting the 60s budget with margin (~51s CPU vs ~58s at the full grid).
-CURSOR_CX_PITCHED = CURSOR_CX[::2]  # [17,35,...,143], 8 of 15 -- coarse azimuth fill
-CURSOR_CY_PITCHED = CURSOR_CY[::3]  # [32,59,86,113,140], 5 of 15 -- coarse pitch fill
+# COMPLETENESS over the pitched body angles: the FULL 9px cursor grid (15x15) is swept at
+# EVERY body pitch, not just at $F5.  A coarser cursor grid at the 26 pitched angles (formerly
+# every 2nd cx, every 3rd cy) DROPPED landing views the ROM keyboard genuinely reaches -- e.g.
+# ls335 absorb (22,14) at (h=88, v=241, cx=53, cy=122): cy=122 is not on the [::3] grid, so the
+# reduced sweep reported the tile UNREACHABLE though a real keyboard aim lands the sights on it.
+# The oracle must equal the full 4-DOF brute sweep (h step8 x v-band step4 x cx 9px x cy 9px =
+# the ROM via aim_target), so the pitched cursor grid is the FULL grid too.  Perf is a non-issue:
+# the whole lattice vector set is precomputed once (:data:`_VEC_CACHE`) and each state sweep is a
+# single batched numba march; the ls0 offline solve issues only ~4 sweeps, so the ~5x per-sweep
+# cost adds a few seconds to a multi-minute solve.  Validated 0-false-negative-vs-brute against
+# the recorded human wins (:mod:`sentinel.test_human_win_logs`).
+CURSOR_CX_PITCHED = CURSOR_CX  # full 9px azimuth grid at pitched body angles too
+CURSOR_CY_PITCHED = CURSOR_CY  # full 9px pitch grid at pitched body angles too
 
 # Precomputed lattice ray vectors, keyed by the (h, v, cx, cy) grid.  The ray vector for an
 # aim depends ONLY on the aim params (prepare_vector_from_player_sights reads neither `state`
@@ -1354,10 +1354,9 @@ def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=Fal
     hgrid = sorted(range(0, 256, AZIMUTH_STEP), key=lambda h: _angle_dist(h0, h))
     cxs = sorted(CURSOR_CX, key=lambda c: abs(c - SIGHTS_CX))
     cys = sorted(CURSOR_CY, key=lambda c: abs(c - SIGHTS_CY))
-    # PITCHED-body probes use the same reduced cursor grid as the batched sweep (the body
-    # v_angle supplies the pitch, the cursor only fills gaps -- see CURSOR_CX/CY_PITCHED), so
-    # this single-tile query stays consistent with landable_views and the v_band MISS (full
-    # lattice exhaust) is ~4x cheaper.
+    # PITCHED-body probes sweep the SAME full 9px cursor grid as the batched sweep (a coarser
+    # grid dropped landing views the ROM keyboard reaches -- see CURSOR_CX/CY_PITCHED), so this
+    # single-tile query stays consistent with landable_views and the full 4-DOF brute sweep.
     cxs_p = sorted(CURSOR_CX_PITCHED, key=lambda c: abs(c - SIGHTS_CX))
     cys_p = sorted(CURSOR_CY_PITCHED, key=lambda c: abs(c - SIGHTS_CY))
     vgrid = (

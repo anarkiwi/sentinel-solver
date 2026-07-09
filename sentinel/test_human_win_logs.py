@@ -19,10 +19,17 @@ and two aim/buildability validations that surface REAL gaps (kept strict, marked
 
 * the keyboard-aim landability oracle (:func:`sentinel.los.landable_views` /
   ``landable_view(v_band=True)``) must contain every tile the human built or
-  absorbed on.  It does NOT for far tiles: 4 (ls0) + 4 (ls42) + 53 (ls335) build
-  tiles the human demonstrably acted on are OFF the coarse keyboard-aim lattice
-  though geometrically visible (:func:`sentinel.threat.player_sees_tile` sees
-  them).  This is the "9px-cursor-grid" D1 oracle-exhaustiveness gap.
+  absorbed on.  The oracle now sweeps the FULL 9px sights-cursor grid at every body
+  pitch (matching the full 4-DOF brute sweep = the ROM via ``aim_target``), which
+  closed the coarse-pitched-cursor gap.  What remains OFF the oracle is 4 (ls0) + 4
+  (ls42) + 48 (ls335) build tiles that are geometrically visible
+  (:func:`sentinel.threat.player_sees_tile` sees them) yet NOT reticle-landable by
+  ANY ROM keyboard aim from the DISTILLED pre-state: the exhaustive 4-DOF brute
+  sweep (and even a 1px-cursor sweep) also misses them, the reticle landing on a
+  nearer tile.  The distilled fixture state (intermediate enemy objects stripped;
+  player position/eye captured at the distilled moment) differs from the human's
+  true fire state, so the aim geometry cannot be reproduced -- a fixture/telemetry
+  limit, not an oracle-exhaustiveness gap.
 * the RECORDED aim reproducing the built tile.  The logged ``objects_h_angle`` /
   ``objects_v_angle`` are post-action pan-drift transients, not the settled fire
   aim (``$365D``, outside the ``[0:0x0CFF]`` dump), so exact reproduction is
@@ -44,9 +51,15 @@ _FIX_DIR = os.path.join(os.path.dirname(__file__), "tests", "fixtures", "human_w
 FIXTURES = ("ls0.json", "ls42.json", "ls335.json")
 
 # Build/absorb tiles the human acted on that the keyboard-aim landability oracle
-# reports UNREACHABLE -- the D1 far-tile gap (each is geometrically visible via
-# threat.player_sees_tile but off the coarse 9px-cursor aim lattice; stable across
-# march caps 1200..6000).  Indices into each fixture's ``events`` list.
+# reports UNREACHABLE.  Each is geometrically visible via threat.player_sees_tile but
+# NOT reticle-landable by any ROM keyboard aim from the DISTILLED pre-state: the
+# exhaustive full 4-DOF brute sweep (h step8 x v-band step4 x cx 9px x cy 9px, = the ROM
+# via aim_target) AND even a 1px-cursor sweep also miss them -- the reconstructed state
+# differs from the human's true fire state, so the reticle lands on a nearer tile.  This
+# is a fixture/telemetry limit, not an oracle-exhaustiveness gap.  (Five former members --
+# ls335 ev 51/57/108/155/157 -- WERE a real gap: reachable by the full sweep but dropped by
+# the old coarse pitched-cursor grid.  The full-cursor-at-every-pitch fix flipped them to
+# GREEN; they are no longer listed.)  Indices into each fixture's ``events`` list.
 D1_LANDABLE_GAP = {
     "ls0.json": frozenset({4, 5, 10, 16}),
     "ls42.json": frozenset({12, 15, 18, 36}),
@@ -64,10 +77,8 @@ D1_LANDABLE_GAP = {
             38,
             43,
             50,
-            51,
             52,
             56,
-            57,
             58,
             61,
             67,
@@ -83,7 +94,6 @@ D1_LANDABLE_GAP = {
             95,
             101,
             106,
-            108,
             110,
             111,
             113,
@@ -99,9 +109,7 @@ D1_LANDABLE_GAP = {
             145,
             148,
             152,
-            155,
             156,
-            157,
             164,
             181,
             182,
@@ -126,9 +134,12 @@ _REPLAY_DIVERGE_REASON = (
 )
 
 _D1_GAP_REASON = (
-    "D1 keyboard-aim landability gap: the human built/absorbed on a "
-    "geometrically-visible far tile that is off the coarse 9px-cursor aim "
-    "lattice (los.landable_views / landable_view). See module docstring."
+    "the human built/absorbed on a geometrically-visible tile "
+    "(threat.player_sees_tile) that is NOT reticle-landable by any ROM keyboard aim "
+    "from the DISTILLED pre-state -- the exhaustive full 4-DOF brute sweep (and a 1px "
+    "cursor sweep) also miss it, the reticle landing on a nearer tile.  Fixture state "
+    "differs from the true fire state; a telemetry limit, not an oracle gap.  See the "
+    "module docstring."
 )
 
 

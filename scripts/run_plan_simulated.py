@@ -45,7 +45,7 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, ROOT)
 
 from sentinel import landscape as _landscape
-from sentinel import actions, enemies as SE
+from sentinel import actions, enemies as SE, aim
 from sentinel import memmap as mm
 from sentinel import actioncost
 from solver import plan_game
@@ -118,11 +118,10 @@ def execute_step(world, stp, heading, budget, log):
     verb, otype, tile = stp["verb"], stp["otype"], tuple(stp["target"])
     view = stp.get("view")
     # A deferred view (on-boulder synthoid re-aim, or a coarse absorb) is resolved
-    # against CURRENT world memory, exactly as the live runner does before firing.
+    # against CURRENT world memory via the SHARED aim proposer (sentinel.aim.propose,
+    # true eye) -- exactly as the live runner and planner resolve it before firing.
     if verb in ("create", "absorb") and view is None:
-        ps = world.player
-        eye_z = world.mem[mm.OBJECTS_Z_HEIGHT + ps]
-        view = plan_game.centre_view_for(bytes(world.mem), tile, ps, eye_z)
+        view = aim.propose(world, tile, eye_z=None)
 
     # --- aim: the world runs while the view pans to the target bearing ---
     if view:
@@ -130,6 +129,14 @@ def execute_step(world, stp, heading, budget, log):
         heading[0] = view.get("h_angle", heading[0])
         heading[1] = view.get("v_angle", heading[1])
         set_facing(world, view)
+
+    # ROM action LOS gate ($1B46, sentinel.aim.gate at the TRUE eye): the sim now
+    # rejects a no-LOS aim exactly like the live driver -- a resolved view whose
+    # real-eye ray does not reach `tile` fires NOTHING (no world mutation), it misses.
+    if view is not None and not aim.gate(world, view, tile):
+        if verb == "create":
+            return "create"
+        return "sentinel" if otype == T_SENTINEL else "miss"
 
     # Per-action settle: the ROM-cadence cost the enemies advance AFTER the pan,
     # while the action animates and the live driver reads back the result. Priced

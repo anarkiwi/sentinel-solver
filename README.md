@@ -254,38 +254,51 @@ The live driver additionally needs Docker and the `asid-vice:latest` image
 ## Run
 
 ```bash
-# plan a win with the best-first lookahead (landscape 0, depth 2; ~25s):
-python3 solver/climb_search.py 0 2     # prints native_won True + the step plan
+# plan a win offline with the weighted-A* macro planner (landscape 0; ~55s):
+python3 solver/astar_planner.py 0     # prints won=True + peak eye + step count
 
-# the plan is validated by construction: it is built on the sentinel simulator,
-# which is bit-exact vs the real 6502 code (golden-fixture CI, see below).
-
-# run the planner against the simulator as a TICK-ACCURATE "real game": enemies
+# run that planner against the simulator as a TICK-ACCURATE "real game": enemies
 # advance every game round (drain/rotate/downgrade) between and during actions,
-# and the loop resyncs + replans each step (~45s, no emulator):
+# and the loop resyncs + replans each step (~55s, no emulator):
 python3 scripts/run_plan_simulated.py 0     # reports WON / lost + the climb log
+```
 
-# drive the same loop in the real game and record it (Docker; ~3-20 min). Boot +
-# landscape entry are handled by the driver, which auto-caches a code-entry
-# snapshot under renders/ to skip the ~50s tape load after the first run:
-python3 scripts/run_plan_live.py --digits 0000
+### Live run + video record
+
+Drive the same plan loop in the real game (asid-vice, in Docker) and record the
+run as an AVI. The landscape is chosen by the 4 typed code digits (`--digits`);
+code `0000` is landscape 0. Boot + landscape entry are handled by the driver,
+which auto-caches a code-entry snapshot under `renders/` to skip the ~50s tape
+load after the first run.
+
+```bash
+# win landscape 0 live and record it (Docker; first run ~3-20 min incl. tape load):
+python3 scripts/run_plan_live.py --digits 0000 --video-name ls0_win.avi
+
+# the recording lands at renders/ls0_win.avi (default name: solver_run_<digits>.avi).
+# the script prints WIN VERIFIED PASS/FAIL ($0CDE bit6), the per-step log, and the
+# AVI's validated size/frame count. exit status is 0 on a verified win.
+```
+
+Options: `--max-seconds` (wall cap, default 1500), `--max-replans` (live resync +
+re-plan budget, default 4), `--video-name` (AVI basename under `renders/`).
+Env: `NO_RECORD=1` skips the AVI; `BINMON_HOST=<ip>` overrides the auto-detected
+container bridge IP if the binmon connection can't be reached.
+
+View the result:
+
+```bash
+ffplay renders/ls0_win.avi          # or any AVI player; mplayer/vlc also work
 ```
 
 Sharing one loop makes the two runners a controlled comparison: `run_plan_live`
-(`scripts/`) is now just glue — it wires the solver's decision to the driver's
+(`scripts/`) is just glue — it wires the solver's decision to the driver's
 booted-game session (`driver.core.boot_and_play`) and per-step keyboard executor
 (`driver.sentinel_execute.perform_step`), owning no emulator driving itself.
 
-**Status: the solver does not yet win.** The current `climb_search` is a
-receding-horizon best-first search whose objective is height with a stack of soft cost
-penalties. That model does not reproduce how the game is actually won — a recovered
-human ls0 win shows a **deterministic, never-seen** strategy (gaze-gap timing, not the
-static "ever-visible" mask; aim-coherent ping-pong so every aim is one U-turn; height
-from cheap transfers to naturally-high terrain with minimal, *distant* builds; fuel
-deferred by visibility; launch from afar). The next step is to replace the cost-weighted
-search with a **deterministic constructive plan model** (gaze oracle as a hard
-constraint, distance-priced aim, offline plan + live re-schedule, missed-aim-is-a-crash).
-Full write-up and the plan-model spec: [docs/outstanding-issues.md](docs/outstanding-issues.md).
+The planner wins landscape 0 offline and against the tick-accurate simulator
+(on-platform, zero-drain). Remaining work toward reliable *live* wins and other
+landscapes is tracked in [docs/outstanding-issues.md](docs/outstanding-issues.md).
 
 ## Tests
 

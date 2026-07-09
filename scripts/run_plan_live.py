@@ -101,14 +101,17 @@ def execute_live(
     execute those steps one at a time via driver.sentinel_execute.perform_step:
 
       * "ok"/"best_effort_miss" -- continue (a landed create seeds built columns).
-      * "aim_miss"/"drained"    -- the live view could not be driven / energy fell
-                                   below a build cost, so NOTHING landed on a wrong
-                                   tile; RESYNC + re-plan() from the true live state
-                                   and restart, capped at ``max_replans``.
-      * "fail"                  -- verify() rejected the fire (wrong tile / count /
-                                   energy delta). The offline plan is aim-exact, so a
-                                   rejected fire means the MODEL diverged from the ROM:
-                                   raise RuntimeError. Do NOT smooth it over or replan.
+      * "aim_miss"/"drained"/"diverge" -- the AIM was not wrong: nothing fired (view
+                                   undriveable / energy below cost), or the object DID
+                                   land on the target tile but the world diverged under
+                                   it (a concurrent meanie spawn / discharge / in-window
+                                   drain -- "diverge"). RESYNC + re-plan() from the true
+                                   live state and restart, capped at ``max_replans``.
+      * "fail"                  -- verify() rejected the fire AND the primary on-tile
+                                   effect did NOT happen: the object landed on the WRONG
+                                   tile. The offline plan is aim-exact, so a wrong-tile
+                                   landing means the MODEL diverged from the ROM: raise
+                                   RuntimeError. Do NOT smooth it over or replan.
 
     On a clean run of every step the endgame transfer has landed the player ON the
     platform tile, so fire the final hyperspace from there (fire_hyperspace sets the
@@ -186,20 +189,45 @@ def execute_live(
         for stp in result_plan.steps:
             label += 1
             tile = tuple(stp["target"])
+            if (
+                os.environ.get("DUMP_LIVE")
+                and stp["verb"] == "absorb"
+                and stp.get("otype") == 5
+            ):
+                # Capture the PRE-fire live 64 KB image for the endgame Sentinel absorb,
+                # to diff the live launch state (player pos/eye, objects on the down-look
+                # ray) against the offline forecast when the far launch misses live.
+                try:
+                    with ex.bm.halted():
+                        _mem = core.live_image(ex.bm)
+                    _p = os.path.join(ROOT, "renders", f"live_endgame_L{label}.bin")
+                    with open(_p, "wb") as _f:
+                        _f.write(bytes(_mem))
+                    _lg = plan_game.PlanGame.from_mem(_mem, landscape)
+                    log(
+                        f"    [DUMP_LIVE] pre-endgame -> {_p}; live player "
+                        f"{_lg.player_xy()} eye {_lg.eye} energy {_lg.energy}"
+                    )
+                except Exception as _e:  # noqa: broad-except
+                    log(f"    [DUMP_LIVE] failed: {_e}")
             outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             if outcome in ("ok", "best_effort_miss"):
                 if outcome == "ok" and stp["verb"] == "create":
                     built_anything = True
                 continue
-            if outcome in ("aim_miss", "drained"):
-                # NOTHING landed on a wrong tile -- the live view could not be driven, or
-                # energy fell below the build cost. Resync + re-plan() from the true live
-                # state (a fresh plan re-snaps the view / reroutes the climb) and restart.
+            if outcome in ("aim_miss", "drained", "diverge"):
+                # The AIM was not wrong. Either nothing fired (the live view could not be
+                # driven / energy fell below cost), or the primary on-tile effect DID land
+                # but the world diverged under it -- a concurrent meanie spawn / discharge
+                # / in-window drain ("diverge"). Both are live-state divergences the loop is
+                # designed to self-heal: resync + re-plan() from the true live state (which
+                # now reflects the landed object and any new meanies) and restart.
                 log(f"    LIVE: {stp['verb']} {tile} -> {outcome}; resync + re-plan")
                 replan_needed = True
                 break
-            # outcome == "fail": verify() rejected the fire. The offline plan is aim-exact,
-            # so a wrong-tile / wrong-count / wrong-energy delta means the MODEL is wrong.
+            # outcome == "fail": verify() rejected the fire AND the primary on-tile effect
+            # did NOT happen -- the object landed on the WRONG tile (or no tile). The offline
+            # plan is aim-exact, so a wrong-tile landing means the MODEL is wrong.
             # Do NOT smooth it over, do NOT replan -- CRASH loudly and let it propagate.
             raise RuntimeError(
                 f"LIVE aim-exact plan fired on the WRONG target: step {stp['verb']} "

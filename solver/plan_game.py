@@ -8,7 +8,7 @@ The module also provides the line-of-sight sweep wrappers the climb planner uses
 """
 
 from sentinel import landscape as _landscape
-from sentinel import actions, los, threat
+from sentinel import actions, aim, los, threat
 from sentinel import memmap as mm
 from sentinel.state import State
 
@@ -192,7 +192,11 @@ class PlanGame:
     def create(self, otype, tile, view, note=""):
         """Build ``otype`` on ``tile`` (delegates to actions.create, so the
         objects_flags chain + tile byte + energy match the ROM).  Returns the new
-        slot, or None if ROM-infeasible."""
+        slot, or None if ROM-infeasible OR the sights ``view`` has no line of sight
+        to ``tile`` at the true eye (``aim.gate`` -- the ROM action LOS gate $1B46,
+        the same check the sim runner and driver apply)."""
+        if view is not None and not aim.gate(self.state, view, tuple(tile)):
+            return None  # no real-eye LOS on the resolved aim -- the ROM would abort
         slot = actions.create(self.state, otype, tuple(tile))
         if slot is None:
             return None
@@ -229,8 +233,10 @@ class PlanGame:
         )
 
     def absorb(self, slot, view, note=""):
-        otype = int(self.state.obj_type[slot])
         tile = (self.state.obj_x[slot], self.state.obj_y[slot])
+        if view is not None and not aim.gate(self.state, view, tile):
+            return False  # ROM action LOS gate $1B46: no real-eye LOS -> no absorb
+        otype = int(self.state.obj_type[slot])
         flags = self.state.obj_flags[slot]
         actions.absorb(self.state, slot)  # gains energy, removes object, repairs tile
         if 0x40 <= flags <= 0x7F:  # an object sat below -> it becomes the tile top
@@ -251,6 +257,7 @@ class PlanGame:
                 "note": note,
             }
         )
+        return True
 
     def clone(self):
         """Independent branch copy for lookahead search."""

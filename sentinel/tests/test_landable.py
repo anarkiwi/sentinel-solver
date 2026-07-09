@@ -27,12 +27,13 @@ LS0 = os.path.join(ROOT, "out", "play_20260707_193356.jsonl")
 LS335 = os.path.join(ROOT, "out", "play_20260707_203210.jsonl")
 
 # The exact aim-landable set from the real ls0 start (8,17,eye5) -- a regression lock on the
-# oracle. Now the v-swept set (body v_angle swept over PITCH_BAND as well as the sights
-# cursor): 48 tiles, a strict superset of the old v=$F5-only 17-tile set (the extra tiles are
-# near/below builds the player pitches the body down for). Reflects the documented pitched-v
-# lattice reduction (los.CURSOR_CX/CY_PITCHED): the full pitched grid yields one more tile,
-# (17,14); the reduced grid drops that single marginal extra to fit the 60s solve budget while
-# keeping every ground-truth build landable. A geometric-visibility test reports far more still.
+# oracle. The v-swept set (body v_angle swept over PITCH_BAND as well as the sights cursor):
+# 49 tiles, a strict superset of the old v=$F5-only 17-tile set (the extra tiles are near/below
+# builds the player pitches the body down for). Now the FULL 9px sights-cursor grid is swept at
+# every body pitch (los.CURSOR_CX/CY_PITCHED == the full grid), matching the full 4-DOF brute
+# sweep = the ROM via aim_target; this adds (17,14) -- a genuine keyboard landing (h=72, v=237,
+# cursor [134,131]) the old coarse pitched-cursor grid dropped. A geometric-visibility test
+# reports far more still.
 LS0_START_LANDABLE = {
     (7, 10),
     (7, 11),
@@ -78,6 +79,7 @@ LS0_START_LANDABLE = {
     (16, 14),
     (16, 16),
     (17, 13),
+    (17, 14),
     (18, 13),
     (18, 14),
     (19, 14),
