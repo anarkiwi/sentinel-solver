@@ -80,11 +80,13 @@ def launch_tiles(state, plat, plat_ground) -> set:
 
 
 def down_look_los(g, plat) -> bool:
-    """Line of sight from the PlanGame `g`'s CURRENT tile/eye down to `plat`. A
-    fractional eye above `plat_ground` sees down onto the platform, so the observer
-    height is ceiled before the march."""
-    seye = int(g.eye) + (1 if g.eye > int(g.eye) else 0)
-    return threat.player_sees_tile(g.state, tuple(plat), g.player, eye_z=seye)
+    """Line of sight from the PlanGame `g`'s CURRENT tile/eye down to `plat`, using
+    the player's TRUE eye (``eye_z=None`` reads the real z_height + z_frac from the
+    object, exactly what the ROM's aim march uses at fire time). An earlier ceil of
+    the eye to the next integer over-estimated the observer by up to ~1 tile and
+    granted a marginal far down-look LOS the real eye does not have -- the endgame
+    then fired blind and missed live (the (5,16)->(12,4) ls0 launch)."""
+    return threat.player_sees_tile(g.state, tuple(plat), g.player, eye_z=None)
 
 
 def endgame_ready(g, plat, plat_ground) -> bool:

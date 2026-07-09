@@ -9,7 +9,7 @@ and an Executor exposing raw memory reads (`rd`) and a decoded live GameState
 from driver import sentinel_state as gs
 from driver import core
 from sentinel import memmap as mm
-from sentinel import los
+from sentinel import aim
 from sentinel.state import State
 from sentinel.memmap import T_BOULDER, T_ROBOT, T_TREE
 
@@ -114,16 +114,14 @@ class Executor:
 
 
 def _live_centre_view(bm, tile, log, label, verb):
-    """Resolve a deferred aim (plan view None) against CURRENT live memory: the best
-    keyboard centre-aimed sights view onto ``tile`` (sentinel.los on a RAM snapshot).
-    Returns the view dict (cursor as a list) or None when there is no live LOS."""
+    """Resolve a deferred aim (plan view None) against CURRENT live memory via the
+    SHARED aim proposer (``sentinel.aim.propose`` at the player's TRUE eye) on a RAM
+    snapshot -- the same proposer the planner and sim use, so the three never diverge
+    on how a tile is aimed. Returns the view dict (cursor as a list) or None when no
+    keyboard aim lands on ``tile``."""
     mem = core.live_image(bm)
-    ps = mem[mm.PLAYER_OBJECT]
-    eye_z = mem[mm.OBJECTS_Z_HEIGHT + ps]
-    view = los.centre_view(State.from_mem(mem), tile, ps, eye_z=eye_z)
-    if view is not None:
-        view["cursor"] = list(view["cursor"])
-    else:
+    view = aim.propose(State.from_mem(mem), tile, eye_z=None)
+    if view is None:
         log(
             f"[{label}] {verb} {tile}: no live keyboard view (no LOS); "
             "firing blind, verify() decides"

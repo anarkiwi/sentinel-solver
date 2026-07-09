@@ -446,7 +446,8 @@ def _refuel(g, log, sweep_max_steps=320, sweep_coarse=False):
             # plan on a phantom bank. On a SAFE tile no drain fires, so this never trips.
             if e_pre - g.energy >= mm.ENERGY_IN_OBJECTS[ot]:
                 break
-        g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel")
+        if not g.absorb(slot, sweep[tile], f"absorb {_FUEL_NAME[ot]} for fuel"):
+            continue  # ROM action LOS gate rejected the aim -> no absorb, no credit
         gained += mm.ENERGY_IN_OBJECTS[ot]
         tiles_done.add(tile)
         log(f"    +fuel: absorbed {_FUEL_NAME[ot]} {tile}, energy {g.energy}")
@@ -539,7 +540,10 @@ def endgame(g, plat, log):
     view = _platform_launch_view(g, plat, v_band=True)
     if view is None:
         return False
-    g.absorb(g.sentinel_slot, view, "absorb Sentinel")
+    if not g.absorb(g.sentinel_slot, view, "absorb Sentinel"):
+        return (
+            False  # ROM action LOS gate: no real-eye LOS to the platform -> no launch
+        )
     log(f"  absorbed Sentinel from eye {g.eye}, energy {g.energy}")
     if g.feasible(0, plat):
         g.transfer(

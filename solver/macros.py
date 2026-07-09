@@ -19,8 +19,9 @@ from typing import Optional
 
 from solver import plan_game, cost, launch
 from solver.search_node import Node
-from sentinel import los, actions, actioncost
+from sentinel import los, actions, actioncost, aim
 from sentinel import memmap as mm
+from sentinel.state import State
 
 # Fuel types the refuel macro will absorb (below-eye, in-LOS): synthoid, sentry,
 # tree, boulder.  Meanies/Sentinel/platform are excluded.
@@ -95,12 +96,13 @@ def _full_top(g, slot):
     return g.state.obj_z_height[slot] + g.state.obj_z_frac[slot] / 256.0
 
 
-def _boulder_centre_feasible(g, tile, max_steps=2000):
+def _boulder_centre_feasible(g, tile):
     """Simulate landing a boulder at `tile` (a byte-level mutation mirroring create's own
     boulder placement, on a throwaway mem copy) and check the on-boulder synthoid then has
-    a keyboard-reachable centre-aim ($1E48 <$40) from the PLAYER's current eye.  The
-    pre-build sweep's centre estimate is against the BARE surface, so a tile can look
-    centre-ok yet have no valid on-boulder aim once the boulder is real -- catch it here.
+    a keyboard aim onto it from the PLAYER's TRUE eye (``aim.propose`` -- the single
+    landable proposer, gated by the ROM action LOS at fire time).  The pre-build sweep's
+    estimate is against the BARE surface, so a tile can look ok yet have no valid on-boulder
+    aim once the boulder is real -- catch it here.
     """
     if not g.free:
         return False
@@ -125,10 +127,7 @@ def _boulder_centre_feasible(g, tile, max_steps=2000):
     mem[mm.OBJECTS_Z_HEIGHT + slot] = z & 0xFF
     mem[mm.OBJECTS_Z_FRACTION + slot] = zf & 0xFF
     mem[mm.OBJECTS_TYPE + slot] = mm.T_BOULDER
-    return (
-        plan_game.centre_view_for(mem, tile, g.player, int(g.eye), max_steps=max_steps)
-        is not None
-    )
+    return aim.propose(State(mem), tile, eye_z=None, player=g.player) is not None
 
 
 def _buildable(g, tile, use_b):
@@ -173,21 +172,27 @@ def _apply_climb(n, t2, use_b, n_b, view, gaze) -> Optional[Node]:
     prev_slot, prev_tile = g.player, g.player_xy()
     if use_b:
         for i in range(max(1, n_b)):
-            g.create(mm.T_BOULDER, t2, view if i == 0 else None, "climb boulder")
+            b = g.create(mm.T_BOULDER, t2, view if i == 0 else None, "climb boulder")
+            if (
+                i == 0 and b is None
+            ):  # gated aim has no real-eye LOS -> not buildable here
+                return None
         s = g.create(mm.T_ROBOT, t2, None, "climb synthoid")
     else:
         s = g.create(mm.T_ROBOT, t2, view, "hop synthoid")
     if s is None:
         return None
     g.transfer(s, "step")
-    # look-back reabsorb of the departed shell if it is now below eye and in LOS.
-    sw = plan_game.visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200)
+    # look-back reabsorb of the departed shell if it is now below eye and in LOS.  The
+    # aim is proposed at the TRUE eye (aim.propose == the single player-aim proposer);
+    # absorb re-gates it and no-ops on a reject, so this stays best-effort.
+    rv = aim.propose(g.state, prev_tile, eye_z=None, player=g.player)
     if (
-        prev_tile in sw
+        rv is not None
         and g.state.obj_type[prev_slot] == mm.T_ROBOT
         and _full_top(g, prev_slot) <= g.eye + 1e-9
     ):
-        g.absorb(prev_slot, sw[prev_tile], "reabsorb prior shell")
+        g.absorb(prev_slot, rv, "reabsorb prior shell")
     # legality gate 2: managed-exposure survivability over the whole window.
     ok, _ea = cost.survivable(g, prev_tile, window)
     if not ok:
@@ -268,7 +273,8 @@ def _apply_refuel(n, tile, slot, view) -> Optional[Node]:
     from_tile = g.player_xy()
     e0 = g.energy
     window = cost.aim_rounds(n.vh, n.vv, view) + actioncost.SETTLE["absorb"]
-    g.absorb(slot, view, "refuel")
+    if not g.absorb(slot, view, "refuel"):
+        return None  # ROM action LOS gate rejected the aim -> the refuel did not happen
     ok, ea = cost.survivable(g, from_tile, window)
     if not ok or ea <= e0:  # must survive and net an energy gain
         return None
@@ -300,9 +306,13 @@ def expand_refuel(n, gaze, need=cost.NEXT_COST_FLOOR + 2):
     g = n.g
     if g.energy >= need:  # defer: only refuel when energy-blocked
         return []
-    sw = plan_game.visibility_sweep(g.mem, g.player, int(g.eye), max_steps=200)
-    hi = plan_game.visibility_sweep(
-        g.mem, g.player, int(g.eye) + plan_game.ROBOT_EYE_FUDGE, max_steps=200
+    # Landable (aim-consistent) sweep at the player's TRUE eye supplies the fuel
+    # candidates + their views; a raised-eye landable sweep classifies "broadly
+    # visible" (open high-ground) fuel to defer.  No visibility_sweep/visible_tiles
+    # for the player's aim -- the same landable oracle the climb macro uses.
+    sw, _ = los.landable_sweep_with_centres(g.state, g.player, eye_z=None)
+    hi, _ = los.landable_sweep_with_centres(
+        g.state, g.player, eye_z=int(g.eye) + plan_game.ROBOT_EYE_FUDGE
     )
     cur = g.player_xy()
     cands = []  # (tile, slot, view, broadly_visible)
@@ -339,16 +349,19 @@ def endgame_child(n, plat, plat_ground) -> Optional[Node]:
         return None
     plat = tuple(plat)
     g = n.g.clone()
-    seye = int(g.eye) + (1 if g.eye > int(g.eye) else 0)
-    view = los.landable_view(g.state, plat, g.player, eye_z=seye, v_band=True)
+    # Resolve the launch view at the player's TRUE eye (eye_z=None reads the real
+    # z_height + z_frac -- what the ROM aim uses at fire time). Ceiling the eye here
+    # picked a cursor that only clears terrain at the next integer height, so the
+    # live fire from the real (lower) eye had no LOS and missed the Sentinel.
+    view = los.landable_view(g.state, plat, g.player, eye_z=None, v_band=True)
     if (
         view is None
     ):  # no keyboard aim lands on the platform from here -- not launchable
         return None
     view = {**view, "cursor": list(view["cursor"])}
     sent = g.state.slot_of_type(mm.T_SENTINEL)
-    if sent is not None:
-        g.absorb(sent, view, "absorb Sentinel")  # drive-through
+    if sent is not None and not g.absorb(sent, view, "absorb Sentinel"):
+        return None  # ROM action LOS gate: no real-eye LOS to the platform -> not launchable
     if not g.feasible(mm.T_ROBOT, plat):
         return None
     s = g.create(mm.T_ROBOT, plat, view, "platform synthoid")
