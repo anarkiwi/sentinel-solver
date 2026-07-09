@@ -367,18 +367,24 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                 session = GameSession(
                     bm, landscape, t_start, entry_match, st, video_host
                 )
-                play_fn(session)
-                time.sleep(1.5)
-
-                log("-- stopping AVI recording (finalize) --")
+                # FINALIZE the AVI even when the plan loop raises (an aim-exact crash,
+                # a mid-run divergence): the recording of the ATTEMPT up to the failure
+                # is the deliverable, so stop+flush it in a finally before the exception
+                # propagates -- otherwise the container teardown kills VICE mid-write and
+                # the AVI has no frame index (frames=0, "not RIFF/AVI").
                 try:
-                    if record:
-                        bm.video_stop()
+                    play_fn(session)
                     time.sleep(1.5)
-                except Exception as e:
-                    log(f"  video_stop failed: {e}")
-                result["wall_seconds"] = round(time.time() - t_start, 1)
-                bm.close()
+                finally:
+                    log("-- stopping AVI recording (finalize) --")
+                    try:
+                        if record:
+                            bm.video_stop()
+                        time.sleep(1.5)
+                    except Exception as e:
+                        log(f"  video_stop failed: {e}")
+                    result["wall_seconds"] = round(time.time() - t_start, 1)
+                    bm.close()
             return result
         except Exception as e:
             import traceback

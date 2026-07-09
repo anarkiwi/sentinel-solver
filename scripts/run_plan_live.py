@@ -189,6 +189,27 @@ def execute_live(
         for stp in result_plan.steps:
             label += 1
             tile = tuple(stp["target"])
+            if (
+                os.environ.get("DUMP_LIVE")
+                and stp["verb"] == "absorb"
+                and stp.get("otype") == 5
+            ):
+                # Capture the PRE-fire live 64 KB image for the endgame Sentinel absorb,
+                # to diff the live launch state (player pos/eye, objects on the down-look
+                # ray) against the offline forecast when the far launch misses live.
+                try:
+                    with ex.bm.halted():
+                        _mem = core.live_image(ex.bm)
+                    _p = os.path.join(ROOT, "renders", f"live_endgame_L{label}.bin")
+                    with open(_p, "wb") as _f:
+                        _f.write(bytes(_mem))
+                    _lg = plan_game.PlanGame.from_mem(_mem, landscape)
+                    log(
+                        f"    [DUMP_LIVE] pre-endgame -> {_p}; live player "
+                        f"{_lg.player_xy()} eye {_lg.eye} energy {_lg.energy}"
+                    )
+                except Exception as _e:  # noqa: broad-except
+                    log(f"    [DUMP_LIVE] failed: {_e}")
             outcome = perform_step(ex, drv, f"L{label}", stp, log, result)
             if outcome in ("ok", "best_effort_miss"):
                 if outcome == "ok" and stp["verb"] == "create":
