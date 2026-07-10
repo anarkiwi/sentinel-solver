@@ -17,6 +17,7 @@ from typing import Optional
 
 from solver import plan_game, cost, launch
 from solver.search_node import Node
+from solver.search_node import energy as node_energy
 from sentinel import los, actions, actioncost, aim
 from sentinel import memmap as mm
 from sentinel.state import State
@@ -211,16 +212,25 @@ def _apply_climb(n, t2, use_b, n_b, view, gaze) -> Optional[Node]:
     )
 
 
-def expand_climb(n, gaze):
+def expand_climb(n, gaze, beam=None, horizon=None):
     """Climb-macro expander: every buildable foothold in the keyboard LOS sweep, as a hop
     and (if it climbs) a boulder-step, priced and survivability-gated.  Non-regressing
-    (resulting eye >= current eye) children only."""
+    (resulting eye >= current eye) children only.
+
+    ``beam``/``horizon`` enable lazy, beam-priority materialization: candidates are ranked
+    by the planner's beam key ``(-resulting_eye, window_cost)`` from cheap geometry
+    (:func:`_foothold_eye`, :func:`cost.move_rounds`, no aim-LOS), and the expensive
+    ``_apply_climb`` runs ONLY until ``beam`` children pass ``energy>0 ^ t<horizon``.  That
+    key equals the planner's beam key (``_apply_climb`` leaves eye ``he``, cost ``window``),
+    so the survivors are identical to full materialization.  ``beam=None`` materializes all.
+    """
     g = n.g
     cur = g.player_xy()
     views, centres = los.landable_sweep_with_centres(
         g.state, g.player, int(g.eye), max_steps=6000
     )
-    out = []
+    # (-he, window, t2, use_b, n_b, view): the planner beam key + build args
+    cands = []
     for t2, view in views.items():
         if t2 == cur:
             continue
@@ -233,9 +243,24 @@ def expand_climb(n, gaze):
             he = _foothold_eye(g, t2, use_b, n_b)
             if he is None or he < g.eye - 1e-9:  # non-regression
                 continue
-            child = _apply_climb(n, t2, use_b, n_b, view, gaze)
-            if child is not None:
-                out.append(child)
+            window, _eh, _ev = cost.move_rounds(g, t2, use_b, n_b, view, n.vh, n.vv)
+            cands.append((-he, window, t2, use_b, n_b, view))
+    cands.sort(key=lambda c: (c[0], c[1]))
+    out = []
+    kept = 0
+    for _nhe, _w, t2, use_b, n_b, view in cands:
+        child = _apply_climb(n, t2, use_b, n_b, view, gaze)
+        if child is None:
+            continue
+        out.append(child)
+        if (
+            beam is not None
+            and node_energy(child) > 0
+            and (horizon is None or child.t < horizon)
+        ):
+            kept += 1
+            if kept >= beam:
+                break
     return out
 
 

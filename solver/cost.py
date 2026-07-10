@@ -3,11 +3,12 @@ keyboard-aim geometry (``sentinel.aimcost``) and the per-verb settle floors
 (``sentinel.actioncost``).
 
 The canonical move-cost accounting for the planner and the tick-accurate runner: a climb
-macro's cost is the aim pan onto the build tile, the
-per-verb SETTLE floor of every fired verb (a stacked create adds ``STACK_CREATE``), and
-the return-pan that swings the view back to reabsorb the departed shell. The same figures
-the tick-accurate runner advances the world by (``run_plan_simulated.execute_step``), so
-the planner forecasts enemy rotation/drain over exactly the window an action really costs.
+macro's cost is the aim pan onto the build tile (coarse body-pan notches PLUS the fine
+sights-cursor travel from its reset centre), the per-verb SETTLE floor of every fired verb
+(a stacked create adds ``STACK_CREATE``), and the return-pan that swings the view back to
+reabsorb the departed shell. The same figures the tick-accurate runner advances the world
+by (``run_plan_simulated.execute_step``), so the planner forecasts enemy rotation/drain
+over exactly the window an action really costs.
 """
 
 from sentinel import aimcost as ac, actioncost, actions, enemies
@@ -20,20 +21,36 @@ from sentinel import aimcost as ac, actioncost, actions, enemies
 # swings the bearing the same per-notch cost as a forward pan.
 H_SCROLL_FRAMES = 16.0  # $10EE
 V_SCROLL_FRAMES = 8.0  # $1135
+# One scroll step per frame; during a scroll $3684 calls the $130C divider once per
+# step (the raster tick $9663 is suppressed), so the FRAME_TICKS cadence is unchanged.
 ROUNDS_PER_H_STEP = actioncost.FRAME_TICKS * H_SCROLL_FRAMES
 ROUNDS_PER_V_STEP = actioncost.FRAME_TICKS * V_SCROLL_FRAMES
 ROUNDS_PER_UTURN = ROUNDS_PER_H_STEP
 
+# Fine sights-cursor travel: initialise_sights ($134C) resets the cursor to ($50,$5F)
+# each aim; move_sights ($9958) steps cx AND cy 1px/frame in one call, so a diagonal drive
+# reaches (cx,cy) in max(|dx|,|dy|) frames at FRAME_TICKS/unit.
+SIGHTS_CX0 = 0x50  # $1354 STA $0CC6
+SIGHTS_CY0 = 0x5F  # $135D STA $0CC7
+ROUNDS_PER_CURSOR_STEP = actioncost.FRAME_TICKS
+
 
 def aim_rounds(h0, v0, view):
     """Enemy rounds to pan the view from heading ``(h0, v0)`` onto ``view``'s aim: the
-    U-turn-aware bearing pan plus the pitch pan, weighted by the per-axis scroll cadence.
-    0 when the view is empty or carries no bearing."""
+    U-turn-aware bearing pan plus the pitch pan (per-axis scroll cadence), then the fine
+    sights-cursor travel (diagonal, ``max`` axis) from its reset centre to ``view``'s
+    cursor. 0 when the view is empty or carries no bearing."""
     if not view or view.get("h_angle") is None:
         return 0.0
     r = ac.bearing_rounds(h0, view["h_angle"], ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
     if view.get("v_angle") is not None and v0 is not None:
         r += ac.v_steps(v0, view["v_angle"]) * ROUNDS_PER_V_STEP
+    cur = view.get("cursor")
+    if cur is not None:  # diagonal drive: max axis, not the sum
+        r += (
+            max(abs(cur[0] - SIGHTS_CX0), abs(cur[1] - SIGHTS_CY0))
+            * ROUNDS_PER_CURSOR_STEP
+        )
     return r
 
 
