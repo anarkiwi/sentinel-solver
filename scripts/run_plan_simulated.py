@@ -65,6 +65,7 @@ def make_world(landscape):
     world.mem[mm.COOLDOWN_GATE] = 0
     world.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
     world.mem[mm.PLAYER_HAS_HYPERSPACED] = 0
+    world.mem[mm.PLAYER_NOT_ACTED] = 0  # active-play cooldown clock (matches PlanGame)
     return world
 
 
@@ -73,8 +74,8 @@ def advance(world, rounds, budget):
     APPLIED (this is the real game running, not a forecast). Accumulates into the
     tick budget for reporting."""
     n = int(round(rounds))
-    for i in range(n):
-        SE.step(world)
+    for i in range(n):  # rounds is now in FRAMES (the ROM frame cadence)
+        SE.advance_frame(world)
         if actions.player_dead(world):  # drained to death mid-advance -- stop the clock
             budget["ticks"] += i + 1
             return

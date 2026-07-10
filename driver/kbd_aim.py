@@ -151,9 +151,18 @@ class KbdDriver:
     """Drive the real keys to an exact (h_angle, v_angle, cursor) using the verified
     pan cycles. All gating/feedback is from memory reads."""
 
-    def __init__(self, bm, log):
+    def __init__(self, bm, log, quantized=False):
         self.bm = bm
         self.log = log
+        # QUANTIZED live cadence: when True the CPU stays HALTED between primitives -- the
+        # emulator advances ONLY inside the explicit run_until_pc animation windows (pan,
+        # cursor, action settle), never during the auto-resuming socket reads of the
+        # bookkeeping between steps. That monitor free-run (game running at gameplay speed
+        # while Python does round-trips) inflated live per-step frames ~3x past the ROM
+        # animation the cost model prices ($1FA4 dither + $2625 replot), pushing the player
+        # past the ~450-frame drain onset that the model keeps it under. Off (default) keeps
+        # the legacy resume-between-primitives behaviour for boot/aim helpers.
+        self.quantized = quantized
         # Committed view bearing (objects_h/v_angle for the CURRENT player slot), tracked
         # so a follow-on same-bearing aim can keep sights ON and drive ONLY the cursor,
         # skipping the sights OFF->ON toggle whose initialise_sights ($134C) recenters the
@@ -162,6 +171,14 @@ class KbdDriver:
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
+
+    def _resume(self):
+        """Resume the CPU at a halted primitive's tail. No-op in quantized mode: the CPU
+        stays HALTED so the game advances only during explicit run_until_pc windows, and
+        the auto-resuming reads of inter-step bookkeeping never free-run the emulator.
+        """
+        if not self.quantized:
+            self.bm.exit()
 
     def slot(self):
         return self.rd(A_SLOT)
@@ -243,7 +260,7 @@ class KbdDriver:
                 pass
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
 
     def _pan_angle(
         self, addr, want, dir_fn, stall_bail=24, max_attempts=300, residue=8
@@ -278,7 +295,7 @@ class KbdDriver:
                     self.log(f"    pan cond fallback: {type(e).__name__}")
                 finally:
                     self.bm.keymatrix_release_all()
-            self.bm.exit()
+            self._resume()
             if self.rd(addr) == want:
                 return True
         return self._pan_angle_stepwise(addr, want, dir_fn, stall_bail, max_attempts)
@@ -328,7 +345,7 @@ class KbdDriver:
                 self.log(f"    pan ${self.PC_PAN_DONE:04x} stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
         return self.rd(addr) == want
 
     def _one_scan_press(self, key, timeout=10.0):
@@ -344,7 +361,7 @@ class KbdDriver:
                 self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=timeout)
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
 
     def sights_set(self, on):
         """Toggle SPACE (edge-latched $1236) until the sights flag ($0C5F bit7) matches.
@@ -391,7 +408,7 @@ class KbdDriver:
                 self.log(f"    uturn stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
         return flipped
 
     def coarse_h(self, want):
@@ -531,7 +548,7 @@ class KbdDriver:
                 pass
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
 
     def fine_cursor(self, cx, cy):
         """SIGHTS ON: drive the sights cursor to (cx, cy) DIAGONALLY -- move_sights ($9958)
@@ -578,15 +595,20 @@ class KbdDriver:
                     self.bm.keymatrix_release_all()  # before the next scan
                     if want in flags:
                         latched = True
-                        # scans reopen only after $12D0 consumed the action. This is a
-                        # CONFIRMATION wait (latch already observed); a transfer rebuilds
-                        # the view from the new POV and the gated scan PC may not recur for
-                        # seconds -- at true gameplay speed (warp off during recording)
-                        # that is seconds of live dwell in which the Sentinel spawns a
-                        # meanie. Cap it short: the caller resyncs+halts before the next
-                        # action, so consumption always completes before it matters.
+                        # scans reopen only after $12D0 consumed the action. Running to the
+                        # NEXT gated scan carries the CPU through the whole settle: consume
+                        # the action -> object dither ($1FA4) -> plot_world ($2625) -> back
+                        # to $9678. In quantized mode this run IS the deterministic settle
+                        # window (the CPU halts at the PC; it never dwells at gameplay speed),
+                        # so allow the ~55-frame dither+replot to complete before the caller
+                        # reads state. Legacy (free-run) path caps it short: there the settle
+                        # runs during the post-resume bookkeeping and a long gameplay-speed
+                        # dwell would let the Sentinel spawn a meanie.
                         try:
-                            self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=1.0)
+                            self.bm.run_until_pc(
+                                self.PC_IRQ_SCAN,
+                                timeout=(6.0 if self.quantized else 1.0),
+                            )
                         except Exception:
                             pass
                         break
@@ -594,7 +616,7 @@ class KbdDriver:
                 self.log(f"    tap_action {name} stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
-        self.bm.exit()
+        self._resume()
         return latched
 
     def drive_to(self, view):

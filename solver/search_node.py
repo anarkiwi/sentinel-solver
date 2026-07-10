@@ -42,10 +42,10 @@ def tile(n: Node) -> tuple:
 
 
 def step_world(g: PlanGame, rounds: int) -> None:
-    """Advance the real enemy world ``rounds`` rounds on ``g.state``
-    (drain/rotate/meanie)."""
+    """Advance the real enemy world ``rounds`` FRAMES on ``g.state``
+    (drain/rotate/meanie), via the ROM frame cadence (advance_frame)."""
     for _ in range(int(rounds)):
-        enemies.step(g.state)
+        enemies.advance_frame(g.state)
 
 
 def enemy_phase_hash(state) -> tuple:

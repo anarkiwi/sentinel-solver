@@ -529,9 +529,79 @@ def update_enemies(state):
 
 
 def step(state):
-    """Advance the world by one game round: cooldown tick + one enemy update."""
+    """Advance the world by one game round: cooldown tick + one enemy update.
+
+    This is the ISOLATED-ROUTINE round (tick_cooldowns + update_enemies, 1:1) that the
+    py65 oracle (tests/oracle.step_enemy_round) captures the golden with -- a valid
+    transition-function unit, but NOT the running game's cadence.  Real-time advance goes
+    through :func:`advance_frames` (the two decoupled ROM clocks)."""
     tick_cooldowns(state)
     update_enemies(state)
+
+
+# ---------------------------------------------------------------------------
+# real-game frame cadence: update_game_loop $1289 + raster IRQ $9663 / scroll $3684
+# ---------------------------------------------------------------------------
+CURSOR_SLOTS = 8  # $0090 cycles 7->0: one cursor sweep considers every enemy slot once
+
+
+def _any_enemy_due(state):
+    """True if some enemy's update_cooldown has ticked below the stick threshold, so a
+    not-plotting update_enemies sweep would actually process it.  While every enemy is
+    still cooling ($16E9 skips them), a sweep only churns the cursor/PRNG (out of the lock
+    state), so it can be skipped -- the ~15x speedup that keeps the frame forecast fast.
+    """
+    mem = state.mem
+    for e in range(CURSOR_SLOTS):
+        if state.obj_flags[e] & 0x80:
+            continue
+        if state.obj_type[e] in mm.ENEMY_TYPES:
+            if mem[mm.ENEMIES_UPDATE_COOLDOWN + e] < COOLDOWN_STICK:
+                return True
+    return False
+
+
+def cooldown_frame(state):
+    """The cooldown clock for ONE video frame -- $130C called once per frame (raster
+    $9663, or the scroll loop $3684 while scrolling; the two are mutually exclusive via
+    $0CD8, so exactly one $130C per frame).  Advance the integer Bresenham accumulator
+    $1335 += $CD and, only on carry (205/256), run update_enemy_cooldowns ($1317, itself
+    1-in-3 via the $0C50 gate).  Suppressed until the player's first action ($0CE5,
+    $9659/$367f).  All integer -- no rounding to drift."""
+    mem = state.mem
+    if mem[mm.PLAYER_NOT_ACTED] & 0x80:  # player has not yet acted -> no cooldown ticks
+        return
+    acc = mem[mm.COOLDOWN_BRESENHAM] + mm.COOLDOWN_BRESENHAM_STEP
+    mem[mm.COOLDOWN_BRESENHAM] = acc & 0xFF
+    if acc > 0xFF:  # $1315 BCC skip -> only the carry runs the cooldown decrement
+        tick_cooldowns(state)
+
+
+def advance_frame(state, plotting=False):
+    """Advance the world by ONE video frame.
+
+    The cooldown clock ticks every frame (:func:`cooldown_frame`).  update_enemies
+    executes the cooldown-gated decisions only in a NOT-plotting frame (the loop's
+    is_plotting path $128c suppresses it while the world scrolls).  A full 8-slot cursor
+    sweep lets every enemy that became due at this frame's cooldown tick act exactly once
+    -- further sweeps are idempotent (its update_cooldown was reloaded).
+
+    Validated against the live ROM (scripts/lockstep_probe.py): with the exact live frame
+    count, the sentinel facing, energy, objects, tiles and every cooldown reproduce the
+    running game byte-for-byte.  ``plotting`` gates the update_enemies spin per the ROM's
+    is_plotting path; the caller supplies the plot schedule (the live driver reads $0CE4,
+    the offline planner runs the cooldown clock which is plot-independent)."""
+    cooldown_frame(state)
+    if not plotting and _any_enemy_due(state):
+        for _ in range(CURSOR_SLOTS):
+            update_enemies(state)
+
+
+def advance_frames(state, n_frames, plotting=False):
+    """Advance ``n_frames`` video frames.  ``plotting`` marks a scroll/replot span in which
+    update_enemies is suppressed (only the cooldown clock advances)."""
+    for _ in range(int(n_frames)):
+        advance_frame(state, plotting=plotting)
 
 
 # ---------------------------------------------------------------------------
