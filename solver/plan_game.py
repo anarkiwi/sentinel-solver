@@ -4,11 +4,10 @@
 ``PlanGame`` tracks the planner's derived view of the climb -- ``col`` (tile ->
 object-stack top height), ``eye``, ``steps``, and feasibility -- while every
 mechanic is delegated to the ``sentinel`` package so the plan is ROM-faithful.
-The module also provides the line-of-sight sweep wrappers the climb planner uses.
 """
 
 from sentinel import landscape as _landscape
-from sentinel import actions, aim, los, threat
+from sentinel import actions, aim
 from sentinel import memmap as mm
 from sentinel.state import State
 
@@ -31,51 +30,6 @@ def terrain_z(mem_or_state, x, y):
     mem = getattr(mem_or_state, "mem", mem_or_state)
     b = mem[mm.TILES_TABLE + mm.tidx(x, y)]
     return (b >> 4) if b < _OBJECT_TILE else None
-
-
-def _as_state(mem_or_state):
-    """Wrap a raw 64 KB image in a State for a read-only sweep.  ``los`` never
-    writes to ``mem``, so the buffer is shared by reference (no 64 KB copy per
-    sweep -- the dominant cost when a planner sweeps every candidate)."""
-    return mem_or_state if isinstance(mem_or_state, State) else State(mem_or_state)
-
-
-def visibility_sweep(mem, player_slot, eye_z, max_steps=320, coarse=False):
-    """Every tile the observer can aim at with line of sight from its current
-    position + eye_z, as ``{(tx, ty): view}``.  ``coarse`` is a no-op (the
-    keyboard lattice is already the coarse lattice)."""
-    del coarse  # keyboard lattice == coarse lattice
-    state = _as_state(mem)
-    views = los.visible_tiles(state, player_slot, eye_z=eye_z, max_steps=max_steps)
-    for v in views.values():
-        v["cursor"] = list(v["cursor"])
-    return views
-
-
-def sees_tile(mem, tile, player_slot, eye_z, max_steps=320):
-    """Whether the observer has line of sight to a SINGLE ``tile`` from its current
-    position + eye_z.  Uses the ROM's direct observer->tile geometric march
-    (``threat.player_sees_tile`` / ``relative.can_see_object``) rather than the coarse
-    fixed-cursor sights-aim sweep -- the sweep steps over the fine fractional sub-angles
-    a diagonally-driven cursor reaches, wrongly reporting far/launch build tiles unseen.
-    ``max_steps`` is accepted for caller compatibility but unused (the march is not a
-    bounded lattice sweep)."""
-    del max_steps  # the geometric march is not a bounded aim sweep
-    return threat.player_sees_tile(
-        _as_state(mem), tuple(tile), player_slot, eye_z=eye_z
-    )
-
-
-def centre_view_for(mem, tile, player_slot, eye_z, hstep=8, max_steps=2000):
-    """The best sights view landing on ``tile`` with line of sight (closest to the
-    tile centre), or None when no reachable view sees it."""
-    state = _as_state(mem)
-    view = los.centre_view(
-        state, tile, player_slot, eye_z=eye_z, azimuth_step=hstep, max_steps=max_steps
-    )
-    if view is not None:
-        view["cursor"] = list(view["cursor"])
-    return view
 
 
 class PlanGame:

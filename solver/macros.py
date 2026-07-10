@@ -8,8 +8,6 @@ keyboard LOS sweep supplies buildable footholds; each buildable tile yields a ho
 a synthoid).  Every child is priced by :mod:`solver.cost`, feasibility-gated up
 front, and survivability-gated over the drained window via the true transition.
 
-The climb mechanics (`_top_type`, `_boulder_batch`, `_foothold_eye`,
-`_boulder_centre_feasible`) are ported from the validated ``solver.climb_search``.
 Refuel (T2.2, :func:`expand_refuel`) and endgame (T2.3, :func:`endgame_child`)
 macros are implemented alongside the climb expander.
 """
@@ -27,9 +25,9 @@ from sentinel.state import State
 # tree, boulder.  Meanies/Sentinel/platform are excluded.
 FUEL_TYPES = (mm.T_ROBOT, mm.T_SENTRY, mm.T_TREE, mm.T_BOULDER)
 
-# Energy kept in reserve above a build's up-front cost (env-overridable, ROM-tuned;
-# ported from climb_search): live enemies drain during aiming, so planned refunds
-# silently shrink -- the reserve absorbs that loss when sizing a boulder batch.
+# Energy kept in reserve above a build's up-front cost (env-overridable, ROM-tuned):
+# live enemies drain during aiming, so planned refunds silently shrink -- the reserve
+# absorbs that loss when sizing a boulder batch.
 RESERVE = int(os.environ.get("CLIMB_RESERVE", "2"))
 # Largest boulder batch a single dwell will stack (build-cap + affordability aside).
 MAX_BATCH = 4
@@ -161,9 +159,9 @@ def _foothold_options(g, tile, centres):
 
 
 def _apply_climb(n, t2, use_b, n_b, view, gaze) -> Optional[Node]:
-    """Concrete climb macro body (mirrors climb_search._apply on a cloned PlanGame, then
-    advances the world and runs the T1.2 survivability test).  Returns the child Node, or
-    None if a legality/survivability gate rejects the move."""
+    """Concrete climb macro body on a cloned PlanGame: build, transfer, then advance the
+    world and run the T1.2 survivability test.  Returns the child Node, or None if a
+    legality/survivability gate rejects the move."""
     del gaze  # T2.1 prices the true transition via cost.survivable, not the gaze forecast
     g = n.g.clone()
     window, end_h, end_v = cost.move_rounds(g, t2, use_b, n_b, view, n.vh, n.vv)
@@ -308,8 +306,8 @@ def expand_refuel(n, gaze, need=cost.NEXT_COST_FLOOR + 2):
         return []
     # Landable (aim-consistent) sweep at the player's TRUE eye supplies the fuel
     # candidates + their views; a raised-eye landable sweep classifies "broadly
-    # visible" (open high-ground) fuel to defer.  No visibility_sweep/visible_tiles
-    # for the player's aim -- the same landable oracle the climb macro uses.
+    # visible" (open high-ground) fuel to defer -- the same landable oracle the
+    # climb macro uses for the player's aim.
     sw, _ = los.landable_sweep_with_centres(g.state, g.player, eye_z=None)
     hi, _ = los.landable_sweep_with_centres(
         g.state, g.player, eye_z=int(g.eye) + plan_game.ROBOT_EYE_FUDGE
@@ -341,8 +339,7 @@ def endgame_child(n, plat, plat_ground) -> Optional[Node]:
     The win shot is the player looking DOWN onto the platform, so the precondition is a
     real KEYBOARD-aimable down-look view (``los.landable_view`` with the body-pitch band),
     NOT mere geometric LOS: the sim absorbs by slot regardless of aim, but the live driver
-    aims BY this view, so a geometric-only launch fires blind and misses live (the coarse
-    ``visibility_sweep`` drops the far down-look platform tile -- the cursor-cy sweep bug).
+    aims BY this view, so a geometric-only launch fires blind and misses live.
     The resolved view is attached to every platform-targeting step so the plan is aim-exact.
     """
     if not launch.endgame_ready(n.g, plat, plat_ground):

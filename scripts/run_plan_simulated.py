@@ -17,7 +17,7 @@ The "real game" is the bit-exact ``sentinel`` simulator (not VICE):
     separate endgame phase.
   * each step (create/transfer/absorb) is EXECUTED against ``world`` one at a time
     via :func:`execute_step`, which advances the world by the real number of enemy
-    rounds the action costs -- the keyboard-aim pan (``climb_search._pan_rounds``)
+    rounds the action costs -- the keyboard-aim pan (``cost.aim_rounds``)
     plus the per-action settle (``sentinel.actioncost``) -- with drain and downgrades
     APPLIED. So if real timing/enemies made a foothold infeasible (its object
     downgraded out from under it, energy drained below the build cost), the step
@@ -49,7 +49,7 @@ from sentinel import actions, enemies as SE, aim
 from sentinel import memmap as mm
 from sentinel import actioncost
 from solver import plan_game
-from solver import climb_search as csearch  # only for _pan_rounds (aim cost)
+from solver import cost  # aim_rounds: the keyboard-aim pan cost
 from solver.astar_planner import plan
 
 ENERGY = mm.ENERGY_IN_OBJECTS
@@ -125,7 +125,7 @@ def execute_step(world, stp, heading, budget, log):
 
     # --- aim: the world runs while the view pans to the target bearing ---
     if view:
-        advance(world, csearch._pan_rounds(heading[0], heading[1], view), budget)
+        advance(world, cost.aim_rounds(heading[0], heading[1], view), budget)
         heading[0] = view.get("h_angle", heading[0])
         heading[1] = view.get("v_angle", heading[1])
         set_facing(world, view)

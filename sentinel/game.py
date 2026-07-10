@@ -15,7 +15,7 @@ Every method delegates to the package modules (:mod:`sentinel.landscape`,
 and offers them under one object.
 """
 
-from sentinel import landscape, actions, enemies, los, relative, memmap as mm
+from sentinel import landscape, actions, enemies, threat, relative, memmap as mm
 
 
 class Game:
@@ -84,8 +84,10 @@ class Game:
 
     # -- line of sight -------------------------------------------------------
     def player_sees(self, tile, eye_z=None):
-        """Whether the player can see ``tile`` from its current position."""
-        return los.can_see(self.state, tile, eye_z=eye_z)
+        """Whether the player can see ``tile`` from its current position, via the ROM's
+        direct observer->tile geometric march ($0C76 check_for_line_of_sight_to_tile).
+        """
+        return threat.player_sees_tile(self.state, tile, self.state.player, eye_z=eye_z)
 
     def enemy_sees(self, enemy, target, fov=enemies.FOV_SCAN):
         """Whether ``enemy`` can currently, fully see object ``target``."""

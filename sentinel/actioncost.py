@@ -33,7 +33,7 @@ Per-phase frame counts, each cited to the ROM:
   * AIM is priced by the caller from the keyboard-scroll cadence (a +-8 bearing
     notch animates a 16-step horizontal scroll $10EE, a +-4 pitch notch an 8-step
     vertical scroll $1135, each followed by one ``plot_world``); see
-    ``solver.cost`` / ``climb_search._pan_rounds``.
+    ``solver.cost.aim_rounds``.
 
   * REDRAW: ``plot_world`` is a single blocking pass whose cost scales with the
     summed polygon EDGES of the objects in view; the raster IRQ keeps ticking
@@ -137,7 +137,7 @@ def action_rounds(mem, verb, view, stacked=False):
     game-intrinsic per-verb settle, plus the scene redraw term.  STACK_CREATE is
     ROM-zero (the stacked-create path is byte-identical) but still added when set,
     for callers that want to model a VICE-measured surcharge.  The aim itself is
-    priced separately by the caller (``solver.cost`` / ``climb_search._pan_rounds``)."""
+    priced separately by the caller (``solver.cost.aim_rounds``)."""
     settle = SETTLE.get(verb, SETTLE["absorb"])
     if verb == "create" and stacked:
         settle += STACK_CREATE

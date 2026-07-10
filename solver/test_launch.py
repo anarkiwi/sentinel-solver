@@ -10,8 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sentinel import landscape, los, threat  # noqa: E402
-from sentinel import memmap as mm  # noqa: E402
+from sentinel import landscape, threat  # noqa: E402
 from solver.plan_game import PlanGame  # noqa: E402
 from solver.launch import launch_tiles, down_look_los, endgame_ready  # noqa: E402
 
@@ -62,19 +61,6 @@ def test_endgame_ready_gate():
     assert endgame_ready(_game_at_launch(9.375), PLAT, PLAT_GROUND)
     # Not above the platform ground -> not ready even with LOS.
     assert not endgame_ready(_game_at_launch(9.0), PLAT, PLAT_GROUND)
-
-
-def test_symmetric_sweep_misses_human_tile():
-    # The BUG: the symmetric platform-vantage reverse sweep does not see (2,10).
-    # (12,4) hosts the platform object, so the platform's own slot IS the platform
-    # vantage (a robot phantom cannot be stacked on a non-boulder). This is exactly
-    # the old climb_search._launch_tiles sweep.
-    state = landscape.generate(0)
-    ps = state.slot_of_type(mm.T_PLATFORM)
-    reverse = los.visible_tiles(state, ps, eye_z=PLAT_GROUND + 1)
-    assert LAUNCH not in reverse
-    # The down-look enumeration recovers the tile the symmetric sweep drops.
-    assert LAUNCH in launch_tiles(state, PLAT, PLAT_GROUND)
 
 
 def test_dead_end_corner_handled():

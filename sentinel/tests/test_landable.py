@@ -2,9 +2,9 @@
 ``landable_views`` / ``landable_view`` / ``landable_sweep_with_centres``).
 
 Buildability == AIM-landability: a real keyboard aim (body h in 8-notches, sights
-cursor on its 9px grid, body v_angle) lands the sights ray on the tile with LOS.
-This is a STRICT subset of geometric visibility (``relative.can_see_object`` /
-``los.visible_tiles`` over-report far/low tiles). Validated against ground-truth
+cursor at 1px resolution, body v_angle) lands the sights ray on the tile with LOS.
+This is a STRICT subset of geometric visibility (``threat.player_sees_tile``
+over-reports far/low tiles). Validated against ground-truth
 human-win telemetry (``out/play_*.jsonl``, base64 ``mem`` per record): from every
 exact pre-FIRE state (the LAST record while standing on the from-tile, after the
 player has absorbed/built and is about to transfer), the tile actually built on
@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, los
+from sentinel import landscape, los, threat
 from sentinel.state import State
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,13 +27,12 @@ LS0 = os.path.join(ROOT, "out", "play_20260707_193356.jsonl")
 LS335 = os.path.join(ROOT, "out", "play_20260707_203210.jsonl")
 
 # The exact aim-landable set from the real ls0 start (8,17,eye5) -- a regression lock on the
-# oracle. The v-swept set (body v_angle swept over PITCH_BAND as well as the sights cursor):
-# 49 tiles, a strict superset of the old v=$F5-only 17-tile set (the extra tiles are near/below
-# builds the player pitches the body down for). Now the FULL 9px sights-cursor grid is swept at
-# every body pitch (los.CURSOR_CX/CY_PITCHED == the full grid), matching the full 4-DOF brute
-# sweep = the ROM via aim_target; this adds (17,14) -- a genuine keyboard landing (h=72, v=237,
-# cursor [134,131]) the old coarse pitched-cursor grid dropped. A geometric-visibility test
-# reports far more still.
+# oracle. The v-swept set (body v_angle over PITCH_BAND x the 1px sights-cursor window): 50
+# tiles. The sights cursor is now enumerated at the ROM's true 1px resolution ($9965/$9994 step
+# +/-1px; each 1px step a distinct ray via prepare_vector_from_player_sights $1C10), swept over a
+# 64px window per axis that is bit-equivalent to the full cx[16,143] x cy[32,159] range. This
+# faithful resolution adds (22,12) -- a far tile the old 9px notch grid false-negatived. A
+# geometric-visibility test reports far more still.
 LS0_START_LANDABLE = {
     (7, 10),
     (7, 11),
@@ -84,6 +83,7 @@ LS0_START_LANDABLE = {
     (18, 14),
     (19, 14),
     (20, 14),
+    (22, 12),
 }
 
 
@@ -144,10 +144,12 @@ def test_generated_landscape_oracle_invariants():
     st = landscape.generate(0)
     views = los.landable_views(st, st.player)
     assert views, "expected some aim-landable tiles from the start"
+    # every aim-landable tile is also geometrically visible: aim-landability is a
+    # STRICT subset of the ROM observer->tile march (threat.player_sees_tile).
     # views/view agreement: every swept tile resolves via the single-tile query too,
     # and the sweep's recorded aim actually lands on its tile with LOS.
     for tile, view in list(views.items())[:8]:
-        assert los.landable_view(st, tile, st.player) is not None
+        assert los.landable_view(st, tile, st.player, v_band=True) is not None
         tx, ty, ok = los.aim_target(
             st,
             view["h_angle"],
@@ -157,10 +159,12 @@ def test_generated_landscape_oracle_invariants():
             st.player,
         )
         assert ok and (tx, ty) == tile
-    # subset of geometric visibility (visible_tiles sweeps the centred-cursor lattice;
-    # the keyboard sweep is at least as reachable via the same underlying march).
-    vis = set(los.visible_tiles(st, st.player))
-    assert set(views) & vis, "landable and visible sets should overlap"
+    # strict subset of geometric visibility: every landable tile passes the ROM
+    # observer->tile march that threat.player_sees_tile distils.
+    for tile in list(views)[:8]:
+        assert threat.player_sees_tile(
+            st, tile, st.player
+        ), f"landable tile {tile} is not geometrically visible"
     # sweep-with-centres returns the same view keys.
     sviews, centres = los.landable_sweep_with_centres(st, st.player)
     assert set(sviews) == set(views)
@@ -205,31 +209,53 @@ def test_ls335_adjacent_build_now_landable():
     pytest.skip("ls335 opening (11,17)->(11,18) not present in log")
 
 
+def test_prep_vec_matches_python():
+    """The numba ray-vector builder (los_jit._prep_vec / build_lattice, used by both
+    aim_target and the batched sweep) is BIT-for-bit identical to the pure-Python reference
+    prepare_vector_from_player_sights $1C10 over the keyboard lattice."""
+    if not los._HAVE_JIT:
+        pytest.skip("numba not available")
+    bad = 0
+    for h in range(0, 256, los.AZIMUTH_STEP):
+        for v in (los.KBD_V_ANGLE, 0xCD, 0x35, 0x11, 0xE1):
+            for cx in (16, 48, 80, 111, 143):
+                for cy in (32, 63, 95, 126, 159):
+                    vec = los.prepare_vector_from_player_sights(None, h, v, cx, cy, 0)
+                    a = tuple(int(x) for x in los.los_jit._prep_vec(h, v, cx, cy))
+                    exp = (
+                        vec.vx_lo,
+                        vec.vx_hi,
+                        vec.vz_lo,
+                        vec.vz_hi,
+                        vec.vy_lo,
+                        vec.vy_hi,
+                        vec.s30,
+                    )
+                    if exp != a:
+                        bad += 1
+    assert bad == 0
+
+
 def test_batched_sweep_matches_per_probe_aim_target():
     """CI-safe bit-exactness lock: the batched numba lattice march used by landable_views /
     landable_sweep_with_centres returns IDENTICAL (tx, ty, los) and tile-centre fraction to
-    calling aim_target once per aim, over the WHOLE v-complete keyboard lattice."""
+    calling aim_target once per aim, over a representative slice of the v-complete lattice.
+    """
     if not los._HAVE_JIT:
         pytest.skip("numba not available -- batched march path not exercised")
     st = landscape.generate(0)
     slot = st.player
-    hgrid = list(range(0, 256, los.AZIMUTH_STEP))
-    status, tx, ty, centre, meta = los._landable_batch(
-        st,
-        slot,
-        None,
-        6000,
-        hgrid,
-        los._V_PRIORITY,
-        los.CURSOR_CX,
-        los.CURSOR_CY,
-        los.CURSOR_CX_PITCHED,
-        los.CURSOR_CY_PITCHED,
-        los.KBD_V_ANGLE,
+    # A representative slice (a few h notches x the whole v band x the 1px cursor window) --
+    # the full lattice is ~3.5M aims; this keeps the per-probe reference loop fast while still
+    # exercising flat->(h,v,cx,cy) reconstruction, all pitches and the cursor edges.
+    hgrid = [0, 64, 128]
+    status, tx, ty, centre, grids = los._landable_batch(
+        st, slot, None, 6000, hgrid, los._V_PRIORITY, los.CURSOR_CX, los.CURSOR_CY
     )
     verdict_bad = 0
     centre_bad = 0
-    for i, (h, v, cx, cy) in enumerate(meta):
+    for i in range(status.shape[0]):
+        h, v, cx, cy = los._meta_at(i, *grids)
         atx, aty, alos, acen = los.aim_target(
             st, h, v, cx, cy, slot, max_steps=6000, return_centre=True
         )
@@ -239,3 +265,50 @@ def test_batched_sweep_matches_per_probe_aim_target():
         if blos and int(centre[i]) != acen:
             centre_bad += 1
     assert verdict_bad == 0 and centre_bad == 0, (verdict_bad, centre_bad)
+
+
+def test_window_equals_full_1px_cursor():
+    """The 64px step-1 cursor WINDOW (los.CURSOR_CX/CY) is BIT-EQUIVALENT to the full 1px ROM
+    cursor range (cx[16,143] x cy[32,159], los.CURSOR_CX_FULL/CY_FULL): the full v-band sweep
+    returns the EXACT same landable tile set AND per-tile min tile-centre fraction.  Body-h
+    (step 8) + cx>>3 over 64px tiles the h-integer, and body-v (step 4) + (cy-5)>>4 over 64px
+    tiles the v-integer, so the wider cursor range only re-reaches rays a different body notch
+    already produced.  (Proven on the generated board; the recorded-win states match too.)
+    """
+    if not los._HAVE_JIT:
+        pytest.skip("numba not available")
+    st = landscape.generate(0)
+    slot = st.player
+    hgrid = list(range(0, 256, los.AZIMUTH_STEP))
+
+    def sweep(vgrid, cxs, cys):
+        status, tx, ty, centre, _ = los._landable_batch(
+            st, slot, None, 6000, hgrid, vgrid, cxs, cys
+        )
+        best = {}
+        for i in range(status.shape[0]):
+            if status[i] != los.los_jit.LOS_CLEAR:
+                continue
+            tile = (int(tx[i]), int(ty[i]))
+            c = int(centre[i])
+            if tile not in best or c < best[tile]:
+                best[tile] = c
+        return best
+
+    def diff(a, b):
+        return (
+            set(b) - set(a),
+            set(a) - set(b),
+            {t: (a.get(t), b.get(t)) for t in set(a) & set(b) if a[t] != b[t]},
+        )
+
+    # Full v-band: cx WINDOW x cy WINDOW == full 1px cursor (body-v step 4 fills the cy gaps).
+    win = sweep(los._V_PRIORITY, los.CURSOR_CX, los.CURSOR_CY)
+    full = sweep(los._V_PRIORITY, los.CURSOR_CX_FULL, los.CURSOR_CY_FULL)
+    assert win == full, diff(win, full)
+
+    # Single $F5 plane (v_primary): NO body-v, so cy must be FULL; cx WINDOW still suffices.
+    v1 = [los.KBD_V_ANGLE]
+    p_win = sweep(v1, los.CURSOR_CX, los.CURSOR_CY_FULL)
+    p_full = sweep(v1, los.CURSOR_CX_FULL, los.CURSOR_CY_FULL)
+    assert p_win == p_full, diff(p_win, p_full)

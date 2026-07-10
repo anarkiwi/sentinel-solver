@@ -14,28 +14,27 @@ check the sim against ground truth:
 * absorb   -> the target tile holds an absorbable object                   (GREEN)
 * transfer -> the target tile holds a robot to transfer into              (GREEN)
 
-and two aim/buildability validations that surface REAL gaps (kept strict, marked
-``xfail(strict=True)`` -- see the module report):
+and two aim/buildability validations:
 
-* the keyboard-aim landability oracle (:func:`sentinel.los.landable_views` /
-  ``landable_view(v_band=True)``) must contain every tile the human built or
-  absorbed on.  The oracle now sweeps the FULL 9px sights-cursor grid at every body
-  pitch (matching the full 4-DOF brute sweep = the ROM via ``aim_target``), which
-  closed the coarse-pitched-cursor gap.  What remains OFF the oracle is 4 (ls0) + 4
-  (ls42) + 48 (ls335) build tiles that are geometrically visible
-  (:func:`sentinel.threat.player_sees_tile` sees them) yet NOT reticle-landable by
-  ANY ROM keyboard aim from the DISTILLED pre-state: the exhaustive 4-DOF brute
-  sweep (and even a 1px-cursor sweep) also misses them, the reticle landing on a
-  nearer tile.  The distilled fixture state (intermediate enemy objects stripped;
-  player position/eye captured at the distilled moment) differs from the human's
-  true fire state, so the aim geometry cannot be reproduced -- a fixture/telemetry
-  limit, not an oracle-exhaustiveness gap.
+* the keyboard-aim landability oracle (:func:`sentinel.los.landable_view` /
+  ``landable_views``) must contain every tile the human built or absorbed on.  The
+  oracle enumerates the sights cursor at the ROM's true 1px resolution ($9965/$9994
+  move +/-1px; each 1px step a distinct ray via prepare_vector_from_player_sights
+  $1C10) over a 64px window bit-equivalent to the full cursor range, so every GENUINE
+  player build/absorb is landable (the old 9px notch grid false-negatived far/
+  adjacent tiles).  The extractor (``_extract.py``) now drops Sentinel-SPAWNED trees
+  (an enemy discharging absorbed energy plants a TREE at a RANDOM tile, ROM
+  ``consider_discharging_enemy_energy $1A5D``, NOT gated by the player's sights), so
+  every event in the fixtures is a real player action and this oracle covers them all
+  with NO gap.
 * the RECORDED aim reproducing the built tile.  The logged ``objects_h_angle`` /
   ``objects_v_angle`` are post-action pan-drift transients, not the settled fire
   aim (``$365D``, outside the ``[0:0x0CFF]`` dump), so exact reproduction is
   impossible from this telemetry (only 18 / 203 events happen to catch a clean
   aim).  This is a TELEMETRY limit, not a sim geometry bug -- ``aim_target``'s
-  bit-exactness is locked by ``tests/test_landable.py``.
+  bit-exactness is locked by ``tests/test_landable.py``.  This one stays
+  ``xfail(strict=True)`` (as does the end-to-end replay, whose unsimulated enemy
+  dynamics between actions are out of scope); the landability oracle is now GREEN.
 """
 
 import json
@@ -49,73 +48,6 @@ from sentinel.terrain import set_tile_byte, top_object
 
 _FIX_DIR = os.path.join(os.path.dirname(__file__), "tests", "fixtures", "human_wins")
 FIXTURES = ("ls0.json", "ls42.json", "ls335.json")
-
-# Build/absorb tiles the human acted on that the keyboard-aim landability oracle
-# reports UNREACHABLE.  Each is geometrically visible via threat.player_sees_tile but
-# NOT reticle-landable by any ROM keyboard aim from the DISTILLED pre-state: the
-# exhaustive full 4-DOF brute sweep (h step8 x v-band step4 x cx 9px x cy 9px, = the ROM
-# via aim_target) AND even a 1px-cursor sweep also miss them -- the reconstructed state
-# differs from the human's true fire state, so the reticle lands on a nearer tile.  This
-# is a fixture/telemetry limit, not an oracle-exhaustiveness gap.  (Five former members --
-# ls335 ev 51/57/108/155/157 -- WERE a real gap: reachable by the full sweep but dropped by
-# the old coarse pitched-cursor grid.  The full-cursor-at-every-pitch fix flipped them to
-# GREEN; they are no longer listed.)  Indices into each fixture's ``events`` list.
-D1_LANDABLE_GAP = {
-    "ls0.json": frozenset({4, 5, 10, 16}),
-    "ls42.json": frozenset({12, 15, 18, 36}),
-    "ls335.json": frozenset(
-        {
-            11,
-            19,
-            20,
-            23,
-            26,
-            28,
-            32,
-            34,
-            36,
-            38,
-            43,
-            50,
-            52,
-            56,
-            58,
-            61,
-            67,
-            75,
-            77,
-            78,
-            79,
-            83,
-            84,
-            85,
-            86,
-            89,
-            95,
-            101,
-            106,
-            110,
-            111,
-            113,
-            114,
-            116,
-            118,
-            119,
-            121,
-            124,
-            127,
-            130,
-            141,
-            145,
-            148,
-            152,
-            156,
-            164,
-            181,
-            182,
-        }
-    ),
-}
 
 _TELEMETRY_AIM_REASON = (
     "recorded objects_h/v_angle are post-action pan-drift transients, not the "
@@ -132,16 +64,6 @@ _REPLAY_DIVERGE_REASON = (
     "Per-action mechanics are validated against the real pre-state by the "
     "can_create / absorb / transfer tests."
 )
-
-_D1_GAP_REASON = (
-    "the human built/absorbed on a geometrically-visible tile "
-    "(threat.player_sees_tile) that is NOT reticle-landable by any ROM keyboard aim "
-    "from the DISTILLED pre-state -- the exhaustive full 4-DOF brute sweep (and a 1px "
-    "cursor sweep) also miss it, the reticle landing on a nearer tile.  Fixture state "
-    "differs from the true fire state; a telemetry limit, not an oracle gap.  See the "
-    "module docstring."
-)
-
 
 # ---------------------------------------------------------------------------
 # fixture loading + PRE-action State reconstruction
@@ -209,20 +131,14 @@ def _verb_params(verbs):
 
 
 def _landable_params():
-    """(name, idx) for every create/absorb event; D1-gap events carry xfail."""
+    """(name, idx) for every create/absorb event (all are real player actions now
+    that _extract.py drops Sentinel-spawned trees, so every one must be landable)."""
     out = []
     for name in FIXTURES:
         for i, ev in enumerate(_load(name)["events"]):
             if ev["verb"] == "transfer":
                 continue
-            marks = (
-                [pytest.mark.xfail(strict=True, reason=_D1_GAP_REASON)]
-                if i in D1_LANDABLE_GAP[name]
-                else []
-            )
-            out.append(
-                pytest.param(name, i, marks=marks, id=f"{name[:-5]}-ev{i}-{ev['verb']}")
-            )
+            out.append(pytest.param(name, i, id=f"{name[:-5]}-ev{i}-{ev['verb']}"))
     return out
 
 
@@ -277,20 +193,20 @@ def test_transfer_target_is_robot(name, idx):
 
 
 # ---------------------------------------------------------------------------
-# buildability oracle exhaustiveness -- the D1 gap (xfail on the far tiles)
+# buildability oracle exhaustiveness -- every player build/absorb tile is landable
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("name,idx", _landable_params())
 def test_build_tile_is_aim_landable(name, idx):
-    """Every tile the human built/absorbed on must be reachable by SOME keyboard
-    aim (``landable_view(v_band=True)`` <=> membership of ``landable_views``, the
-    same aim lattice; the batched membership form is used for speed).  The D1
-    far-tile gaps are xfail(strict)."""
+    """Every tile the human built/absorbed on must be reachable by SOME keyboard aim
+    (``landable_view(v_band=True)``, the targeted single-tile form -- it sweeps the cheap
+    $F5 plane first and only falls to the full pitch band when needed, so each event is one
+    cheap march in the common case rather than a full-board sweep)."""
     ev = _load(name)["events"][idx]
     st = state_from_event(ev, _load(name)["landscape"])
     pl = ev["player"]
     target = tuple(ev["target"])
-    landable = los.landable_views(st, pl["slot"], eye_z=pl["z"])
-    assert target in landable, (
+    view = los.landable_view(st, target, pl["slot"], eye_z=pl["z"], v_band=True)
+    assert view is not None, (
         f"{name} ev{idx} {ev['verb']} target {target} from ({pl['x']},{pl['y']}) "
         f"eye_z={pl['z']} is NOT aim-landable"
     )
