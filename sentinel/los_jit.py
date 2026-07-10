@@ -36,7 +36,7 @@ _OZFRAC = 0x0A00
 _OTYPE = 0x0A40
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _tile_byte(mem, x, y):
     """terrain.tile_byte: the raw tiles_table byte via the ROM address arithmetic
     ``page=(x&3)+4``, ``lo=((x<<3)&0xE0)|(y&0x1F)``."""
@@ -63,7 +63,7 @@ def _corner_z(mem, x, y):
     return (b >> 4) & 0x0F
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _edge(y):
     """The $1DF1-$1DF8 edge table."""
     if y == 0:
@@ -83,7 +83,7 @@ def _edge(y):
     return 0x03  # y == 7
 
 
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _corner_at(i, p73, p74, p75, p76):
     """The zero-page corner square $73..$77 == [p73,p74,p75,p76,p73], indexed."""
     if i == 0:
@@ -175,23 +175,7 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
     return 0  # loop
 
 
-@njit(cache=True)
-def _check_slope(mem, x, y, z00, px_sub, py_sub, pz_sub, pz_whole):
-    """los._check_sloping_tile $1D46.  Returns 1 (blocked) or 0 (loop)."""
-    p73 = z00 & 0xFF
-    p76 = _corner_z(mem, x + 1, y)
-    p75 = _corner_z(mem, x + 1, y + 1)
-    p74 = _corner_z(mem, x, y + 1)
-    nib = _tile_byte(mem, x, y) & 0x0F
-    if nib == 0x04 or nib == 0x0C:
-        b = pz_whole & 0xFF
-        if b >= p73 or b >= p74 or b >= p75 or b >= p76:
-            return 0  # loop
-        return 1  # blocked
-    return _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole)
-
-
-@njit(cache=True)
+@njit(cache=True, inline="always")
 def _min_xy(px_sub, py_sub):
     """los._get_min_xy_fraction $1EAF: min tile-centre fraction of x/y (the exact
     6502 form, not plain abs)."""
@@ -354,6 +338,30 @@ def march(
     tx = 0
     steps = 0
     status = BLOCKED
+    # Signed 16-bit per-axis vectors: each march sub-step adds this (sign-extended)
+    # to the 24-bit (whole:sub:frac) position accumulator.  Used by the flat-tile
+    # intra-tile fast-forward below.
+    vx16 = ((ax_hi & 0xFF) << 8) | (ax_lo & 0xFF)
+    if vx16 >= 0x8000:
+        vx16 -= 0x10000
+    vy16 = ((ay_hi & 0xFF) << 8) | (ay_lo & 0xFF)
+    if vy16 >= 0x8000:
+        vy16 -= 0x10000
+    vz16 = ((az_hi & 0xFF) << 8) | (az_lo & 0xFF)
+    if vz16 >= 0x8000:
+        vz16 -= 0x10000
+    # Per-tile cache: the tile byte and (for a sloping tile) the four corner
+    # heights depend only on (tx,ty), not on the sub-step position, so they are
+    # computed once per tile and reused across its ~tens of sub-steps.
+    cur_tx = -1
+    cur_ty = -1
+    cb = 0
+    cnib = 0
+    cz = 0
+    cp73 = 0
+    cp74 = 0
+    cp75 = 0
+    cp76 = 0
     while steps < max_steps:
         steps += 1
         # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
@@ -391,7 +399,18 @@ def march(
             status = BLOCKED
             break
 
-        b = _tile_byte(mem, tx, ty)
+        if tx != cur_tx or ty != cur_ty:
+            cur_tx = tx
+            cur_ty = ty
+            cb = _tile_byte(mem, tx, ty)
+            cnib = cb & 0x0F
+            cz = (cb >> 4) & 0x0F
+            if cb < 0xC0 and cnib != 0:
+                cp73 = cz
+                cp76 = _corner_z(mem, tx + 1, ty)
+                cp75 = _corner_z(mem, tx + 1, ty + 1)
+                cp74 = _corner_z(mem, tx, ty + 1)
+        b = cb
         if b >= 0xC0:
             # object tile: resolve the stack surface ($1E3F) then the general
             # (object-aware) check_flat_tile $1D0D.
@@ -422,8 +441,8 @@ def march(
             status = LOS_CLEAR
             break
 
-        slope = b & 0x0F
-        z = (b >> 4) & 0x0F
+        slope = cnib
+        z = cz
         if slope == 0:
             # check_flat_tile $1D0D, fast path (s79=0, tolerance $000C=$80,
             # $0060 bit6 clear, $0C67 clear).
@@ -431,7 +450,74 @@ def march(
             borrow = 1 if pz_sub & 0xFF else 0
             d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
             if d & 0x80:
-                continue  # tile below the ray -> keep marching
+                # Tile below the ray -> keep marching.  The tile (tx,ty) is fixed
+                # for a closed-form run of sub-steps (position accumulators are
+                # linear); fast-forward that run, replaying ONLY the z surface
+                # comparison per sub-step and skipping the redundant x/y add_vector,
+                # edge tests and tile_byte re-read.  Bit-identical to per-sub-step.
+                if tx == (ox & 0xFF) and ty == (oy & 0xFF):
+                    continue
+                xacc = ((px_sub & 0xFF) << 8) | (px_frac & 0xFF)
+                yacc = ((py_sub & 0xFF) << 8) | (py_frac & 0xFF)
+                if vx16 > 0:
+                    nx = (0xFFFF - xacc) // vx16
+                elif vx16 < 0:
+                    nx = xacc // (-vx16)
+                else:
+                    nx = max_steps
+                if vy16 > 0:
+                    ny = (0xFFFF - yacc) // vy16
+                elif vy16 < 0:
+                    ny = yacc // (-vy16)
+                else:
+                    ny = max_steps
+                n_tile = min(nx, ny, max_steps - steps)
+                zacc = (
+                    ((pz_whole & 0xFF) << 16)
+                    | ((pz_sub & 0xFF) << 8)
+                    | (pz_frac & 0xFF)
+                )
+                m = 0
+                hit = 0
+                while m < n_tile:
+                    m += 1
+                    zacc = (zacc + vz16) & 0xFFFFFF
+                    pzw = (zacc >> 16) & 0xFF
+                    pzs = (zacc >> 8) & 0xFF
+                    dd = (z - pzw - (1 if pzs else 0)) & 0xFF
+                    if dd & 0x80:
+                        continue
+                    hit = 1
+                    break
+                steps += m
+                xacc = (xacc + m * vx16) & 0xFFFF
+                yacc = (yacc + m * vy16) & 0xFFFF
+                px_frac = xacc & 0xFF
+                px_sub = (xacc >> 8) & 0xFF
+                py_frac = yacc & 0xFF
+                py_sub = (yacc >> 8) & 0xFF
+                pz_frac = zacc & 0xFF
+                pz_sub = (zacc >> 8) & 0xFF
+                pz_whole = (zacc >> 16) & 0xFF
+                if hit == 0:
+                    continue  # left the tile (or hit budget) -> resume march
+                # terminated inside the tile: flat verdict at this sub-step
+                s79 = (0 - (pz_sub & 0xFF)) & 0xFF
+                if (
+                    ((z & 0xFF) - (pz_whole & 0xFF) - (1 if pz_sub & 0xFF else 0))
+                    & 0xFF
+                ) != 0:
+                    status = BLOCKED
+                    break
+                if s79 >= 0x80:
+                    status = BLOCKED
+                    break
+                if (c6e & 0x80) == 0:
+                    if (s30 & 0x80) == 0:
+                        status = BLOCKED
+                        break
+                status = LOS_CLEAR
+                break
             if d != 0:
                 status = BLOCKED
                 break
@@ -447,7 +533,20 @@ def march(
             status = LOS_CLEAR
             break
         else:
-            if _check_slope(mem, tx, ty, z, px_sub, py_sub, pz_sub, pz_whole) == 0:
+            # check_sloping_tile $1D46 with the tile's four corner heights hoisted
+            # out of the per-sub-step loop (they are constant for the tile).
+            if cnib == 0x04 or cnib == 0x0C:
+                b8 = pz_whole & 0xFF
+                if b8 >= cp73 or b8 >= cp74 or b8 >= cp75 or b8 >= cp76:
+                    continue  # ray above the slope -> keep marching
+                status = BLOCKED
+                break
+            if (
+                _slope_quad(
+                    cnib, cp73, cp74, cp75, cp76, px_sub, py_sub, pz_sub, pz_whole
+                )
+                == 0
+            ):
                 continue  # ray above the slope -> keep marching
             status = BLOCKED
             break
