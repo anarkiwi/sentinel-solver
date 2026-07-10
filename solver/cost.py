@@ -12,6 +12,7 @@ over exactly the window an action really costs.
 """
 
 from sentinel import aimcost as ac, actioncost, actions, enemies
+from sentinel import memmap as mm
 
 # Keyboard-pan cadence in enemy-round (tick) units. A +-8 bearing notch animates a
 # 16-frame horizontal scroll ($10EE); a +-4 pitch notch an 8-frame vertical scroll
@@ -54,6 +55,23 @@ def aim_rounds(h0, v0, view):
     return r
 
 
+def reabsorb_count(g):
+    """Departed-shell objects the look-back reabsorb will peel from the player's
+    current tile: the whole stack the player stands on top of (every live object on
+    that tile).  A non-regressing climb looks back from a higher eye, so the loop in
+    ``macros._apply_climb`` peels the entire departed shell top-down; this prices that
+    window."""
+    prev = g.player_xy()
+    st = g.state
+    n = 0
+    for s in range(mm.NUM_SLOTS):
+        if st.obj_flags[s] & 0x80:
+            continue
+        if (st.obj_x[s], st.obj_y[s]) == prev:
+            n += 1
+    return n
+
+
 def move_rounds(g, t2, use_boulder, n_boulders, view, vh, vv):
     """``(rounds, end_h, end_v)`` for a climb macro: aim + build + transfer + look-back
     reabsorb. Prices each fired verb by ``actioncost.SETTLE``; a stacked create adds
@@ -76,9 +94,14 @@ def move_rounds(g, t2, use_boulder, n_boulders, view, vh, vv):
     end_h, end_v = (view.get("h_angle"), view.get("v_angle")) if view else (vh, vv)
     back_h = ac.bearing_to(t2[0], t2[1], prev[0], prev[1])  # look back at departed tile
     if back_h is not None and end_h is not None:
-        r += ac.bearing_rounds(end_h, back_h, ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
-        end_h = back_h
-        settle += actioncost.SETTLE["absorb"]  # reabsorb-shell confirm
+        n_re = reabsorb_count(g)
+        if n_re > 0:
+            r += ac.bearing_rounds(end_h, back_h, ROUNDS_PER_H_STEP, ROUNDS_PER_UTURN)
+            end_h = back_h
+            # every peeled object confirms an absorb; successive same-tile absorbs share
+            # the bearing (only the pitch drops as the stack shrinks -> one V-notch re-aim).
+            settle += n_re * actioncost.SETTLE["absorb"]
+            r += (n_re - 1) * ROUNDS_PER_V_STEP
     return r + settle, end_h, end_v
 
 

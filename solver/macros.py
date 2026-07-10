@@ -168,7 +168,7 @@ def _apply_climb(n, t2, use_b, n_b, view, gaze) -> Optional[Node]:
     window, end_h, end_v = cost.move_rounds(g, t2, use_b, n_b, view, n.vh, n.vv)
     if not _buildable(g, t2, use_b):  # legality gate 1
         return None
-    prev_slot, prev_tile = g.player, g.player_xy()
+    prev_tile = g.player_xy()
     if use_b:
         for i in range(max(1, n_b)):
             b = g.create(mm.T_BOULDER, t2, view if i == 0 else None, "climb boulder")
@@ -182,16 +182,21 @@ def _apply_climb(n, t2, use_b, n_b, view, gaze) -> Optional[Node]:
     if s is None:
         return None
     g.transfer(s, "step")
-    # look-back reabsorb of the departed shell if it is now below eye and in LOS.  The
-    # aim is proposed at the TRUE eye (aim.propose == the single player-aim proposer);
-    # absorb re-gates it and no-ops on a reject, so this stays best-effort.
-    rv = aim.propose(g.state, prev_tile, eye_z=None, player=g.player)
-    if (
-        rv is not None
-        and g.state.obj_type[prev_slot] == mm.T_ROBOT
-        and _full_top(g, prev_slot) <= g.eye + 1e-9
-    ):
-        g.absorb(prev_slot, rv, "reabsorb prior shell")
+    # look-back reabsorb of the WHOLE departed shell, peeled top-down from the new tile:
+    # while prev_tile is object-topped, its topmost object is below eye, and a keyboard
+    # aim lands on it, absorb it.  The pitch drops as the stack shrinks, so the view is
+    # re-proposed each iteration; absorb re-gates the ROM action LOS ($1B46).  Best-effort:
+    # the first bare-terrain / above-eye / no-aim / failed-gate ends the loop (never raises).
+    while True:
+        tb = g.mem[mm.TILES_TABLE + mm.tidx(*prev_tile)]
+        if tb < mm.OBJECT_TILE:
+            break  # shell fully recovered -- bare terrain
+        slot = tb & 0x3F
+        if _full_top(g, slot) > g.eye + 1e-9:  # cannot look up at a top above eye
+            break
+        rv = aim.propose(g.state, prev_tile, eye_z=None, player=g.player)
+        if rv is None or not g.absorb(slot, rv, "reabsorb prior shell"):
+            break
     # legality gate 2: managed-exposure survivability over the whole window.
     ok, _ea = cost.survivable(g, prev_tile, window)
     if not ok:
