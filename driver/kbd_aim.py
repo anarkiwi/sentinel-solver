@@ -154,6 +154,11 @@ class KbdDriver:
     def __init__(self, bm, log):
         self.bm = bm
         self.log = log
+        # Committed view bearing (objects_h/v_angle for the CURRENT player slot), tracked
+        # so a follow-on same-bearing aim can keep sights ON and drive ONLY the cursor,
+        # skipping the sights OFF->ON toggle whose initialise_sights ($134C) recenters the
+        # cursor to ($50,$5F). None == unknown/stale.
+        self._bearing = None
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
@@ -169,6 +174,24 @@ class KbdDriver:
 
     def cur(self):
         return self.rd(A_CX), self.rd(A_CY)
+
+    def sights_live_on(self):
+        """True iff the sights flag ($0C5F bit7) is set. SPACE is the only sights toggle
+        ($11B3), so this flag is stable regardless of panning -- safe to read any time.
+        """
+        return bool(self.rd(A_SFLAG) & 0x80)
+
+    def committed_bearing(self):
+        """The last committed (h_angle, v_angle) for the current player slot, or None when
+        unknown/stale (never aimed, an aim did not converge, a monitor drop, a slot change).
+        """
+        return self._bearing
+
+    def set_bearing(self, h, v):
+        self._bearing = (h & 0xFF, v & 0xFF)
+
+    def clear_bearing(self):
+        self._bearing = None
 
     # ---- checkpoint-driven primitives (no wall-clock timing) ----
     # PCs from the game's ROM routines.

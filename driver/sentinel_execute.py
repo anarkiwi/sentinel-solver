@@ -185,8 +185,31 @@ def perform_step(ex, drv, label, stp, log, result):
         rx = ry = centre = 0
         los_hit = False
         ach = {"h": 0, "v": 0, "cur": (0, 0)}
+        want_bearing = (view["h_angle"], view["v_angle"])
+        # REUSE the live aim across consecutive same-bearing steps (e.g. a stacked build).
+        # A create/absorb leaves sights ON and the bearing untouched -- SPACE is the only
+        # sights toggle ($11B3) and the action keys never call initialise_sights -- so when
+        # the committed bearing already equals this view's, keep sights ON and drive ONLY
+        # the cursor. That skips the sights OFF->ON toggle whose initialise_sights ($134C)
+        # recenters the cursor to ($50,$5F) and forces a full re-drive down, holding the
+        # player exposed while enemies rotate. The native-LOS probe GATES the fast path: it
+        # fires only if the live ray still lands on `tile`, else it falls back to a full
+        # re-aim -- so reuse can never fire on the wrong tile.
+        reuse = drv.sights_live_on() and drv.committed_bearing() == want_bearing
         for _aim_try in range(3):
             try:
+                if reuse:
+                    okc = drv.fine_cursor(*view["cursor"])
+                    rx, ry, los_hit, centre = core.probe_tile(ex.bm)
+                    if okc and (rx, ry) == tile and los_hit:
+                        okh = okv = True
+                        ach = {
+                            "h": want_bearing[0],
+                            "v": want_bearing[1],
+                            "cur": drv.cur(),
+                        }
+                        break
+                    reuse = False  # cursor-only did not land -> full re-aim this pass
                 if not drv.sights_set(False):
                     log(f"[{label}] {verb} {tile}: sights would not turn OFF")
                     return "fail"
@@ -214,6 +237,8 @@ def perform_step(ex, drv, label, stp, log, result):
                 ach = {"h": ach_h, "v": ach_v, "cur": drv.cur()}
                 break
             except (TimeoutError, OSError, ConnectionError) as e:
+                reuse = False  # a dropped pass may leave the bearing/cursor half-driven
+                drv.clear_bearing()
                 log(
                     f"[{label}] {verb} {tile}: aim monitor drop "
                     f"({type(e).__name__}); reconnecting + re-aiming"
@@ -252,12 +277,16 @@ def perform_step(ex, drv, label, stp, log, result):
         # angles correct it can still disagree with the ROM, so a probe-only mismatch is NOT
         # a reason to withhold the action (that would skip valid actions forever).
         if not drove_ok:
+            drv.clear_bearing()  # aim did not converge -> bearing is unknown for reuse
             log(
                 f"[{label}] {verb} {tile}: aim did NOT reach view (want h=${view['h_angle']:02x} "
                 f"v=${view['v_angle']:02x} cur={view['cursor']}, got h=${ach['h']:02x} "
                 f"v=${ach['v']:02x} cur={ach['cur']}); NOT firing -- resync + re-plan"
             )
             return "aim_miss"
+        drv.set_bearing(
+            ach["h"], ach["v"]
+        )  # committed: a same-bearing next step can reuse
         if (rx, ry) != tile or not los_hit:
             log(
                 f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los_hit} but angles "
@@ -299,6 +328,10 @@ def perform_step(ex, drv, label, stp, log, result):
     e1 = after.player_energy
     objs1 = len(after.objects_at(*tile))
     slot1 = after.player_slot
+    if (
+        slot1 != slot0
+    ):  # slot changed (transfer): the per-slot committed bearing is stale
+        drv.clear_bearing()
 
     ok, msg = verify(
         verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1
