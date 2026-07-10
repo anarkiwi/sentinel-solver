@@ -2,8 +2,8 @@
 keyboard-aim geometry (``sentinel.aimcost``) and the per-verb settle floors
 (``sentinel.actioncost``).
 
-Mirrors the verified ``climb_search._move_cost`` / ``_pan_rounds`` accounting but with
-no climb-search coupling: a climb macro's cost is the aim pan onto the build tile, the
+The canonical move-cost accounting for the planner and the tick-accurate runner: a climb
+macro's cost is the aim pan onto the build tile, the
 per-verb SETTLE floor of every fired verb (a stacked create adds ``STACK_CREATE``), and
 the return-pan that swings the view back to reabsorb the departed shell. The same figures
 the tick-accurate runner advances the world by (``run_plan_simulated.execute_step``), so

@@ -20,3 +20,7 @@ __pycache__/
 # editor swap files
 *.swp
 *.swo
+
+# local working directives (not part of the project)
+/CLAUDE.md
+/.claude/

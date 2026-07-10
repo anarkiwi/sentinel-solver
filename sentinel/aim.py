@@ -14,8 +14,8 @@ it is visible.  Both are the ROM's own action path (``handle_player_actions`` $1
 
     propose(state, tile)      find a keyboard-lattice view whose ``gate`` holds for
                               ``tile`` (``los.landable_view``), or None.  The single
-                              proposer -- replacing the old per-consumer mix of
-                              ``centre_view`` / ``visibility_sweep`` / ``visible_tiles``.
+                              buildability proposer for every consumer (planner, sim
+                              runner, live driver).
 
 The eye is the player's TRUE eye (``eye_z=None`` reads the object's real
 ``z_height`` + ``z_frac``, exactly what the ROM aim uses at fire time).  A ceiled or

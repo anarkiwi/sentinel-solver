@@ -13,7 +13,7 @@ ROM image.
 | `sentinel/prng.py` | the 40-bit LFSR `prnd` and landscape seeding |
 | `sentinel/state.py` | the one canonical state: a 64 KB `bytearray` laid out like the game's RAM, with typed object-array views |
 | `sentinel/terrain.py` | height/slope nibble decode and the slope-facet surface |
-| `sentinel/los.py` | the integer line-of-sight ray-march and sights aim vector |
+| `sentinel/los.py` | the integer line-of-sight ray-march and sights aim vector, plus the ROM-faithful keyboard-aim buildability oracle (`landable_views` / `landable_view` / `landable_sweep_with_centres`) that sweeps the sights cursor at 1 px resolution — the ROM cursor-move step (`$9965`/`$9994`), each 1 px a distinct ray sub-angle — over the full ROM cursor range |
 | `sentinel/los_jit.py` | numba fast-march of the hot LOS inner loop (bit-identical to `los.py`, ~11x faster on full sweeps); auto-used when numba is present, else `los.py` falls back to pure Python |
 | `sentinel/actions.py` | absorb / create / transfer / win and the energy economy |
 | `sentinel/landscape.py` | `generate(landscape) -> State`: the from-scratch board generator |

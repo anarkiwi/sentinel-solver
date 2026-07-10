@@ -21,7 +21,7 @@ Every integer is kept in a Python-int-width (int64) register and masked with
 """
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 LOS_CLEAR = 1
 BLOCKED = 0
@@ -470,7 +470,7 @@ def march(
     )
 
 
-@njit(cache=True)
+@njit(cache=True, parallel=True)
 def march_batch(
     mem,
     ax_lo,
@@ -514,7 +514,9 @@ def march_batch(
     tx = np.empty(n, dtype=np.int64)
     ty = np.empty(n, dtype=np.int64)
     centre = np.empty(n, dtype=np.int64)
-    for i in range(n):
+    # rays are independent (read-only on `mem`, each writes only its own index), so the
+    # lattice marches in parallel across cores -- the v-COMPLETE sweep stays fast.
+    for i in prange(n):  # pylint: disable=not-an-iterable
         (
             st,
             txi,
@@ -562,3 +564,266 @@ def march_batch(
         ty[i] = tyi
         centre[i] = _min_xy(pxs, pys)
     return status, tx, ty, centre
+
+
+# ============================================================================
+# lattice ray-vector builder (numba twin of sentinel.los.prepare_vector_from_
+# player_sights).  A batched, prange builder so the full 1px keyboard-cursor
+# lattice can be constructed in a fraction of a second instead of ~1min of pure
+# Python.  Bit-for-bit identical to the pure-Python path (locked by
+# tests/test_landable.py::test_lattice_vectors_match_python).
+# ============================================================================
+@njit(cache=True, inline="always")
+def _vmul8(a, b):
+    p = (a & 0xFF) * (b & 0xFF)
+    return (p >> 8) & 0xFF, p & 0xFF
+
+
+@njit(cache=True, inline="always")
+def _vinvert16(high, frac):
+    val = ((high & 0xFF) << 8) | (frac & 0xFF)
+    neg = (-val) & 0xFFFF
+    return (neg >> 8) & 0xFF, neg & 0xFF
+
+
+@njit(cache=True, inline="always")
+def _vmul_dbl_by_byte(low74, high75, byte76):
+    r1h, _r1l = _vmul8(low74, high75)
+    r2h, r2l = _vmul8(byte76, high75)
+    res75 = r2h
+    total = r1h + r2l
+    res74 = total & 0xFF
+    if total > 0xFF:
+        res75 = (res75 + 1) & 0xFF
+    return res74, res75
+
+
+@njit(cache=True, inline="always")
+def _vmul_dbl_A_by_pi(A, frac74):
+    frac = frac74 & 0xFF
+    a = A & 0xFF
+    for _ in range(2):
+        c = (frac >> 7) & 1
+        frac = (frac << 1) & 0xFF
+        a = ((a << 1) | c) & 0xFF
+    m76 = a
+    r1h, _r1l = _vmul8(frac, 0xC9)
+    r77 = r1h
+    r2h, _r2l = _vmul8(m76, 0xC9)
+    r75 = r2h
+    total = r77 + _r2l
+    r74 = total & 0xFF
+    if total > 0xFF:
+        r75 = (r75 + 1) & 0xFF
+    return r74, r75
+
+
+@njit(cache=True)
+def _vsin_cos(angle, frac74):
+    angle &= 0xFF
+    c0c = angle
+    _apl, aPI_hi = _vmul_dbl_A_by_pi(angle, frac74)
+    c53 = _apl
+    c54 = aPI_hi
+    sixty = 1
+    X = 0
+    if c0c & 0x40:
+        X = 1
+        sixty = 0
+    A_cmp = c54
+    cur_c53 = c53
+    cur_c54 = c54
+    cur_75 = aPI_hi
+    sc_low0 = 0
+    sc_low1 = 0
+    sc_high0 = 0
+    sc_high1 = 0
+    while True:
+        if (A_cmp & 0xFF) >= 0x7A:
+            t74 = (0 - cur_c53) & 0xFF
+            borrow1 = 1 if (0 - cur_c53) < 0 else 0
+            v = 0xC9 - cur_c54 - borrow1
+            t75 = v & 0xFF
+            t76 = t75
+            r74, r75 = _vmul_dbl_by_byte(t74, t75, t76)
+            c = (r74 >> 7) & 1
+            r74 = (r74 << 1) & 0xFF
+            r75 = ((r75 << 1) | c) & 0xFF
+            sub_lo = 0 - r74
+            low = (sub_lo & 0xFF) & 0xFE
+            borrow2 = 1 if sub_lo < 0 else 0
+            cur_low = low
+            sub_hi = 0 - r75 - borrow2
+            if sub_hi < 0:
+                cur_high = sub_hi & 0xFF
+            else:
+                cur_low = 0xFE
+                cur_high = 0xFF
+        else:
+            r_high1, _r1 = _vmul8(0xAB, cur_75)
+            r_high2, r_low2 = _vmul8(r_high1, cur_75)
+            t76 = r_high2
+            r74, r75 = _vmul_dbl_by_byte(r_low2, cur_75, t76)
+            t74b = (cur_c53 - r74) & 0xFF
+            borrow1 = 1 if cur_c53 < r74 else 0
+            hv = (cur_c54 - r75 - borrow1) & 0xFF
+            c = (t74b >> 7) & 1
+            hi = ((hv << 1) | c) & 0xFF
+            cur_high = hi
+            cur_low = ((t74b << 1) & 0xFF) & 0xFE
+        if X == 0:
+            sc_low0 = cur_low
+            sc_high0 = cur_high
+        else:
+            sc_low1 = cur_low
+            sc_high1 = cur_high
+        if X == sixty:
+            break
+        X = sixty
+        new_c53 = (0 - cur_c53) & 0xFF
+        borrow = 1 if (0 - cur_c53) < 0 else 0
+        new_c54 = (0xC9 - cur_c54 - borrow) & 0xFF
+        cur_c53 = new_c53
+        cur_c54 = new_c54
+        cur_75 = new_c54
+        A_cmp = new_c54
+    sin_lo = sc_low0
+    cos_lo = sc_low1
+    sin_hi = sc_high0
+    cos_hi = sc_high1
+    if c0c & 0x80:
+        sin_lo |= 1
+    t = ((c0c << 1) & 0xFF) ^ c0c
+    if t & 0x80:
+        cos_lo |= 1
+    return sin_lo & 0xFF, cos_lo & 0xFF, sin_hi & 0xFF, cos_hi & 0xFF
+
+
+@njit(cache=True, inline="always")
+def _vproc_sc(low, high):
+    t74 = low & 0xFF
+    A = high & 0xFF
+    # LSR A ; ROR $0074, four times; carry from the FIRST is the sign.
+    c = A & 1
+    A >>= 1
+    saved = t74 & 1
+    t74 = (t74 >> 1) | (c << 7)
+    for _ in range(3):
+        c = A & 1
+        A >>= 1
+        t74 = (t74 >> 1) | (c << 7)
+    if saved:
+        A, t74 = _vinvert16(A, t74)
+    return A & 0xFF, t74 & 0xFF
+
+
+@njit(cache=True, inline="always")
+def _vmul_dbl_dbl(x_lo, x_hi, y_lo, y_hi):
+    s67 = 0
+    s6a = y_lo & 0xFF
+    s6b = y_hi & 0xFF
+    s68 = x_lo & 0xFF
+    s69 = x_hi & 0xFF
+    if s6b & 0x80:
+        neg = (-(((s6b << 8) | s6a))) & 0xFFFF
+        s6a = neg & 0xFF
+        s6b = (neg >> 8) & 0xFF
+        s67 ^= 0x80
+    if s68 & 1:
+        s67 ^= 0x80
+    r1h, xl_yh_low = _vmul8(s68, s6b)
+    r77 = r1h
+    rounded = xl_yh_low + 0x80
+    r76 = rounded & 0xFF
+    if rounded > 0xFF:
+        r77 = (r77 + 1) & 0xFF
+    r2h, r2l = _vmul8(s69, s6b)
+    r78 = r2h
+    total = r2l + r77
+    r77 = total & 0xFF
+    if total > 0xFF:
+        r78 = (r78 + 1) & 0xFF
+    r3h, r3l = _vmul8(s69, s6a)
+    t = r3l + r76
+    carry = 1 if t > 0xFF else 0
+    t2 = r3h + r77 + carry
+    res74 = t2 & 0xFF
+    if t2 > 0xFF:
+        r78 = (r78 + 1) & 0xFF
+    A = r78 & 0xFF
+    frac = res74 & 0xFF
+    if s67 & 0x80:
+        A, frac = _vinvert16(A, frac)
+    return A & 0xFF, frac & 0xFF
+
+
+@njit(cache=True)
+def _prep_vec(h_angle, v_angle, cur_x, cur_y):
+    """Numba twin of prepare_vector_from_player_sights $1C10 + prepare_vector_from_
+    angle $1C54.  Returns (vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30)."""
+    cc6 = cur_x & 0xFF
+    s75 = cc6
+    A = 0
+    for _ in range(3):
+        c = s75 & 1
+        s75 >>= 1
+        A = (A >> 1) | (c << 7)
+    h_frac = A & 0xFF
+    val = s75 + (h_angle & 0xFF)
+    h_angle_v = (val - 0x0A) & 0xFF
+    s75 = (cur_y - 0x05) & 0xFF
+    A = 0
+    for _ in range(4):
+        c = s75 & 1
+        s75 >>= 1
+        A = (A >> 1) | (c << 7)
+    v_frac = (A + 0x20) & 0xFF
+    s74 = v_frac
+    carry_in = 1 if (A + 0x20) > 0xFF else 0
+    val2 = s75 + (v_angle & 0xFF) + carry_in
+    v_angle_v = ((val2 & 0xFF) + 0x03) & 0xFF
+    # prepare_vector_from_angle $1C54
+    sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v = _vsin_cos(v_angle_v, s74)
+    _s33, s32 = _vproc_sc(cos_lo_v, cos_hi_v)
+    s30, s2d = _vproc_sc(sin_lo_v, sin_hi_v)
+    h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi = _vsin_cos(h_angle_v, h_frac)
+    vy_hi, vy_lo = _vmul_dbl_dbl(h_cos_lo, h_cos_hi, s32, _s33)
+    vx_hi, vx_lo = _vmul_dbl_dbl(h_sin_lo, h_sin_hi, s32, _s33)
+    return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30
+
+
+@njit(cache=True, parallel=True)
+def build_lattice(hgrid, vgrid, cxs, cys):
+    """Build every keyboard-lattice ray vector, order ``for v: for h: for cx: for cy``
+    (uniform cursor grid at all pitches).  Returns the six int16 component arrays plus
+    s30, matching :func:`_prep_vec` per index; the grids reconstruct (h, v, cx, cy)."""
+    nv = vgrid.shape[0]
+    nh = hgrid.shape[0]
+    ncx = cxs.shape[0]
+    ncy = cys.shape[0]
+    per_h = ncx * ncy
+    per_v = nh * per_h
+    n = nv * per_v
+    vx_lo = np.empty(n, dtype=np.int16)
+    vx_hi = np.empty(n, dtype=np.int16)
+    vz_lo = np.empty(n, dtype=np.int16)
+    vz_hi = np.empty(n, dtype=np.int16)
+    vy_lo = np.empty(n, dtype=np.int16)
+    vy_hi = np.empty(n, dtype=np.int16)
+    s30 = np.empty(n, dtype=np.int16)
+    for idx in prange(n):  # pylint: disable=not-an-iterable
+        vi = idx // per_v
+        rem = idx - vi * per_v
+        hi = rem // per_h
+        rem2 = rem - hi * per_h
+        cxi = rem2 // ncy
+        cyi = rem2 - cxi * ncy
+        a, b, cl, ch, dl, dh, s = _prep_vec(hgrid[hi], vgrid[vi], cxs[cxi], cys[cyi])
+        vx_lo[idx] = a
+        vx_hi[idx] = b
+        vz_lo[idx] = cl
+        vz_hi[idx] = ch
+        vy_lo[idx] = dl
+        vy_hi[idx] = dh
+        s30[idx] = s
+    return vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30

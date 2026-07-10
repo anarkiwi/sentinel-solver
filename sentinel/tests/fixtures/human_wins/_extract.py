@@ -21,8 +21,9 @@ the audited byte-exact :func:`sentinel.landscape.generate`).  That is the
 "cache for fixtures" the repo permits.
 
 One fixture EVENT per player ACTION.  Actions are recovered by walking the
-change-bracketed records (schema ``watch_play/2``: a record carrying a ``bracket``
-field is emitted post-action) and DIFFING each bracket's object table against the
+change-bracketed records (schema ``watch_play/2``: the recorder brackets on ANY
+change of ``(energy, n_objects, player slot/x/y, done_flag)`` -- ``key_of`` in
+``driver/watch_play.py``) and DIFFING each bracket's object table against the
 previous bracket's (the initial record ``t~=0`` seeds the first diff):
 
     a newly-occupied slot at tile T of type X  => create X at T
@@ -35,6 +36,19 @@ fire (``hang``/``vang``/``cursor`` -- the sights settle on the built tile in the
 change record).  Records at/after the first ``done_flag`` are post-win
 next-landscape noise and are dropped.
 
+Because the recorder brackets on any ``n_objects`` change, an object the SENTINEL
+spawns is bracketed identically to a player build.  A discharging enemy creates a
+TREE at a RANDOM tile below its z (ROM ``consider_discharging_enemy_energy $1A5D``
+-> ``create_object #$2`` -> ``put_object_in_random_tile_below_z $1238``) -- it is
+NOT gated by the player's sights.  A real player build IS gated: the fire path
+``handle_player_actions $1B18`` -> ``try_to_create_object $1BBA`` ->
+``check_for_line_of_sight_to_tile $1CDD`` -> ``put_object_in_tile $1F16`` only
+lands where the player's sights can reach.  So a candidate create/absorb whose
+target tile NO keyboard aim can land on (:func:`sentinel.los.landable_view` is
+``None`` -- the distilled realisation of that LOS gate) while an enemy is present
+is an enemy-spawned object, not a player action, and is dropped (its object is
+still folded into the world baseline for later diffs, since it is really there).
+
 Run ``python -m sentinel.tests.fixtures.human_wins._extract`` (with the raw logs
 present) to regenerate the committed ``ls*.json`` fixtures.
 """
@@ -43,8 +57,9 @@ import base64
 import json
 import os
 
-from sentinel import landscape, memmap as mm
-from sentinel.terrain import tile_byte
+from sentinel import landscape, los, memmap as mm
+from sentinel.state import State
+from sentinel.terrain import set_tile_byte, tile_byte
 
 _ROOT = os.path.dirname(
     os.path.dirname(
@@ -62,6 +77,69 @@ SOURCES = {
 }
 
 _BUILDABLE = (mm.T_ROBOT, mm.T_TREE, mm.T_BOULDER)
+_ENEMIES = (mm.T_MEANIE, mm.T_SENTINEL, mm.T_SENTRY)
+
+_BASE = {}
+
+
+def _base_mem(seed):
+    """Generated board stripped to bare terrain (every object slot empty, object
+    tiles reverted) -- identical to ``test_human_win_logs._base_mem`` so the drop
+    gate sees exactly the State the tests reconstruct from a committed event."""
+    if seed not in _BASE:
+        gen = landscape.generate(seed)
+        for s in range(mm.NUM_SLOTS):
+            if not (gen.obj_flags[s] & 0x80) and gen.obj_flags[s] < 0x40:
+                set_tile_byte(
+                    gen, gen.obj_x[s], gen.obj_y[s], (gen.obj_z_height[s] << 4) & 0xFF
+                )
+        for s in range(mm.NUM_SLOTS):
+            gen.obj_flags[s] = 0x80
+        _BASE[seed] = bytes(gen.mem)
+    return bytearray(_BASE[seed])
+
+
+def _pre_state(event, seed):
+    """Reconstruct the PRE-action State from a distilled event -- mirrors
+    ``test_human_win_logs.state_from_event`` so landability here == the test's."""
+    st = State(_base_mem(seed))
+    objs = event["objects"]
+    below = {o[6] & 0x3F for o in objs if o[6] >= 0x40}
+    for slot, x, y, zh, zf, otype, flags in objs:
+        st.obj_x[slot] = x
+        st.obj_y[slot] = y
+        st.obj_z_height[slot] = zh
+        st.obj_z_frac[slot] = zf
+        st.obj_type[slot] = otype
+        st.obj_flags[slot] = flags
+    for slot, x, y, zh, zf, otype, flags in objs:
+        if slot not in below:
+            set_tile_byte(st, x, y, mm.OBJECT_TILE | slot)
+    pl = event["player"]
+    st.player = pl["slot"]
+    st.energy = event["energy"]
+    return st
+
+
+def _is_enemy_spawn(event, seed):
+    """True if this candidate create/absorb is an ENEMY-spawned object, not a player
+    action: the target tile is unreachable by any keyboard aim (the ROM player-fire
+    LOS gate ``check_for_line_of_sight_to_tile $1CDD`` would reject it) AND an enemy
+    (the only thing that spawns objects off the player's sight -- Sentinel discharge
+    ``$1A5D`` / meanie) is present in the pre-state."""
+    if event["verb"] not in ("create", "absorb"):
+        return False
+    if not any(o[5] in _ENEMIES for o in event["objects"]):
+        return False
+    pl = event["player"]
+    view = los.landable_view(
+        _pre_state(event, seed),
+        tuple(event["target"]),
+        pl["slot"],
+        eye_z=pl["z"],
+        v_band=True,
+    )
+    return view is None
 
 
 def _occupied(mem):
@@ -130,28 +208,30 @@ def extract(path, entered_code, seed):
         verb, otype, target = _classify(prev_objs, post_objs, post)
         pre_pl = prev_rec["player"]
         post_pl = post["player"]
-        events.append(
-            {
-                "verb": verb,
-                "otype": otype,
-                "target": target,
-                # position from the pre-action record; aim from the change (post)
-                # record -- the sights settle on the fired tile there.
-                "player": {
-                    "slot": pre_pl["slot"],
-                    "x": pre_pl["x"],
-                    "y": pre_pl["y"],
-                    "z": pre_pl["z"],
-                    "zf": pre_pl["zf"],
-                    "hang": post_pl["hang"],
-                    "vang": post_pl["vang"],
-                },
-                "cursor": [post["cursor"][0], post["cursor"][1]],
-                "energy": prev_rec["energy"],
-                "do_los": prev_rec["do_los"],
-                "objects": [[s] + prev_objs[s] for s in sorted(prev_objs)],
-            }
-        )
+        candidate = {
+            "verb": verb,
+            "otype": otype,
+            "target": target,
+            # position from the pre-action record; aim from the change (post)
+            # record -- the sights settle on the fired tile there.
+            "player": {
+                "slot": pre_pl["slot"],
+                "x": pre_pl["x"],
+                "y": pre_pl["y"],
+                "z": pre_pl["z"],
+                "zf": pre_pl["zf"],
+                "hang": post_pl["hang"],
+                "vang": post_pl["vang"],
+            },
+            "cursor": [post["cursor"][0], post["cursor"][1]],
+            "energy": prev_rec["energy"],
+            "do_los": prev_rec["do_los"],
+            "objects": [[s] + prev_objs[s] for s in sorted(prev_objs)],
+        }
+        # Fold the change into the world baseline regardless (it really happened);
+        # emit it as a player event only if it is not an enemy-spawned object.
+        if not _is_enemy_spawn(candidate, seed):
+            events.append(candidate)
         prev_rec = post
         prev_objs = post_objs
 

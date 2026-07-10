@@ -47,29 +47,6 @@ def test_aim_target_matches_rom():
     assert total > 100  # the fixture actually exercised the engine
 
 
-def test_visible_tiles_are_all_los_positive():
-    for _ls, g in _golden().items():
-        state = _rebuild(g["regions"])
-        ps = g["player_slot"]
-        seen = los.visible_tiles(state, ps, max_steps=2000)
-        assert seen, "the observer should see at least some tiles"
-        # every returned view really does land on its tile with LOS.
-        for (tx, ty), view in list(seen.items())[:40]:
-            rtx, rty, rlos = los.aim_target(
-                state, view["h_angle"], view["v_angle"], *view["cursor"], ps
-            )
-            assert (rtx, rty) == (tx, ty) and rlos
-
-
-def test_can_see_agrees_with_centre_view():
-    for _ls, g in _golden().items():
-        state = _rebuild(g["regions"])
-        ps = g["player_slot"]
-        seen = los.visible_tiles(state, ps, max_steps=2000)
-        for tile in list(seen)[:10]:
-            assert los.can_see(state, tile, ps)
-
-
 def test_tile_byte_matches_memmap_index_in_range():
     # the ROM addressing form used by terrain.tile_byte equals TILES_TABLE+tidx.
     g = next(iter(_golden().values()))
@@ -89,17 +66,3 @@ def test_height_slope_grid_shape():
     assert len(height) == mm.N and len(height[0]) == mm.N
     assert all(0 <= height[y][x] <= 15 for y in range(mm.N) for x in range(mm.N))
     assert len(slope) == mm.N
-
-
-def test_sees_tile_agrees_with_visible_tiles():
-    # sees_tile is the short-circuit of "tile in visible_tiles(...)": it must agree
-    # tile-for-tile with the full sweep it replaces.
-    for _ls, g in _golden().items():
-        state = _rebuild(g["regions"])
-        ps = g["player_slot"]
-        seen = set(los.visible_tiles(state, ps, max_steps=2000))
-        for x in range(0, mm.N, 3):
-            for y in range(0, mm.N, 3):
-                assert los.sees_tile(state, (x, y), ps, max_steps=2000) == (
-                    (x, y) in seen
-                ), f"landscape {_ls} tile ({x},{y})"
