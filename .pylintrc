@@ -1,0 +1,20 @@
+[MASTER]
+ignore-patterns=
+[MESSAGES CONTROL]
+disable=missing-module-docstring,missing-function-docstring,missing-class-docstring,
+        invalid-name,too-many-locals,too-many-branches,too-many-statements,
+        too-many-arguments,too-many-instance-attributes,too-many-return-statements,
+        too-many-nested-blocks,too-few-public-methods,duplicate-code,
+        consider-using-f-string,line-too-long,too-many-lines,too-many-public-methods,
+        too-many-positional-arguments,protected-access,import-outside-toplevel,
+        wrong-import-position,wrong-import-order,cyclic-import,fixme,
+        unspecified-encoding,consider-using-with,global-statement,
+        broad-exception-caught,redefined-outer-name,attribute-defined-outside-init,
+        unused-argument,multiple-imports,unnecessary-lambda-assignment,
+        superfluous-parens,subprocess-run-check,f-string-without-interpolation,
+        cell-var-from-loop,no-else-return,no-else-break,consider-using-in,
+        using-constant-test,ungrouped-imports,unbalanced-tuple-unpacking,
+        reimported,consider-using-max-builtin,
+        unsubscriptable-object
+[REPORTS]
+score=no

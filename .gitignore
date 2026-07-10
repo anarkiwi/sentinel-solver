@@ -1,0 +1,26 @@
+# game fixtures — copyrighted, never commit
+/sentinel-gold.tap
+/out/sentinel_stage2.bin
+/out/*.bin
+
+# run products
+/renders/
+# VICE machine snapshots (boot.vsf and friends) — regenerated, never committed
+*.vsf
+__pycache__/
+*.pyc
+/out/*.pkl
+/out/*.log
+
+# VICE runtime home (cache/config/local)
+/.vice-home/
+/out/*.json
+/out/*.jsonl
+
+# editor swap files
+*.swp
+*.swo
+
+# local working directives (not part of the project)
+/CLAUDE.md
+/.claude/
