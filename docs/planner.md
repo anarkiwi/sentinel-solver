@@ -394,6 +394,53 @@ geometry — is deterministic), not a cost-weighted search:
 Both open items are handled inside their own task gates (§6.3), not blockers to
 earlier phases.
 
+### 6.2a Sim-vs-live cadence divergence (characterised, benign)
+
+`scripts/lockstep_probe.py` executes each plan step against BOTH the live emulator
+and the sim, advancing the sim by the exact live `$130C` cooldown-tick count, and
+compares the full state. It used to halt at **step 1** on a "locked-state" diff.
+Root-caused with per-step live memory dumps (`scripts/lockstep_dump.py`): the ONLY
+diverging byte is the Sentinel's **update-cooldown** (`enemies_update_cooldown
+$0C30`), off by **±1** (≤±2 over a long window). Every other byte — the Bresenham
+accumulator `$1335`, the 1-in-3 gate `$0C50`, rotation cooldown `$0C28`, sentinel
+facing, energy, all objects, all tiles — matches the live ROM **bit-for-bit**.
+
+Cause (ROM): the game runs two asynchronous per-frame clocks. The cooldown
+*decrement* `update_enemy_cooldowns $1317` (via `$130C`) runs **once per frame**
+from the raster IRQ `$9663` or the scroll path `$3684` (mutually exclusive via
+`$0CD8`). The enemy *reconsideration* `update_enemies $16B5` — which reloads a due
+enemy's update-cooldown to 4 (`$16ED`) — is **spun continuously** by
+`update_game_loop $129F` (measured live: ~5 calls/frame). Because the
+update-cooldown cycles fast (~10 frames), its value at an arbitrary CPU-halt
+boundary depends on the **sub-frame phase**, which `sentinel.enemies.advance_frame`
+(one tick + one 8-slot sweep per frame) cannot reproduce. It is **not** a
+tick-schedule error: perturbing the advance count breaks `$1335`/`$0C50` but never
+fixes the update-cooldown, and at the exact live frame count those all match. It is
+proven **inert per resynced step** — forcing the sim's value to live's changes
+nothing else in the window (over long horizons it only shifts a rotation's *timing*
+by ~2 frames, never its facing value). The probe therefore lists
+`E_upd_cd` in its `UNLOCKED` set alongside `prng`/`cursor`; every other field stays
+strict, so the probe now validates the whole plan live instead of false-stopping.
+
+### 6.2b Trail self-funding: whole-shell reabsorb + residual exposure
+
+The climb macro's look-back reabsorb (`macros._apply_climb`) used to recover only the
+**topmost synthoid** of the departed shell, abandoning any boulders beneath it (wasted
+energy). It now **peels the whole shell top-down** — while the departed tile is
+object-topped, its top is below the (higher) eye, and a keyboard aim lands, absorb and
+repeat — gated exactly as before by `aim.gate` (`$1B46`); `cost.move_rounds`
+(`reabsorb_count`) prices every peeled absorb so `cost.survivable`'s window stays
+faithful. On ls0 the higher, honest cost of leaving-and-reabsorbing a multi-boulder
+shell steers A\* to an **all-hop trail** whose shells fully reabsorb (abandoned trail
+boulders 2→0), still winning zero-drain.
+
+**Residual (open):** a shell left standing for a full macro window can be **seen and
+downgraded** by the Sentinel before the look-back (robot→boulder→tree, `$1A08`), so
+its reabsorb returns less (or misses). `cost.survivable` checks only the *player's*
+energy/death, never whether abandoned **trail objects** stay hidden. Closing this needs
+a trail-exposure gate (require left-behind objects out of enemy LOS over the window, or
+reabsorb before the next macro) — the same exposure-scheduling lever as §6.1.
+
 ### 6.3 Implementation plan (the "how")
 
 Mechanically executable task plan for the design above. Each task is ~1 PR. Repo
