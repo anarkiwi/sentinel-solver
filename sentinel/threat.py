@@ -176,10 +176,11 @@ def ticks_until_seen(state, x, y, horizon=256, object_top=ROBOT_EYE):
     per-tick visibility test then restored -- so enemy targeting/rotation is not
     perturbed by the query target."""
     clone = state.clone()
+    clone.mem[mm.PLAYER_NOT_ACTED] = 0  # active-play cooldown clock (see gaze.py)
     slot = _free_slot(clone)
     if slot is None:
         return horizon
-    for t in range(horizon):
+    for t in range(horizon):  # horizon is now in FRAMES
         old = terrain.tile_byte(clone, x, y)
         if _place_phantom(clone, (x, y), slot):
             seen = any(
@@ -191,7 +192,7 @@ def ticks_until_seen(state, x, y, horizon=256, object_top=ROBOT_EYE):
             _restore_tile(clone, (x, y), old, slot)
             if seen:
                 return t
-        enemies.step(clone)
+        enemies.advance_frame(clone)
     return horizon
 
 
@@ -253,10 +254,11 @@ def meanie_safe(state, tile):
 
 
 def drain_over_window(state, ticks):
-    """Energy the actual player loses while the world advances `ticks` rounds from
+    """Energy the actual player loses while the world advances `ticks` FRAMES from
     `state`. The player object is already at its position in `state`."""
     clone = state.clone()
+    clone.mem[mm.PLAYER_NOT_ACTED] = 0  # active-play cooldown clock (see gaze.py)
     e0 = clone.energy
     for _ in range(ticks):
-        enemies.step(clone)
+        enemies.advance_frame(clone)
     return max(0, e0 - clone.energy)

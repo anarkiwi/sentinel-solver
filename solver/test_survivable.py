@@ -3,9 +3,13 @@
 
 Headline gate: over a window the Sentinel actually drains, ``survivable``'s returned
 ``energy_after`` equals ``energy_before - threat.drain_over_window(state, W)`` EXACTLY --
-both drive the identical ``enemies.step`` loop, so the timed-race feasibility test is the
-true transition, not an approximation. A state whose buffer cannot absorb the drain
+both drive the identical ``enemies.advance_frame`` loop, so the timed-race feasibility test
+is the true transition, not an approximation. A state whose buffer cannot absorb the drain
 returns ``ok=False``.
+
+The window is in FRAMES: the draining cooldown ($1835 reload 120) decrements at the
+per-frame cadence (205/256 Bresenham x 1/3 gate ~= 0.267/frame), so the first drain fires
+~450 frames after first sight; the window is set well past that.
 """
 
 import os
@@ -18,9 +22,11 @@ from solver.plan_game import PlanGame, terrain_z  # noqa: E402
 from sentinel import memmap as mm, terrain, threat  # noqa: E402
 
 # A high, bare ls0 tile the Sentinel has terrain line-of-sight to at t=0 (ticks_until_seen
-# == 0); the drain cooldown reaches its fire point well inside this window.
+# == 0); the drain cooldown reaches its fire point well inside this FRAME window.
 SEEN_TILE = (13, 2)
-WINDOW = 450
+WINDOW = (
+    900  # frames (was 450 rounds; the per-frame cooldown cadence is ~0.267 ticks/frame)
+)
 
 
 def _seen_ls0():

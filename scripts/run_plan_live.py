@@ -126,7 +126,13 @@ def execute_live(
     from solver import plan_game
     from solver.astar_planner import plan
 
-    drv = kbd_aim.KbdDriver(ex.bm, log)
+    # Quantized live cadence: CPU stays HALTED between primitives, advancing ONLY inside
+    # run_until_pc animation windows, so the live game spends exactly the ROM animation
+    # frames the cost model prices -- no monitor free-run (auto-resuming reads running the
+    # game at gameplay speed through Python bookkeeping) that pushed each step ~3x past its
+    # modelled frames and drove the player past the ~450-frame drain onset.
+    ex.bm.auto_resume = False
+    drv = kbd_aim.KbdDriver(ex.bm, log, quantized=True)
     halt_during_decide = True
     label = 0
 
@@ -141,13 +147,18 @@ def execute_live(
         )
 
     def resume_cpu():
-        if not halt_during_decide:
+        # Quantized: keep the CPU HALTED after planning. Keystrokes drive via run_until_pc
+        # (which runs then re-halts), and every read is halt-safe (auto_resume off), so the
+        # game never free-runs during bookkeeping. Resuming here would reintroduce exactly
+        # the gameplay-speed drift the quantization removes.
+        if drv.quantized or not halt_during_decide:
             return
         try:
             ex.bm.exit()  # resume the CPU (frozen during planning) for the keystrokes
         except Exception as e:  # noqa: broad-except
             log(f"    (resume after plan failed: {e}; reconnecting)")
             core.reconnect(ex.bm, log)
+            ex.bm.auto_resume = False  # a fresh BinMon defaults resume ON; re-quantize
 
     # seed_built_columns must stay False until a create() has ACTUALLY landed in the
     # real game: before that, the only object on the player's tile is the landscape

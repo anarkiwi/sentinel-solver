@@ -55,6 +55,14 @@ ROTATION_SPEED_TABLE = 0x9D37  # per-enemy rotation step (+$14 / $EC), indexed b
 
 # ---- enemy-update scalars -------------------------------------------------
 COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
+# The running game ticks cooldowns ONCE PER FRAME (raster $9663 / scroll $3684, mutually
+# exclusive via $0CD8) through this integer Bresenham accumulator: $130C does $1335 += $CD
+# and only falls through to update_enemy_cooldowns ($1317) on carry (205/256).  Suppressed
+# until the player's first action ($0CE5).  NOT touched by the isolated-routine oracle
+# (which calls $1317 directly), so it is the cadence the 1:1 sim step never modelled.
+COOLDOWN_BRESENHAM = 0x1335  # $130C running accumulator ($1335)
+COOLDOWN_BRESENHAM_STEP = 0xCD  # $1310 ADC #$CD
+PLAYER_NOT_ACTED = 0x0CE5  # bit7 set until the player's first action ($12E1 clears it)
 TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
 FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
 TARGETED_OBJECT_IN_LOS = 0x0C56  # march sets bit7 when the ray reaches the target

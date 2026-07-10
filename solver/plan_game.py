@@ -59,6 +59,11 @@ class PlanGame:
     def _init(self, state, landscape, seed_built_columns):
         self.state = state
         self.mem = state.mem
+        # Model the active-play cooldown clock: the climb happens after the player is
+        # acting, so mark $0CE5 clear ($12E1) -- enemies precess/drain (advance_frame's
+        # per-frame cooldown tick). Assuming active enemies from the root is the safe
+        # (conservative) bound for the survivability/gaze forecast.
+        state.mem[mm.PLAYER_NOT_ACTED] = 0
         self.landscape = landscape
         self.col = {}
         self.steps = []

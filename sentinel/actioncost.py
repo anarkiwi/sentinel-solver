@@ -50,8 +50,11 @@ import os
 
 from sentinel import memmap as mm
 
-# --- frame -> tick conversion (exact, $130C/$1335 Bresenham 205/256) -----------
-FRAME_TICKS = float(os.environ.get("FRAME_TICKS", "0.80"))
+# Costs are now in FRAMES (video frames), the unit sentinel.enemies.advance_frames
+# consumes: the $130C/$1335 Bresenham (205/256) and the $0C50 1-in-3 gate are applied
+# INSIDE advance_frame per frame, so the cost model must NOT pre-scale by them.  Kept as
+# FRAME_TICKS=1.0 (env-overridable) so every settle/pan term below reads as a frame count.
+FRAME_TICKS = float(os.environ.get("FRAME_TICKS", "1.0"))
 
 # --- ROM-cited per-phase frame counts ------------------------------------------
 # Object dither animation loop ($1FA4 create / $86A5 absorb): 977904 cycles at the

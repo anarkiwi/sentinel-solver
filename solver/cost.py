@@ -101,8 +101,10 @@ def survivable(g_after_actions, from_tile, window_rounds):
     """
     del from_tile  # part of the feasibility signature; not read by the true transition
     state = g_after_actions.state
-    for _ in range(int(window_rounds)):
-        enemies.step(state)
+    for _ in range(
+        int(window_rounds)
+    ):  # window is now in FRAMES (advance_frame cadence)
+        enemies.advance_frame(state)
     if actions.player_dead(state):
         return (False, state.energy)
     ea = state.energy

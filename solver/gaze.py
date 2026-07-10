@@ -77,13 +77,17 @@ class GazeTimeline:
         self.horizon = int(horizon)
         self._enemies = enemies.enemy_slots(state)
         n = len(self._enemies)
-        # Forward-sim a passive clone, recording each enemy's facing per round.
+        # Forward-sim a passive clone per FRAME, recording each enemy's facing. The
+        # horizon is in frames (the advance_frame cadence). Mark the player as having acted
+        # ($0CE5) so the cooldown clock runs -- the timeline models the active-play world
+        # the climb happens in (assuming active enemies is the conservative, safe bound).
         clone = state.clone()
+        clone.mem[mm.PLAYER_NOT_ACTED] = 0
         facings = np.zeros((n, self.horizon), dtype=np.uint8)
         for t in range(self.horizon):
             for i, e in enumerate(self._enemies):
                 facings[i, t] = clone.obj_h_angle[e]
-            enemies.step(clone)
+            enemies.advance_frame(clone)
         self._facings = facings
         # A clone at t=0 for the static terrain-LOS / bearing probes.
         self._terr_state = state.clone()
