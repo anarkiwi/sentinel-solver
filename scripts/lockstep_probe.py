@@ -200,7 +200,14 @@ def run_probe(session, log, result):
     # PRNG + cursor churn on the unbounded update_enemies spin, which feeds nothing but
     # drain-scatter / forced-hyperspace (events a hidden plan never triggers), so they are
     # out of the lock-state; everything that determines the enemy schedule + outcome is in.
-    UNLOCKED = {"prng", "cursor"}
+    # E_upd_cd (enemy update-cooldown $0C30): a sub-frame-phase artifact of the ROM's two
+    # asynchronous cooldown clocks -- the cooldown decrement $130C/$1317 runs once/frame from
+    # raster $9663 / scroll $3684, while the enemy reconsideration reload $16ED (which reloads
+    # a due enemy's update-cooldown to 4) is spun continuously by update_game_loop $129F. Its
+    # value at an arbitrary CPU-halt boundary depends on the sub-frame phase the whole-frame
+    # sim cannot reproduce; proven inert per resynced step (forcing sim->live changes nothing
+    # else in the window). Every OTHER field stays strict.
+    UNLOCKED = {"prng", "cursor", "E_upd_cd"}
     # Resync the sim from the live PRE-step image each step, so every step's frame advance
     # is validated in isolation (no error accumulation). Step 0 carries the known $0CE5
     # aim-split (cooldowns don't tick during the first-ever action's aim frames) -- that is
