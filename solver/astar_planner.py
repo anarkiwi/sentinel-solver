@@ -62,8 +62,9 @@ T_BUDGET_S = _envf("T_BUDGET_S", "150.0")  # wall-clock budget (search grant, < 
 # was an overfit shortcut that only won under the old inflated action costs; once the
 # costs went game-intrinsic (sentinel.actioncost) it dead-ends at eye 7.875. With early
 # goal detection (a launch-height child wins on generation, not on pop) BEAM=8 wins ls0
-# in ~7 expansions. Each expansion is ~7 s (survivability enemy-stepping over ~50
-# candidates), independent of BEAM, so the budget scales with expansion COUNT, not width.
+# in ~9 expansions. expand_climb materializes lazily in beam-priority order, so each
+# expansion runs only ~BEAM of the expensive per-child down-look aim sweeps (not one per
+# foothold candidate); the budget scales with expansion COUNT x BEAM, not candidate count.
 BEAM = _envi("BEAM", "8")  # children pushed per expansion
 BRANCH_HIGH = _envi("BRANCH_HIGH", "24")  # high-branch escalation threshold
 SAFETY_HORIZON = _envi("SAFETY_HORIZON", "256")  # exposure look-ahead window
@@ -176,7 +177,7 @@ def plan(landscape_or_game, cfg=None) -> PlanResult:
         closed[k] = n.cost
         best_eye = max(best_eye, n.g.eye)
 
-        climb_children = expand_climb(n, gaze)
+        climb_children = expand_climb(n, gaze, beam=BEAM, horizon=HORIZON)
         children = climb_children + expand_refuel(n, gaze)
         children = [c for c in children if node_energy(c) > 0 and c.t < HORIZON]
 

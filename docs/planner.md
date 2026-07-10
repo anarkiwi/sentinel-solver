@@ -84,10 +84,23 @@ strategy-and-execution problem, tracked in §6. The legacy best-first height sea
 (formerly under `solver/`) has been **removed** (it is no longer a file); its
 structural failure (§3) is the motivation for the current design.
 
-**Not yet solved:** the search does **not** yet win on the faithful oracle. A full
-body-pitch-band landable sweep is now ~18× slower than the old coarse grid, so the
-outstanding future work is a perf adaptation of the sweep plus a search that wins
-under the (now much larger) faithful buildable set.
+The search **wins ls0** offline and against the tick-accurate runner.
+
+**Lazy beam materialization.** The ROM-faithful full-band landable sweep is ~18×
+slower than the old coarse grid, so materializing every foothold candidate (each runs
+the down-look `aim.propose` reabsorb + boulder-centre gates) cost ~60 s/node. `expand_climb`
+instead ranks candidates by the planner's beam key `(-eye, cost)` from cheap geometry
+(`_foothold_eye`, `cost.move_rounds`, no aim-LOS), and materializes only until `BEAM`
+survive the `energy>0 ∧ t<HORIZON` filter. Since that key equals what the planner beams
+on (`_apply_climb` leaves eye=`he`, cost=`window`), the beam is identical to full
+materialization (ls0 node 0: 8 vs 75).
+
+**Aim-dwell cost.** `cost.aim_rounds` prices the coarse body-pan (`$10EE`/`$1135`
+scroll notches) *and* the fine sights-cursor travel `(|cx−0x50| + |cy−0x5F|) ×
+FRAME_TICKS` — units from the `initialise_sights $134C` reset centre (`move_sights
+$9958` steps ±1/frame, `$130C` 205/256 cadence). Dropping the cursor term ran enemies
+~12× fast (ls0 ~1054→~1524 `enemies.step` ticks), forecasting the climb zero-drain
+where the ROM drains and spawns meanies. Constants are ROM-read, not tuned.
 
 ---
 
@@ -116,7 +129,8 @@ not patched. Retained here as the motivation for the current design:
 5. **Meanies unmodeled** — only avoided via the static mask or met reactively live.
 6. **Only wins ls0 when the modelled per-action drain window is hand-cut ~2.5×** — the
    tell of a wrong model being tuned, not a strategy being executed (consistent with
-   the open scan/cooldown cadence calibration gap).
+   the open scan/cooldown cadence calibration gap). *(Resolved: the window is now the
+   ROM aim-dwell cadence — §2 "Aim-dwell cost", not hand-cut.)*
 
 A recorded **human win** on ls0 embodies the strategy the greedy search does not
 (strategy 6–10): zero drain (gaze forecast, not the static mask); aim-coherent

@@ -45,7 +45,7 @@ The live driver additionally needs Docker and the `asid-vice:latest` image
 ## Run
 
 ```bash
-# plan a win offline with the weighted-A* macro planner (landscape 0; ~55s):
+# plan a win offline with the weighted-A* macro planner (landscape 0; ~75-90s):
 python3 solver/astar_planner.py 0            # prints won=True + peak eye + step count
 
 # run that plan against the simulator as a TICK-ACCURATE "real game" (no emulator):

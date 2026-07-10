@@ -4,15 +4,14 @@ rotation).  Shared by the simulated runner's world advance and the planner's
 forecast so both price an action the same way the *game* advances the enemies
 while that action executes.
 
-Every term is the GAME-INTRINSIC cost derived from the ROM's own code (see the
-re-sentinel C64 disasm), NOT a per-action-type fitted floor.  The earlier model
-carried SETTLE floors (create 290 / absorb 190 / transfer 300) and STACK_CREATE
-285; a ROM read (2026-07-07) showed those are ~3-7x the game-intrinsic cost and
-the excess is a DRIVER artifact -- the live driver's aim ring-search
-(``kbd_aim.fine_to_tile`` probes ~24 cursor positions, each a keystroke that
-advances the game) plus post-fire read-back idle.  That excess is not a property
-of the game, so it is eliminated (by aiming the live driver directly at the
-plan's cursor), not fitted here.
+Every term is the GAME-INTRINSIC cost derived from the ROM, NOT a fitted floor.
+The per-verb SETTLE here is dither+redraw only; the old floors (create 290 / absorb
+190 / transfer 300, STACK_CREATE 285) inflated that with DRIVER overhead (the aim
+ring-SEARCH ``kbd_aim.fine_to_tile`` + read-back idle), eliminated by direct aiming.
+
+The aim DWELL (coarse body-pan scroll + fine sights-cursor travel), also game time,
+is priced by the caller in ``solver.cost.aim_rounds`` ($10EE/$1135 notches; cursor
+from the $134C reset centre at FRAME_TICKS/unit), not here.
 
 Frame -> tick conversion.  A video frame ticks the cooldowns once (raster IRQ
 $9663 -> $130C); the $1335 Bresenham divider ($130C: ``+= $CD`` == 205/256) means
@@ -81,10 +80,13 @@ SETTLE = {
     "transfer": FRAME_TICKS * (TUNE_FRAMES + 2 * REDRAW_FRAMES),
 }
 
-# The ROM stacked-create path is byte-identical to the bare-create path (the live
-# +285 was driver aim-search idle, not the game). Kept as a symbol for callers but
-# ROM-zero. Env-overridable only to reintroduce a measured surcharge if one is ever
-# found in VICE.
+# The ROM stacked-create dither is byte-identical to the bare-create dither: the loop
+# frame count $2099 is loaded #$19 (25) unconditionally in update_object_on_screen
+# ($1FA4), independent of stacking; put_object_in_tile ($1F16) differs only by the
+# handful of instructions that set the on-object $40 flag and stacked-z ($1F3A-$1F63)
+# before both paths converge at set_object_z ($1F76) -- < 1 frame. So NO tick surcharge
+# (the live +285 was driver aim-search idle, not the game). Kept as a symbol for callers
+# but ROM-zero; env-overridable only to reintroduce a VICE-measured surcharge if found.
 STACK_CREATE = float(os.environ.get("STACK_CREATE", "0"))
 
 # Per-type polygon EDGE counts rasterised by plot_object ($8533/$8579), read from

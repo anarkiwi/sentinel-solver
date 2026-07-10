@@ -491,14 +491,46 @@ class KbdDriver:
                 self._cursor_step(key_dec, dec_pc)
         return self.rd(addr) == want
 
+    def _cursor_step_diag(self, keys, commit_pc):
+        """One move_sights call with `keys` (a horizontal and/or vertical direction) held
+        together: $9958 runs $9965 (cx) then $9994 (cy), so a diagonal press moves BOTH 1px.
+        `commit_pc` is the STA that executes LAST (the cy write when a vertical key is held,
+        else the cx write), so both writes are committed when it is reached. Press WHILE
+        HALTED, run to the write, execute it, RELEASE -- one clean diagonal pixel, no burst.
+        """
+        presses = [(*_k(key), 1) for key in keys]
+        with self.bm.halted():
+            try:
+                self.bm.keymatrix_set(presses)
+                self.bm.run_until_pc(commit_pc, timeout=1.5)
+                self.bm.advance_instructions(1)  # execute the last STA
+            except Exception:
+                pass
+            finally:
+                self.bm.keymatrix_release_all()
+        self.bm.exit()
+
     def fine_cursor(self, cx, cy):
-        """SIGHTS ON: drive the sights cursor to (cx, cy) checkpoint-driven (x then y).
-        D/S move cx +/- ($997C/$9990), L/COMMA move cy +/- ($99B8/$99D2)."""
-        okx = self._cursor_axis(
-            A_CX, cx, K_RIGHT, K_LEFT, self.PC_CX_INC, self.PC_CX_DEC
-        )
-        oky = self._cursor_axis(A_CY, cy, K_DOWN, K_UP, self.PC_CY_INC, self.PC_CY_DEC)
-        return okx and oky
+        """SIGHTS ON: drive the sights cursor to (cx, cy) DIAGONALLY -- move_sights ($9958)
+        steps cx ($9965) and cy ($9994) in ONE call, so a held horizontal+vertical pair moves
+        both 1px/frame and travel is max(|dx|,|dy|), not the axis-by-axis sum. Re-reads each
+        step so a stray move self-corrects; interior targets never wrap/pan. D/S move cx +/-
+        ($997C/$9990), L/COMMA move cy +/- ($99B8/$99D2)."""
+        cx &= 0xFF
+        cy &= 0xFF
+        for _ in range(160):
+            curx, cury = self.rd(A_CX), self.rd(A_CY)
+            if curx == cx and cury == cy:
+                return True
+            keys, commit_pc = [], None
+            if curx != cx:
+                keys.append(K_RIGHT if cx > curx else K_LEFT)
+                commit_pc = self.PC_CX_INC if cx > curx else self.PC_CX_DEC
+            if cury != cy:  # cy write runs last in move_sights -> commit point
+                keys.append(K_DOWN if cy > cury else K_UP)
+                commit_pc = self.PC_CY_INC if cy > cury else self.PC_CY_DEC
+            self._cursor_step_diag(keys, commit_pc)
+        return self.rd(A_CX) == cx and self.rd(A_CY) == cy
 
     def tap_action(self, name, max_passes=45):
         """Fire an action key EXACTLY ONCE. One full IDLE scan first: update_game
