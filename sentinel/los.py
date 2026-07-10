@@ -1278,17 +1278,33 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
     )
     views = {}
     centres = {}
-    for i in range(status.shape[0]):
-        if status[i] != los_jit.LOS_CLEAR:
-            continue
-        tile = (int(tx[i]), int(ty[i]))
-        if tile not in views:
-            h, v, cx, cy = _meta_at(i, *grids)
-            views[tile] = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+    clear = np.flatnonzero(status == los_jit.LOS_CLEAR)
+    if clear.size:
+        # Pack each clear hit's tile (tx,ty) into one int64 key. `clear` is ascending, so
+        # np.unique(return_index=True) yields the FIRST clear lattice index per tile; sorting
+        # those first-indices restores the original loop's ascending-i discovery order (so the
+        # dicts get the same insertion order, not just the same contents).
+        key = (tx[clear].astype(np.int64) << 16) | ty[clear].astype(np.int64)
+        uniq, first = np.unique(key, return_index=True)
+        order_ins = np.argsort(first, kind="stable")
+        uniq = uniq[order_ins]
+        first = first[order_ins]
+        cmin = None
         if want_centres:
-            c = int(centre[i])
-            if tile not in centres or c < centres[tile]:
-                centres[tile] = c
+            # Min tile-centre per tile: stable-sort by key into contiguous groups and take a
+            # per-group minimum. Keyed by the same packed int64 for lookup in discovery order.
+            order = np.argsort(key, kind="stable")
+            ks = key[order]
+            cs = centre[clear][order].astype(np.int64)
+            bnd = np.concatenate(([0], np.flatnonzero(ks[1:] != ks[:-1]) + 1))
+            mins = np.minimum.reduceat(cs, bnd)
+            cmin = dict(zip(ks[bnd].tolist(), mins.tolist()))
+        for k, fi in zip(uniq.tolist(), first.tolist()):
+            h, v, cx, cy = _meta_at(int(clear[fi]), *grids)
+            tile = (int(k >> 16), int(k & 0xFFFF))
+            views[tile] = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+            if want_centres:
+                centres[tile] = int(cmin[k])
     return views, centres
 
 
