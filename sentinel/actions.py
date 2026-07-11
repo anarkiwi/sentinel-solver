@@ -17,6 +17,10 @@ from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
 
 PLATFORM_SLOT = 0x3F  # the platform is always object $3F ($1B78)
+# slot 0 is ALWAYS the Sentinel (is_sentinel $1553).  try_to_absorb_object $1B8E opens with an
+# ABSOLUTE `LDA $0100 / BMI` over objects_flags[0]; once the Sentinel is absorbed (its slot
+# SLOT_EMPTY) that branch rejects EVERY absorb -- of any object, meanies included.
+SENTINEL_SLOT = 0
 
 
 def _find_empty_slot(state):
@@ -107,8 +111,13 @@ remove_object = _remove_object
 
 
 def can_absorb(state, slot):
-    """Whether the object in `slot` can be absorbed (occupied, not a platform),
-    ignoring line of sight."""
+    """Whether the object in `slot` can be absorbed (the Sentinel still exists, the
+    slot is occupied and is not a platform), ignoring line of sight."""
+    # $1B8E/$1B91: the Sentinel-still-exists gate comes FIRST -- an absolute read of
+    # objects_flags[0].  Absorbing the Sentinel itself passes here (its slot is still
+    # occupied at the time of the check).
+    if state.obj_flags[SENTINEL_SLOT] & 0x80:
+        return False
     if state.obj_flags[slot] & 0x80:
         return False
     return state.obj_type[slot] != mm.T_PLATFORM
@@ -150,9 +159,34 @@ def on_platform(state):
     return False
 
 
+def hyperspace(state):
+    """do_hyperspace $2156: the player's panic teleport, and the terminal move of a
+    win.  Creates a new robot (type 0, $2158), places it on a random flat empty tile
+    no higher than the player's ``z_height + 1`` ($215D-$2165) via the shared
+    random-tile-below-z placement, and spends 3 energy -- the robot value -- through
+    the energy economy ($216A).
+
+    * underflow -> DEATH: the new robot is removed and $0CDE bit7 (only) is set, with
+      NO relocation ($2170-$217A);
+    * survived ($217F): if the player's CURRENT tile is the platform tile
+      ($0C19/$0C1A) the landscape is complete, $0CDE = $C0 (bit7 hyperspaced + bit6
+      complete, $2196); the player then transfers into the new robot ($21A5).
+
+    The PRNG-driven landing is deliberately not steerable (a faithful solver must
+    treat it as unknown).  This is the same ROM routine a meanie forces on the player
+    (:func:`sentinel.enemies.do_hyperspace`); the win path drives it directly.
+    Returns True if the player survived the hyperspace."""
+    from sentinel import enemies  # deferred: enemies imports actions
+
+    enemies.do_hyperspace(state)
+    return not player_dead(state)
+
+
 def won(state):
-    """Whether the landscape is complete (the player is on the platform)."""
-    return on_platform(state)
+    """Whether the landscape is complete -- the player HYPERSPACED while standing on
+    the platform tile, setting $0CDE to $C0 (player_survived_hyperspace $217F/$2196).
+    Merely standing on the platform (:func:`on_platform`) is NOT a win."""
+    return (state.mem[mm.PLAYER_HAS_HYPERSPACED] & 0xC0) == 0xC0
 
 
 def player_dead(state):
@@ -169,9 +203,11 @@ def player_dead(state):
 
 
 def win(state, tile=None):
-    """The endgame: absorb the Sentinel, build a synthoid on its platform tile,
-    and transfer onto it.  Returns True if the player ends on the platform.  The
-    caller is responsible for having line of sight to each step."""
+    """The endgame (docs/gameplay.md §1 "How a human wins"): absorb the Sentinel,
+    build a synthoid on its platform tile, transfer onto it, then HYPERSPACE from the
+    platform -- the terminal move that actually sets the landscape-complete flag
+    (player_survived_hyperspace $217F).  Returns :func:`won`.  The caller is
+    responsible for having line of sight to each step."""
     sentinel = state.slot_of_type(mm.T_SENTINEL)
     if sentinel is not None:
         absorb(state, sentinel)
@@ -181,4 +217,5 @@ def win(state, tile=None):
     if slot is None:
         return False
     transfer(state, slot)
-    return on_platform(state)
+    hyperspace(state)
+    return won(state)
