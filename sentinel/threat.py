@@ -199,10 +199,12 @@ def ticks_until_seen(state, x, y, horizon=256, object_top=ROBOT_EYE):
 def meanie_safe(state, tile):
     """True iff standing at `tile` carries NO meanie-spawn risk.
 
-    Ported from the ROM's meanie predicate: for some enemy that sees the player
-    PARTIALLY at `tile` (A), and some tree within 10 tiles in both axes (B) that
-    the enemy fully sees (C) and that can itself see the player (D), the enemy can
-    arm a meanie -> unsafe. All tests run on a clone."""
+    Ported from attempt_to_create_meanie $19A1: an enemy arms a meanie when it sees
+    the player PARTIALLY at `tile` (A -- head but not base, $0014 == $40) and there is
+    some tree within 10 tiles in BOTH axes ($19C3/$19D5 -> B) that the enemy can fully
+    see ($19DE $0014 bit7 -> C).  The ROM applies NO tree->player line-of-sight test,
+    so C is sufficient.  A conservative query may over-report danger but must never
+    under-report.  All tests run on a clone."""
     clone = state.clone()
     ens = enemies.enemy_slots(clone)
     if not ens:
@@ -237,18 +239,8 @@ def meanie_safe(state, tile):
             # (B) tree within 10 tiles of `tile` in both axes.
             if abs(clone.obj_x[tr] - x) >= 10 or abs(clone.obj_y[tr] - y) >= 10:
                 continue
-            # (C) the enemy fully sees the tree.
-            if not relative.can_see_object(clone, e, tr, mm.T_TREE, FOV_FULL)["full"]:
-                continue
-            # (D) the tree can see the player.
-            old2 = terrain.tile_byte(clone, x, y)
-            if not _place_phantom(clone, (x, y), slot):
-                continue
-            sees_player = relative.can_see_object(
-                clone, tr, slot, mm.T_ROBOT, FOV_FULL
-            )["full"]
-            _restore_tile(clone, (x, y), old2, slot)
-            if sees_player:
+            # (C) the enemy fully sees the tree -- sufficient to arm a meanie.
+            if relative.can_see_object(clone, e, tr, mm.T_TREE, FOV_FULL)["full"]:
                 return False
     return True
 

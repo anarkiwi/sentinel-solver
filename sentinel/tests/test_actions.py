@@ -12,6 +12,7 @@ import os
 
 from sentinel.state import State
 from sentinel import actions, energy, memmap as mm
+from sentinel.terrain import set_tile_byte
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_actions.json")
 
@@ -122,19 +123,131 @@ def test_robot_faces_player():
     assert state.obj_h_angle[slot] == (0x40 ^ 0x80)
 
 
-def test_on_platform_detects_win():
+def _empty_state():
     state = State.from_mem(bytearray(0x10000))
     for s in range(mm.NUM_SLOTS):
-        state.obj_flags[s] = 0x80
-    # platform is always slot $3F; player stacked on it.
+        state.obj_flags[s] = 0x80  # all slots empty; terrain is bare flat height 0
+    state.mem[mm.PRND_STATE] = 0x01  # non-degenerate PRNG for hyperspace placement
+    return state
+
+
+def _player_on_platform(state, px=8, py=8):
+    """Slot $3F platform at (px, py) with a player robot (slot 5) stacked on it."""
     state.obj_flags[0x3F] = 0x00
     state.obj_type[0x3F] = mm.T_PLATFORM
+    state.obj_x[0x3F], state.obj_y[0x3F] = px, py
+    state.obj_z_height[0x3F], state.obj_z_frac[0x3F] = 0, 0xE0
+    set_tile_byte(state, px, py, mm.OBJECT_TILE | 0x3F)
+    state.mem[mm.PLATFORM_X], state.mem[mm.PLATFORM_Y] = px, py
     player = 5
     state.obj_flags[player] = 0x40 | 0x3F
     state.obj_type[player] = mm.T_ROBOT
+    state.obj_x[player], state.obj_y[player] = px, py
+    state.obj_z_height[player], state.obj_z_frac[player] = 1, 0xE0
     state.player = player
+    return player
+
+
+def test_on_platform_is_not_by_itself_a_win():
+    state = _empty_state()
+    _player_on_platform(state)
+    state.energy = 10
+    # Standing on the platform is on_platform, but NOT a win: the landscape-complete
+    # flag ($0CDE bit6) is set only by hyperspacing from the platform ($217F).
     assert actions.on_platform(state) is True
+    assert actions.won(state) is False
+
+
+def test_won_only_after_hyperspace_from_platform():
+    state = _empty_state()
+    _player_on_platform(state)
+    state.energy = 10
+    assert actions.won(state) is False
+    assert actions.hyperspace(state) is True  # survived
+    assert actions.won(state) is True  # $0CDE == $C0 (bit7 + bit6)
+    assert actions.player_dead(state) is False
+
+
+def test_hyperspace_off_platform_is_not_a_win():
+    state = _empty_state()
+    player = 5
+    state.obj_flags[player] = 0x00
+    state.obj_type[player] = mm.T_ROBOT
+    state.obj_x[player], state.obj_y[player] = 3, 3  # not the platform tile
+    state.obj_z_height[player], state.obj_z_frac[player] = 0, 0xE0
+    set_tile_byte(state, 3, 3, mm.OBJECT_TILE | player)
+    state.mem[mm.PLATFORM_X], state.mem[mm.PLATFORM_Y] = 20, 20
+    state.player = player
+    state.energy = 10
+    assert actions.hyperspace(state) is True  # survived
+    assert actions.won(state) is False  # not on the platform -> no complete flag
+
+
+def test_hyperspace_underfunded_kills():
+    state = _empty_state()
+    player = 5
+    state.obj_flags[player] = 0x00
+    state.obj_type[player] = mm.T_ROBOT
+    state.obj_x[player], state.obj_y[player] = 3, 3
+    state.obj_z_height[player], state.obj_z_frac[player] = 0, 0xE0
+    set_tile_byte(state, 3, 3, mm.OBJECT_TILE | player)
+    state.player = player
+    state.energy = 2  # < 3 (robot value) -> the hyperspace kills
+    assert actions.hyperspace(state) is False
+    assert actions.player_dead(state) is True
+    assert state.player == player  # the ROM does NOT relocate on a hyperspace death
+
+
+def test_win_absorbs_hyperspaces_and_completes():
+    state = _empty_state()
+    px, py = 8, 8
+    # a Sentinel (slot 0) standing on its platform (slot $3F).
+    state.obj_flags[0x3F] = 0x00
+    state.obj_type[0x3F] = mm.T_PLATFORM
+    state.obj_x[0x3F], state.obj_y[0x3F] = px, py
+    state.obj_z_height[0x3F], state.obj_z_frac[0x3F] = 0, 0xE0
+    set_tile_byte(state, px, py, mm.OBJECT_TILE | 0x3F)
+    state.mem[mm.PLATFORM_X], state.mem[mm.PLATFORM_Y] = px, py
+    state.obj_flags[0] = 0x40 | 0x3F  # Sentinel stacked on the platform
+    state.obj_type[0] = mm.T_SENTINEL
+    state.obj_x[0], state.obj_y[0] = px, py
+    state.obj_z_height[0], state.obj_z_frac[0] = 1, 0xE0
+    # a spare player robot somewhere so `state.player` is valid pre-win.
+    player = 5
+    state.obj_flags[player] = 0x00
+    state.obj_type[player] = mm.T_ROBOT
+    state.obj_x[player], state.obj_y[player] = 2, 2
+    state.obj_z_height[player], state.obj_z_frac[player] = 0, 0xE0
+    set_tile_byte(state, 2, 2, mm.OBJECT_TILE | player)
+    state.player = player
+    state.energy = 10
+    assert actions.win(state) is True
     assert actions.won(state) is True
+    assert state.slot_of_type(mm.T_SENTINEL) is None  # Sentinel absorbed
+
+
+def test_absorb_locked_after_sentinel_absorbed():
+    state = _empty_state()
+    # Sentinel in slot 0, a free-standing tree in slot 10.
+    state.obj_flags[0] = 0x00
+    state.obj_type[0] = mm.T_SENTINEL
+    state.obj_x[0], state.obj_y[0] = 1, 1
+    state.obj_z_height[0] = 0
+    tree = 10
+    state.obj_flags[tree] = 0x00
+    state.obj_type[tree] = mm.T_TREE
+    state.obj_x[tree], state.obj_y[tree] = 2, 2
+    state.obj_z_height[tree] = 0
+    state.energy = 0
+    # both are absorbable while the Sentinel lives.
+    assert actions.can_absorb(state, tree) is True
+    assert actions.can_absorb(state, 0) is True
+    # absorb the Sentinel; slot 0 becomes SLOT_EMPTY.
+    assert actions.absorb(state, 0) is True
+    # now $1B8E's absolute check on slot 0 rejects EVERY absorb.
+    assert actions.can_absorb(state, tree) is False
+    assert actions.absorb(state, tree) is False
+    assert state.obj_type[tree] == mm.T_TREE  # unchanged; still present
 
 
 def test_player_dead_detects_both_death_paths():

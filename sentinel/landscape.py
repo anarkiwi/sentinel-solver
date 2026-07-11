@@ -412,7 +412,20 @@ def _rnd_0_22_prng(prng):
 def generate(landscape):
     """Build landscape `landscape` from scratch -- terrain + Sentinel/platform +
     sentries + player + trees -- and return a :class:`sentinel.state.State`.
-    Byte-for-byte identical to running the game's own generator."""
+    Byte-for-byte identical to running the game's own generator.
+
+    Input contract (seed_prnd_from_landscape_number $33ED): `landscape` is used
+    exactly as the ROM's seed routine uses its X/Y registers -- its raw little-endian
+    bytes seed prnd_state ($0C7B <- landscape & $FF, $0C7C <- landscape >> 8).  It is
+    therefore the game's PACKED-BCD landscape number, NOT a plain decimal to be
+    re-encoded: the ROM reads those same bytes back as BCD digits (`>> 4` for the
+    tens/thousands digit) when it derives the enemy cap (1 + landscape DIV 10, $3403;
+    top digit + 2, $3426).  The number a player enters on the keypad as "NNNN" is thus
+    the integer whose hex nibbles are NNNN -- e.g. the human landscape 0042 is
+    ``generate(0x0042)`` == ``generate(66)``, and 2024 is ``generate(0x2024)``.  A
+    plain decimal >= 10 (``generate(42)``) seeds a different, legal-but-non-BCD board.
+    This matches the oracle (``oracle.generate`` seeds X=n&$FF, Y=n>>8 identically),
+    which is why the byte-exact ``golden_landscape`` fixtures validate it directly."""
     mem = bytearray(mm.MEM_SIZE)
     for slot in range(mm.NUM_SLOTS):  # reset_game_state: all object slots empty
         mem[mm.OBJECTS_FLAGS + slot] = 0x80

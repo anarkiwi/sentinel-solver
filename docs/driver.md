@@ -136,8 +136,6 @@ read-timing bug that made a correct aim look like a miss.
 - `objects_v_angle` — `$0140 + player_slot` (pitch, 4-unit lattice)
 - the sights cursor — `$0CC6` / `$0CC7`
 
-(See the re-sentinel disassembly `disasm/INPUT.md` §3–4.)
-
 **Why a raw read of `objects_h_angle` is unreliable.** The foreground loop
 (`$363D`) calls `JSR $10B7 pan_viewpoint` **every frame** at `$365A`.
 `pan_viewpoint` does a settle dance — add `+$14`, `JSR plot_world` (`$2625`),
