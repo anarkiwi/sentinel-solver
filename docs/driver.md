@@ -21,7 +21,7 @@ and the memory map).
 ## Boot / enter / record lifecycle
 
 `SentinelDriver.boot()` (via `driver.boot.boot_loaded`) launches an
-`asid-vice:latest` container, connects a `BinMon`, and polls RAM for the loaded
+`anarkiwi/asid-vice:latest` container, connects a `BinMon`, and polls RAM for the loaded
 game's signature (`A5 0B 85` at `$35A4`) instead of a fixed sleep, because the
 multi-stage tape load's timing under warp varies and occasionally JAMs the 6502
 (closing the socket) — so the whole container launch is retried. On first load
@@ -182,7 +182,7 @@ so the arbiter of a fired action remains the ROM object-count/energy delta
   Snapshot save/load paths are **paths inside the emulator process**, so they must
   point at `/renders/...`.
 - **Stale containers.** `free_stale_containers` / `kill_stale` remove any leftover
-  `asid-vice:latest` container still holding port 6502 (a SIGKILLed driver can
+  `anarkiwi/asid-vice:latest` container still holding port 6502 (a SIGKILLed driver can
   orphan a `--rm` container) before a new launch.
 - **Monitor resilience.** A warp/AVI stall can drop the monitor socket mid-op;
   `reconnect` re-opens it and `robust` retries an op across a drop. Under live AVI

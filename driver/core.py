@@ -229,7 +229,7 @@ def free_stale_containers(log=print):
     """Remove any leftover asid-vice containers still holding port 6502."""
     try:
         ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=asid-vice:latest"],
+            ["docker", "ps", "-aq", "--filter", "ancestor=anarkiwi/asid-vice:latest"],
             capture_output=True,
             text=True,
             timeout=15,

@@ -94,7 +94,7 @@ def kill_stale():
     SIGKILLed driver process can orphan a detached --rm container)."""
     try:
         ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=asid-vice:latest"],
+            ["docker", "ps", "-aq", "--filter", "ancestor=anarkiwi/asid-vice:latest"],
             capture_output=True,
             text=True,
         ).stdout.split()
