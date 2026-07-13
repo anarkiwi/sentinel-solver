@@ -1,4 +1,4 @@
 numpy>=1.24
 numba>=0.66.0
 py65>=1.2.0
-vice-driver @ git+https://github.com/anarkiwi/vice-driver@v0.4.0
+vice-driver>=0.4.0
