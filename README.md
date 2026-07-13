@@ -31,7 +31,7 @@ Both paths are gitignored; tests that need them auto-skip when absent.
 pip install -r requirements.txt
 ```
 
-The live driver additionally needs Docker and the `asid-vice:latest` image
+The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` image
 (build from https://github.com/anarkiwi/asid-vice).
 
 ## Tests

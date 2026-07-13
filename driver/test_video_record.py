@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Standalone test: prove asid-vice can produce a real, playable video file.
 
-Boots asid-vice:latest with ViceContainer (warp, silent), connects BinMon,
+Boots anarkiwi/asid-vice:latest with ViceContainer (warp, silent), connects BinMon,
 starts native VICE video recording (ZMBV-in-AVI via the new VIDEO_RECORD
 binmon opcode 0x79), lets the default C64 boot animation run for a few
 seconds of real (non-warp) emulation, stops recording, closes the container,
