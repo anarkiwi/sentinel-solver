@@ -11,6 +11,7 @@ frozen as golden fixtures so CI proves correctness without the ROM.
 | Area | Path | Role |
 |------|------|------|
 | Model | `sentinel/` | standalone, bit-exact forward model of the game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). See [docs/simulator.md](docs/simulator.md). |
+| Player | `sentinel/player.py` | reactive tick-by-tick greedy player over the model (`python -m sentinel.player 0`). See [docs/player.md](docs/player.md). |
 | Driver | `driver/` | boot the game, enter a landscape, and run memory-verified live keyboard operations (aim → fire → verify), recording an AVI. Imports only `sentinel/`. See [docs/driver.md](docs/driver.md). |
 | Docs | `docs/` | rules and subsystem references (below). |
 
@@ -44,5 +45,6 @@ pytest -n auto
 
 - [docs/gameplay.md](docs/gameplay.md) — the game's rules and mechanics.
 - [docs/simulator.md](docs/simulator.md) — the `sentinel/` model's modules and validation.
+- [docs/player.md](docs/player.md) — the reactive greedy player: priorities, threat model, timing.
 - [docs/driver.md](docs/driver.md) — the live driver: boot/enter/record, keyboard aim → fire → verify, container plumbing.
 </content>
