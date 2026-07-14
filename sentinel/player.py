@@ -225,15 +225,27 @@ class Player:
                 f"eye={rec[4]:6.3f} enemy_h={faces}"
             )
 
+    def _hyperspace(self):
+        """Fire hyperspace (the win move from the platform / last-resort escape);
+        the live driver overrides this with the real keystroke."""
+        actions.hyperspace(self.st)
+        self._log("hyperspace", self.st.player_xy())
+
+    def _observe(self):
+        """Refresh the observed state at tick start (the live driver re-reads
+        game memory here; the simulator's state is already live)."""
+
     # ------------------------------------------------------------- decisions
     def run(self, max_actions=300):
         """Play until won, dead, or `max_actions` decision ticks."""
         for _ in range(max_actions):
+            self._observe()
             if actions.won(self.st):
                 return True
             if actions.player_dead(self.st):
                 return False
             self._tick()
+        self._observe()
         return actions.won(self.st)
 
     def _tick(self):
@@ -264,8 +276,7 @@ class Player:
         st = self.st
         ptile = st.platform_xy
         if actions.on_platform(st):
-            actions.hyperspace(st)
-            self._log("hyperspace", st.player_xy())
+            self._hyperspace()
             return True
         top = self._top(ptile)
         if top is not None and st.obj_type[top] in (mm.T_ROBOT, mm.T_PLATFORM):
@@ -460,8 +471,7 @@ class Player:
             self.hop_tile = None
             return True
         if st.energy >= mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
-            actions.hyperspace(st)
-            self._log("hyperspace", st.player_xy())
+            self._hyperspace()
             return True
         return False
 
