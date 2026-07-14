@@ -8,6 +8,8 @@ wait), gates it through the ROM aim oracle, then advances the world in frames.
 import argparse
 import math
 
+import numpy as np
+
 from sentinel import actioncost, actions, aim, aimcost, enemies, los, memmap as mm
 from sentinel import relative, terrain, threat
 from sentinel.game import Game
@@ -33,21 +35,69 @@ def _signed(b):
     return b - 256 if b >= 128 else b
 
 
+def _cheap_views(st, v_primary, aim_from):
+    """Landable views choosing, per tile, the MIN-AIM-COST keyboard view from
+    facing ``aim_from`` (u-turn-aware bearing steps, then pitch steps, then
+    cursor distance from the $134C recentre point) -- same tile membership as
+    ``los.landable_sweep_with_centres``, cheapest representative view."""
+    if not los._HAVE_JIT:
+        return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
+    hgrid = list(range(0, 256, los.AZIMUTH_STEP))
+    vgrid = [los.KBD_V_ANGLE] if v_primary else los._V_PRIORITY
+    cxs = los.CURSOR_CX
+    cys = los.CURSOR_CY_FULL if v_primary else los.CURSOR_CY
+    status, tx, ty, _, grids = los._landable_batch(
+        st, st.player, None, 6000, hgrid, vgrid, cxs, cys
+    )
+    views = {}
+    clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
+    if not clear.size:
+        return views
+    key = (tx[clear].astype(np.int64) << 16) | ty[clear].astype(np.int64)
+    per_h, per_v = len(cxs) * len(cys), len(hgrid) * len(cxs) * len(cys)
+    vi, rem = np.divmod(clear, per_v)
+    hi, rem2 = np.divmod(rem, per_h)
+    cxi, cyi = np.divmod(rem2, len(cys))
+    h = np.asarray(hgrid)[hi]
+    v = np.asarray(vgrid)[vi]
+    cx = np.asarray(cxs)[cxi]
+    cy = np.asarray(cys)[cyi]
+    h0, v0 = aim_from
+    dh = np.abs(((h - h0) + 128) % 256 - 128) // aimcost.AZIMUTH_STEP
+    dv = np.abs(((v - v0) + 128) % 256 - 128) // aimcost.PITCH_STEP
+    cur = np.maximum(np.abs(cx - los.SIGHTS_CX), np.abs(cy - los.SIGHTS_CY))
+    cost = np.minimum(dh, 17 - dh) * 1000 + dv * 100 + cur
+    order = np.lexsort((clear, cost, key))
+    ks = key[order]
+    head = order[np.concatenate(([True], ks[1:] != ks[:-1]))]
+    for i in head[np.argsort(clear[head], kind="stable")]:
+        hh, vv, cxx, cyy = los._meta_at(int(clear[i]), *grids)
+        views[(int(key[i] >> 16), int(key[i] & 0xFFFF))] = {
+            "h_angle": hh,
+            "v_angle": vv,
+            "cursor": [cxx, cyy],
+        }
+    return views
+
+
 class _Views:
     """Per-tick lazy cache of the keyboard-aim landable views.
 
     One primary ($F5-plane) sweep and at most one full pitch-band sweep per
-    tick, replacing a per-candidate ``aim.propose`` full sweep each.
+    tick, replacing a per-candidate ``aim.propose`` full sweep each; each
+    tile's view is the cheapest-to-aim one from the player's current facing.
     """
 
     def __init__(self, st):
         self.st = st
+        me = st.player
+        self.aim_from = (st.obj_h_angle[me], st.obj_v_angle[me])
         self._primary = None
         self._full = None
 
     def primary(self):
         if self._primary is None:
-            self._primary, _ = los.landable_sweep_with_centres(self.st, v_primary=True)
+            self._primary = _cheap_views(self.st, True, self.aim_from)
         return self._primary
 
     def get(self, tile, band=False):
@@ -57,7 +107,7 @@ class _Views:
         if view is not None or not band:
             return view
         if self._full is None:
-            self._full, _ = los.landable_sweep_with_centres(self.st, v_primary=False)
+            self._full = _cheap_views(self.st, False, self.aim_from)
         return self._full.get(tuple(tile))
 
 
@@ -263,6 +313,10 @@ class Player:
             return
         if self._transfer_up(views, urgent=urgent):
             return
+        if self.hop_tile is not None and self._climb(
+            views, urgent=urgent, only_tile=self.hop_tile
+        ):
+            return
         if not urgent and self._reclaim(views):
             return
         if self._climb(views, urgent=urgent):
@@ -349,7 +403,7 @@ class Player:
             view = views.get(tile, band=True)
             if view is None:
                 continue
-            key = (eye, window)
+            key = (eye, -self._aim_frames(view), window)
             if best is None or key > best[0]:
                 best = (key, tile, view)
         if best is None:
@@ -386,19 +440,24 @@ class Player:
                 continue
             cands.append((prio, slot, tile))
         cands.sort()
+        landable = []
         for prio, _, tile in cands:
             view = views.get(tile)
             if view is None and prio < 2 and self._sees_tile(tile):
                 view = views.get(tile, band=True)
             if view is None:
                 continue
+            landable.append((prio, self._aim_frames(view), tile, view))
+        landable.sort(key=lambda c: c[:2])  # priority, then cheapest aim
+        for _, _, tile, view in landable:
             if self._fire("absorb", tile, view):
                 return True
         return False
 
-    def _climb(self, views, urgent=False, need_progress=True):
+    def _climb(self, views, urgent=False, need_progress=True, only_tile=None):
         """One hop step toward height: robot on a tall-enough pedestal, another
-        boulder on a short one, or a new boulder on the best safe tile."""
+        boulder on a short one, or a new boulder on the best safe tile.
+        `only_tile` restricts to the hop in progress (finish before roaming)."""
         st = self.st
         my_eye = self._my_eye()
         need = 0 if urgent else HOP_FRAMES
@@ -406,6 +465,8 @@ class Player:
         best_boulder = None
         for tile, view in views.primary().items():
             if tile == st.player_xy():
+                continue
+            if only_tile is not None and tile != only_tile:
                 continue
             top = self._top(tile)
             if top is not None and st.obj_type[top] == mm.T_BOULDER:
@@ -415,11 +476,11 @@ class Player:
                     continue
                 grows = robot_eye > my_eye + EYE_EPS
                 if (grows or (urgent and window > SAFE_FRAMES)) and st.energy >= 3:
-                    key = (robot_eye, window)
+                    key = (robot_eye, -self._aim_frames(view), window)
                     if best_robot is None or key > best_robot[0]:
                         best_robot = (key, tile, view)
                 if not grows and tile == self.hop_tile and st.energy >= HOP_COST:
-                    key = (robot_eye, window)
+                    key = (robot_eye, -self._aim_frames(view), window)
                     if best_boulder is None or key > best_boulder[0]:
                         best_boulder = (key, tile, view)
             elif top is None:
@@ -433,7 +494,7 @@ class Player:
                 window = self._gaze_window(tile)
                 if window <= 0.0 or window < need:
                     continue
-                key = (robot_eye, window)
+                key = (robot_eye, -self._aim_frames(view), window)
                 if best_boulder is None or key > best_boulder[0]:
                     best_boulder = (key, tile, view)
         if best_robot is not None:
