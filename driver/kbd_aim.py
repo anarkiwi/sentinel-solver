@@ -26,13 +26,13 @@ from sentinel.state import State
 from sentinel import los
 from sentinel import aimcost as ac
 
-# run_until_pc socket-guard timeouts. Under live AVI recording (warp OFF) the ZMBV
-# encoder can back-pressure the binmon socket for several seconds, so the CPU takes
-# longer than a few frames to next reach a checkpoint from the monitor's view. The
-# old 4 s pan guard tripped on that backpressure and aborted the aim mid-pan (an
-# aim_miss that then burned energy in re-plan churn). These are pure hang guards --
-# the checkpoints recur every frame -- so a generous value only costs time on a truly
-# dead socket, never on the happy path. Overridable via env for headless/warp runs.
+# run_until_pc hang guards. MEASURED: VICE services the binary monitor once per
+# emulated frame while the CPU runs (halted 0.04 ms/cmd, warp ~1.4 ms, real-time
+# pace ~23.5 ms == one PAL frame, independent of read size -- the encoder/disk are
+# irrelevant; recording matters only because video_record forces warp off). A pan
+# checkpoint recurs every frame, so a timeout here means a WAIT ON A PC OR
+# CONDITION THAT CANNOT RECUR (clamped pan, left the play loop) -- a bug to fix,
+# not back-pressure to wait out. Generous values only cost time on such bugs.
 _RU_PAN = float(os.environ.get("KBD_PAN_TIMEOUT", "20"))
 _RU_STA = float(os.environ.get("KBD_STA_TIMEOUT", "8"))
 
@@ -606,7 +606,7 @@ class KbdDriver:
         self._resume()
         return ok or (self.rd(A_CX) == cx and self.rd(A_CY) == cy)
 
-    def tap_action(self, name, max_passes=45):
+    def tap_action(self, name, max_passes=45, settle=True):
         """Fire an action key EXACTLY ONCE. One full IDLE scan first: update_game
         zeroes $0C51 ($1281) and only an idle full scan re-arms $40 ($11EA); without it
         a u-turn latch is DROPPED at $1B2F (ASL $0C51 / BPL). Anchor at the gated full-scan
@@ -629,6 +629,9 @@ class KbdDriver:
                     self.bm.keymatrix_release_all()  # before the next scan
                     if want in flags:
                         latched = True
+                        if not settle:
+                            break  # caller settles by its own condition (e.g. a
+                            # hyperspace: the play-loop scan PC may never recur)
                         # scans reopen only after $12D0 consumed the action. Running to the
                         # NEXT gated scan carries the CPU through the whole settle: consume
                         # the action -> object dither ($1FA4) -> plot_world ($2625) -> back

@@ -184,12 +184,18 @@ so the arbiter of a fired action remains the ROM object-count/energy delta
 - **Stale containers.** `free_stale_containers` / `kill_stale` remove any leftover
   `anarkiwi/asid-vice:latest` container still holding port 6502 (a SIGKILLed driver can
   orphan a `--rm` container) before a new launch.
-- **Monitor resilience.** A warp/AVI stall can drop the monitor socket mid-op;
-  `reconnect` re-opens it and `robust` retries an op across a drop. Under live AVI
-  recording (warp off) the ZMBV encoder can back-pressure the socket for seconds,
-  so the pan/scan hang guards use generous env-overridable timeouts
-  (`KBD_PAN_TIMEOUT`, `KBD_STA_TIMEOUT`) — they only cost time on a truly dead
-  socket, never on the happy path.
+- **Monitor service is frame-quantized while the CPU runs.** Measured on this
+  rig: a monitor command round-trips in 0.04 ms with the CPU halted, ~1.4 ms
+  running under warp, and ~23.5 ms running at real-time pace (one PAL frame +
+  overhead) — **independent of read size** (a 32 KB read costs the same as one
+  byte). VICE services the binary monitor once per emulated frame; recording
+  only correlates with slowness because `video_record` forces warp off (the
+  encoder itself is irrelevant at ~70-byte ZMBV frames). Consequences: issue
+  bookkeeping reads while halted (the quantized discipline), and treat any
+  multi-second monitor timeout as a bug — a wait on a PC or condition that can
+  never recur (e.g. the play-loop input scan after a landscape completes) —
+  never as I/O back-pressure. `reconnect`/`robust` remain as last-resort
+  recovery, not as an explanation.
 - **Dwell spawns meanies.** At true gameplay speed (warp off during recording),
   any dead dwell in which the CPU runs — a clamped pan whose checkpoint PC never
   recurs, a post-action consumption wait — is live time in which the Sentinel can
