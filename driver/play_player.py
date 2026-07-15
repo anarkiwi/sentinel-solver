@@ -12,7 +12,7 @@ import os
 import time
 
 from driver import core, kbd_aim, sentinel_execute as sx
-from sentinel import memmap as mm, player as sim_player
+from sentinel import actioncost, memmap as mm, player as sim_player
 from sentinel.game import Game
 from sentinel.state import State
 
@@ -26,10 +26,11 @@ class LivePlayer(sim_player.Player):
         game = Game(State.from_mem(core.live_image(session.bm)))
         super().__init__(game, verbose=True)
         self.bm = session.bm
+        self.bm.auto_resume = False  # world runs ONLY in deliberate run windows
         self.live_log = log
         self.result = result
         self.ex = sx.Executor(session.bm, log)
-        self.kbd = kbd_aim.KbdDriver(session.bm, log)
+        self.kbd = kbd_aim.KbdDriver(session.bm, log, quantized=True)
         self.step_no = 0
         self.acted = False
         self.life_lost = None
@@ -112,8 +113,19 @@ class LivePlayer(sim_player.Player):
             return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
+        charged = self._aim_frames(view) + actioncost.SETTLE.get(pverb, 60)
+        acc0 = self.ex.rd(mm.COOLDOWN_BRESENHAM)
         out = sx.perform_step(
             self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
+        )
+        acc1 = self.ex.rd(mm.COOLDOWN_BRESENHAM)
+        measured = ((acc1 - acc0) * 5) & 0xFF  # 205x per frame; 205^-1 = 5 mod 256
+        self.result.setdefault("frame_audit", []).append(
+            [f"p{self.step_no}", pverb, list(tile), round(charged), measured]
+        )
+        self.live_log(
+            f"    [clock] p{self.step_no} {pverb}: charged={round(charged)} "
+            f"measured={measured} (mod 256)"
         )
         self.acted = True
         self._observe()

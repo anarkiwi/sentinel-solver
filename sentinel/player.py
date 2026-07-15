@@ -18,6 +18,9 @@ REDRAW = actioncost.REDRAW_FRAMES  # one plot_world follows every pan notch
 H_NOTCH_FRAMES = 16 + REDRAW  # $10EE: 16-step scroll per +-8 bearing notch
 V_NOTCH_FRAMES = 8 + REDRAW  # $1135: 8-step scroll per +-4 pitch notch
 UTURN_FRAMES = REDRAW  # $1B2F: instant EOR $80 flip + replot
+SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
+TOGGLE_FRAMES = 2 * (2 + REDRAW)  # off+on: a gated scan and a replot each ($11B3)
+TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
 FOV_HALF = enemies.FOV_SCAN // 2  # +-10 units of the enemy scan cone
@@ -125,7 +128,8 @@ class Player:
     def __init__(self, game, verbose=False):
         self.g = game
         self.st = game.state
-        self.cursor = [80, 95]  # $134C sights-centre reset position
+        self.cursor = list(SIGHTS_CENTRE)
+        self.last_bearing = None  # committed (h, v): a same-bearing aim reuses
         self.hop_tile = None
         self.endgame_waits = 0
         self.tick_window = math.inf  # own-tile gaze window, refreshed per tick
@@ -283,17 +287,33 @@ class Player:
 
     # ------------------------------------------------------------------- aim
     def _aim_frames(self, view):
-        """Frames the keyboard pan from the current facing/cursor to `view`
-        costs: u-turn-aware bearing notches, pitch notches, 1px/frame cursor."""
+        """Frames the executor's aim method costs, mechanism for mechanism: a
+        same-bearing REUSE keeps sights on and drives the cursor from where it
+        is; otherwise sights toggle off/on (gated scans + replots, and $134C
+        re-centres the cursor) before the coarse pan and a from-centre drive."""
         st = self.st
         me = st.player
+        want = (view["h_angle"], view["v_angle"])
         nu, ns = aimcost.h_press_count(st.obj_h_angle[me], view["h_angle"])
         nv = aimcost.v_steps(st.obj_v_angle[me], view["v_angle"])
+        if self.last_bearing == want:
+            cur_from = self.cursor
+            toggles = 0
+        else:
+            cur_from = SIGHTS_CENTRE
+            toggles = TOGGLE_FRAMES
         cur = max(
-            abs(view["cursor"][0] - self.cursor[0]),
-            abs(view["cursor"][1] - self.cursor[1]),
+            abs(view["cursor"][0] - cur_from[0]),
+            abs(view["cursor"][1] - cur_from[1]),
         )
-        return nu * UTURN_FRAMES + ns * H_NOTCH_FRAMES + nv * V_NOTCH_FRAMES + cur
+        return (
+            toggles
+            + nu * UTURN_FRAMES
+            + ns * H_NOTCH_FRAMES
+            + nv * V_NOTCH_FRAMES
+            + cur
+            + TAP_FRAMES
+        )
 
     def _fire(self, verb, tile, view):
         """Aim (world advances), re-gate, apply `verb` on `tile`, settle.
@@ -307,6 +327,7 @@ class Player:
         st.obj_h_angle[me] = view["h_angle"]
         st.obj_v_angle[me] = view["v_angle"]
         self.cursor = list(view["cursor"])
+        self.last_bearing = (view["h_angle"], view["v_angle"])
         if not aim.gate(st, view, tile):
             view = aim.propose(st, tile, v_band=True)
             if view is None or not aim.gate(st, view, tile):
@@ -329,6 +350,8 @@ class Player:
             top = self._top(tile)
             ok = top is not None and actions.transfer(st, top)
         if ok:
+            if verb == "transfer":
+                self.last_bearing = None  # new body: committed bearing is stale
             settle_verb = {"boulder": "create", "robot": "create"}.get(verb, verb)
             self._advance(actioncost.SETTLE.get(settle_verb, 60))
             self._log(verb, tile)
