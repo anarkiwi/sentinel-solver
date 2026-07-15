@@ -29,10 +29,13 @@ class Game:
     # -- construction --------------------------------------------------------
     @classmethod
     def new(cls, landscape_number):
-        """Generate the board for ``landscape_number`` from scratch."""
+        """Generate the board for ``landscape_number`` from scratch, in the ROM's
+        at-entry state: enemies frozen until the player's first action ($0CE5
+        bit7, skipped at $3682; cleared by the action dispatch $12E1)."""
         game = cls(landscape.generate(landscape_number))
         game.state.mem[mm.CURSOR] = 7
         game.state.mem[mm.COOLDOWN_GATE] = 0
+        game.state.mem[mm.PLAYER_NOT_ACTED] = 0x80
         return game
 
     def clone(self):
