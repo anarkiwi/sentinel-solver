@@ -107,6 +107,9 @@ class LivePlayer(sim_player.Player):
             "target": list(tile),
             "view": {**view, "cursor": list(view["cursor"])},
         }
+        if self.acted and self.ex.rd(mm.PLAYER_NOT_ACTED) & 0x80:
+            self.life_lost = "died (landscape reset caught pre-fire)"
+            return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
         out = sx.perform_step(

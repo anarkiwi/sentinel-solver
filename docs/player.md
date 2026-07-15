@@ -2,8 +2,9 @@
 
 A tick-by-tick greedy player over the `sentinel/` model. No search tree, no
 lookahead branching, and **no PRNG reads**: each decision tick observes the live
-`State` and commits one action. Wins landscape 0 in 21 actions with zero energy
-drained.
+`State` and commits one action. Wins landscapes 0000 (19 actions, nothing
+drained), 0042 (Sentinel + 1 sentry) and 0335 (Sentinel + 3 sentries) in the
+simulator, hunting and clearing every enemy; 0000 and 0042 verified live.
 
 ```bash
 python -m sentinel.player 0        # play landscape 0, print the action trace
@@ -17,16 +18,38 @@ so enemies rotate, target and drain while the player aims — there are no free
 moves.
 
 1. **Win move** — Sentinel absorbed: create a robot on the platform tile,
-   transfer in, hyperspace (`do_hyperspace $2156` sets the complete flag).
-2. **Dissolve a meanie** — absorb it while absorption is still possible.
-3. **Absorb the Sentinel** — dead last among absorbs (the `$1B8E` slot-0 lock),
-   only with the endgame affordable (energy ≥ 2 before the +4) and no live meanie.
-4. **Transfer up** — into the highest aim-landable robot that raises the eye.
-5. **Reclaim / harvest** — absorb old shells (+3) and spent pedestals (+2) from
-   the new vantage (never the hop in progress), trees while below headroom.
-6. **Climb** — the ping-pong hop: boulder on the best safe landable tile, robot
-   on the pedestal (stacking more boulders if still short), transfer.
-7. **Wait** — otherwise idle a few frames and re-observe.
+   transfer in, hyperspace (`do_hyperspace $2156` sets the complete flag),
+   waiting out any surviving cone on the platform first.
+2. **Dissolve a meanie** — absorb it, but only when the aim beats the meanie's
+   rotate-to-face window (`$16F2`: ±8 units per ~10-unit reload); otherwise the
+   transfer-out dissolve outruns it.
+3. **Counterattack** — seen by an absorbable enemy: absorb IT (no facing
+   requirement; the budget is the seer's own drain countdown `$0C20`) rather
+   than flee; the Sentinel qualifies only as the last enemy standing.
+4. **Hunt enemies** — absorb any sentry whose tile is aim-landable within the
+   current safety window, cheapest aim first: each one permanently deletes a
+   rotating gaze, worth far more than its +3.
+5. **Absorb the Sentinel** — dead last (the `$1B8E` slot-0 lock would strand
+   every remaining enemy), with the endgame affordable (energy ≥ 2).
+6. **Transfer up** — into the highest aim-landable robot that raises the eye.
+7. **Reclaim / harvest** — absorb old shells and spent pedestals from the new
+   vantage, trees while below headroom, ordered by aim-frames per energy unit,
+   and only when the aim leaves room for the hop that must follow.
+8. **Climb** — the ping-pong hop toward LOS on the hunt target: boulder on the
+   best safe landable tile, robot on the pedestal, transfer. A pedestal that
+   would leave the next hop unaffordable is refused unless the abandoned shell
+   stays aim-landable from the destination (no stranding).
+9. **Wait / escape** — idle when the world may improve; when cornered, a
+   strictly-window-improving transfer, then hyperspace as the true last resort.
+
+Placements obey one invariant: **never create on a tile any enemy sees right
+now** (any exposure, the ROM's own `$8401` bearing and `$18B8` cone gate);
+transfers refuse the DANGER basis — full visibility (`$1838` drains), or
+partial with a tree within 10 tiles (the meanie arm, `$19C3`) — so a harmless
+partial glimpse cannot orphan a pedestal the build was allowed to make. Every
+destination's danger window must cover the aim plus a safety margin; graded
+last-resort tiers (partial-only sight, then least-exposed) unlock only when no
+unseen tile exists.
 
 ## Enemy model (deterministic only)
 
@@ -56,7 +79,59 @@ Landability queries use one cheap primary-plane sweep per tick, falling back to
 one full pitch-band sweep only for down-looks that a single-ray visibility check
 first confirms plausible.
 
+## Why landscape 0335 is hard
+
+Typed `0335` is internal seed `$35`: the Sentinel on its platform at (26,18)
+height 11 plus **three sentries** at (0,9), (5,22) and (18,3), all at height 9
+(the enemy-count draw `$3426` landed 4 under the ≥0100 cap of 8), against a
+player starting at (17,28) with the usual 10 energy. Each mechanic that makes
+one enemy manageable compounds against four:
+
+- **The union of four any-rotation cones covers almost the whole board.** A
+  tile is only safe if blocked from *every* facing an enemy rotates through
+  (§6 of gameplay.md); with enemies spread to three corners by the
+  section-placement rule (`$1528`, no two in adjacent 4×4 sections), the
+  never-be-seen placement set is empty for long stretches of the climb. The
+  player's graded relaxations (partial-only sight, least-exposed) engage
+  constantly rather than exceptionally.
+- **Safe windows are short and out of phase.** Each enemy rotates ±20 units
+  every ~200 cooldown units (~750 frames); four independent phases interleave,
+  so windows long enough for a full hop (~700 frames of aim + create + create +
+  transfer) on a *useful* tile are rare. The player provably stalls: measured
+  runs spend most ticks waiting for a window that three other cones keep
+  closing.
+- **Meanie pressure everywhere.** A meanie needs only a *partially* visible
+  player and a fully-visible tree within 10 tiles (`$19A1`/`$19C3`). With four
+  scanners and the board's trees concentrated on the low ground where the
+  player must start, the arm condition is satisfied on most low tiles — early
+  runs died to forced hyperspaces (3 energy each, death below 3, `$215F`)
+  before the drain economy even mattered.
+- **The energy economy decays under gaze.** Reclaiming the shell and pedestal
+  a hop leaves behind (+3/+2) is what makes climbing affordable; here the
+  abandoned bodies usually sit in someone's cone and are dismantled
+  robot→boulder→tree (`$1A08`) before the player can re-aim, so reclaims pay
+  +2 or +1 instead. Every hop leaks energy the board cannot replace (more
+  enemies also means fewer trees at generation: `48 − 3·enemies`, §3).
+- **Hunting is circular — until the seer is treated as a target.** The
+  absorb-lock (`$1B8E`) forces all three sentries before the Sentinel, but
+  gaining line of sight on any sentry at height 9 generally means standing
+  where a height-9 sentry sees back. What breaks the circle is the
+  **counterattack**: being seen starts the seer's ~120-unit drain countdown
+  (`$0C20`), not an instant loss — absorbs have no facing requirement and a
+  u-turn costs one keystroke, so an absorbable seer whose tile is landable
+  inside its own countdown is absorbed instead of fled from. Fleeing was the
+  stall: it spent energy, reset nothing, and the circle remained.
+
+With the counterattack tier (and transfers gated on the same danger basis as
+builds, so a harmless partial glimpse cannot orphan a fresh pedestal), the
+player now beats 0335 in the simulator — 295 actions, all four enemies
+cleared. The board remains the stress case: most of its length is spent
+waiting out four interleaved cones, and any regression in the time model or
+the invariant shows up here first.
+
 ## Test
 
-`sentinel/tests/test_player.py` — the player wins landscape 0 alive and solvent,
-and every transfer in the winning trace landed outside every enemy's live cone.
+`sentinel/tests/test_player.py` — the player wins landscapes 0000 and seed 66
+(typed 0042) alive and solvent, and no create or transfer in either winning
+trace leaves an object inside an enemy's live scan cone (verified with the
+ROM's own visibility test on the actual object after each action).
