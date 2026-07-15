@@ -127,6 +127,8 @@ class Player:
         self.st = game.state
         self.cursor = [80, 95]  # $134C sights-centre reset position
         self.hop_tile = None
+        self.endgame_waits = 0
+        self.tick_window = math.inf  # own-tile gaze window, refreshed per tick
         self.frames = 0
         self.verbose = verbose
         self.trace = []
@@ -161,41 +163,85 @@ class Player:
         return threat.player_sees_tile(self.st, tile, self.st.player)
 
     # ---------------------------------------------------------------- threat
+    @staticmethod
+    def _in_cone(angle_hi, facing, half):
+        """The ROM's FOV gate ($18B8) on its own bearing: byte test
+        (angle_hi - facing + fov/2) & $FF < fov, with fov == 2*half."""
+        return ((angle_hi - facing + half) & 0xFF) < 2 * half
+
     def _exposing_enemies(self, tile):
-        """Enemy slots that could FULLY see a robot on `tile` at ANY facing."""
-        clone = self.st.clone()
+        """(enemy, angle_hi, full) for every enemy with ANY sight of a robot on
+        `tile` at ANY facing; angle_hi is the ROM bearing ($8401) the real FOV
+        gate compares the facing against (NOT an analytic atan2 -- the game's
+        compass is rotated/mirrored relative to it).  A tile already topped by
+        a robot (a transfer target) is evaluated on THAT robot -- a phantom
+        cannot stand there, and treating it as unexposed hid every transfer
+        destination from the invariant."""
+        st = self.st
+        top = self._top(tile)
+        if top is not None and st.obj_type[top] == mm.T_ROBOT:
+            return self._exposures(st, top)
+        clone = st.clone()
         slot = threat._free_slot(clone)
         if slot is None:
             return []
         old = terrain.tile_byte(clone, *tile)
         if not threat._place_phantom(clone, tile, slot):
             return []
-        out = [
-            e
-            for e in enemies.enemy_slots(clone)
-            if relative.can_see_object(clone, e, slot, mm.T_ROBOT, threat.FOV_FULL)[
-                "full"
-            ]
-        ]
+        out = self._exposures(clone, slot)
         threat._restore_tile(clone, tile, old, slot)
         return out
 
+    @staticmethod
+    def _exposures(st, slot):
+        out = []
+        for e in enemies.enemy_slots(st):
+            see = relative.can_see_object(st, e, slot, mm.T_ROBOT, threat.FOV_FULL)
+            if see["exposure"]:
+                ah = relative.relative_angles(st, e, slot)["angle_hi"]
+                out.append((e, ah, bool(see["full"])))
+        return out
+
+    def _tree_near(self, tile):
+        """The meanie precondition ($19C3/$19D5): some tree within 10 tiles of
+        `tile` in BOTH axes -- only then is PARTIAL visibility dangerous."""
+        st = self.st
+        for s in range(mm.NUM_SLOTS):
+            if st.is_empty(s) or st.obj_type[s] != mm.T_TREE:
+                continue
+            if abs(st.obj_x[s] - tile[0]) < 10 and abs(st.obj_y[s] - tile[1]) < 10:
+                return True
+        return False
+
+    def _seen_now(self, exposed, full_only=False):
+        """Whether an exposing enemy has the spot in its live cone right now --
+        the never-place-in-enemy-view test.  `full_only` restricts to enemies
+        with FULL sight (the drainers): the middle relaxation tier when no
+        unseen tile exists at all (partial-without-tree cannot be damaged)."""
+        st = self.st
+        half = FOV_HALF + FOV_MARGIN
+        return any(
+            self._in_cone(ah, st.obj_h_angle[e], half)
+            for e, ah, full in exposed
+            if full or not full_only
+        )
+
     def _gaze_window(self, tile, exposed=None):
-        """Frames until some enemy's rotating scan cone covers a robot on
-        `tile` while it has full line of sight there (0 == in a gaze now, inf
-        == blocked from every facing).  Deterministic: facing, fixed rotation
-        step and cooldown cadence only -- no PRNG."""
+        """Frames until an enemy that can DAMAGE a robot on `tile` has it in
+        its rotating cone: full visibility drains ($1838); partial visibility
+        counts only with a tree within 10 tiles (the meanie arm, $19C3).  0 ==
+        in such a cone now; inf == never.  Deterministic -- no PRNG."""
         st = self.st
         if exposed is None:
             exposed = self._exposing_enemies(tile)
+        dangerous = [x for x in exposed if x[2]]
+        if len(dangerous) < len(exposed) and self._tree_near(tile):
+            dangerous = exposed
         best = math.inf
         half = FOV_HALF + FOV_MARGIN
-        for e in exposed:
-            bearing = aimcost.bearing_to(st.obj_x[e], st.obj_y[e], tile[0], tile[1])
-            if bearing is None:
-                continue
+        for e, angle_hi, _ in dangerous:
             facing = st.obj_h_angle[e]
-            if aimcost.angle_dist(bearing, facing) <= half:
+            if self._in_cone(angle_hi, facing, half):
                 return 0.0
             step = _signed(st.mem[mm.ROTATION_SPEED_TABLE + e])
             if step == 0:
@@ -203,7 +249,7 @@ class Player:
             first = st.mem[mm.ENEMIES_ROTATION_COOLDOWN + e] * UNIT_FRAMES
             for k in range(1, 256 // abs(step) + 2):
                 facing = (facing + step) & 0xFF
-                if aimcost.angle_dist(bearing, facing) <= half:
+                if self._in_cone(angle_hi, facing, half):
                     best = min(best, first + (k - 1) * ROT_PERIOD_FRAMES)
                     break
         return best
@@ -212,17 +258,25 @@ class Player:
         """World frozen until the player's first action ($0CE5 bit7, $3682)."""
         return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
 
+    def _reserve(self):
+        """Survival floor under any live threat: a forced (meanie) hyperspace
+        spends the 3-energy robot cost and KILLS below it ($215F), so while any
+        enemy or meanie exists a create must never leave energy under 3."""
+        st = self.st
+        if enemies.enemy_slots(st):
+            return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        for s in range(mm.NUM_SLOTS):
+            if not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE:
+                return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        return 0
+
     def _player_window(self):
         """Gaze window of the player's own current body (no phantom)."""
         st = self.st
         if self._frozen():
             return math.inf  # no drain/meanie clock runs before the first action
         me = st.player
-        exposed = [
-            e
-            for e in enemies.enemy_slots(st)
-            if relative.can_see_object(st, e, me, mm.T_ROBOT, threat.FOV_FULL)["full"]
-        ]
+        exposed = self._exposures(st, me)
         if not exposed:
             return math.inf
         return self._gaze_window(st.player_xy(), exposed=exposed)
@@ -257,6 +311,12 @@ class Player:
             view = aim.propose(st, tile, v_band=True)
             if view is None or not aim.gate(st, view, tile):
                 return False
+        if verb in ("boulder", "robot"):
+            cost = mm.ENERGY_IN_OBJECTS[
+                mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
+            ]
+            if st.energy - cost < self._reserve():
+                return False  # drained during the aim: creating now breaches the floor
         ok = False
         if verb == "boulder":
             ok = actions.create(st, mm.T_BOULDER, tile) is not None
@@ -295,6 +355,11 @@ class Player:
         """Refresh the observed state at tick start (the live driver re-reads
         game memory here; the simulator's state is already live)."""
 
+    def _dead(self):
+        """Whether the player is dead; the live driver refines the ambiguous
+        $0CDE bit7 (set by ANY survived hyperspace, not only a meanie kill)."""
+        return actions.player_dead(self.st)
+
     # ------------------------------------------------------------- decisions
     def run(self, max_actions=300):
         """Play until won, dead, or `max_actions` decision ticks."""
@@ -302,7 +367,7 @@ class Player:
             self._observe()
             if actions.won(self.st):
                 return True
-            if actions.player_dead(self.st):
+            if self._dead():
                 return False
             self._tick()
         self._observe()
@@ -316,8 +381,11 @@ class Player:
                 return
             self._wait()
             return
-        urgent = self._player_window() <= SAFE_FRAMES
+        self.tick_window = self._player_window()
+        urgent = self.tick_window <= SAFE_FRAMES
         if self._meanie_response(views):
+            return
+        if not urgent and self._hunt_enemies(views):
             return
         if not urgent and self._absorb_sentinel(views):
             return
@@ -331,6 +399,8 @@ class Player:
             return
         if self._climb(views, urgent=urgent):
             return
+        if urgent and st.energy < HOP_COST and self._reclaim(views):
+            return  # cornered and poor: any cheap absorb is survival energy
         if urgent and self._escape(views):
             return
         if self._frozen() and self._climb(views, urgent=True):
@@ -342,7 +412,10 @@ class Player:
         self._advance(WAIT_FRAMES)
 
     def _endgame(self, views):
-        """Sentinel absorbed: robot on the platform, transfer in, hyperspace."""
+        """Sentinel absorbed: robot on the platform, transfer in, hyperspace.
+        The platform strike obeys the placement invariant too: wait for the
+        surviving sentries' cones to rotate off the platform, striking exposed
+        only once a full rotation cycle has shown no window (no other choice)."""
         st = self.st
         ptile = st.platform_xy
         if actions.on_platform(st):
@@ -353,6 +426,10 @@ class Player:
             verb = "transfer" if st.obj_type[top] == mm.T_ROBOT else "robot"
             if verb == "robot" and st.energy < 6:
                 return False
+            if self._gaze_window(ptile) < SAFE_FRAMES:
+                self.endgame_waits += 1
+                if self.endgame_waits * WAIT_FRAMES <= ROT_PERIOD_FRAMES:
+                    return False  # let the cone rotate off the platform first
             view = views.get(ptile)
             if view is None and self._sees_tile(ptile):
                 view = views.get(ptile, band=True)
@@ -360,27 +437,76 @@ class Player:
                 return self._fire(verb, ptile, view)
         return self._climb(views, urgent=False, need_progress=True)
 
+    def _meanie_faces_window(self, meanie):
+        """Frames until the meanie rotates to face the player ($16F2 turns it
+        +-8 units toward us per ~10-unit update reload) -- the budget a cheap
+        absorb of it must fit inside."""
+        st = self.st
+        ra = relative.relative_angles(st, meanie, st.player)
+        gap = aimcost.angle_dist(ra["angle_hi"], st.obj_h_angle[meanie]) - FOV_HALF
+        if gap <= 0:
+            return 0.0
+        steps = -(-gap // enemies.MEANIE_ROTATE_STEP)
+        return steps * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE * UNIT_FRAMES
+
     def _meanie_response(self, views):
-        """Absorb a live meanie before it lines up its forced hyperspace; if it
-        is not landable, the normal transfer priorities dissolve it instead."""
+        """Absorb a live meanie if the aim is CHEAP -- it must land before the
+        meanie rotates to face us; otherwise the transfer-out dissolve (the
+        normal climb priorities) outruns it instead."""
         st = self.st
         for e in enemies.enemy_slots(st):
             meanie = st.mem[mm.ENEMIES_MEANIE_OBJECT + e]
             if meanie & 0x80:
                 continue
             tile = st.tile_of(meanie)
-            view = views.get(tile, band=True)
-            if view is not None and self._fire("absorb", tile, view):
+            view = views.get(tile)
+            if view is None and self._sees_tile(tile):
+                view = views.get(tile, band=True)
+            if view is None:
+                continue
+            if self._aim_frames(view) >= self._meanie_faces_window(meanie):
+                continue
+            if self._fire("absorb", tile, view):
+                return True
+        return False
+
+    def _hunt_enemies(self, views):
+        """Absorb sentries whenever landable within our own safety window,
+        cheapest aim first: each one PERMANENTLY deletes a rotating gaze
+        (worth far more than its +3), and the $1B8E absorb-lock forces every
+        enemy absorb to precede the Sentinel's anyway."""
+        st = self.st
+        cands = []
+        for e in enemies.enemy_slots(st):
+            if e == actions.SENTINEL_SLOT:
+                continue
+            tile = st.tile_of(e)
+            if self._top(tile) != e:
+                continue
+            view = views.get(tile)
+            if view is None and self._sees_tile(tile):
+                view = views.get(tile, band=True)
+            if view is None:
+                continue
+            aimf = self._aim_frames(view)
+            if aimf + SAFE_FRAMES >= self.tick_window:
+                continue  # a hunt aim must not consume the escape margin
+            cands.append((aimf, tile, view))
+        cands.sort(key=lambda c: c[0])
+        for _, tile, view in cands:
+            if self._fire("absorb", tile, view):
                 return True
         return False
 
     def _absorb_sentinel(self, views):
-        """Absorb the Sentinel dead last: only with the endgame affordable
-        (robot 3 + hyperspace 3 - Sentinel's +4 => energy >= 2) and no live
-        meanie (the absorb-lock would make it permanent)."""
+        """Absorb the Sentinel dead last ($1B8E lock): only once no other
+        enemy or meanie remains absorbable, with the endgame affordable
+        (robot 3 + hyperspace 3 - Sentinel's +4 => energy >= 2)."""
         st = self.st
         if st.energy < 6 - mm.ENERGY_IN_OBJECTS[mm.T_SENTINEL]:
             return False
+        if len(enemies.enemy_slots(st)) > 1:
+            return False  # sentries first: the lock would strand them forever
         if any(
             not st.mem[mm.ENEMIES_MEANIE_OBJECT + e] & 0x80
             for e in enemies.enemy_slots(st)
@@ -411,15 +537,17 @@ class Player:
             eye = self._base_z(slot)
             if eye <= my_eye + EYE_EPS and not urgent:
                 continue
-            window = self._gaze_window(tile)
-            if window <= 0.0:
-                continue
-            if not urgent and window < SAFE_FRAMES:
-                continue
+            exposed = self._exposing_enemies(tile)
+            if self._seen_now(exposed):
+                continue  # never transfer into a live view, even a partial one
+            window = self._gaze_window(tile, exposed=exposed)
             view = views.get(tile, band=True)
             if view is None:
                 continue
-            key = (eye, -self._aim_frames(view), window)
+            aimf = self._aim_frames(view)
+            if not urgent and (aimf >= self.tick_window or window < aimf + SAFE_FRAMES):
+                continue  # the destination clock starts at ARRIVAL, after the aim
+            key = (eye, -aimf, window)
             if best is None or key > best[0]:
                 best = (key, tile, view)
         if best is None:
@@ -446,26 +574,25 @@ class Player:
                 continue
             if self._top(tile) != slot:
                 continue
-            if otype == mm.T_ROBOT and self._base_z(slot) <= my_eye + EYE_EPS:
-                prio = 0  # a shell we climbed out of: 3 energy, look-down aim
-            elif otype == mm.T_BOULDER and self._base_z(slot) <= my_eye + EYE_EPS:
-                prio = 1  # a spent pedestal: 2 energy
-            elif otype == mm.T_TREE and want_trees:
-                prio = 2
-            else:
+            if otype in (mm.T_ROBOT, mm.T_BOULDER):
+                if self._base_z(slot) > my_eye + EYE_EPS:
+                    continue  # a live pedestal above us, not a spent one
+            elif otype != mm.T_TREE or not want_trees:
                 continue
-            cands.append((prio, slot, tile))
-        cands.sort()
+            cands.append((mm.ENERGY_IN_OBJECTS[otype], tile))
         landable = []
-        for prio, _, tile in cands:
+        for value, tile in cands:
             view = views.get(tile)
-            if view is None and prio < 2 and self._sees_tile(tile):
-                view = views.get(tile, band=True)
+            if view is None and self._sees_tile(tile):
+                view = views.get(tile, band=True)  # near/below targets pitch down
             if view is None:
                 continue
-            landable.append((prio, self._aim_frames(view), tile, view))
-        landable.sort(key=lambda c: c[:2])  # priority, then cheapest aim
-        for _, _, tile, view in landable:
+            aimf = self._aim_frames(view)
+            if aimf + HOP_FRAMES >= self.tick_window:
+                continue  # optional: must leave room for the hop that follows
+            landable.append((aimf / value, tile, view))
+        landable.sort(key=lambda c: c[0])  # cheapest aim frames per energy unit
+        for _, tile, view in landable:
             if self._fire("absorb", tile, view):
                 return True
         return False
@@ -483,6 +610,14 @@ class Player:
             best_robot, best_boulder = self._climb_scan(
                 views.band(), urgent, need_progress, only_tile
             )
+        if best_robot is None and best_boulder is None:
+            best_robot, best_boulder = self._climb_scan(
+                views.band(), urgent, need_progress, only_tile, seen_tier=1
+            )
+        if best_robot is None and best_boulder is None and (urgent or self._frozen()):
+            best_robot, best_boulder = self._climb_scan(
+                views.band(), urgent, need_progress, only_tile, seen_tier=2
+            )
         if best_robot is not None:
             _, tile, view = best_robot
             if self._fire("robot", tile, view):
@@ -495,11 +630,46 @@ class Player:
                 return True
         return False
 
-    def _climb_scan(self, cand_views, urgent, need_progress, only_tile):
-        """Scan `cand_views` for the best pedestal-robot and boulder builds."""
+    def _hunt_target(self):
+        """The tile the climb works toward LOS on: the NEAREST sentry first
+        (the hunt order -- each one absorbed deletes a gaze), the Sentinel
+        once it stands alone, the platform for the endgame strike."""
+        st = self.st
+        px, py = st.player_xy()
+        sentries = [e for e in enemies.enemy_slots(st) if e != actions.SENTINEL_SLOT]
+        if sentries:
+            near = min(
+                sentries,
+                key=lambda e: (st.obj_x[e] - px) ** 2 + (st.obj_y[e] - py) ** 2,
+            )
+            return st.tile_of(near)
+        if not st.is_empty(actions.SENTINEL_SLOT):
+            return st.tile_of(actions.SENTINEL_SLOT)
+        return st.platform_xy
+
+    def _tile_sees_target(self, tile, target):
+        """Whether a robot standing on `tile` would see `target`'s tile (a
+        phantom-observer $1CDD march) -- the LOS-progress term of a hop."""
+        clone = self.st.clone()
+        slot = threat._free_slot(clone)
+        if slot is None or not threat._place_phantom(clone, tile, slot):
+            return False
+        return threat.player_sees_tile(clone, target, slot)
+
+    def _climb_scan(self, cand_views, urgent, need_progress, only_tile, seen_tier=0):
+        """Scan `cand_views` for the best pedestal-robot and boulder builds.
+        Progress = gaining LOS on the hunt target first, then eye height (an
+        equal/lower hop is legal exactly when it buys the target sight line).
+        Budget: hops start only when boulder + robot + reserve are affordable.
+        `seen_tier`: 0 = unseen tiles only; 1 = tolerate partial sight with a
+        safe horizon (undrainable); 2 = no-other-choice (least-exposed)."""
         st = self.st
         my_eye = self._my_eye()
         need = 0 if urgent else HOP_FRAMES
+        reserve = self._reserve()
+        robot_min = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] + reserve
+        hop_min = HOP_COST + reserve
+        target = self._hunt_target()
         best_robot = None
         best_boulder = None
         for tile, view in cand_views.items():
@@ -510,37 +680,59 @@ class Player:
             top = self._top(tile)
             if top is not None and st.obj_type[top] == mm.T_BOULDER:
                 robot_eye = self._base_z(top) + BOULDER_H
-                window = self._gaze_window(tile)
-                if window <= 0.0 or window < need:
-                    continue
-                grows = robot_eye > my_eye + EYE_EPS
-                if (grows or (urgent and window > SAFE_FRAMES)) and st.energy >= 3:
-                    key = (robot_eye, -self._aim_frames(view), window)
+                aimf = self._aim_frames(view)
+                exposed = self._exposing_enemies(tile)
+                if self._seen_now(exposed, full_only=seen_tier >= 1) and seen_tier < 2:
+                    continue  # never build under a live view, even a partial one
+                window = self._gaze_window(tile, exposed=exposed)
+                if window < aimf + need and seen_tier < 2:
+                    continue  # the destination clock starts at ARRIVAL
+                if not urgent and aimf >= self.tick_window:
+                    continue  # the aim itself outlasts our own tile's safety
+                sees = self._tile_sees_target(tile, target)
+                grows = robot_eye > my_eye + EYE_EPS or sees
+                if (
+                    grows or (urgent and window > SAFE_FRAMES)
+                ) and st.energy >= robot_min:
+                    key = (sees, robot_eye, -aimf, window)
                     if best_robot is None or key > best_robot[0]:
                         best_robot = (key, tile, view)
-                if not grows and tile == self.hop_tile and st.energy >= HOP_COST:
-                    key = (robot_eye, -self._aim_frames(view), window)
+                if not grows and tile == self.hop_tile and st.energy >= hop_min:
+                    key = (sees, robot_eye, -aimf, window)
                     if best_boulder is None or key > best_boulder[0]:
                         best_boulder = (key, tile, view)
             elif top is None:
-                if st.energy < HOP_COST:
+                if st.energy < hop_min:
                     continue
                 if not actions.can_create(st, mm.T_BOULDER, tile):
                     continue
+                aimf = self._aim_frames(view)
+                if not urgent and aimf >= self.tick_window:
+                    continue
+                exposed = self._exposing_enemies(tile)
+                if self._seen_now(exposed, full_only=seen_tier >= 1) and seen_tier < 2:
+                    continue
+                window = self._gaze_window(tile, exposed=exposed)
+                if window < aimf + need and seen_tier < 2:
+                    continue
                 robot_eye = self._robot_eye_after_boulder(tile)
-                if need_progress and robot_eye <= my_eye + EYE_EPS and not urgent:
+                sees = self._tile_sees_target(tile, target)
+                if (
+                    need_progress
+                    and robot_eye <= my_eye + EYE_EPS
+                    and not sees
+                    and not urgent
+                ):
                     continue
-                window = self._gaze_window(tile)
-                if window <= 0.0 or window < need:
-                    continue
-                key = (robot_eye, -self._aim_frames(view), window)
+                key = (sees, robot_eye, -aimf, window)
                 if best_boulder is None or key > best_boulder[0]:
                     best_boulder = (key, tile, view)
         return best_robot, best_boulder
 
     def _escape(self, views):
-        """In the gaze with no safe option: least-bad transfer, else the truly
-        last resort, an unsteerable hyperspace."""
+        """In the gaze with no safe option: a transfer that STRICTLY improves
+        the danger window (a lateral swap just resets nothing and burns time),
+        else the truly last resort, an unsteerable hyperspace."""
         st = self.st
         best = None
         for slot in range(mm.NUM_SLOTS):
@@ -555,6 +747,8 @@ class Player:
             if view is None:
                 continue
             window = self._gaze_window(tile)
+            if window <= self.tick_window:
+                continue  # no improvement: not an escape
             if best is None or window > best[0]:
                 best = (window, tile, view)
         if best is not None and self._fire("transfer", best[1], best[2]):

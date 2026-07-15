@@ -28,22 +28,39 @@ def test_player_wins_landscape_0042():
     assert not actions.player_dead(game.state)
 
 
-def test_player_never_transfers_into_gaze():
-    """Every transfer in the winning trace landed outside an enemy's live cone
-    (the player re-checks the gaze window before each one)."""
-    game = Game.new(0)
-    player = Player(game)
-    gazes = []
-    orig = Player._fire
+def test_player_placement_invariant():
+    """No create or transfer ever leaves an object inside an enemy's LIVE scan
+    cone, judged by the ROM's own visibility test on the ACTUAL object right
+    after the action fires (not the player's own predicate, which a phantom
+    quirk once blinded to transfer destinations)."""
+    from sentinel import enemies, relative
+    from sentinel.terrain import top_object
 
-    def spy(self, verb, tile, view):
-        if verb == "transfer":
-            gazes.append(self._gaze_window(tile))
-        return orig(self, verb, tile, view)
+    for seed in (0, 66):
+        game = Game.new(seed)
+        player = Player(game)
+        bad = []
+        orig = Player._fire
 
-    Player._fire = spy
-    try:
-        assert player.run(max_actions=100)
-    finally:
-        Player._fire = orig
-    assert gazes and all(w > 0 for w in gazes)
+        def spy(self, verb, tile, view):
+            ok = orig(self, verb, tile, view)
+            if ok and verb in ("boulder", "robot", "transfer"):
+                st = self.st
+                top = top_object(st, *tile)
+                seen = [
+                    e
+                    for e in enemies.enemy_slots(st)
+                    if relative.can_see_object(
+                        st, e, top, st.obj_type[top], enemies.FOV_SCAN
+                    )["exposure"]
+                ]
+                if seen:
+                    bad.append((verb, tuple(tile), seen))
+            return ok
+
+        Player._fire = spy
+        try:
+            assert player.run(max_actions=250), f"seed {seed} did not win"
+        finally:
+            Player._fire = orig
+        assert not bad, f"seed {seed}: objects left in a live cone: {bad}"
