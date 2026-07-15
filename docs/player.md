@@ -129,6 +129,24 @@ cleared. The board remains the stress case: most of its length is spent
 waiting out four interleaved cones, and any regression in the time model or
 the invariant shows up here first.
 
+## Sim-vs-live verification (landscapes 0000 and 0042)
+
+Outcome matrix under the quantized live clock (world frames advance only in
+deliberate run-to-PC windows) and the executor-true sim charges:
+
+| landscape | sim | live | outcome match | live/sim actions | charged vs measured frames |
+|---|---|---|---|---|---|
+| 0000 | WON | WON | yes | 38 / 19 | 5479 / 3616 (1.52x, over-charged) |
+| 0042 | WON | WON | yes | 43 / 41 | 5659 / 5680 (1.00x) |
+| 0335 | LOST (honest clock) | not attempted | — | — | — |
+
+`measured` comes from the game's own per-frame accumulator ($1335 advances
+205/frame; 205^-1 = 5 mod 256 turns the delta into an exact frame count under
+256).  Paths still diverge at the tile level (identical prefix 7 actions on
+0000, 1 on 0042; shared strategic skeleton throughout): outcome-level agreement
+holds, trajectory-level agreement needs per-step frame parity — the residual
+per-step scatter and the 0000 over-charge are the open accounting items.
+
 ## Test
 
 `sentinel/tests/test_player.py` — the player wins landscapes 0000 and seed 66
