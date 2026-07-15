@@ -47,13 +47,18 @@ def test_player_placement_invariant():
             if ok and verb in ("boulder", "robot", "transfer"):
                 st = self.st
                 top = top_object(st, *tile)
-                seen = [
-                    e
-                    for e in enemies.enemy_slots(st)
-                    if relative.can_see_object(
+                seen = []
+                for e in enemies.enemy_slots(st):
+                    see = relative.can_see_object(
                         st, e, top, st.obj_type[top], enemies.FOV_SCAN
-                    )["exposure"]
-                ]
+                    )
+                    if not see["exposure"]:
+                        continue
+                    if verb == "transfer" and not (
+                        see["full"] or self._tree_near(tuple(tile))
+                    ):
+                        continue  # harmless partial glimpse: undrainable, no meanie
+                    seen.append(e)
                 if seen:
                     bad.append((verb, tuple(tile), seen))
             return ok

@@ -18,6 +18,9 @@ REDRAW = actioncost.REDRAW_FRAMES  # one plot_world follows every pan notch
 H_NOTCH_FRAMES = 16 + REDRAW  # $10EE: 16-step scroll per +-8 bearing notch
 V_NOTCH_FRAMES = 8 + REDRAW  # $1135: 8-step scroll per +-4 pitch notch
 UTURN_FRAMES = REDRAW  # $1B2F: instant EOR $80 flip + replot
+SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
+TOGGLE_FRAMES = 2 * (2 + REDRAW)  # off+on: a gated scan and a replot each ($11B3)
+TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
 FOV_HALF = enemies.FOV_SCAN // 2  # +-10 units of the enemy scan cone
@@ -125,7 +128,8 @@ class Player:
     def __init__(self, game, verbose=False):
         self.g = game
         self.st = game.state
-        self.cursor = [80, 95]  # $134C sights-centre reset position
+        self.cursor = list(SIGHTS_CENTRE)
+        self.last_bearing = None  # committed (h, v): a same-bearing aim reuses
         self.hop_tile = None
         self.endgame_waits = 0
         self.tick_window = math.inf  # own-tile gaze window, refreshed per tick
@@ -283,17 +287,33 @@ class Player:
 
     # ------------------------------------------------------------------- aim
     def _aim_frames(self, view):
-        """Frames the keyboard pan from the current facing/cursor to `view`
-        costs: u-turn-aware bearing notches, pitch notches, 1px/frame cursor."""
+        """Frames the executor's aim method costs, mechanism for mechanism: a
+        same-bearing REUSE keeps sights on and drives the cursor from where it
+        is; otherwise sights toggle off/on (gated scans + replots, and $134C
+        re-centres the cursor) before the coarse pan and a from-centre drive."""
         st = self.st
         me = st.player
+        want = (view["h_angle"], view["v_angle"])
         nu, ns = aimcost.h_press_count(st.obj_h_angle[me], view["h_angle"])
         nv = aimcost.v_steps(st.obj_v_angle[me], view["v_angle"])
+        if self.last_bearing == want:
+            cur_from = self.cursor
+            toggles = 0
+        else:
+            cur_from = SIGHTS_CENTRE
+            toggles = TOGGLE_FRAMES
         cur = max(
-            abs(view["cursor"][0] - self.cursor[0]),
-            abs(view["cursor"][1] - self.cursor[1]),
+            abs(view["cursor"][0] - cur_from[0]),
+            abs(view["cursor"][1] - cur_from[1]),
         )
-        return nu * UTURN_FRAMES + ns * H_NOTCH_FRAMES + nv * V_NOTCH_FRAMES + cur
+        return (
+            toggles
+            + nu * UTURN_FRAMES
+            + ns * H_NOTCH_FRAMES
+            + nv * V_NOTCH_FRAMES
+            + cur
+            + TAP_FRAMES
+        )
 
     def _fire(self, verb, tile, view):
         """Aim (world advances), re-gate, apply `verb` on `tile`, settle.
@@ -307,6 +327,7 @@ class Player:
         st.obj_h_angle[me] = view["h_angle"]
         st.obj_v_angle[me] = view["v_angle"]
         self.cursor = list(view["cursor"])
+        self.last_bearing = (view["h_angle"], view["v_angle"])
         if not aim.gate(st, view, tile):
             view = aim.propose(st, tile, v_band=True)
             if view is None or not aim.gate(st, view, tile):
@@ -329,6 +350,8 @@ class Player:
             top = self._top(tile)
             ok = top is not None and actions.transfer(st, top)
         if ok:
+            if verb == "transfer":
+                self.last_bearing = None  # new body: committed bearing is stale
             settle_verb = {"boulder": "create", "robot": "create"}.get(verb, verb)
             self._advance(actioncost.SETTLE.get(settle_verb, 60))
             self._log(verb, tile)
@@ -385,6 +408,8 @@ class Player:
         urgent = self.tick_window <= SAFE_FRAMES
         if self._meanie_response(views):
             return
+        if urgent and self._counterattack(views):
+            return
         if not urgent and self._hunt_enemies(views):
             return
         if not urgent and self._absorb_sentinel(views):
@@ -399,7 +424,7 @@ class Player:
             return
         if self._climb(views, urgent=urgent):
             return
-        if urgent and st.energy < HOP_COST and self._reclaim(views):
+        if urgent and st.energy < HOP_COST and self._reclaim(views, urgent=True):
             return  # cornered and poor: any cheap absorb is survival energy
         if urgent and self._escape(views):
             return
@@ -466,6 +491,38 @@ class Player:
                 continue
             if self._aim_frames(view) >= self._meanie_faces_window(meanie):
                 continue
+            if self._fire("absorb", tile, view):
+                return True
+        return False
+
+    def _counterattack(self, views):
+        """Seen by an absorbable enemy: absorb IT instead of fleeing.  The
+        budget is the enemy's own drain countdown ($0C20, ~120 units of grace
+        before the first drain, $1838); absorbs have no facing requirement and
+        a u-turn aim costs one keystroke.  The Sentinel qualifies only as the
+        last enemy standing (the $1B8E lock) with the endgame affordable."""
+        st = self.st
+        me = st.player
+        half = FOV_HALF + FOV_MARGIN
+        others = len(enemies.enemy_slots(st)) > 1
+        for e in enemies.enemy_slots(st):
+            see = relative.can_see_object(st, e, me, mm.T_ROBOT, threat.FOV_FULL)
+            if not see["exposure"]:
+                continue
+            ah = relative.relative_angles(st, e, me)["angle_hi"]
+            if not self._in_cone(ah, st.obj_h_angle[e], half):
+                continue
+            if e == actions.SENTINEL_SLOT and (others or st.energy < 2):
+                continue
+            tile = st.tile_of(e)
+            view = views.get(tile)
+            if view is None and self._sees_tile(tile):
+                view = views.get(tile, band=True)
+            if view is None:
+                continue
+            budget = st.mem[mm.ENEMIES_DRAINING_COOLDOWN + e] * UNIT_FRAMES
+            if budget and self._aim_frames(view) >= budget:
+                continue  # cannot land the absorb before its drain fires
             if self._fire("absorb", tile, view):
                 return True
         return False
@@ -538,9 +595,9 @@ class Player:
             if eye <= my_eye + EYE_EPS and not urgent:
                 continue
             exposed = self._exposing_enemies(tile)
-            if self._seen_now(exposed):
-                continue  # never transfer into a live view, even a partial one
             window = self._gaze_window(tile, exposed=exposed)
+            if window <= 0.0:
+                continue  # dangerous live view: same basis as the build gate
             view = views.get(tile, band=True)
             if view is None:
                 continue
@@ -558,9 +615,10 @@ class Player:
             return True
         return False
 
-    def _reclaim(self, views):
+    def _reclaim(self, views, urgent=False):
         """Absorb invested/loose energy: old shells and spent pedestals (never
-        the hop in progress), and trees while energy has headroom."""
+        the hop in progress), and trees while energy has headroom.  Urgent
+        reclaims drop the follow-up-hop reservation: the energy IS the move."""
         st = self.st
         my_eye = self._my_eye()
         want_trees = st.energy < HOP_COST + 6
@@ -588,7 +646,7 @@ class Player:
             if view is None:
                 continue
             aimf = self._aim_frames(view)
-            if aimf + HOP_FRAMES >= self.tick_window:
+            if not urgent and aimf + HOP_FRAMES >= self.tick_window:
                 continue  # optional: must leave room for the hop that follows
             landable.append((aimf / value, tile, view))
         landable.sort(key=lambda c: c[0])  # cheapest aim frames per energy unit
@@ -618,6 +676,8 @@ class Player:
             best_robot, best_boulder = self._climb_scan(
                 views.band(), urgent, need_progress, only_tile, seen_tier=2
             )
+        if best_robot is not None and not self._no_strand(best_robot[1]):
+            best_robot = None  # completing this pedestal would strand our reclaims
         if best_robot is not None:
             _, tile, view = best_robot
             if self._fire("robot", tile, view):
@@ -629,6 +689,20 @@ class Player:
                 self.hop_tile = tile
                 return True
         return False
+
+    def _no_strand(self, tile):
+        """Whether completing the pedestal at `tile` is energy-safe: either the
+        next hop stays affordable without reclaims, or the shell we abandon is
+        KEYBOARD-LANDABLE (not merely geometrically visible) from up there."""
+        st = self.st
+        if st.energy - mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] >= HOP_COST + self._reserve():
+            return True
+        clone = st.clone()
+        slot = threat._free_slot(clone)
+        if slot is None or not threat._place_phantom(clone, tile, slot):
+            return False
+        views, _ = los.landable_sweep_with_centres(clone, slot=slot, v_primary=False)
+        return tuple(st.player_xy()) in views
 
     def _hunt_target(self):
         """The tile the climb works toward LOS on: the NEAREST sentry first
@@ -670,10 +744,11 @@ class Player:
         robot_min = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] + reserve
         hop_min = HOP_COST + reserve
         target = self._hunt_target()
+        here = st.player_xy()
         best_robot = None
         best_boulder = None
         for tile, view in cand_views.items():
-            if tile == st.player_xy():
+            if tile == here:
                 continue
             if only_tile is not None and tile != only_tile:
                 continue

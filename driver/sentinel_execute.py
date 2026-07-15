@@ -6,6 +6,8 @@ and an Executor exposing raw memory reads (`rd`) and a decoded live GameState
 (`state`) over a BinMon connection.
 """
 
+import time
+
 from driver import sentinel_state as gs
 from driver import core
 from sentinel import memmap as mm
@@ -413,7 +415,12 @@ def fire_hyperspace(ex, drv, plat, log, result):
         log(f"   WARNING: player tile {pcur} != platform {plat}")
     won = False
     for attempt in range(4):
-        drv.tap_action(K_HYPERSPACE)
+        drv.tap_action(K_HYPERSPACE, settle=False)
+        for _ in range(120):  # poll the flag; the win path leaves the play loop
+            if ex.landscape_done() & 0x40:
+                break
+            ex.bm.exit()
+            time.sleep(0.05)
         done1 = ex.landscape_done()
         log(
             f"   H attempt {attempt}: $0CDE=${done1:02x} "
