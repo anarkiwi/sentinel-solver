@@ -100,15 +100,19 @@ class _Views:
             self._primary = _cheap_views(self.st, True, self.aim_from)
         return self._primary
 
+    def band(self):
+        """The full pitch-band landable views (down-looks included)."""
+        if self._full is None:
+            self._full = _cheap_views(self.st, False, self.aim_from)
+        return self._full
+
     def get(self, tile, band=False):
         """The landable view for `tile`, or None; `band` falls back to the
         full pitch-band sweep (down-looks at reclaim/endgame targets)."""
         view = self.primary().get(tuple(tile))
         if view is not None or not band:
             return view
-        if self._full is None:
-            self._full = _cheap_views(self.st, False, self.aim_from)
-        return self._full.get(tuple(tile))
+        return self.band().get(tuple(tile))
 
 
 class Player:
@@ -204,9 +208,15 @@ class Player:
                     break
         return best
 
+    def _frozen(self):
+        """World frozen until the player's first action ($0CE5 bit7, $3682)."""
+        return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
+
     def _player_window(self):
         """Gaze window of the player's own current body (no phantom)."""
         st = self.st
+        if self._frozen():
+            return math.inf  # no drain/meanie clock runs before the first action
         me = st.player
         exposed = [
             e
@@ -304,7 +314,7 @@ class Player:
         if st.is_empty(actions.SENTINEL_SLOT):
             if self._endgame(views):
                 return
-            self._advance(WAIT_FRAMES)
+            self._wait()
             return
         urgent = self._player_window() <= SAFE_FRAMES
         if self._meanie_response(views):
@@ -323,6 +333,12 @@ class Player:
             return
         if urgent and self._escape(views):
             return
+        if self._frozen() and self._climb(views, urgent=True):
+            return  # waiting cannot change a frozen world: take the least-bad hop
+        self._wait()
+
+    def _wait(self):
+        """Idle one beat and re-observe; the live driver overrides with real time."""
         self._advance(WAIT_FRAMES)
 
     def _endgame(self, views):
@@ -457,13 +473,36 @@ class Player:
     def _climb(self, views, urgent=False, need_progress=True, only_tile=None):
         """One hop step toward height: robot on a tall-enough pedestal, another
         boulder on a short one, or a new boulder on the best safe tile.
-        `only_tile` restricts to the hop in progress (finish before roaming)."""
+        `only_tile` restricts to the hop in progress (finish before roaming).
+        A primary-plane scan with no candidate falls back to the full pitch
+        band -- from a hollow every buildable tile needs a down-pitch aim."""
+        best_robot, best_boulder = self._climb_scan(
+            views.primary(), urgent, need_progress, only_tile
+        )
+        if best_robot is None and best_boulder is None:
+            best_robot, best_boulder = self._climb_scan(
+                views.band(), urgent, need_progress, only_tile
+            )
+        if best_robot is not None:
+            _, tile, view = best_robot
+            if self._fire("robot", tile, view):
+                self.hop_tile = tile
+                return True
+        if best_boulder is not None:
+            _, tile, view = best_boulder
+            if self._fire("boulder", tile, view):
+                self.hop_tile = tile
+                return True
+        return False
+
+    def _climb_scan(self, cand_views, urgent, need_progress, only_tile):
+        """Scan `cand_views` for the best pedestal-robot and boulder builds."""
         st = self.st
         my_eye = self._my_eye()
         need = 0 if urgent else HOP_FRAMES
         best_robot = None
         best_boulder = None
-        for tile, view in views.primary().items():
+        for tile, view in cand_views.items():
             if tile == st.player_xy():
                 continue
             if only_tile is not None and tile != only_tile:
@@ -497,17 +536,7 @@ class Player:
                 key = (robot_eye, -self._aim_frames(view), window)
                 if best_boulder is None or key > best_boulder[0]:
                     best_boulder = (key, tile, view)
-        if best_robot is not None:
-            _, tile, view = best_robot
-            if self._fire("robot", tile, view):
-                self.hop_tile = tile
-                return True
-        if best_boulder is not None:
-            _, tile, view = best_boulder
-            if self._fire("boulder", tile, view):
-                self.hop_tile = tile
-                return True
-        return False
+        return best_robot, best_boulder
 
     def _escape(self, views):
         """In the gaze with no safe option: least-bad transfer, else the truly

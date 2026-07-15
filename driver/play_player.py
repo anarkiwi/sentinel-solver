@@ -39,6 +39,11 @@ class LivePlayer(sim_player.Player):
     def _advance(self, frames):
         """Real time passes in the live game; the model clock is a no-op."""
 
+    def _wait(self):
+        """A deliberate wait must spend REAL time (PAL 50 frames/s) so the live
+        world -- enemy rotation, cooldowns -- actually advances before re-observing."""
+        time.sleep(sim_player.WAIT_FRAMES / 50.0)
+
     def _drive_transfer_aim(self, tile, view):
         """Aim the sights onto `tile` for a transfer (perform_step drives the aim
         only for create/absorb).  Reuses a matching committed bearing, else drives

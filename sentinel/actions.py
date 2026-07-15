@@ -31,6 +31,12 @@ def _find_empty_slot(state):
     return None
 
 
+def _mark_player_acted(state):
+    """$12E1: the player-action dispatch clears $0CE5 bit7 on the first action,
+    unfreezing the enemy world clock ($3682/$9659 skip while it is set)."""
+    state.mem[mm.PLAYER_NOT_ACTED] = 0x00
+
+
 def can_create(state, otype, tile):
     """Whether a create of `otype` on `tile` is feasible on energy / free-slot /
     stackability grounds (the $1F38 checks), ignoring line of sight."""
@@ -51,6 +57,7 @@ def create(state, otype, tile):
     create is infeasible (no free slot, out of energy, or the tile can't be
     stacked on).  Mirrors try_to_create_object $1BBA exactly, including the prnd
     draw that put_object_in_tile spends on the object's random facing."""
+    _mark_player_acted(state)
     slot = _find_empty_slot(state)
     if slot is None:
         return None
@@ -127,6 +134,7 @@ def absorb(state, slot):
     """Absorb the object in `slot`, gaining its energy (try_to_absorb_object
     $1B8E + absorb_object $1B9E).  Returns True, or False if the slot is empty or
     a platform.  (Meanie absorption $1BEC is handled with the enemy dynamics.)"""
+    _mark_player_acted(state)
     if not can_absorb(state, slot):
         return False
     otype = state.obj_type[slot]
@@ -139,6 +147,7 @@ def transfer(state, slot):
     """Move the player's viewpoint into robot `slot` (try_to_transfer_into_object
     $1B64).  Returns True, or False if the target isn't a robot.  The eye height
     follows automatically from the target's own z_height/z_fraction."""
+    _mark_player_acted(state)
     if state.obj_type[slot] != mm.T_ROBOT:
         return False
     state.player = slot
@@ -178,6 +187,7 @@ def hyperspace(state):
     Returns True if the player survived the hyperspace."""
     from sentinel import enemies  # deferred: enemies imports actions
 
+    _mark_player_acted(state)
     enemies.do_hyperspace(state)
     return not player_dead(state)
 

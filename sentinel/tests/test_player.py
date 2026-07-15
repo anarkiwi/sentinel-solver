@@ -18,6 +18,16 @@ def test_player_wins_landscape_0():
     assert game.state.is_empty(actions.SENTINEL_SLOT)
 
 
+def test_player_wins_landscape_0042():
+    """Seed 66 (typed 0042, two enemies, down-look-only start hollow): the band
+    climb fallback and frozen-world model get the player out and to the win."""
+    game = Game.new(66)
+    player = Player(game)
+    assert player.run(max_actions=250)
+    assert actions.won(game.state)
+    assert not actions.player_dead(game.state)
+
+
 def test_player_never_transfers_into_gaze():
     """Every transfer in the winning trace landed outside an enemy's live cone
     (the player re-checks the gaze window before each one)."""
