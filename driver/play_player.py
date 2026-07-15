@@ -31,17 +31,39 @@ class LivePlayer(sim_player.Player):
         self.ex = sx.Executor(session.bm, log)
         self.kbd = kbd_aim.KbdDriver(session.bm, log)
         self.step_no = 0
+        self.acted = False
+        self.life_lost = None
 
     def _observe(self):
-        self.st = State.from_mem(core.live_image(self.bm))
+        """Snapshot live memory and LEAVE THE CPU HALTED: think time is a
+        tooling artifact, so the world may advance only under real input
+        (pans/actions), which the ROM-derived cost model already prices.
+        A death is detected by the drain flag or by the landscape silently
+        auto-resetting ($0CE5 re-frozen after we have acted) -- NOT by $0CDE
+        bit7, which any survived hyperspace also sets."""
+        with self.bm.halted():
+            mem = core.live_image(self.bm)
+        self.st = State.from_mem(mem)
         self.g.state = self.st
+        if self.acted and self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80:
+            self.life_lost = "died (landscape auto-reset observed)"
+
+    def _dead(self):
+        if self.st.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80:
+            self.life_lost = "drained at zero energy"
+        if self.life_lost:
+            self.live_log(f"DEAD: {self.life_lost}")
+            self.result["death"] = self.life_lost
+            return True
+        return False
 
     def _advance(self, frames):
         """Real time passes in the live game; the model clock is a no-op."""
 
     def _wait(self):
-        """A deliberate wait must spend REAL time (PAL 50 frames/s) so the live
-        world -- enemy rotation, cooldowns -- actually advances before re-observing."""
+        """A deliberate wait spends REAL world time: resume the CPU (observe
+        left it halted), let PAL frames elapse, and re-observe."""
+        self.bm.exit()
         time.sleep(sim_player.WAIT_FRAMES / 50.0)
 
     def _drive_transfer_aim(self, tile, view):
@@ -85,9 +107,12 @@ class LivePlayer(sim_player.Player):
             "target": list(tile),
             "view": {**view, "cursor": list(view["cursor"])},
         }
+        if pverb == "create":
+            stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
         out = sx.perform_step(
             self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
         )
+        self.acted = True
         self._observe()
         ok = out in ("ok", "diverge")  # diverge: primary effect landed, world moved
         if ok:
@@ -95,12 +120,20 @@ class LivePlayer(sim_player.Player):
         return ok
 
     def _hyperspace(self):
-        won = sx.fire_hyperspace(
-            self.ex, self.kbd, self.ex.platform(), self.live_log, self.result
-        )
+        """Platform win: the verified multi-attempt primitive. Escape: ONE tap,
+        then straight back to the reactive loop (re-tapping H after a survived
+        escape would burn 3 energy per press, or stand still in a gaze)."""
+        if self.st.player_xy() == self.ex.platform():
+            won = sx.fire_hyperspace(
+                self.ex, self.kbd, self.ex.platform(), self.live_log, self.result
+            )
+            self.result["won_flag"] = won
+        else:
+            self.live_log("-- ESCAPE HYPERSPACE (H, single tap) --")
+            self.kbd.tap_action(sx.K_HYPERSPACE)
+        self.acted = True
         self._observe()
         self._log("hyperspace", self.st.player_xy())
-        self.result["won_flag"] = won
 
 
 def main(argv=None):

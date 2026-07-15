@@ -292,6 +292,16 @@ def perform_step(ex, drv, label, stp, log, result):
                 f"reached; firing, verify() decides"
             )
 
+    # post-aim budget gate: a mid-aim drain must not push a create below the floor
+    if verb == "create" and stp.get("min_energy") is not None:
+        e_now = ex.rd(mm.PLAYER_ENERGY) & 0x3F
+        if e_now < stp["min_energy"]:
+            log(
+                f"[{label}] create {tile}: DRAINED mid-aim -- energy {e_now} < "
+                f"floor {stp['min_energy']}; not firing"
+            )
+            return "drained"
+
     # --- ACTION KEY (deterministic, scan-consumed) ---
     if verb == "create":
         key = CREATE_KEY[otype]
