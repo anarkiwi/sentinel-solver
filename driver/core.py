@@ -656,11 +656,11 @@ class SentinelDriver:
             return False
         okh = self.kbd.coarse_h(view["h_angle"])
         okv = self.kbd.coarse_v(view["v_angle"])
-        if not (okh and okv):  # one retry (a wrap/overshoot self-corrects)
+        if okh != "ok" or okv != "ok":  # one retry (a wrap/overshoot self-corrects)
             okh = self.kbd.coarse_h(view["h_angle"])
             okv = self.kbd.coarse_v(view["v_angle"])
-        if not (okh and okv):
-            self.log(f"    aim {tuple(tile)}: coarse pan miss")
+        if okh != "ok" or okv != "ok":
+            self.log(f"    aim {tuple(tile)}: coarse pan miss ({okh}/{okv})")
             return False
         if not self.kbd.sights_set(True):
             return False

@@ -25,8 +25,12 @@ Per-phase frame counts, each cited to the ROM:
     The stacked-vs-bare create path is byte-identical (< 1 frame difference), so
     there is NO stack surcharge.
 
-  * TRANSFER (hyperspace): the tune wait ($AB69) is ``TUNE_FRAMES`` frames, framed
-    by two ``plot_world`` redraws ($35C3).
+  * TRANSFER: moving the eye sets viewpoint-changed ($0C63), so the main loop takes
+    the full-redraw path ``play_landscape_loop`` ($3642 -> $357D): two full
+    ``plot_world`` passes ($35C3/$35C6) then ``wait_for_end_of_tune`` ($35D5) for the
+    #$19 transfer tune started at $1B82 -- ``VIEWPOINT_REPLOT_FRAMES`` total.  This is
+    NOT the #$0 hyperspace tune, whose longer $AB69 countdown (``TUNE_FRAMES``) the
+    *hyperspace* path ($217F) waits for.
 
   * AIM is priced by the caller from the keyboard-scroll cadence (a +-8 bearing
     notch animates a 16-step horizontal scroll $10EE, a +-4 pitch notch an 8-step
@@ -58,10 +62,14 @@ FRAME_TICKS = float(os.environ.get("FRAME_TICKS", "1.0"))
 # Object dither animation loop ($1FA4 create / $86A5 absorb): 977904 cycles at the
 # 19656-cycle PAL frame.
 DITHER_FRAMES = float(os.environ.get("DITHER_FRAMES", str(977904.0 / 19656.0)))
-# Hyperspace tune wait ($AB69), a static 96-frame countdown.
+# Hyperspace #$0 tune wait ($AB69), a static 96-frame countdown ($217F path only).
 TUNE_FRAMES = float(os.environ.get("TUNE_FRAMES", "96"))
 # One blocking plot_world ($2625) terrain-dominant redraw pass (py65 ~5 frames).
 REDRAW_FRAMES = float(os.environ.get("REDRAW_FRAMES", "5"))
+# Transfer settle: play_landscape_loop ($357D) 2x plot_world + #$19 tune wait ($35D5); VICE ~47.
+VIEWPOINT_REPLOT_FRAMES = float(os.environ.get("VIEWPOINT_REPLOT_FRAMES", "47"))
+# Post-create/absorb scene replot after the dither loop; VICE ~44 (vs incremental REDRAW 5).
+POST_ACTION_REPLOT_FRAMES = float(os.environ.get("POST_ACTION_REPLOT_FRAMES", "44"))
 
 # Redraw ticks per rasterised edge (frames/edge from the py65 plot_world
 # measurement, * FRAME_TICKS): a minor scene-scaling correction. Validated.
@@ -72,13 +80,11 @@ STEPS_PER_EDGE = float(os.environ.get("STEPS_PER_EDGE", "0.02"))
 FOV_HALF = 10
 
 # --- game-intrinsic per-verb settle (ticks), derived from the frame counts ------
-# create/absorb: dither loop + one scene replot.
-# transfer:      tune wait + two scene replots.
-# No fitted floors, no driver read-back idle, no stack surcharge.
+# create/absorb: dither loop + one incremental replot; transfer: viewpoint full-redraw.
 SETTLE = {
-    "absorb": FRAME_TICKS * (DITHER_FRAMES + REDRAW_FRAMES),
-    "create": FRAME_TICKS * (DITHER_FRAMES + REDRAW_FRAMES),
-    "transfer": FRAME_TICKS * (TUNE_FRAMES + 2 * REDRAW_FRAMES),
+    "absorb": FRAME_TICKS * (DITHER_FRAMES + POST_ACTION_REPLOT_FRAMES),
+    "create": FRAME_TICKS * (DITHER_FRAMES + POST_ACTION_REPLOT_FRAMES),
+    "transfer": FRAME_TICKS * VIEWPOINT_REPLOT_FRAMES,
 }
 
 # The ROM stacked-create dither is byte-identical to the bare-create dither: the loop

@@ -216,9 +216,17 @@ def perform_step(ex, drv, label, stp, log, result):
                     return "fail"
                 okh = drv.coarse_h(view["h_angle"])
                 okv = drv.coarse_v(view["v_angle"])
-                if not (okh and okv):
+                if "hyperspace" in (okh, okv):
+                    log(f"[{label}] {verb} {tile}: HYPERSPACED mid-aim; aborting aim")
+                    return "aim_hyperspace"
+                if okh != "ok" or okv != "ok":
                     okh = drv.coarse_h(view["h_angle"])
                     okv = drv.coarse_v(view["v_angle"])
+                    if "hyperspace" in (okh, okv):
+                        log(
+                            f"[{label}] {verb} {tile}: HYPERSPACED mid-aim; aborting aim"
+                        )
+                        return "aim_hyperspace"
                 # Read the h/v angles WHILE SIGHTS ARE STILL OFF. objects_h_angle
                 # ($09C0+slot) is only settled at the $365D pan checkpoint; once sights
                 # are ON the per-frame pan_viewpoint dance ($10B7: +$14 -> plot -> -$0C)
@@ -318,6 +326,9 @@ def perform_step(ex, drv, label, stp, log, result):
     # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
     # false-negative latch -- a second create/absorb would stack an extra object). The
     # object-count/energy/slot delta in verify() is the real arbiter of success.
+    settle_acc0 = ex.rd(
+        mm.COOLDOWN_BRESENHAM
+    )  # bracket fire+settle only (aim excluded)
     if verb in ("create", "absorb", "transfer"):
         for _s_try in range(3):
             try:
@@ -330,6 +341,8 @@ def perform_step(ex, drv, label, stp, log, result):
                 )
                 core.reconnect(ex.bm, log)
     latched = drv.tap_action(key)
+    settle_measured = ((ex.rd(mm.COOLDOWN_BRESENHAM) - settle_acc0) * 5) & 0xFF
+    result.setdefault("settle_audit", []).append([label, verb, settle_measured])
     if not latched:
         log(
             f"[{label}] {verb} {tile}: action key {key} latch not observed; verify() decides"
