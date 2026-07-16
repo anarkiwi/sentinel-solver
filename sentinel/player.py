@@ -7,6 +7,7 @@ wait), gates it through the ROM aim oracle, then advances the world in frames.
 
 import argparse
 import math
+import os
 
 import numpy as np
 
@@ -14,12 +15,13 @@ from sentinel import actioncost, actions, aim, aimcost, enemies, los, memmap as 
 from sentinel import relative, terrain, threat
 from sentinel.game import Game
 
-REDRAW = actioncost.REDRAW_FRAMES  # one plot_world follows every pan notch
-H_NOTCH_FRAMES = 16 + REDRAW  # $10EE: 16-step scroll per +-8 bearing notch
-V_NOTCH_FRAMES = 8 + REDRAW  # $1135: 8-step scroll per +-4 pitch notch
-UTURN_FRAMES = REDRAW  # $1B2F: instant EOR $80 flip + replot
+H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
+V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
+# Per-notch plot_world ($2625): per-pitch terrain base (~34, measured) + STEPS_PER_EDGE/edge.
+REDRAW_BASE = float(os.environ.get("REDRAW_BASE", "34"))
+CURSOR_PER_PX = 1.24  # sights-cursor rounds/pixel (gated move_sights, measured)
 SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
-TOGGLE_FRAMES = 2 * (2 + REDRAW)  # off+on: a gated scan and a replot each ($11B3)
+TOGGLE_FRAMES = 12  # sights OFF (~0) + ON (~10: $134C recentre + plot_sights), measured
 TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
@@ -306,12 +308,16 @@ class Player:
             abs(view["cursor"][0] - cur_from[0]),
             abs(view["cursor"][1] - cur_from[1]),
         )
+        # per-notch plot_world cost, geometric in the in-view object edges ($2625 scene patch)
+        redraw = REDRAW_BASE + actioncost.STEPS_PER_EDGE * actioncost.visible_edges(
+            st.mem, view
+        )
         return (
             toggles
-            + nu * UTURN_FRAMES
-            + ns * H_NOTCH_FRAMES
-            + nv * V_NOTCH_FRAMES
-            + cur
+            + nu * redraw
+            + ns * (H_SCROLL + redraw)
+            + nv * (V_SCROLL + redraw)
+            + cur * CURSOR_PER_PX
             + TAP_FRAMES
         )
 
