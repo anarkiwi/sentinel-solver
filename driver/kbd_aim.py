@@ -35,6 +35,15 @@ from sentinel import aimcost as ac
 # not back-pressure to wait out. Generous values only cost time on such bugs.
 _RU_PAN = float(os.environ.get("KBD_PAN_TIMEOUT", "20"))
 _RU_STA = float(os.environ.get("KBD_STA_TIMEOUT", "8"))
+_RU_COMMIT = float(
+    os.environ.get("KBD_COMMIT_TIMEOUT", "4")
+)  # socket backstop, one frame
+_PAN_STALL_FRAMES = (
+    24  # > one notch scroll (16 h / 8 v): no commit this long => clamped
+)
+_PAN_MAX_FRAMES = (
+    400  # > a full pan (256 h / 208 v frames); real targets need far fewer
+)
 
 A_SLOT = 0x000B
 A_H = 0x09C0
@@ -283,91 +292,50 @@ class KbdDriver:
                 self.bm.keymatrix_release_all()
         self._resume()
 
-    def _pan_angle(
-        self, addr, want, dir_fn, stall_bail=24, max_attempts=300, residue=8
-    ):
-        """Drive the view angle at `addr` to `want`. Fast path: HOLD the direction key
-        and resume ONCE with a condition-gated checkpoint at PC_PAN_DONE ($365D) that
-        stops the CPU exactly when the angle register reads `want` -- the scroll runs
-        through every intermediate notch at full speed, no per-notch read-back, no
-        self-correction, no stall_bail. `want` is only reachable on the +-`residue`
-        lattice from `cur`, so a residue mismatch (or any monitor error) falls back to
-        the stepwise loop below."""
+    def _pan_angle(self, addr, want, dir_fn):
+        """Drive the view angle at `addr` to `want` with NO wall-clock control flow: HOLD
+        the pan key and step frame-by-frame at PC_PAN_DONE ($365D, reached every frame),
+        reading the SETTLED angle each frame until it equals `want`. Terminates only on a
+        real state -- reached want ("ok"); player_object ($0B) changed, i.e. teleported
+        mid-aim ("hyperspace"); or the angle stops advancing for a full notch-scroll while
+        not at want, i.e. clamped/off-lattice ("unreachable", an aim-proposer bug)."""
         want &= 0xFF
-        cur = self.rd(addr)
-        if cur == want:
-            return True
-        if (want - cur) % residue == 0:
-            key = dir_fn(cur)
-            r, c = _k(key)
-            with self.bm.halted():
-                try:
-                    self.bm.keymatrix_release_all()
-                    self.bm.keymatrix_set([(r, c, 1)])
-                    self.bm.run_until_pc(
-                        self.PC_PAN_DONE,
-                        timeout=_RU_PAN,
-                        # VICE condition grammar (mon_parse.y): memory read is
-                        # @BANKNAME:(addr); numbers are $-hex. Stop the scroll the
-                        # instant the angle register reads `want`.
-                        condition=f"@cpu:(${addr:04x}) == ${want:02x}",
-                    )
-                except Exception as e:  # off-lattice, clamp, or monitor rejects cond
-                    self.log(f"    pan cond fallback: {type(e).__name__}")
-                finally:
-                    self.bm.keymatrix_release_all()
-            self._resume()
-            if self.rd(addr) == want:
-                return True
-        return self._pan_angle_stepwise(addr, want, dir_fn, stall_bail, max_attempts)
-
-    def _pan_angle_stepwise(self, addr, want, dir_fn, stall_bail=24, max_attempts=300):
-        """Drive the view angle at `addr` to `want`, NO wall-clock wait. HOLD the pan key
-        and step ONE ATTEMPT at a time by halting at PC_PAN_DONE ($365D) -- reached once per
-        attempt on commit AND undo AND clamp, both axes -- then read the SETTLED angle from
-        memory. `dir_fn(cur)` picks the key for the remaining delta and is re-evaluated each
-        attempt (self-correcting across a wrap/overshoot). The key stays HELD across the plot
-        so check_if_player_still_wants_to_pan ($1223) sees it and the plot completes.
-
-        Stop conditions are STATE, never a timer: reached `want` (success), or `stall_bail`
-        consecutive attempts that moved the angle by ZERO (genuinely clamped / can't reach --
-        the caller re-snaps a different view). The run_until_pc timeout is a bare socket-hang
-        guard, not a functional wait: $365D recurs every attempt, so it is hit promptly.
-        """
-        want &= 0xFF
-        if self.rd(addr) == want:
-            return True
+        slot0 = self.rd(A_SLOT)
         stalled = 0
+        stall_bail = _PAN_STALL_FRAMES  # > one notch scroll (16 frames h / 8 v)
         held = None
+        result = "unreachable"
         with self.bm.halted():
             try:
-                for _ in range(max_attempts):
+                for _ in range(_PAN_MAX_FRAMES):
                     cur = self.rd(addr)
                     if cur == want:
+                        result = "ok"
+                        break
+                    if self.rd(A_SLOT) != slot0:
+                        result = "hyperspace"
                         break
                     key = dir_fn(cur)
-                    if key != held:  # (re)press for the direction the delta needs
+                    if (
+                        key != held
+                    ):  # (re)press only on a direction change; HOLD otherwise
                         self.bm.keymatrix_release_all()
                         r, c = _k(key)
                         self.bm.keymatrix_set([(r, c, 1)])
                         held = key
-                    self.bm.run_until_pc(
-                        self.PC_PAN_DONE, timeout=_RU_PAN
-                    )  # one attempt
+                    self.bm.run_until_pc(self.PC_PAN_DONE, timeout=_RU_COMMIT)
                     new = self.rd(addr)
                     self.bm.advance_instructions(1)  # step off $365D
-                    if new == cur:  # undone or clamped this attempt
+                    if new == cur:
                         stalled += 1
                         if stalled >= stall_bail:
-                            break
+                            break  # a full scroll with no commit: clamped / off-lattice
                     else:
                         stalled = 0
-            except Exception as e:  # socket drop / genuinely wedged
-                self.log(f"    pan ${self.PC_PAN_DONE:04x} stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
         self._resume()
-        return self.rd(addr) == want
+        return result
 
     def _one_scan_press(self, key, timeout=10.0):
         """Hold `key` for EXACTLY ONE gated full input scan ($9678->$967B). Anchor at the
@@ -463,10 +431,12 @@ class KbdDriver:
         L raises pitch (+4), COMMA lowers it (-4); direction is chosen per attempt."""
         addr = A_V + self.slot()
         want &= 0xFF
+        if not (want >= 0xCD or want <= 0x35):
+            return "unreachable"  # off the $CD..$35 pan band: proposer bug, don't drive
         dir_fn = lambda cur: (
             K_DOWN if self._pitch_lin(want) > self._pitch_lin(cur) else K_UP
         )
-        return self._pan_angle(addr, want, dir_fn, residue=4)
+        return self._pan_angle(addr, want, dir_fn)
 
     def fine_to_tile(self, target, probe_fn, want_centre=False, budget=24):
         """SIGHTS ON. Land the sights ray on `target` (with LOS, and centre fraction
@@ -521,14 +491,14 @@ class KbdDriver:
             return None
         okh = self.coarse_h(view["h_angle"])
         okv = self.coarse_v(view["v_angle"])
-        if not (okh and okv):
+        if okh != "ok" or okv != "ok":
             okh = self.coarse_h(view["h_angle"])
             okv = self.coarse_v(view["v_angle"])
         self.log(
             f"    coarse {target}: h=${self.hang():02x}/want ${view['h_angle']:02x} "
             f"ok={okh}  v=${self.vang():02x}/want ${view['v_angle']:02x} ok={okv}"
         )
-        if not (okh and okv):
+        if okh != "ok" or okv != "ok":
             return None
         if not self.sights_set(True):
             return None
@@ -664,9 +634,22 @@ class KbdDriver:
             return {"h": self.hang(), "v": self.vang(), "cur": self.cur(), "ok": False}
         okh = self.coarse_h(view["h_angle"])
         okv = self.coarse_v(view["v_angle"])
-        if not (okh and okv):
+        if "hyperspace" in (okh, okv):  # teleported mid-aim: abort, do not re-drive
+            return {
+                "h": self.hang(),
+                "v": self.vang(),
+                "cur": self.cur(),
+                "ok": False,
+                "status": "hyperspace",
+            }
+        if okh != "ok" or okv != "ok":
             okh = self.coarse_h(view["h_angle"])
             okv = self.coarse_v(view["v_angle"])
+        status = (
+            "hyperspace"
+            if "hyperspace" in (okh, okv)
+            else ("unreachable" if "unreachable" in (okh, okv) else "ok")
+        )
         oks = self.sights_set(True)  # fine: cursor selection
         cx, cy = view["cursor"]
         okc = self.fine_cursor(cx, cy)
@@ -674,7 +657,8 @@ class KbdDriver:
             "h": self.hang(),
             "v": self.vang(),
             "cur": self.cur(),
-            "ok": bool(okh and okv and oks and okc),
+            "ok": bool(okh == "ok" and okv == "ok" and oks and okc),
+            "status": status,
         }
 
 
