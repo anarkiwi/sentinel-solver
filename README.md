@@ -13,6 +13,7 @@ frozen as golden fixtures so CI proves correctness without the ROM.
 | Model | `sentinel/` | standalone, bit-exact forward model of the game — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). See [docs/simulator.md](docs/simulator.md). |
 | Player | `sentinel/player.py` | reactive tick-by-tick greedy player over the model (`python -m sentinel.player 0`). See [docs/player.md](docs/player.md). |
 | Driver | `driver/` | boot the game, enter a landscape, and run memory-verified live keyboard operations (aim → fire → verify), recording an AVI. Imports only `sentinel/`. See [docs/driver.md](docs/driver.md). |
+| Instrument | `driver/instrument.py` + `sentinel/statecmp.py` | frame-locked sim-vs-emulator divergence: seed the sim from the live image, step both one frame at a time, and report the first state disagreement decoded to a named field (`python -m driver.instrument 335`). See [docs/instrument.md](docs/instrument.md). |
 | Docs | `docs/` | rules and subsystem references (below). |
 
 ## Fixtures (not distributed)
@@ -47,4 +48,5 @@ pytest -n auto
 - [docs/simulator.md](docs/simulator.md) — the `sentinel/` model's modules and validation.
 - [docs/player.md](docs/player.md) — the reactive greedy player: priorities, threat model, timing.
 - [docs/driver.md](docs/driver.md) — the live driver: boot/enter/record, keyboard aim → fire → verify, container plumbing.
+- [docs/instrument.md](docs/instrument.md) — the shared frame-locked divergence instrument: schema, tiers, first-disagreement report.
 </content>

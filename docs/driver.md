@@ -172,10 +172,26 @@ so the arbiter of a fired action remains the ROM object-count/energy delta
 ## Container / bridge-IP plumbing and known gotchas
 
 - **Bridge IP, not published ports.** Host `-p` port publishing is not reachable
-  in this environment (`127.0.0.1:6502` is unreachable); the driver connects to
-  the container's **docker bridge IP** (`docker inspect` of
-  `NetworkSettings.Networks`). `BINMON_HOST` / `BINMON_PORT` env vars override.
-  A missing bridge IP falls back to `127.0.0.1`.
+  in this environment (`127.0.0.1:6502` is unreachable); **every** boot path
+  connects to the container's **docker bridge IP**, resolved once by
+  `driver.boot.bridge_ip` (`docker inspect` of `NetworkSettings.Networks`) and used
+  by both `boot_loaded` (→ `SentinelDriver.boot`, the headless/instrument path) and
+  `connect_binmon` (→ `boot_and_play`, the record path). `boot_loaded` sleeps ~2 s
+  after `container.start()` so docker has assigned the IP before the lookup.
+  `BINMON_HOST` / `BINMON_PORT` env vars override; a missing bridge IP falls back to
+  `127.0.0.1`. A headless boot is therefore just:
+
+  ```python
+  from driver import core
+  drv = core.SentinelDriver.boot(record_mount="renders")  # bridge-IP connect + warp
+  drv.enter_landscape(0x0335)                              # types "0335"
+  # ... drive drv.bm ...
+  drv.close()
+  ```
+
+  The `WarpMode` monitor resource is not settable on this asid-vice build (opcode
+  `0x52` → err `0x8f`), but the container is launched `warp=True`, so warp is
+  already on — callers should treat a failed warp-resource set as non-fatal.
 - **`/scratch` bind-mount only.** The tape image and the `/renders` volume are
   bind-mounted into the container; the AVI, `boot.vsf`, and `vice_code_entry.vsf`
   land on the mounted `/renders` volume (gitignored) so they persist on the host.

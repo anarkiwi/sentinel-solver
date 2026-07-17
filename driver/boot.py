@@ -106,6 +106,28 @@ def kill_stale():
         pass
 
 
+def bridge_ip(container_id, log=print):
+    """The docker bridge IP of a started asid-vice container. Host ``-p`` publishing
+    is not reachable in this environment; the bridge IP is. Returns None on failure."""
+    try:
+        out = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                container_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout.strip()
+        return out or None
+    except Exception as e:  # docker missing / container gone
+        log(f"  bridge-ip lookup failed: {e}")
+        return None
+
+
 def boot_loaded(log=print, attempts=4, record_mount=None):
     """Launch the container and wait for the loaded game. Retries on a load JAM.
     record_mount: optional host dir to mount at /renders (for AVI / snapshots).
@@ -129,11 +151,16 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
         )
         try:
             container.start()
-            # D4: host/port from env (BINMON_HOST/BINMON_PORT); host-loopback default.
-            bm = BinMon(
-                os.environ.get("BINMON_HOST", "127.0.0.1"),
-                int(os.environ.get("BINMON_PORT", "6502")),
+            time.sleep(2)  # let docker assign the container its bridge IP
+            # host: env override, else container bridge IP (host -p unreachable here), else loopback
+            host = (
+                os.environ.get("BINMON_HOST")
+                or bridge_ip(container.container_id, log)
+                or "127.0.0.1"
             )
+            port = int(os.environ.get("BINMON_PORT", "6502"))
+            log(f"[boot {attempt}] connecting binmon {host}:{port}")
+            bm = BinMon(host, port)
             bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
             bm.exit()
             log(f"[boot {attempt}] connected; waiting for tape load ...")
