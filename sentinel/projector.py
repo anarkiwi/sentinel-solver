@@ -415,19 +415,56 @@ C_EXAMINE = float(os.environ.get("RENDER_C_EXAMINE", "1737"))
 PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b) edge/row
 PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))  # term (b) span_fill byte
 
+# term (c) plot_object ($8533) base floor (docs/render_cost.md); object fill = residual.
+C_VERTEX = float(os.environ.get("RENDER_C_VERTEX", "2200"))  # transform_vertex trig
+C_PREP_CALL = float(os.environ.get("RENDER_C_PREP_CALL", "625"))  # off-band prepare
+SECTIONS = int(os.environ.get("RENDER_SECTIONS", "2"))  # wide play buffer ($2AAB)
+# type ($004C) -> (vertices, polygons) from model tables $9CA0/$9CA1, $9CAB/$9CAC.
+_OBJECT_MODEL = {
+    0: (29, 27),
+    1: (22, 25),
+    2: (17, 15),
+    3: (8, 10),
+    4: (18, 25),
+    5: (30, 35),
+    6: (12, 11),
+    7: (8, 4),
+}
+
+
+def _inview_object_base(state, tiles):
+    """plot_object base cost summed over objects on the plotted object-tiles ($21AE
+    stack walk down the $0100 flags chain). Unknown types contribute nothing."""
+    total = 0.0
+    for tile in tiles:
+        tb = tile["tile_byte"]
+        if tb < mm.OBJECT_TILE:
+            continue
+        slot = tb & 0x3F
+        for _ in range(mm.NUM_SLOTS):
+            model = _OBJECT_MODEL.get(state.obj_type[slot])
+            if model is not None:
+                nv, npoly = model
+                total += nv * C_VERTEX + npoly * SECTIONS * C_PREP_CALL
+            flags = state.obj_flags[slot]
+            if flags < 0x40:  # bottommost object, on the ground
+                break
+            slot = flags & 0x3F
+    return total
+
 
 def render_cost(state, view, observer=None):
     """One plot_world pass in PAL frames (docs/render_cost.md):
-    ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W)) / 19656`` over the
-    exactly-selected visible tiles. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
-    """
+    ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W) + object_base)/19656``.
+    ``view`` maps ``h_angle``/``v_angle``; 0.0 if none."""
     if not view or view.get("h_angle") is None:
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
     tiles, n_examine = project_scene(state, h, v, observer)
     area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
-    return (BASE_CYCLES + n_examine * C_EXAMINE + area) / FRAME_CYCLES
+    obj_base = _inview_object_base(state, tiles)
+    return (BASE_CYCLES + n_examine * C_EXAMINE + area + obj_base) / FRAME_CYCLES
 
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/render_cost.md).

@@ -160,6 +160,25 @@ def test_examine_count_is_exact_and_scene_dependent():
     assert len(counts) > 5  # examine count varies strongly with scene/view
 
 
+def test_object_base_never_overshoots_and_is_present():
+    """The plot_object base-floor term (c) stays at or under the exact per-view
+    object_fill_cycles (never overshoots, since object span_fill is unmodelled) and is
+    non-zero on the object-bearing views."""
+    with open(GOLDEN) as f:
+        data = json.load(f)
+    seen_object_view = False
+    for key, rec in data.items():
+        ls, h, v = (int(x) for x in key.split(","))
+        state = landscape.generate(ls)
+        tiles, _ = projector.project_scene(state, h, v)
+        base = projector._inview_object_base(state, tiles)
+        assert base <= rec["object_fill_cycles"] + 1  # floor, never overshoots
+        if rec["object_fill_cycles"] and base:
+            seen_object_view = True
+            assert base >= 40_000  # a plotted object carries its trig+prepare floor
+    assert seen_object_view
+
+
 def _py65_occlusion(cpu, mem, state):
     """Decode the real $3E80/$24DA bitmap after running $2993 then $245B in py65."""
     player = mem[0x000B]
@@ -230,8 +249,8 @@ def test_viewpoint_replot_lands_in_live_settle_band():
             errs.append(abs(p - live) / live)
     errs.sort()
     assert (
-        errs[len(errs) // 2] < 0.30
-    )  # median abs error under 30% (was ~90%: 10x under)
+        errs[len(errs) // 2] < 0.15
+    )  # median abs error (~9% with the object-base term; was ~22%, ~90% before)
 
 
 @pytest.mark.oracle

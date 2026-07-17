@@ -88,20 +88,71 @@ in every fresh play state ($26CD).
 ## Fill term: the exact residual
 
 `render_cost`'s fill is still `sum(60*H + 1.75*H*W)` over the kept tiles. Making it
-frame-exact needs two more ROM subsystems, which this pass measures but does not port
-(no curve-fitting of the gap):
+frame-exact needs the full render engine ported and cycle-counted. This pass measured
+every block's exact cost and its geometric driver (below) but does NOT ship a native
+model, because the drivers cannot yet be computed exactly from the projector's geometry
+(see "Why the native drivers diverge"); shipping a coefficient fit to close the gap is
+the forbidden `97%=0%` anti-pattern.
 
-- **Multi-band terrain rasteriser.** Each tile polygon is clipped to the current
-  vertical buffer band ($0051/$0052) and rasterised by `process_line` ($3002), a
-  self-modifying steep/shallow x inside/outside Bresenham edge tracer, then filled by
-  `span_fill`. The filled scanline count and per-row byte count are NOT a clean
-  function of the projected corner H/W: instrumentation shows the ROM's polygon rows
-  ($0004/$0006) diverge from the projected y-extent because the edge tracer, not a
-  linear map, sets them, and edge/`process_line` overhead (~hundreds of cyc/row)
-  dominates thin polygons. Even the pure-terrain views (0% object) span ratio 0.38-2.26.
-- **Object renderer.** `plot_stack_of_objects` ($21AE) is a distinct per-object
-  polygon renderer; a single object tile costs 68k-213k cyc (vs a few k for terrain),
-  so object-heavy views are the largest single error source (up to 42% of plot_world).
+### The fill is prepare-dominated, not span-dominated (measured)
+
+Per-phase py65 cycle brackets over the 15 sweep views (`prepare_polygon` subtree vs
+`span_fill` subtree vs `plot_stack_of_objects` subtree):
+
+- **`span_fill` frequently never runs.** 5 of 15 views fill zero pixels (`nspan=0`)
+  yet still spend 3k-450k cyc of terrain "fill". The cost is `process_line` ($3002)
+  building the `polygon_left/right_edge_table`s ($AD00/$AE00) for polygons that then
+  clip out of the band -- pure edge-trace overhead, no `span_fill`.
+- **`prepare_polygon` ($2D6C) is called per polygon x 2 wide-buffer sections** (the
+  play buffer is wide: `$0010=0 < 2` at $2AAB, so `plot_polygon` runs two
+  `prepare_polygon`+`span_fill` passes). A flat tile is one quad, a sloped tile two
+  triangles (`plot_two_triangles` $2A8A), so a plotted tile costs 2-4 `prepare_polygon`
+  calls; every scan-visible non-hidden tile pays this even when nothing fills.
+
+### Exact per-block cycle costs (derived from the loop bodies)
+
+- **`process_line` steep inner loop** ($2F58): `ADC $0D`(3) `BCC`(3 taken) `STX
+  table`(4) `DEC $2F60`(6) `BEQ`(2) `DEY`(2) `BNE`(3) = **23 cyc/row**, or **27** on a
+  column step (`+SBC $0C`(3) `+INX`(2), `BCC` not taken). Steep-loop iteration count =
+  **exactly 2 x filled-rows** for an inside polygon (each filled row is bounded by a
+  left and a right edge) -- verified per tile (`steep = 2*srows`).
+- **`span_fill` middle** (`plot_middle_of_row` $23DC): unrolled `LDY #imm`(2)+`STA
+  ($70),Y`(6) = **8 cyc/byte** (4 px/byte). Per-row edge plot (`plot_left/right_edge_of_row`)
+  ~55-70 cyc; per-8-rows buffer advance (`ADC #$39` $231F) ~15 cyc. Rows walk the band
+  `[$0052,$0051] = [48,240]` top-to-bottom.
+- **`prepare_polygon`** off-band (all clip, no fill): ~600 cyc/call; with tracing it
+  carries the `process_line` cost above.
+
+### Object renderer reuses the SAME rasteriser (measured)
+
+`plot_object` ($8533 -> transform loop $8475): per vertex, `transform_vertex` runs
+`calculate_sine_and_cosine` + two `multiply_byte_by_byte` + `calculate_angle` +
+`calculate_hypotenuse` + `calculate_object_relative_vertical_angle` ~ **2200 cyc**;
+then per polygon it calls the same `prepare_polygon`+`span_fill`. Per-type model sizes
+(engine facts `$9CA0/$9CA1` verts, `$9CAB/$9CAC` polys): type 0=(29v,27p) 1=(22,25)
+2=(17,15) 3=(8,10) 4=(18,25) 5=(30,35) 6=(12,11) 7=(8,4). An in-view object costs a
+**~63k-95k base** (vertex trig + `np x 2` `prepare_polygon`) plus distance-dependent
+fill up to ~213k when close -- the largest single error source (0-42% of plot_world).
+
+### Why the native drivers diverge (the port gap)
+
+The projector's per-tile `H`/`W` and kept-tile set are NOT the ROM's rasterised
+polygons:
+
+- **`H` is 0 where the ROM fills 100k+ cyc.** All-prep views (e.g. `0,48,8`,
+  `335,64,16`) project every corner `screen_y` below the inner band, so the
+  `[0,240]`-clamped `H` is 0 while `process_line` spends its full prep cost.
+- **The kept-tile set undercounts.** `plot_tile` gates on the `$0180` scan buffer, a
+  DIFFERENT table from the `$3E80` occlusion bitmap `project_scene` filters on; ROM
+  `plot_object` calls exceed the projector's object-tile count (e.g. `777,32,0`: ROM
+  plots 5 objects, projector finds 0). So even a perfect rasteriser fed the projector's
+  tiles would undercount.
+
+Cycle-exactness therefore requires porting three more subsystems, in order: the
+`$0180` plotted-set gate (so the polygon set matches), the self-modifying
+`process_line`/`span_fill` rasteriser (edge tables + cycle count per polygon), and the
+`plot_object` vertex transform/projection (so object polygon geometry is native). All
+were RE'd to the block level here; none is curve-fit into `render_cost`.
 
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
@@ -110,12 +161,18 @@ frame-exact needs two more ROM subsystems, which this pass measures but does not
 | `N_examine` (count) | `_scan_visible` port | **exact** (0 mismatches) |
 | occlusion `$3E80` bitmap | `_occlusion_visible` port | **exact** (0 mismatches) |
 | examine cost | `N_examine * 1737` | median 5.6%, max 14% |
-| total frames | + area-proxy fill | ratio 0.32-2.26, median 0.52 |
+| object base floor | `_inview_object_base` | floor, ratio 0.16-0.92 (never overshoots) |
+| total frames | + area-proxy fill + object base | median err 41% (was 53%) |
 
-The two named residual subsystems (multi-band rasteriser, object renderer) plus the
-per-call examine-trig spread are what stand between this and a few-% total. The
-tile-selection, examine-count and occlusion foundations for porting them are exact and
-in place. Fill constants stay env-overridable (`RENDER_*`).
+The **object-base term (c)** (`_inview_object_base`, `C_VERTEX`=2200, `C_PREP_CALL`=625,
+`SECTIONS`=2, per-type `(verts,polys)` model sizes) adds `plot_object`'s per-object
+vertex-trig + `prepare_polygon` floor over the plotted object-tiles' stacks. Because the
+distance-dependent object `span_fill` is unmodelled, the term is a strict floor: it moves
+the previously-zero object cost toward the truth and never overshoots (verified
+`test_object_base_never_overshoots_and_is_present`). The remaining residual is the
+multi-band terrain rasteriser and the object `span_fill` fill; the tile-selection,
+examine-count and occlusion foundations for porting them are exact and in place. Fill
+constants stay env-overridable (`RENDER_*`).
 
 ## Transfer settle: the full fixed base (tune + $357D foreground)
 
@@ -166,12 +223,13 @@ folded into this and the tune base.
 
 | landscape | live settles | predicted | median abs error |
 | --- | --- | --- | --- |
-| ls42 | 305,338,435,460 | 315-352 | ~15% |
-| ls335 | 259,333,371 | 264-317 | ~25% |
+| ls42 | 305,338,435,460 | 291-329 | ~9% |
+| ls335 | 259,333,371 | 288-358 | ~9% |
 
-Median ~22%, max ~29% (was ~10x / ~90% under). The residual is the documented
-`render_cost` fill-proxy swing (ratio 0.32-2.26) plus the single-constant occlusion
-approximation; the tune + fixed-foreground base is the win.
+Median **~9%**, max ~29% (was ~22%, and ~10x / ~90% under before the settle base). The
+object-base term (c) closes most of the object-view gap; the residual is the documented
+`render_cost` terrain fill-proxy swing plus the object `span_fill` fill and the
+single-constant occlusion approximation.
 
 A u-turn (EOR $80 bearing flip) scrolls 0 frames (instant) and is not a viewpoint
 replot.
