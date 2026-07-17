@@ -19,6 +19,36 @@ from sentinel.state import State
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+class MeasuringKbdDriver(kbd_aim.KbdDriver):
+    """KbdDriver that times each aim primitive into ``subframes`` (exact $9630 frames
+    via the shared Executor) for per-sub-term charge validation. Reset per step;
+    sights_on delegates to sights_set so the toggle is timed once, not twice."""
+
+    def __init__(self, bm, log, quantized=False, ex=None):
+        super().__init__(bm, log, quantized=quantized)
+        self._ex = ex
+        self.subframes = {}
+
+    def _timed(self, name, fn, *args):
+        f0 = self._ex.frames()
+        r = fn(*args)
+        df = self._ex.frames() - f0
+        self.subframes[name] = self.subframes.get(name, 0) + df
+        return r
+
+    def coarse_h(self, want):
+        return self._timed("pan_h", super().coarse_h, want)
+
+    def coarse_v(self, want):
+        return self._timed("pan_v", super().coarse_v, want)
+
+    def fine_cursor(self, cx, cy):
+        return self._timed("cursor", super().fine_cursor, cx, cy)
+
+    def sights_set(self, on):
+        return self._timed("toggle", super().sights_set, on)
+
+
 class LivePlayer(sim_player.Player):
     """The reactive player over live VICE memory instead of the simulator."""
 
@@ -30,7 +60,7 @@ class LivePlayer(sim_player.Player):
         self.live_log = log
         self.result = result
         self.ex = sx.Executor(session.bm, log)
-        self.kbd = kbd_aim.KbdDriver(session.bm, log, quantized=True)
+        self.kbd = MeasuringKbdDriver(session.bm, log, quantized=True, ex=self.ex)
         self.step_no = 0
         self.acted = False
         self.life_lost = None
@@ -98,6 +128,8 @@ class LivePlayer(sim_player.Player):
             if top is None:
                 return False
             otype = st.obj_type[top]
+        whole_f0 = self.ex.frames()  # exact whole-action bracket (incl. transfer aim)
+        self.kbd.subframes = {}  # per-step aim sub-term (pan/cursor/toggle) accumulator
         if pverb == "transfer" and not self._drive_transfer_aim(tile, view):
             self._observe()
             return False
@@ -113,19 +145,45 @@ class LivePlayer(sim_player.Player):
             return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
-        charged = self._aim_frames(view) + actioncost.SETTLE.get(pverb, 60)
-        acc0 = self.ex.rd(mm.COOLDOWN_BRESENHAM)
+        aim_charged = self._aim_frames(view)
+        settle_charged = actioncost.SETTLE.get(pverb, 60)
+        charged = aim_charged + settle_charged
         out = sx.perform_step(
             self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
         )
-        acc1 = self.ex.rd(mm.COOLDOWN_BRESENHAM)
-        measured = ((acc1 - acc0) * 5) & 0xFF  # 205x per frame; 205^-1 = 5 mod 256
+        whole_exact = self.ex.frames() - whole_f0  # exact, wrap-free aim+settle
+        sa = self.result.get("settle_audit") or []
+        lbl = f"p{self.step_no}"
+        if sa and sa[-1][0] == lbl:  # perform_step reached the fire this step
+            settle_exact = sa[-1][2]
+            self.result.setdefault("exact_audit", []).append(
+                [
+                    lbl,
+                    pverb,
+                    list(tile),
+                    round(aim_charged),
+                    whole_exact - settle_exact,
+                    settle_charged,
+                    settle_exact,
+                ]
+            )
+            sf = self.kbd.subframes
+            self.result.setdefault("aim_subframes", []).append(
+                [
+                    lbl,
+                    pverb,
+                    sf.get("pan_h", 0),
+                    sf.get("pan_v", 0),
+                    sf.get("toggle", 0),
+                    sf.get("cursor", 0),
+                ]
+            )
         self.result.setdefault("frame_audit", []).append(
-            [f"p{self.step_no}", pverb, list(tile), round(charged), measured]
+            [lbl, pverb, list(tile), round(charged), whole_exact]
         )
         self.live_log(
             f"    [clock] p{self.step_no} {pverb}: charged={round(charged)} "
-            f"measured={measured} (mod 256)"
+            f"measured={whole_exact} (exact frames)"
         )
         self.acted = True
         self._observe()

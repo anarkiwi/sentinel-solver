@@ -66,7 +66,7 @@ DITHER_FRAMES = float(os.environ.get("DITHER_FRAMES", str(977904.0 / 19656.0)))
 TUNE_FRAMES = float(os.environ.get("TUNE_FRAMES", "96"))
 # One blocking plot_world ($2625) terrain-dominant redraw pass (py65 ~5 frames).
 REDRAW_FRAMES = float(os.environ.get("REDRAW_FRAMES", "5"))
-# Transfer settle: play_landscape_loop ($357D) 2x plot_world + #$19 tune wait ($35D5); VICE ~47.
+# Transfer settle: play_landscape_loop ($357D) 2x plot_world + #$19 tune ($35D5); measured scene-dependent ~306-420 exact frames (ls0000 ~420, 0042 ~306), NOT 47 -- terrain projected-AREA dominated; kept at 47 pending the per-notch projection port (docs/render_cost.md).
 VIEWPOINT_REPLOT_FRAMES = float(os.environ.get("VIEWPOINT_REPLOT_FRAMES", "47"))
 # Post-create/absorb scene replot after the dither loop; VICE ~44 (vs incremental REDRAW 5).
 POST_ACTION_REPLOT_FRAMES = float(os.environ.get("POST_ACTION_REPLOT_FRAMES", "44"))

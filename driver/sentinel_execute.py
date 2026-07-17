@@ -95,9 +95,20 @@ class Executor:
     def __init__(self, bm, log):
         self.bm = bm
         self.log = log
+        self._frame_cp = None
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
+
+    def frames(self):
+        """Exact, wrap-free elapsed-frame count from a silent $9630 (per-frame raster
+        marker) checkpoint's u32 hit_count -- unlike the $1335 delta ((d*5)&0xFF),
+        which aliases every 256 frames. Delta two calls to time a span exactly."""
+        if self._frame_cp is None:
+            self._frame_cp = self.bm.checkpoint_set(
+                0x9630, stop_when_hit=False, silent=True
+            )
+        return self.bm.checkpoint_get(self._frame_cp.checknum).hit_count
 
     def state(self):
         return gs.read_game_state(gs.ViceSource(self.bm))
@@ -326,9 +337,7 @@ def perform_step(ex, drv, label, stp, log, result):
     # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
     # false-negative latch -- a second create/absorb would stack an extra object). The
     # object-count/energy/slot delta in verify() is the real arbiter of success.
-    settle_acc0 = ex.rd(
-        mm.COOLDOWN_BRESENHAM
-    )  # bracket fire+settle only (aim excluded)
+    settle_f0 = ex.frames()  # exact (wrap-free) settle bracket; aim excluded
     if verb in ("create", "absorb", "transfer"):
         for _s_try in range(3):
             try:
@@ -341,8 +350,8 @@ def perform_step(ex, drv, label, stp, log, result):
                 )
                 core.reconnect(ex.bm, log)
     latched = drv.tap_action(key)
-    settle_measured = ((ex.rd(mm.COOLDOWN_BRESENHAM) - settle_acc0) * 5) & 0xFF
-    result.setdefault("settle_audit", []).append([label, verb, settle_measured])
+    settle_frames = ex.frames() - settle_f0  # exact, no 256-alias
+    result.setdefault("settle_audit", []).append([label, verb, settle_frames])
     if not latched:
         log(
             f"[{label}] {verb} {tile}: action key {key} latch not observed; verify() decides"
