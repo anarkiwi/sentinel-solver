@@ -314,9 +314,10 @@ class Player:
         redraw = REDRAW_BASE + actioncost.STEPS_PER_EDGE * actioncost.visible_edges(
             st.mem, view
         )
+        # u-turn ($1B2F EOR $80 flip): one keystroke, 0 scroll frames, no redraw (measured)
         return (
             toggles
-            + nu * redraw
+            + nu * TAP_FRAMES
             + ns * (H_SCROLL + redraw)
             + nv * (V_SCROLL + redraw)
             + cur * CURSOR_PER_PX
