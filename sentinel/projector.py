@@ -121,35 +121,262 @@ def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
+# $0C48 furthest-row extent hint ($26CD); 0 in every fresh play state, env-overridable.
+_ROW_HINT = int(os.environ.get("RENDER_ROW_HINT", "0"))
+_LAST = mm.N - 1  # 0x1F
+
+
+def _scan_visible(state, setup):
+    """Exact port of find_visible_extent ($27D7) + plot_rows_in_front_of_observer_loop
+    ($26DE): the furthest->nearest walk that probes tiles via $2845. Returns
+    (n_examine, rows, cache) with the exact $2845 call count and per-row (row, lo, hi)
+    plotted extents; the on-screen byte drives every branch so the count is byte-exact.
+    """
+    cache = {}
+    exam = [0]
+
+    def probe(col, row):
+        exam[0] += 1
+        col &= 0xFF
+        r = cache.get((col, row))
+        if r is None:
+            r = _project(state, setup, col, row)
+            cache[(col, row)] = r
+        return r[5]
+
+    def find_end(row, col):  # find_end_of_row_loop $27E2
+        while True:
+            start = col
+            if col == _LAST:
+                return start, _LAST
+            col += 1
+            a = probe(col, row)
+            if a == 0x81:
+                continue
+            if a == 0x80:
+                return start, col
+            while True:  # find_first_visible_tile_at_end_loop $27F3
+                if col == _LAST:
+                    return start, col
+                col += 1
+                a = probe(col, row)
+                if a == 0:
+                    continue
+                return start, col
+
+    def start_left(row, end, col):  # find_first_visible_tile_at_start_of_row_loop $2820
+        while True:
+            if col == 0:
+                return 0, end
+            col -= 1
+            if probe(col, row) == 0:
+                continue
+            return col, end
+
+    def crop_right(row, col):  # tile_is_cropped_to_right $27FF
+        while True:
+            end = col
+            if col == 0:
+                return 0, end
+            col -= 1
+            a = probe(col, row)
+            if a == 0x80:
+                continue
+            if a != 0:  # into_find_first_visible_tile_at_start_of_row_loop $2825
+                return col, end
+            return start_left(row, end, col)
+
+    def find_extent(row, hint):  # find_visible_extent $27D7
+        col = hint & 0xFF
+        a = probe(col, row)
+        if a == 0x80:
+            return crop_right(row, col)
+        if a != 0:
+            return find_end(row, col)
+        while True:  # find_first_visible_tile_at_start_loop $2811
+            if col == _LAST:
+                return start_left(row, _LAST, hint & 0xFF)  # endRow2 $2818
+            col += 1
+            a = probe(col, row)
+            if a == 0:
+                continue
+            return start_left(row, col, hint & 0xFF)
+
+    c1d, c3 = setup["c1d"], setup["c3"]
+    rows = []
+    row = _LAST
+    start, end = find_extent(row, _ROW_HINT)
+    while True:
+        row -= 1
+        if row < 0:
+            break
+        if row == c1d:  # consider_plotting_observer_row $276F: last, observer row
+            y = (start + 1) & 0xFF
+            if y == c3:
+                probe(start, row)
+                probe(y, row)
+                probe(c3, row)
+            elif (end - 2) & 0xFF == c3:
+                probe((end - 1) & 0xFF, row)
+                probe(end, row)
+                probe(c3, row)
+            else:
+                probe(c3, row)
+            break
+        p_start, p_end = start, end
+        start, end = find_extent(row, p_start)
+        if start < p_start:  # this_row_starts_before $2713
+            y = (p_start - 1) & 0xFF
+            probe(y, row)
+            while y != start:
+                y = (y - 1) & 0xFF
+                probe(y, row)
+        elif start > p_start:  # calculate_this_row_new_first_tiles $2709
+            y = (start - 1) & 0xFF
+            probe(y, row)
+            while y != p_start:
+                y = (y - 1) & 0xFF
+                probe(y, row)
+        if end > p_end:  # this_row_ends_after $2741
+            y = p_end
+            while True:
+                y = (y + 1) & 0xFF
+                probe(y, row)
+                if y == end:
+                    break
+        elif end < p_end:  # calculate_this_row_new_last_tiles $2737
+            y = end
+            while True:
+                y = (y + 1) & 0xFF
+                probe(y, row)
+                if y == p_end:
+                    break
+        rows.append((row, min(start, p_start), max(end, p_end)))
+    return exam[0], rows, cache
+
+
+def _occlusion_visible(state):
+    """Byte-exact port of populate_tile_visibility_bit_table ($245B): the raytraced
+    ``$3E80``/``$24DA`` bitmap $2845 consults at $2911-$2919. ``visible[ty][tx]`` is
+    True iff tile (tx,ty) is unoccluded; object tiles ($28F0) bypass it (terrain-only gate).
+    """
+    n = mm.N
+    p = state.player
+    objx, objy = state.obj_x[p], state.obj_y[p]
+    objz, zfrac = state.obj_z_height[p], state.obj_z_frac[p]
+    tz = [[0] * n for _ in range(n)]  # $25C4: (z<<1)|not_flat per tile
+    for y in range(n):
+        for x in range(n):
+            z, slope = terrain.resolve_ground(state, x, y)
+            tz[y][x] = ((z << 1) | (1 if slope else 0)) & 0xFF
+    mz = [[0] * n for _ in range(n)]  # $25ED: min of the tile's 4 corner bytes, >>1
+    for y in range(0x1E, -1, -1):
+        for x in range(0x1E, -1, -1):
+            b = tz[y][x]
+            mz[y][x] = (
+                (b >> 1)
+                if not (b & 1)
+                else (min(b, tz[y][x + 1], tz[y + 1][x + 1], tz[y + 1][x]) >> 1)
+            )
+
+    def maxz(row, xi):  # ($72),Y horizon lookup; off-table reads hit zeroed RAM
+        return mz[row][xi] if 0 <= row <= 0x1E and 0 <= xi <= 0x1E else 0
+
+    def trace(ty, tx):  # $24E2: ray-march observer->tile, True if unobstructed
+        tile = (tx, tz[ty][tx] >> 1, ty)
+        olo = (0x80, zfrac, 0x80)
+        ohi = (objx, objz, objy)
+        d = [0, 0, 0]
+        hi = [0, 0, 0]
+        ext = [0, 0, 0]
+        maxd = 0
+        for k in (2, 1, 0):  # per-axis signed delta ($2503), track max |hi|
+            lo = (0 - olo[k]) & 0xFF
+            cin = 1 if olo[k] == 0 else 0
+            h = (tile[k] - ohi[k] - (1 - cin)) & 0xFF
+            d[k], hi[k] = lo, h
+            if h & 0x80:
+                ext[k] = 0xFF
+                nb = 1 if lo != 0 else 0
+                a = (0 - h - nb) & 0xFF
+            else:
+                a = h
+            if a >= maxd:
+                maxd = a
+        if ((maxd << 2) & 0xFF) < 6:  # $252A: within ~1 tile => visible
+            return True
+        step = 0xFF
+        a = (maxd << 2) & 0xFF  # $2532 scale: ~2-4 substeps per tile
+        while True:
+            for k in range(3):
+                c = (d[k] >> 7) & 1
+                d[k] = (d[k] << 1) & 0xFF
+                hi[k] = ((hi[k] << 1) | c) & 0xFF
+            step >>= 1
+            carry = (a >> 7) & 1
+            a = (a << 1) & 0xFF
+            if carry:
+                break
+        ax_lo, ax_int = 0x80, objx  # $37/$3A
+        ay_lo, ay_row = 0x80, (objy + 0x40) & 0xFF  # $39/$73
+        az_lo, az_mid, az_hi = 0, zfrac, objz  # $35/$38/$3B
+        for _ in range(step):  # $2576 march; blocked when ray dips below horizon
+            ax_lo += hi[0]
+            ax_int = (ax_int + ext[0] + (ax_lo >> 8)) & 0xFF
+            ax_lo &= 0xFF
+            ay_lo += hi[2]
+            ay_row = (ay_row + ext[2] + (ay_lo >> 8)) & 0xFF
+            ay_lo &= 0xFF
+            az_lo += d[1]
+            az_mid += hi[1] + (az_lo >> 8)
+            az_lo &= 0xFF
+            az_hi = (az_hi + ext[1] + (az_mid >> 8)) & 0xFF
+            az_mid &= 0xFF
+            if az_hi < maxz((ay_row - 0x40) & 0xFF, ax_int):
+                return False
+        return True
+
+    raw = [[trace(ty, tx) for tx in range(n)] for ty in range(n)]
+    vis = [[False] * n for _ in range(n)]
+    for y in range(0x1E, -1, -1):  # $248A combine: 2x2 raytrace dilation AND height
+        for x in range(0x1E, -1, -1):
+            b = tz[y][x]
+            height_ok = (
+                bool(b & 1) or (b >> 1) <= objz
+            )  # hidden only if flat, above eye
+            block = raw[y][x] or raw[y][x + 1] or raw[y + 1][x] or raw[y + 1][x + 1]
+            vis[y][x] = block and height_ok
+    return vis
+
+
 def project_scene(state, h_angle, v_angle, observer=None):
-    """Return (tiles, n_examine): plotted tiles and the count of $2845 examinations,
-    mirroring the furthest->nearest row loop ($26DE) and per-row visible-extent scan
-    ($27D7). Each tile carries its projection and screen height H and width W."""
+    """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
+    $2845 examination count. Non-object tiles the occlusion table hides are examined
+    but dropped before fill; each kept tile carries its projection, H and W."""
     if observer is None:
         observer = state.player
     setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer)
-    n_examine = 0
-    grid = {}
+    n_examine, rows, cache = _scan_visible(state, setup)
+    visible = _occlusion_visible(state)
 
     def proj(col, row):
-        cached = grid.get((col, row))
+        col &= 0xFF
+        cached = cache.get((col, row))
         if cached is None:
             cached = _project(state, setup, col, row)
-            grid[(col, row)] = cached
+            cache[(col, row)] = cached
         return cached
 
     tiles = []
-    for row in range(mm.N - 1, -1, -1):  # $0026 31->0
-        onscreen_cols = [c for c in range(mm.N) if proj(c, row)[5]]
-        n_examine += mm.N
-        if not onscreen_cols:
-            continue
-        n_examine += 2  # the two off-screen boundary probes per row scan
-        for col in range(onscreen_cols[0], onscreen_cols[-1] + 1):
+    for row, lo, hi in rows:
+        for col in range(lo, hi + 1):
             res = proj(col, row)
             if not res[5]:
                 continue
-            c1, r1 = min(col + 1, mm.N - 1), min(row + 1, mm.N - 1)
+            tx, ty = _tile_xy(setup["quadrant"], col, row)
+            if res[4] < mm.OBJECT_TILE and not visible[ty][tx]:
+                continue  # $2A27: hidden non-object tiles are examined, never filled
+            c1, r1 = min(col + 1, _LAST), min(row + 1, _LAST)
             corners = (res, proj(c1, row), proj(col, r1), proj(c1, r1))
             ys = [_signed16(c[3], c[2]) for c in corners]
             xs = [_signed16(c[1], c[0]) for c in corners]
@@ -158,8 +385,6 @@ def project_scene(state, h_angle, v_angle, observer=None):
             span = (max(xs) - min(xs)) / _W_SCALE
             if span > _W_WRAP:  # a tile straddling the angle wrap: not on screen
                 continue
-            width = min(span, _W_SCREEN)
-            tx, ty = _tile_xy(setup["quadrant"], col, row)
             tiles.append(
                 {
                     "col": col,
@@ -172,7 +397,7 @@ def project_scene(state, h_angle, v_angle, observer=None):
                     "tile_byte": res[4],
                     "onscreen": res[5],
                     "h": bot - top,
-                    "w": max(width, 0),
+                    "w": max(min(span, _W_SCREEN), 0),
                 }
             )
     return tiles, n_examine
@@ -185,16 +410,17 @@ def visible_tiles(state, h_angle, v_angle, observer=None):
 
 FRAME_CYCLES = 19656.0  # PAL frame
 BASE_CYCLES = float(os.environ.get("RENDER_BASE_CYCLES", "0"))
-C_EXAMINE = float(os.environ.get("RENDER_C_EXAMINE", "900"))  # term (a) trig floor
-PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b)
-PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))
+# term (a) per-$2845-calltree cost ($2845+$9287+$937F+$933D), py65 mean (1551-2046).
+C_EXAMINE = float(os.environ.get("RENDER_C_EXAMINE", "1737"))
+PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b) edge/row
+PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))  # term (b) span_fill byte
 
 
 def render_cost(state, view, observer=None):
     """One plot_world pass in PAL frames (docs/render_cost.md):
-    ``(BASE + N_examine*C_examine + sum_tiles(60*H + 1.75*H*W)) / 19656``.
-
-    ``view`` maps ``h_angle``/``v_angle`` (the aimed heading); 0.0 if no heading."""
+    ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W)) / 19656`` over the
+    exactly-selected visible tiles. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
+    """
     if not view or view.get("h_angle") is None:
         return 0.0
     h = view["h_angle"] & 0xFF
@@ -206,10 +432,18 @@ def render_cost(state, view, observer=None):
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/render_cost.md).
 REPLOT_PASSES = float(os.environ.get("RENDER_REPLOT_PASSES", "2"))
+# wait_for_end_of_tune ($35D5): #$19 tune ($1B82/$AB69) = FIXED 96 note-hold frames ($0CDF@$9630), == #$0 TUNE_FRAMES.
+TUNE_TRANSFER_FRAMES = float(os.environ.get("TUNE_TRANSFER_FRAMES", "96"))
+# Fixed $357D foreground before the tune, absent from render_cost: $245B occ + $3700 + fill + status (py65 ~176f).
+SETTLE_FIXED_FRAMES = float(os.environ.get("SETTLE_FIXED_FRAMES", "176"))
 
 
 def viewpoint_replot_frames(state, view, observer=None):
-    """The transfer/viewpoint-change settle in frames: ``REPLOT_PASSES`` blocking
-    plot_world passes ($35C3/$35C6), the scene-dependent redraw docs/render_cost.md
-    measures at ~306-420 frames (vs the old constant 47)."""
-    return REPLOT_PASSES * render_cost(state, view, observer)
+    """Transfer/viewpoint-change settle in frames (docs/render_cost.md): fixed tune
+    wait + fixed $245B/$3700/fill/status foreground + ``REPLOT_PASSES`` plot_world
+    passes. Live $9630 settle 259-460f; lands within ~22% median."""
+    return (
+        TUNE_TRANSFER_FRAMES
+        + SETTLE_FIXED_FRAMES
+        + REPLOT_PASSES * render_cost(state, view, observer)
+    )

@@ -147,5 +147,8 @@ def test_visible_tiles_and_replot():
     assert all(t["h"] >= 0 and t["w"] >= 0 for t in tiles)
     settle = projector.viewpoint_replot_frames(s, {"h_angle": h, "v_angle": v})
     single = projector.render_cost(s, {"h_angle": h, "v_angle": v})
-    assert settle == projector.REPLOT_PASSES * single
-    assert 200 <= settle <= 700  # scene-dependent, ~306-420 band (docs/render_cost.md)
+    base = projector.TUNE_TRANSFER_FRAMES + projector.SETTLE_FIXED_FRAMES
+    assert settle == base + projector.REPLOT_PASSES * single
+    assert (
+        base <= settle <= 700
+    )  # tune+fixed base .. live 259-460f (docs/render_cost.md)
