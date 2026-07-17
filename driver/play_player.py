@@ -12,7 +12,7 @@ import os
 import time
 
 from driver import core, kbd_aim, sentinel_execute as sx
-from sentinel import actioncost, memmap as mm, player as sim_player
+from sentinel import memmap as mm, player as sim_player
 from sentinel.game import Game
 from sentinel.state import State
 
@@ -146,7 +146,8 @@ class LivePlayer(sim_player.Player):
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
         aim_charged = self._aim_frames(view)
-        settle_charged = actioncost.SETTLE.get(pverb, 60)
+        # View-aware transfer settle: scene-dependent projector replot, not flat 47.
+        settle_charged = self._settle(pverb, view)
         charged = aim_charged + settle_charged
         out = sx.perform_step(
             self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result

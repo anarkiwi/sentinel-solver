@@ -12,7 +12,7 @@ import os
 import numpy as np
 
 from sentinel import actioncost, actions, aim, aimcost, enemies, los, memmap as mm
-from sentinel import relative, terrain, threat
+from sentinel import projector, relative, terrain, threat
 from sentinel.game import Game
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
@@ -361,17 +361,25 @@ class Player:
         if ok:
             if verb == "transfer":
                 self.last_bearing = None  # new body: committed bearing is stale
-            self._advance(self._settle(verb))
+            self._advance(self._settle(verb, view))
             if self.audit and verb in ("boulder", "robot", "transfer"):
                 self._account(verb, tile)
             self._log(verb, tile)
         return ok
 
-    @staticmethod
-    def _settle(verb):
+    def _settle(self, verb, view=None):
         """World frames the ROM advances AFTER `verb` fires; the placed object is
         on the board and exposable for this whole settle, so a danger window must
-        cover the aim plus this before an enemy's cone can rotate in."""
+        cover the aim plus this before an enemy's cone can rotate in.
+
+        A transfer moves the eye ($0C63) and takes the viewpoint full-redraw path
+        ($357D): its settle is the scene-dependent projector cost for the aimed
+        `view` (~306-420 frames), not the view-less flat constant.  The flat
+        ``actioncost.SETTLE`` (env-overridable) remains the fallback with no view."""
+        if verb == "transfer" and view and view.get("h_angle") is not None:
+            return actioncost.FRAME_TICKS * projector.viewpoint_replot_frames(
+                self.st, view
+            )
         key = {"boulder": "create", "robot": "create"}.get(verb, verb)
         return actioncost.SETTLE.get(key, 60)
 
@@ -643,7 +651,7 @@ class Player:
             if view is None:
                 continue
             aimf = self._aim_frames(view)
-            arrival = window - aimf - self._settle("transfer")
+            arrival = window - aimf - self._settle("transfer", view)
             if arrival <= 0.0:
                 continue  # seen during the aim or the post-transfer settle
             if not urgent and (aimf >= self.tick_window or arrival < SAFE_FRAMES):
@@ -869,7 +877,7 @@ class Player:
             arrival = (
                 self._gaze_window(tile)
                 - self._aim_frames(view)
-                - self._settle("transfer")
+                - self._settle("transfer", view)
             )
             if arrival <= self.tick_window:
                 continue  # seen during the hop, or no improvement: not an escape

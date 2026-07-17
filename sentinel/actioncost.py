@@ -26,11 +26,12 @@ Per-phase frame counts, each cited to the ROM:
     there is NO stack surcharge.
 
   * TRANSFER: moving the eye sets viewpoint-changed ($0C63), so the main loop takes
-    the full-redraw path ``play_landscape_loop`` ($3642 -> $357D): two full
-    ``plot_world`` passes ($35C3/$35C6) then ``wait_for_end_of_tune`` ($35D5) for the
-    #$19 transfer tune started at $1B82 -- ``VIEWPOINT_REPLOT_FRAMES`` total.  This is
-    NOT the #$0 hyperspace tune, whose longer $AB69 countdown (``TUNE_FRAMES``) the
-    *hyperspace* path ($217F) waits for.
+    the full-redraw path ``play_landscape_loop`` ($3642 -> $357D): the fixed occlusion
+    ($245B)/$3700/fill/status foreground, two full ``plot_world`` passes ($35C3/$35C6),
+    then ``wait_for_end_of_tune`` ($35D5) for the #$19 transfer tune ($1B82/$AB69) --
+    a FIXED 96-frame note-hold run, duration-identical to the #$0 hyperspace tune
+    (``TUNE_FRAMES``) the *hyperspace* path ($217F) waits for.  Modelled per-scene by
+    ``projector.viewpoint_replot_frames``; this constant is the view-less fallback.
 
   * AIM is priced by the caller from the keyboard-scroll cadence (a +-8 bearing
     notch animates a 16-step horizontal scroll $10EE, a +-4 pitch notch an 8-step
@@ -67,8 +68,13 @@ DITHER_FRAMES = float(os.environ.get("DITHER_FRAMES", str(977904.0 / 19656.0)))
 TUNE_FRAMES = float(os.environ.get("TUNE_FRAMES", "96"))
 # One blocking plot_world ($2625) terrain-dominant redraw pass (py65 ~5 frames).
 REDRAW_FRAMES = float(os.environ.get("REDRAW_FRAMES", "5"))
-# Transfer settle ($357D) 2x plot_world; scene-dependent ~306-420 frames, now modelled per-scene by projector.render_cost (docs/render_cost.md). This constant is the view-less fallback only.
-VIEWPOINT_REPLOT_FRAMES = float(os.environ.get("VIEWPOINT_REPLOT_FRAMES", "47"))
+# Transfer settle ($357D): fixed #$19 tune wait (96) + fixed $245B/$3700/fill/status foreground (~176) + 2x plot_world; live 259-460f, modelled per-scene by projector.viewpoint_replot_frames (docs/render_cost.md). This constant is the view-less fallback (tune+fixed base only).
+VIEWPOINT_REPLOT_FRAMES = float(
+    os.environ.get(
+        "VIEWPOINT_REPLOT_FRAMES",
+        str(projector.TUNE_TRANSFER_FRAMES + projector.SETTLE_FIXED_FRAMES),
+    )
+)
 # Post-create/absorb scene replot after the dither loop; VICE ~44 (vs incremental REDRAW 5).
 POST_ACTION_REPLOT_FRAMES = float(os.environ.get("POST_ACTION_REPLOT_FRAMES", "44"))
 
