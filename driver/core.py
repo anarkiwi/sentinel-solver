@@ -200,29 +200,8 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
     time.sleep(4)
 
 
-# ============================================================================
-# container / connection (the one home for the asid-vice plumbing the runners share)
-# ============================================================================
-def bridge_ip(container_id, log=print):
-    """The docker bridge IP of a started asid-vice container (host -p publishing is
-    not reachable in this environment; the bridge IP is). None on failure."""
-    try:
-        out = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "-f",
-                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                container_id,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        ).stdout.strip()
-        return out or None
-    except Exception as e:  # docker missing / container gone
-        log(f"  bridge-ip lookup failed: {e}")
-        return None
+# container / connection: the one home for the asid-vice plumbing the runners share.
+bridge_ip = boot.bridge_ip  # single implementation lives in driver.boot
 
 
 def free_stale_containers(log=print):
