@@ -72,24 +72,39 @@ their fields.
 python -m driver.instrument 335 --frames 1200 --follow
 ```
 
-## What it finds on 335
+## The frame→tick cadence skew (fixed) and the residual
 
-Seeded from the live board (`energy=10`, `player_slot=62`), racing frame-for-frame:
+The first CORE divergence the instrument originally pinned was a **frame→tick
+cadence skew**: `advance_frame` ran the cooldown clock *before* the enemy sweep, so
+an enemy the cooldown tick made due was acted on in that *same* frame, whereas the
+ROM runs the foreground sweep (`$1289`) *before* that frame's raster-IRQ cooldown
+tick (`$9663`) and so defers the action to the next frame. The sim's enemy therefore
+rotated one frame early — on landscape 0, slot 0's facing `obj[0].h_angle $09C0` and
+`rotation_cd $0C28` led the ROM by one frame at frame 50; on 335, slot 4 (`$09C4` /
+`$0C2C`) at frame 20.
 
-| Tier | First frame | Fields |
-|------|-------------|--------|
+The fix reorders `advance_frame` to sweep-then-cooldown (`sentinel/enemies.py`),
+matching the ROM's within-frame order. The rotation now commits on the same frame the
+ROM commits it, and the first CORE divergence moves well past the old point (0: 50 →
+84; 335: 20 → 32).
+
+What remains at that later frame is a **readout artifact, not a model error**:
+
+| Tier | First frame (ls 0 / 335) | Fields |
+|------|--------------------------|--------|
 | `SWEEP` | 1 | `cursor $0090`, `prng[0..4] $0C7B-$0C7F` |
-| `CORE` | 20 | `obj[4].h_angle $09C4` (emu 0, sim `$14`), `enemy[4].rotation_cd $0C2C` (emu 0, sim `$C8`) |
-| `SCRATCH` | 20 | `fov_relative_h $0C57`, `targeted_slot $0C58` |
+| `CORE` | 84 / 32 | `enemy[N].update_cd $0C30+N` (emu `$04`, sim `$01`) |
+| `SCRATCH` | 51 / 21 | `fov_relative_h $0C57` |
 
 - **SWEEP at frame 1** is by construction: the sim advances the PRNG/cursor a
   whole cursor sweep per frame while the ROM advances them one slot per frame.
-- **CORE at frame 20 is the real disagreement.** Enemy 4's rotation cooldown
-  reaches 0 on both, but the **sim immediately applies the rotation** in that same
-  frame — `obj[4].h_angle` steps by the `$9D37` rotation unit (+`$14`) and
-  `rotation_cd` reloads to 200 (`$C8`) — whereas the **ROM has not rotated it yet**
-  (`h_angle` still 0, `rotation_cd` still 0): the running game defers the rotation
-  until its once-per-frame round-robin cursor lands on slot 4. The sim fires an
-  enemy action the instant its cooldown expires; the ROM spreads it across the
-  cursor sweep. This is the frame→tick cadence skew the model was flagged for, now
-  pinned to the exact frame and byte.
+- **The residual CORE is a mid-routine interrupt split.** The ROM's foreground
+  `consider_enemy_state` reloads the enemy's `update_cooldown` to `$04` *early* in the
+  routine and commits the rotation at its *end*. The per-frame raster marker `$9630`
+  the instrument locks to falls inside that routine on the frame it fires, so a live
+  read catches `update_cd` already reloaded (`$04`) while the sim — which applies the
+  whole routine atomically one frame later — still holds the pre-reload `$01`. Both
+  worlds reconverge on the very next frame. It is a one-byte, self-healing snapshot
+  phase of an internal cooldown, cycle-timing dependent (a different boot interrupts
+  at a different instruction), and carries none of the enemy's gameplay-visible facing
+  state — which now tracks the ROM frame-for-frame.

@@ -580,21 +580,24 @@ def cooldown_frame(state):
 def advance_frame(state, plotting=False):
     """Advance the world by ONE video frame.
 
-    The cooldown clock ticks every frame (:func:`cooldown_frame`).  update_enemies
-    executes the cooldown-gated decisions only in a NOT-plotting frame (the loop's
-    is_plotting path $128c suppresses it while the world scrolls).  A full 8-slot cursor
-    sweep lets every enemy that became due at this frame's cooldown tick act exactly once
-    -- further sweeps are idempotent (its update_cooldown was reloaded).
+    The ROM order within a frame is update_enemies (foreground $1289) THEN the
+    cooldown clock (raster IRQ $9663): the enemy sweep runs BEFORE that frame's
+    cooldown tick, so an enemy the tick makes due is acted on the NEXT frame, not the
+    same one.  Running :func:`cooldown_frame` first (the old order) fired a due enemy's
+    rotation one frame early -- the frame-locked instrument's first CORE divergence
+    (slot 0 facing $09C0 / rotation_cd $0C28 leading the ROM by one frame).  A full
+    8-slot cursor sweep lets every enemy already due at this frame act exactly once
+    (further sweeps are idempotent -- its update_cooldown was reloaded).
 
     Validated against the live ROM: with the exact live frame count, the sentinel
     facing, energy, objects, tiles and every cooldown reproduce the running game
     byte-for-byte.  ``plotting`` gates the update_enemies spin per the ROM's
     is_plotting path; the caller supplies the plot schedule (the live driver reads
     $0CE4; a plot-independent caller runs the cooldown clock unconditionally)."""
-    cooldown_frame(state)
     if not plotting and _any_enemy_due(state):
         for _ in range(CURSOR_SLOTS):
             update_enemies(state)
+    cooldown_frame(state)
 
 
 def advance_frames(state, n_frames, plotting=False):
