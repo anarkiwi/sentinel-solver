@@ -50,7 +50,8 @@ frame count refine a ROM number -- they are ROM measurements, not outcome fits.
 
 import os
 
-from sentinel import memmap as mm
+from sentinel import memmap as mm, projector
+from sentinel.state import State
 
 # Costs are now in FRAMES (video frames), the unit sentinel.enemies.advance_frames
 # consumes: the $130C/$1335 Bresenham (205/256) and the $0C50 1-in-3 gate are applied
@@ -66,7 +67,7 @@ DITHER_FRAMES = float(os.environ.get("DITHER_FRAMES", str(977904.0 / 19656.0)))
 TUNE_FRAMES = float(os.environ.get("TUNE_FRAMES", "96"))
 # One blocking plot_world ($2625) terrain-dominant redraw pass (py65 ~5 frames).
 REDRAW_FRAMES = float(os.environ.get("REDRAW_FRAMES", "5"))
-# Transfer settle: play_landscape_loop ($357D) 2x plot_world + #$19 tune ($35D5); measured scene-dependent ~306-420 exact frames (ls0000 ~420, 0042 ~306), NOT 47 -- terrain projected-AREA dominated; kept at 47 pending the per-notch projection port (docs/render_cost.md).
+# Transfer settle ($357D) 2x plot_world; scene-dependent ~306-420 frames, now modelled per-scene by projector.render_cost (docs/render_cost.md). This constant is the view-less fallback only.
 VIEWPOINT_REPLOT_FRAMES = float(os.environ.get("VIEWPOINT_REPLOT_FRAMES", "47"))
 # Post-create/absorb scene replot after the dither loop; VICE ~44 (vs incremental REDRAW 5).
 POST_ACTION_REPLOT_FRAMES = float(os.environ.get("POST_ACTION_REPLOT_FRAMES", "44"))
@@ -147,7 +148,11 @@ def action_rounds(mem, verb, view, stacked=False):
     ROM-zero (the stacked-create path is byte-identical) but still added when set,
     for callers that want to model a VICE-measured surcharge.  The aim itself is
     priced separately from the keyboard-scroll cadence."""
-    settle = SETTLE.get(verb, SETTLE["absorb"])
+    if verb == "transfer" and view and view.get("h_angle") is not None:
+        # Area-based plot_world replot cost, scene-dependent ~306-420 frames.
+        settle = FRAME_TICKS * projector.viewpoint_replot_frames(State(mem), view)
+    else:
+        settle = SETTLE.get(verb, SETTLE["absorb"])
     if verb == "create" and stacked:
         settle += STACK_CREATE
     return settle + STEPS_PER_EDGE * visible_edges(mem, view)

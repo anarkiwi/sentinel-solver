@@ -316,6 +316,7 @@ def _vertical_angle(zp, z_hi, v_angle):
         t50 = ((c << 7) | (t50 >> 1)) & 0xFF
     if neg:
         A = A | 0xF0
+    zp[0x50] = t50  # $0050: the fine (low) byte of the vertical angle (screen y low)
     return A & 0xFF
 
 

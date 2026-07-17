@@ -53,9 +53,14 @@ This is the scene-dependent, pitch-driven cost swing (30 -> 140 frames).
 
 The redraw cost is terrain-projected-AREA dominated, NOT object-polygon-edge-count
 dominated. The old `visible_edges` edge-count proxy (`sentinel/actioncost.py`)
-modeled only the ~5% object term (c). An exact per-notch redraw model requires
-porting the ROM's tile projection ($2845 / $9287 / $937F + the vertical-band clip)
-to compute per-tile H, W. This is future work.
+modeled only the ~5% object term (c).
+
+`sentinel/projector.py` now ports the ROM's tile projection ($2845 setup at $2625,
+`calculate_angle` $9287, `calculate_hypotenuse` $937F, `calculate_object_relative_vertical_angle`
+$933D) bit-exactly (byte-for-byte vs py65, `golden_projector.json`), and derives per-tile
+H (scanlines) and W (pixels) from the projected corners. `projector.render_cost` /
+`viewpoint_replot_frames` sum the term-(b) area cost; the geometric screen bounds and the
+term-(a)/BASE constants are env-overridable (`RENDER_*`) for VICE-measured refinement.
 
 ## Measured ground truth
 
