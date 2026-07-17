@@ -2,9 +2,10 @@
 
 A tick-by-tick greedy player over the `sentinel/` model. No search tree, no
 lookahead branching, and **no PRNG reads**: each decision tick observes the live
-`State` and commits one action. Wins landscapes 0000 (19 actions, nothing
-drained), 0042 (Sentinel + 1 sentry) and 0335 (Sentinel + 3 sentries) in the
-simulator, hunting and clearing every enemy; 0000 and 0042 verified live.
+`State` and commits one action. Wins landscapes 0000 (53 actions) and 0042
+(Sentinel + 1 sentry, 78 actions) in the simulator, hunting and clearing every
+enemy; the counts rose with the ROM-faithful settle/aim clock (§ Sim-vs-live),
+under which 0335 (three sentries) and the live 0042 win no longer reproduce.
 
 ```bash
 python -m sentinel.player 0        # play landscape 0, print the action trace
@@ -47,9 +48,13 @@ now** (any exposure, the ROM's own `$8401` bearing and `$18B8` cone gate);
 transfers refuse the DANGER basis — full visibility (`$1838` drains), or
 partial with a tree within 10 tiles (the meanie arm, `$19C3`) — so a harmless
 partial glimpse cannot orphan a pedestal the build was allowed to make. Every
-destination's danger window must cover the aim plus a safety margin; graded
-last-resort tiers (partial-only sight, then least-exposed) unlock only when no
-unseen tile exists.
+destination's danger window must cover the aim **plus the post-action settle**
+(the object is on the board and exposable for the whole settle) plus a safety
+margin — measured at ARRIVAL, not at plan time; graded last-resort tiers
+(partial-only sight, then least-exposed) unlock only when no unseen tile exists.
+The strict `--audit` flag re-checks this on the actual object after each settle
+(`Player._account`), so an aim/settle exposure the plan-time gate missed is
+recorded as a breach.
 
 ## Enemy model (deterministic only)
 
@@ -140,6 +145,12 @@ deliberate run-to-PC windows) and the executor-true sim charges:
 | 0042 | WON | WON | yes | 43 / 41 | 5659 / 5680 (1.00x) |
 | 0335 | LOST (honest clock) | not attempted | — | — | — |
 
+The rows above predate the ROM-faithful settle/aim clock; under it the sim
+action counts rise (0000 53, 0042 78, still won, seen 0 times) and the **live
+0042 win regressed** — it now loses deterministically by being seen during the
+(13,27)→(5,30) reclaim, a sim-vs-live aim-cost gap (the sim under-charges the
+long reclaim aim, so an enemy rotates into view where it predicted safety).
+
 `measured` comes from the game's own per-frame accumulator ($1335 advances
 205/frame; 205^-1 = 5 mod 256 turns the delta into an exact frame count under
 256).  Paths still diverge at the tile level (identical prefix 7 actions on
@@ -150,6 +161,8 @@ per-step scatter and the 0000 over-charge are the open accounting items.
 ## Test
 
 `sentinel/tests/test_player.py` — the player wins landscapes 0000 and seed 66
-(typed 0042) alive and solvent, and no create or transfer in either winning
-trace leaves an object inside an enemy's live scan cone (verified with the
-ROM's own visibility test on the actual object after each action).
+(typed 0042) alive and solvent, and no create or transfer leaves an object
+inside an enemy's live scan cone POST-SETTLE (the player's built-in `--audit`,
+`Player._account`, judged by the ROM's own visibility on the actual object) —
+the settle-aware gate refusing an aim/settle exposure the plan-time window
+would miss. Run `--audit` on the 0335 stress board to exercise that path.

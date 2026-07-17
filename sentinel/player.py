@@ -127,7 +127,7 @@ class Player:
     half-built pedestal is not reclaimed) and the sights-cursor position.
     """
 
-    def __init__(self, game, verbose=False):
+    def __init__(self, game, verbose=False, audit=False):
         self.g = game
         self.st = game.state
         self.cursor = list(SIGHTS_CENTRE)
@@ -137,6 +137,8 @@ class Player:
         self.tick_window = math.inf  # own-tile gaze window, refreshed per tick
         self.frames = 0
         self.verbose = verbose
+        self.audit = audit  # strict post-settle invariant accounting (below)
+        self.breaches = []
         self.trace = []
 
     # ------------------------------------------------------------------ clock
@@ -358,10 +360,44 @@ class Player:
         if ok:
             if verb == "transfer":
                 self.last_bearing = None  # new body: committed bearing is stale
-            settle_verb = {"boulder": "create", "robot": "create"}.get(verb, verb)
-            self._advance(actioncost.SETTLE.get(settle_verb, 60))
+            self._advance(self._settle(verb))
+            if self.audit and verb in ("boulder", "robot", "transfer"):
+                self._account(verb, tile)
             self._log(verb, tile)
         return ok
+
+    @staticmethod
+    def _settle(verb):
+        """World frames the ROM advances AFTER `verb` fires; the placed object is
+        on the board and exposable for this whole settle, so a danger window must
+        cover the aim plus this before an enemy's cone can rotate in."""
+        key = {"boulder": "create", "robot": "create"}.get(verb, verb)
+        return actioncost.SETTLE.get(key, 60)
+
+    def _account(self, verb, tile):
+        """Strict post-settle invariant check on the ACTUAL placed object via the
+        ROM's own scan cone: record a create/transfer left in a DANGEROUS live
+        cone (full sight, or -- transfers -- partial with a tree within 10
+        tiles), the aim/settle exposure the plan-time gate misses."""
+        st = self.st
+        top = terrain.top_object(st, *tile)
+        if top is None:
+            return
+        dangerous = []
+        tree = self._tree_near(tuple(tile))
+        for e in enemies.enemy_slots(st):
+            see = relative.can_see_object(
+                st, e, top, st.obj_type[top], enemies.FOV_SCAN
+            )
+            if not see["exposure"]:
+                continue
+            if verb == "transfer" and not (see["full"] or tree):
+                continue  # harmless partial glimpse: undrainable, arms no meanie
+            dangerous.append((int(e), bool(see["full"])))
+        if dangerous:
+            self.breaches.append((self.frames, verb, tuple(tile), dangerous))
+            if self.verbose:
+                print(f"  BREACH {verb} {tuple(tile)} seen_by={dangerous}")
 
     def _log(self, verb, tile):
         st = self.st
@@ -602,13 +638,14 @@ class Player:
                 continue
             exposed = self._exposing_enemies(tile)
             window = self._gaze_window(tile, exposed=exposed)
-            if window <= 0.0:
-                continue  # dangerous live view: same basis as the build gate
             view = views.get(tile, band=True)
             if view is None:
                 continue
             aimf = self._aim_frames(view)
-            if not urgent and (aimf >= self.tick_window or window < aimf + SAFE_FRAMES):
+            arrival = window - aimf - self._settle("transfer")
+            if arrival <= 0.0:
+                continue  # seen during the aim or the post-transfer settle
+            if not urgent and (aimf >= self.tick_window or arrival < SAFE_FRAMES):
                 continue  # the destination clock starts at ARRIVAL, after the aim
             key = (eye, -aimf, window)
             if best is None or key > best[0]:
@@ -745,7 +782,8 @@ class Player:
         safe horizon (undrainable); 2 = no-other-choice (least-exposed)."""
         st = self.st
         my_eye = self._my_eye()
-        need = 0 if urgent else HOP_FRAMES
+        # even an urgent build must not be seen DURING its own create settle
+        need = self._settle("robot") if urgent else HOP_FRAMES
         reserve = self._reserve()
         robot_min = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] + reserve
         hop_min = HOP_COST + reserve
@@ -827,11 +865,15 @@ class Player:
             view = views.get(tile, band=True)
             if view is None:
                 continue
-            window = self._gaze_window(tile)
-            if window <= self.tick_window:
-                continue  # no improvement: not an escape
-            if best is None or window > best[0]:
-                best = (window, tile, view)
+            arrival = (
+                self._gaze_window(tile)
+                - self._aim_frames(view)
+                - self._settle("transfer")
+            )
+            if arrival <= self.tick_window:
+                continue  # seen during the hop, or no improvement: not an escape
+            if best is None or arrival > best[0]:
+                best = (arrival, tile, view)
         if best is not None and self._fire("transfer", best[1], best[2]):
             self.hop_tile = None
             return True
@@ -846,15 +888,25 @@ def main():
     parser.add_argument("landscape", nargs="?", type=int, default=0)
     parser.add_argument("--max-actions", type=int, default=300)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="strict post-settle invariant accounting: flag any create/transfer "
+        "that ended in a live enemy cone",
+    )
     args = parser.parse_args()
     game = Game.new(args.landscape)
-    player = Player(game, verbose=not args.quiet)
+    player = Player(game, verbose=not args.quiet, audit=args.audit)
     won = player.run(max_actions=args.max_actions)
     print(
         f"landscape {args.landscape}: {'WON' if won else 'lost'} "
         f"in {len(player.trace)} actions / {player.frames} frames, "
         f"energy {game.energy}, dead={actions.player_dead(game.state)}"
     )
+    if args.audit:
+        print(f"invariant breaches: {len(player.breaches)}")
+        for f, verb, tile, seen in player.breaches:
+            print(f"  f={f} {verb} {tile} seen_by={seen}")
     return 0 if won else 1
 
 
