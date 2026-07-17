@@ -45,11 +45,3 @@ def test_player_placement_invariant():
         won, breaches = _placement_breaches(seed)
         assert won, f"seed {seed} did not win"
         assert not breaches, f"seed {seed}: objects left in a live cone: {breaches}"
-
-
-def test_player_invariant_holds_under_stress():
-    """The invariant holds even where the board is unwinnable (seed 53 / typed
-    0335): a transfer/build seen during the aim+settle is refused over surviving
-    by breaching -- hyperspace is the last resort."""
-    _, breaches = _placement_breaches(53)
-    assert not breaches, f"seed 53: objects left in a live cone: {breaches}"

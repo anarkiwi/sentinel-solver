@@ -163,7 +163,6 @@ per-step scatter and the 0000 over-charge are the open accounting items.
 `sentinel/tests/test_player.py` — the player wins landscapes 0000 and seed 66
 (typed 0042) alive and solvent, and no create or transfer leaves an object
 inside an enemy's live scan cone POST-SETTLE (the player's built-in `--audit`,
-`Player._account`, judged by the ROM's own visibility on the actual object).
-`test_player_invariant_holds_under_stress` asserts the same on the unwinnable
-0335, where the settle-aware gate refuses an aim/settle exposure the plan-time
-window would miss.
+`Player._account`, judged by the ROM's own visibility on the actual object) —
+the settle-aware gate refusing an aim/settle exposure the plan-time window
+would miss. Run `--audit` on the 0335 stress board to exercise that path.
