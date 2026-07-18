@@ -186,6 +186,39 @@ Cycle-exactness for the fill requires porting the self-modifying edge-walker
 plotted set (subsystem A) and keeps the terrain area-proxy and object base-floor as the
 documented fill residual; neither is curve-fit into `render_cost`.
 
+### Subsystem B (fill rasteriser): what is exact, and the cross-polygon coupling
+
+This pass reverse-engineered and cycle-bracketed the whole fill rasteriser per
+polygon-section (py65 `processorCycles` deltas around `$2D6C` prepare + `$22AA` span
+subtrees, object subtree excluded). Two results, both derived from the 6502:
+
+- **`convert_angles_into_screen_coordinates` ($2DCF/$2D93) is ported cycle-exact.** The
+  per-vertex `screen_x = high byte of ((h_angle16 + $0011:$0029) << 3)` and the
+  sign-extended `$0B40` high byte reproduce the ROM `$A7A0`/`$0B40` byte-for-byte on all
+  3574 swept vertices, and the ported instruction-cycle sum equals the ROM `conv` bucket
+  **exactly** (258628 == 258628 cyc over the sweep). The double-coordinate restart
+  ($2D93, taken when any `h_angle16+$0011 >= $20`) is reproduced.
+- **The prepare/edge-BUILD cost is per-polygon independent** (convert + `process_lines`
+  dispatch + `rasterise_polygon_edge` + `process_line`): it reads only the polygon's own
+  projected vertices and the fixed buffer/band vars, and its cycle count does not depend
+  on any table state. So the "prep-dominated" majority of the fill is, in principle,
+  exactly computable from `project_scene`'s corners once the steep/shallow x narrow/wide
+  edge walk is transcribed.
+
+- **`span_fill` cost is NOT a per-tile function -- it couples across polygons.** The
+  `polygon_left_edge_table $0AD00` / `polygon_right_edge_table $0AE00` are **never
+  cleared** between polygons. A polygon that clips to a sliver (e.g. a single band-edge
+  row) writes only some of the `[$0004,$0006]` rows; `span_fill` then reads **stale**
+  left/right columns left by a *previous* polygon (verified: a row's `$0AE0` byte matched
+  none of the current triangle's three `$A7A0` values, only a prior polygon's). Because
+  the middle-fill length is `right_col - left_col`, that stale state changes the span
+  byte count -- so exact `span_fill` cycles require a **stateful emulation of the entire
+  `plot_world` fill sequence in render order**, including the interleaved object
+  polygons (which write the same two tables). This is why the prior pass saw a
+  filled-rows/y-extent ratio of 0.38-2.26 with no per-tile closed form. The exact
+  edge-build cost is shipped/derivable; the cross-polygon-coupled `span_fill` middle
+  remains the honest residual, kept as the area-proxy rather than a curve fit.
+
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
 | term | model | accuracy vs py65 |
