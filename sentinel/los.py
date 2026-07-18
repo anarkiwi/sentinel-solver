@@ -1391,6 +1391,100 @@ def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=Fal
     return _landable_view_py(state, key, slot, eye_z, max_steps, v_band)
 
 
+_HEADING_CACHE = {}
+_TWO_PI = 2.0 * math.pi
+
+
+def _lattice_headings(hgrid, vgrid, cxs, cys):
+    """``(head_sorted, order)`` for the cached lattice, keyed like :data:`_VEC_CACHE`.
+    ``head`` = per-ray horizontal heading ``atan2(vy, vx)`` in tile space (``vx, vy`` are the
+    march's signed 16-bit per-substep increments), sorted once so a per-tile arc query is two
+    :func:`numpy.searchsorted` bisections, not a full-lattice scan."""
+    key = (tuple(hgrid), tuple(vgrid), tuple(cxs), tuple(cys))
+    rec = _HEADING_CACHE.get(key)
+    if rec is None:
+        vx_lo, vx_hi, _, _, vy_lo, vy_hi, _ = _lattice_vectors(hgrid, vgrid, cxs, cys)
+
+        def _s16(hi, lo):
+            v = ((hi.astype(np.int32) & 0xFF) << 8) | (lo.astype(np.int32) & 0xFF)
+            return np.where(v >= 0x8000, v - 0x10000, v).astype(np.float64)
+
+        head = np.arctan2(_s16(vy_hi, vy_lo), _s16(vx_hi, vx_lo))
+        order = np.argsort(head, kind="stable")
+        rec = (head[order], order)
+        _HEADING_CACHE[key] = rec
+    return rec
+
+
+def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
+    """Ascending lattice-ray indices whose heading points into cell ``(tx, ty)`` from the eye
+    centre ``(ex+.5, ey+.5)`` -- a PROVABLE superset of the rays that can land on the cell (a
+    straight ray reaching a convex cell has heading within its angular span from the fixed
+    seed).  ``None`` == eye centre inside the cell (whole circle: keep every ray)."""
+    dxlo, dxhi = tx - ex - 0.5, tx - ex + 0.5
+    dylo, dyhi = ty - ey - 0.5, ty - ey + 0.5
+    if dxlo <= 0.0 <= dxhi and dylo <= 0.0 <= dyhi:
+        return None
+    corners = ((dxlo, dylo), (dxlo, dyhi), (dxhi, dylo), (dxhi, dyhi))
+    angs = [math.atan2(dy, dx) for dx, dy in corners]
+    ref = angs[0]
+    deltas = [((a - ref + math.pi) % _TWO_PI) - math.pi for a in angs]
+    a_lo = ((ref + min(deltas) + math.pi) % _TWO_PI) - math.pi - 1e-9
+    a_hi = a_lo + (max(deltas) - min(deltas)) + 2e-9
+    lo_i = np.searchsorted(head_sorted, a_lo, side="left")
+    if a_hi <= math.pi:
+        idx = order[lo_i : np.searchsorted(head_sorted, a_hi, side="right")]
+    else:  # arc wraps past +pi
+        hi_i = np.searchsorted(head_sorted, a_hi - _TWO_PI, side="right")
+        idx = np.concatenate((order[lo_i:], order[:hi_i]))
+    return np.sort(idx)  # copy: `order` slices are views into the cache
+
+
+def landable_view_targeted(state, tile, slot=None, eye_z=None, max_steps=6000):
+    """Full-pitch-band build view for a SINGLE ``tile`` -- bit-identical to
+    ``landable_views(state).get(tile)`` but marching only the lattice rays whose heading
+    points at the cell (:func:`_tile_arc_indices`), so a per-tile query costs a narrow cone
+    instead of a whole-board sweep.  Falls back to the pure-Python probe when numba is absent.
+    """
+    if slot is None:
+        slot = state.player
+    key = (tile[0], tile[1])
+    if not _HAVE_JIT:
+        return _landable_view_py(state, key, slot, eye_z, max_steps, True)
+    hgrid = list(range(0, 256, AZIMUTH_STEP))
+    vgrid, cxs, cys = _V_PRIORITY, CURSOR_CX, CURSOR_CY
+    head_sorted, order = _lattice_headings(hgrid, vgrid, cxs, cys)
+    ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
+    idx = _tile_arc_indices(head_sorted, order, ex, ey, key[0], key[1])
+    vecs = _lattice_vectors(hgrid, vgrid, cxs, cys)
+    if idx is None:
+        idx = np.arange(vecs[0].shape[0])
+    sub = [np.ascontiguousarray(a[idx]) for a in vecs]
+    seed = _seed_position(state, slot, eye_z)
+    mem_np = np.frombuffer(state.mem, dtype=np.uint8)
+    c56 = (state.mem[0x0C56] >> 1) & 0xFF
+    cdd = (state.mem[0x0CDD] >> 1) & 0xFF
+    status, tx, ty, _ = los_jit.march_batch(
+        mem_np,
+        *sub,
+        *seed,
+        state.obj_x[slot] & 0xFF,
+        state.obj_y[slot] & 0xFF,
+        state.mem[0x0C6E] & 0x7F,
+        state.mem[0x0C58] & 0xFF,
+        c56,
+        cdd,
+        max_steps,
+    )
+    hit = np.flatnonzero(
+        (status == los_jit.LOS_CLEAR) & (tx == key[0]) & (ty == key[1])
+    )
+    if hit.size == 0:
+        return None
+    h, v, cx, cy = _meta_at(int(idx[hit[0]]), hgrid, vgrid, cxs, cys)
+    return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+
+
 def _landable_view_py(state, key, slot, eye_z, max_steps, v_band):
     """Numba-absent fallback for :func:`landable_view`: pure-Python probes ordered from the
     analytic bearing / cursor centre outward, short-circuiting on the first LOS landing.

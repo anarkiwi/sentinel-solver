@@ -1,0 +1,4296 @@
+{
+ "fixture": "ls42.json",
+ "seed": 66,
+ "entered_code": 42,
+ "n_events": 42,
+ "notes": [
+  "Enemy h_angle / rotation cooldowns are NOT recorded in the fixture; every reconstructed enemy facing is the landscape.generate baseline, not the true mid-game facing. Exposure/gaze/breach verdicts run against baseline facings. On a human WIN every placement survived, so any model REJECT/BREACH is a model false-positive against ground truth.",
+  "energy note 'tree_spawn' = a create of a TREE the human paid nothing for: an enemy-discharge-spawned tree ($1A5D) mis-kept as a player build. 'drain' = the human lost energy to an enemy drain between actions (real exposure)."
+ ],
+ "summary": {
+  "n_steps": 42,
+  "energy_model_agree": 41,
+  "energy_notes": {
+   "drain": [
+    15
+   ],
+   "ok": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40
+   ],
+   "terminal": [
+    41
+   ]
+  },
+  "landable_view_agree": 42,
+  "own_tile_transfers": [],
+  "view_facing_matches": 0,
+  "n_steps_with_disagreement": 1,
+  "disagreement_steps_by_code": {
+   "energy": [
+    15
+   ]
+  }
+ },
+ "steps": [
+  {
+   "i": 0,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 208,
+    "v_angle": 241,
+    "cursor": [
+     55,
+     63
+    ],
+    "energy": 10,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 200,
+    "v_angle": 237
+   },
+   "energy": {
+    "pre": 10,
+    "action_cost": 1,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 155,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 147,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 200,
+     "v_angle": 237,
+     "cursor": [
+      55,
+      125
+     ]
+    },
+    "aim_frames": 157.0,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 1,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 208,
+    "v_angle": 241,
+    "cursor": [
+     55,
+     65
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 200,
+    "v_angle": 237
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": -2,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 155,
+     "drain_cooldown": 0,
+     "target_angle_hi": 238,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 147,
+     "drain_cooldown": 0,
+     "target_angle_hi": 16,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 200,
+     "v_angle": 237,
+     "cursor": [
+      55,
+      125
+     ]
+    },
+    "aim_frames": 157.0,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 2,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 209,
+    "v_angle": 241,
+    "cursor": [
+     49,
+     79
+    ],
+    "energy": 9,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 200,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": -3,
+    "model_post": 6,
+    "human_next": 6,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 154,
+     "drain_cooldown": 0,
+     "target_angle_hi": 238,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 146,
+     "drain_cooldown": 0,
+     "target_angle_hi": 16,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 200,
+     "v_angle": 245,
+     "cursor": [
+      74,
+      63
+     ]
+    },
+    "aim_frames": 159.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 3,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     29
+    ],
+    "eye_z": 5.875,
+    "h_angle": 80,
+    "v_angle": 245,
+    "cursor": [
+     49,
+     79
+    ],
+    "energy": 6,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 0,
+    "v_angle": 0
+   },
+   "energy": {
+    "pre": 6,
+    "action_cost": 0,
+    "model_post": 6,
+    "human_next": 6,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 113,
+     "drain_cooldown": 0,
+     "target_angle_hi": 238,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 105,
+     "drain_cooldown": 0,
+     "target_angle_hi": 16,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 200,
+     "v_angle": 245,
+     "cursor": [
+      74,
+      63
+     ]
+    },
+    "aim_frames": 114.1,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 4,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    29
+   ],
+   "human": {
+    "tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 81,
+    "v_angle": 237,
+    "cursor": [
+     55,
+     63
+    ],
+    "energy": 6,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 72,
+    "v_angle": 233
+   },
+   "energy": {
+    "pre": 6,
+    "action_cost": 3,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 158,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 150,
+     "drain_cooldown": 0,
+     "target_angle_hi": 27,
+     "target_full_sight": false,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 72,
+     "v_angle": 233,
+     "cursor": [
+      53,
+      125
+     ]
+    },
+    "aim_frames": 144.2,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 5,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "human": {
+    "tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 102,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     87
+    ],
+    "energy": 9,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 88,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": -2,
+    "model_post": 7,
+    "human_next": 7,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 163,
+     "drain_cooldown": 0,
+     "target_angle_hi": 34,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      105,
+      88
+     ]
+    },
+    "aim_frames": 96.0,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 6,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    26
+   ],
+   "human": {
+    "tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 104,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     101
+    ],
+    "energy": 7,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 96,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 7,
+    "action_cost": -3,
+    "model_post": 4,
+    "human_next": 4,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 173,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "target_angle_hi": 34,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 245,
+     "cursor": [
+      60,
+      89
+     ]
+    },
+    "aim_frames": 89.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 7,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    26
+   ],
+   "human": {
+    "tile": [
+     9,
+     30
+    ],
+    "eye_z": 6.375,
+    "h_angle": 224,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     101
+    ],
+    "energy": 4,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 0,
+    "v_angle": 0
+   },
+   "energy": {
+    "pre": 4,
+    "action_cost": 0,
+    "model_post": 4,
+    "human_next": 4,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 108,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 100,
+     "drain_cooldown": 0,
+     "target_angle_hi": 34,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 245,
+     "cursor": [
+      60,
+      89
+     ]
+    },
+    "aim_frames": 42.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 8,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 232,
+    "v_angle": 237,
+    "cursor": [
+     80,
+     57
+    ],
+    "energy": 4,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 224,
+    "v_angle": 229
+   },
+   "energy": {
+    "pre": 4,
+    "action_cost": 3,
+    "model_post": 7,
+    "human_next": 7,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 146,
+     "drain_cooldown": 0,
+     "target_angle_hi": 238,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 138,
+     "drain_cooldown": 0,
+     "target_angle_hi": 16,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 224,
+     "v_angle": 229,
+     "cursor": [
+      65,
+      126
+     ]
+    },
+    "aim_frames": 190.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 9,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    9,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 230,
+    "v_angle": 237,
+    "cursor": [
+     80,
+     57
+    ],
+    "energy": 7,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 224,
+    "v_angle": 229
+   },
+   "energy": {
+    "pre": 7,
+    "action_cost": 2,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 159,
+     "drain_cooldown": 0,
+     "target_angle_hi": 238,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 151,
+     "drain_cooldown": 0,
+     "target_angle_hi": 16,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 224,
+     "v_angle": 229,
+     "cursor": [
+      65,
+      126
+     ]
+    },
+    "aim_frames": 139.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 10,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    5,
+    30
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 218,
+    "v_angle": 245,
+    "cursor": [
+     99,
+     100
+    ],
+    "energy": 9,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 208,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": 1,
+    "model_post": 10,
+    "human_next": 10,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 175,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 167,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 208,
+     "v_angle": 245,
+     "cursor": [
+      83,
+      104
+     ]
+    },
+    "aim_frames": 82.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 11,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    4,
+    27
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 204,
+    "v_angle": 245,
+    "cursor": [
+     50,
+     104
+    ],
+    "energy": 10,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 192,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 10,
+    "action_cost": 1,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 173,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 192,
+     "v_angle": 245,
+     "cursor": [
+      98,
+      105
+     ]
+    },
+    "aim_frames": 89.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 12,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    2,
+    24
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 192,
+    "v_angle": 245,
+    "cursor": [
+     86,
+     110
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 184,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": -2,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 174,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 166,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 1498.5,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 184,
+     "v_angle": 245,
+     "cursor": [
+      83,
+      110
+     ]
+    },
+    "aim_frames": 84.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 13,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 193,
+    "v_angle": 245,
+    "cursor": [
+     86,
+     121
+    ],
+    "energy": 9,
+    "do_los": 18
+   },
+   "model_geom": {
+    "player_tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 184,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": -3,
+    "model_post": 6,
+    "human_next": 6,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "target_angle_hi": 226,
+     "target_full_sight": false,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 163,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 1498.5,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 184,
+     "v_angle": 245,
+     "cursor": [
+      77,
+      119
+     ]
+    },
+    "aim_frames": 95.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 14,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "human": {
+    "tile": [
+     13,
+     26
+    ],
+    "eye_z": 7.375,
+    "h_angle": 56,
+    "v_angle": 245,
+    "cursor": [
+     86,
+     121
+    ],
+    "energy": 6,
+    "do_los": 2
+   },
+   "model_geom": {
+    "player_tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 152,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 6,
+    "action_cost": 0,
+    "model_post": 6,
+    "human_next": 6,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 133,
+     "drain_cooldown": 0,
+     "target_angle_hi": 226,
+     "target_full_sight": false,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 125,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 1498.5,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 184,
+     "v_angle": 245,
+     "cursor": [
+      77,
+      119
+     ]
+    },
+    "aim_frames": 47.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 15,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "human": {
+    "tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 65,
+    "v_angle": 241,
+    "cursor": [
+     80,
+     82
+    ],
+    "energy": 6,
+    "do_los": 146
+   },
+   "model_geom": {
+    "player_tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 56,
+    "v_angle": 241
+   },
+   "energy": {
+    "pre": 6,
+    "action_cost": 2,
+    "model_post": 8,
+    "human_next": 7,
+    "agree": false,
+    "note": "drain"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 178,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 34,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 1498.5,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 56,
+     "v_angle": 241,
+     "cursor": [
+      77,
+      89
+     ]
+    },
+    "aim_frames": 72.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": [
+    "energy:drain"
+   ]
+  },
+  {
+   "i": 16,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "human": {
+    "tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 64,
+    "v_angle": 241,
+    "cursor": [
+     80,
+     82
+    ],
+    "energy": 7,
+    "do_los": 4
+   },
+   "model_geom": {
+    "player_tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 56,
+    "v_angle": 237
+   },
+   "energy": {
+    "pre": 7,
+    "action_cost": 2,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 160,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 152,
+     "drain_cooldown": 0,
+     "target_angle_hi": 34,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 1498.5,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 56,
+     "v_angle": 237,
+     "cursor": [
+      77,
+      121
+     ]
+    },
+    "aim_frames": 139.2,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 17,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    5,
+    22
+   ],
+   "human": {
+    "tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 88,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     70
+    ],
+    "energy": 9,
+    "do_los": 128
+   },
+   "model_geom": {
+    "player_tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 80,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": -2,
+    "model_post": 7,
+    "human_next": 7,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 169,
+     "drain_cooldown": 0,
+     "target_angle_hi": 227,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 161,
+     "drain_cooldown": 0,
+     "target_angle_hi": 9,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 1498.5,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 80,
+     "v_angle": 245,
+     "cursor": [
+      85,
+      63
+     ]
+    },
+    "aim_frames": 104.7,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 18,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    5,
+    22
+   ],
+   "human": {
+    "tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 95,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     82
+    ],
+    "energy": 7,
+    "do_los": 18
+   },
+   "model_geom": {
+    "player_tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 88,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 7,
+    "action_cost": -3,
+    "model_post": 4,
+    "human_next": 4,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 183,
+     "drain_cooldown": 0,
+     "target_angle_hi": 227,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 175,
+     "drain_cooldown": 0,
+     "target_angle_hi": 9,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 1498.5,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      50,
+      66
+     ]
+    },
+    "aim_frames": 52.2,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 19,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    5,
+    22
+   ],
+   "human": {
+    "tile": [
+     2,
+     24
+    ],
+    "eye_z": 8.375,
+    "h_angle": 216,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     82
+    ],
+    "energy": 4,
+    "do_los": 9
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 0,
+    "v_angle": 0
+   },
+   "energy": {
+    "pre": 4,
+    "action_cost": 0,
+    "model_post": 4,
+    "human_next": 4,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 95,
+     "drain_cooldown": 0,
+     "target_angle_hi": 227,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 87,
+     "drain_cooldown": 0,
+     "target_angle_hi": 9,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 1498.5,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      50,
+      66
+     ]
+    },
+    "aim_frames": 55.2,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 20,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 223,
+    "v_angle": 225,
+    "cursor": [
+     80,
+     95
+    ],
+    "energy": 4,
+    "do_los": 4
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 216,
+    "v_angle": 221
+   },
+   "energy": {
+    "pre": 4,
+    "action_cost": 3,
+    "model_post": 7,
+    "human_next": 7,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 226,
+     "target_full_sight": false,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 162,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 1498.5,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 221,
+     "cursor": [
+      62,
+      124
+     ]
+    },
+    "aim_frames": 99.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 21,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    2,
+    24
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 216,
+    "v_angle": 225,
+    "cursor": [
+     80,
+     95
+    ],
+    "energy": 7,
+    "do_los": 2
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 216,
+    "v_angle": 221
+   },
+   "energy": {
+    "pre": 7,
+    "action_cost": 2,
+    "model_post": 9,
+    "human_next": 9,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 226,
+     "target_full_sight": false,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 162,
+     "drain_cooldown": 0,
+     "target_angle_hi": 242,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 1498.5,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 221,
+     "cursor": [
+      62,
+      124
+     ]
+    },
+    "aim_frames": 99.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 22,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    12,
+    14
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 107,
+    "v_angle": 237,
+    "cursor": [
+     106,
+     61
+    ],
+    "energy": 9,
+    "do_los": 1
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 96,
+    "v_angle": 233
+   },
+   "energy": {
+    "pre": 9,
+    "action_cost": 1,
+    "model_post": 10,
+    "human_next": 10,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 159,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 151,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 233,
+     "cursor": [
+      83,
+      122
+     ]
+    },
+    "aim_frames": 140.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 23,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    15,
+    11
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 106,
+    "v_angle": 245,
+    "cursor": [
+     98,
+     114
+    ],
+    "energy": 10,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 96,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 10,
+    "action_cost": -2,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 174,
+     "drain_cooldown": 0,
+     "target_angle_hi": 229,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 166,
+     "drain_cooldown": 0,
+     "target_angle_hi": 87,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 245,
+     "cursor": [
+      80,
+      113
+     ]
+    },
+    "aim_frames": 87.3,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 24,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    15,
+    11
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 107,
+    "v_angle": 245,
+    "cursor": [
+     98,
+     126
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 96,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": -3,
+    "model_post": 5,
+    "human_next": 5,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 173,
+     "drain_cooldown": 0,
+     "target_angle_hi": 229,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "target_angle_hi": 87,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 245,
+     "cursor": [
+      88,
+      115
+     ]
+    },
+    "aim_frames": 89.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 25,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    15,
+    11
+   ],
+   "human": {
+    "tile": [
+     5,
+     22
+    ],
+    "eye_z": 9.375,
+    "h_angle": 224,
+    "v_angle": 245,
+    "cursor": [
+     98,
+     126
+    ],
+    "energy": 5,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 152,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 5,
+    "action_cost": 0,
+    "model_post": 5,
+    "human_next": 5,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 116,
+     "drain_cooldown": 0,
+     "target_angle_hi": 229,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 108,
+     "drain_cooldown": 0,
+     "target_angle_hi": 87,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 96,
+     "v_angle": 245,
+     "cursor": [
+      88,
+      115
+     ]
+    },
+    "aim_frames": 42.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 26,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    5,
+    22
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 235,
+    "v_angle": 245,
+    "cursor": [
+     94,
+     48
+    ],
+    "energy": 5,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 224,
+    "v_angle": 241
+   },
+   "energy": {
+    "pre": 5,
+    "action_cost": 3,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 163,
+     "drain_cooldown": 0,
+     "target_angle_hi": 227,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 155,
+     "drain_cooldown": 0,
+     "target_angle_hi": 9,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 224,
+     "v_angle": 241,
+     "cursor": [
+      88,
+      104
+     ]
+    },
+    "aim_frames": 126.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 27,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    5,
+    22
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 234,
+    "v_angle": 245,
+    "cursor": [
+     94,
+     48
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 224,
+    "v_angle": 241
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": 2,
+    "model_post": 10,
+    "human_next": 10,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 163,
+     "drain_cooldown": 0,
+     "target_angle_hi": 227,
+     "target_full_sight": true,
+     "in_cone_now": false
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 155,
+     "drain_cooldown": 0,
+     "target_angle_hi": 9,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 2,
+    "n_full": 2,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 224,
+     "v_angle": 241,
+     "cursor": [
+      88,
+      104
+     ]
+    },
+    "aim_frames": 126.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 28,
+   "verb": "absorb",
+   "otype": 1,
+   "otype_name": "SENTRY",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 224,
+    "v_angle": 245,
+    "cursor": [
+     76,
+     113
+    ],
+    "energy": 10,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 216,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 10,
+    "action_cost": 3,
+    "model_post": 13,
+    "human_next": 13,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 172,
+     "drain_cooldown": 0,
+     "target_angle_hi": null,
+     "target_full_sight": null,
+     "in_cone_now": null
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      62,
+      112
+     ]
+    },
+    "aim_frames": 91.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 29,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 223,
+    "v_angle": 245,
+    "cursor": [
+     76,
+     113
+    ],
+    "energy": 13,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 216,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 13,
+    "action_cost": -2,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 187,
+     "drain_cooldown": 0,
+     "target_angle_hi": 221,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      62,
+      112
+     ]
+    },
+    "aim_frames": 37.3,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 30,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 224,
+    "v_angle": 245,
+    "cursor": [
+     76,
+     124
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 216,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": -3,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 172,
+     "drain_cooldown": 0,
+     "target_angle_hi": 221,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      65,
+      113
+     ]
+    },
+    "aim_frames": 91.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 31,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     15,
+     11
+    ],
+    "eye_z": 10.375,
+    "h_angle": 88,
+    "v_angle": 245,
+    "cursor": [
+     76,
+     124
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 0,
+    "v_angle": 0
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": 0,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 136,
+     "drain_cooldown": 0,
+     "target_angle_hi": 221,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2997.1,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      65,
+      113
+     ]
+    },
+    "aim_frames": 40.3,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 32,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    15,
+    11
+   ],
+   "human": {
+    "tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 96,
+    "v_angle": 241,
+    "cursor": [
+     71,
+     95
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 88,
+    "v_angle": 241
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": 3,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 174,
+     "drain_cooldown": 0,
+     "target_angle_hi": 229,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 241,
+     "cursor": [
+      64,
+      89
+     ]
+    },
+    "aim_frames": 85.9,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 33,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    15,
+    11
+   ],
+   "human": {
+    "tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 95,
+    "v_angle": 241,
+    "cursor": [
+     71,
+     95
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 88,
+    "v_angle": 241
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": 2,
+    "model_post": 13,
+    "human_next": 13,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 187,
+     "drain_cooldown": 0,
+     "target_angle_hi": 229,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2997.1,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 241,
+     "cursor": [
+      64,
+      89
+     ]
+    },
+    "aim_frames": 34.8,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 34,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    21,
+    4
+   ],
+   "human": {
+    "tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 101,
+    "v_angle": 245,
+    "cursor": [
+     114,
+     90
+    ],
+    "energy": 13,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 88,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 13,
+    "action_cost": -2,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "target_angle_hi": 0,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 3746.3,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      103,
+      90
+     ]
+    },
+    "aim_frames": 94.6,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 35,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    21,
+    4
+   ],
+   "human": {
+    "tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 101,
+    "v_angle": 245,
+    "cursor": [
+     114,
+     98
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 88,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": -3,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 0,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 3746.3,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      107,
+      91
+     ]
+    },
+    "aim_frames": 99.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 36,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    21,
+    4
+   ],
+   "human": {
+    "tile": [
+     4,
+     18
+    ],
+    "eye_z": 11.375,
+    "h_angle": 216,
+    "v_angle": 245,
+    "cursor": [
+     114,
+     98
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 152,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": 0,
+    "model_post": 8,
+    "human_next": 8,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 127,
+     "drain_cooldown": 0,
+     "target_angle_hi": 0,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 3746.3,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 2247.8,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 88,
+     "v_angle": 245,
+     "cursor": [
+      107,
+      91
+     ]
+    },
+    "aim_frames": 51.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 37,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 229,
+    "v_angle": 245,
+    "cursor": [
+     113,
+     95
+    ],
+    "energy": 8,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 216,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 8,
+    "action_cost": 3,
+    "model_post": 11,
+    "human_next": 11,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 221,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 3746.3,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      107,
+      91
+     ]
+    },
+    "aim_frames": 99.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 38,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    4,
+    18
+   ],
+   "human": {
+    "tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 229,
+    "v_angle": 245,
+    "cursor": [
+     113,
+     95
+    ],
+    "energy": 11,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 216,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 11,
+    "action_cost": 2,
+    "model_post": 13,
+    "human_next": 13,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "target_angle_hi": 221,
+     "target_full_sight": true,
+     "in_cone_now": false
+    }
+   ],
+   "exposure_target": {
+    "n_exposed": 1,
+    "n_full": 1,
+    "seen_now": false,
+    "gaze_window": 2247.8,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 3746.3,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 216,
+     "v_angle": 245,
+     "cursor": [
+      107,
+      91
+     ]
+    },
+    "aim_frames": 99.5,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 39,
+   "verb": "absorb",
+   "otype": 5,
+   "otype_name": "SENTINEL",
+   "target": [
+    21,
+    3
+   ],
+   "human": {
+    "tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 128,
+    "v_angle": 233,
+    "cursor": [
+     80,
+     95
+    ],
+    "energy": 13,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 120,
+    "v_angle": 221
+   },
+   "energy": {
+    "pre": 13,
+    "action_cost": 4,
+    "model_post": 17,
+    "human_next": 17,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": 3746.3,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 120,
+     "v_angle": 221,
+     "cursor": [
+      93,
+      126
+     ]
+    },
+    "aim_frames": 229.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": null,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 40,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    21,
+    3
+   ],
+   "human": {
+    "tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 128,
+    "v_angle": 233,
+    "cursor": [
+     80,
+     95
+    ],
+    "energy": 17,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 120,
+    "v_angle": 221
+   },
+   "energy": {
+    "pre": 17,
+    "action_cost": -3,
+    "model_post": 14,
+    "human_next": 14,
+    "agree": true,
+    "note": "ok"
+   },
+   "enemies": [],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": Infinity,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 120,
+     "v_angle": 221,
+     "cursor": [
+      93,
+      126
+     ]
+    },
+    "aim_frames": 229.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  },
+  {
+   "i": 41,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    21,
+    3
+   ],
+   "human": {
+    "tile": [
+     21,
+     4
+    ],
+    "eye_z": 11.375,
+    "h_angle": 0,
+    "v_angle": 245,
+    "cursor": [
+     80,
+     95
+    ],
+    "energy": 14,
+    "do_los": 0
+   },
+   "model_geom": {
+    "player_tile": [
+     21,
+     3
+    ],
+    "eye_z": 11.875,
+    "h_angle": 48,
+    "v_angle": 245
+   },
+   "energy": {
+    "pre": 14,
+    "action_cost": 0,
+    "model_post": 14,
+    "human_next": null,
+    "agree": true,
+    "note": "terminal"
+   },
+   "enemies": [],
+   "exposure_target": {
+    "n_exposed": 0,
+    "n_full": 0,
+    "seen_now": false,
+    "gaze_window": Infinity,
+    "tree_near": true
+   },
+   "exposure_player": {
+    "player_window": Infinity,
+    "own_tile_transfer": false
+   },
+   "aim": {
+    "sees_target": true,
+    "has_view": true,
+    "view": {
+     "h_angle": 120,
+     "v_angle": 221,
+     "cursor": [
+      93,
+      126
+     ]
+    },
+    "aim_frames": 358.4,
+    "view_matches_human_facing": false
+   },
+   "verdict": {
+    "gate_allow": true,
+    "fire_ok": true,
+    "breaches": []
+   },
+   "disagreements": []
+  }
+ ]
+}
