@@ -49,7 +49,10 @@ Terms (b)+(c) are the "fill". Golden fractions across the sweep:
 
 The **plotted set** (which tiles/objects reach `plot_tile`/`plot_object`) is now
 byte-exact -- see "$0180 plotted-set gate" below. Only the per-tile/per-object fill
-*cycle count* remains approximate.
+*cycle count* remains approximate. That residual is a cycle-accuracy gap, but it is
+**not behaviorally negligible**: on a knife-edge board a within-error fill/object cost
+change can flip the game outcome (measured on ls42/seed-66 -- see "Behavioral
+sensitivity (measured)" below).
 
 ## Occlusion: $245B -> $24DA -> $2845 (EXACT)
 
@@ -227,6 +230,39 @@ branch-taken constant corrections, the wide-line `process_line` sectioning, and
 per-tile function, so the terrain fill in `render_cost` stays the area-proxy rather than a
 curve fit until the stateful whole-scene fill emulation lands.
 
+### Behavioral sensitivity (measured)
+
+The fill/object residual is a cycle-accuracy gap, but on a knife-edge board it is **not
+behaviorally negligible**. Measured on landscape 42 (typed `0042` = `0x42` = seed 66) by
+perturbing `render_cost`'s scene-dependent cost terms via env overrides and diffing the
+player's verb+tile decision log:
+
+    python -m sentinel.player 66 --max-actions 250
+
+| variant (env) | actions | outcome |
+| --- | --- | --- |
+| baseline (default) | 21 | lost, energy 0, dead |
+| fill zeroed `RENDER_PER_SCANLINE=0 RENDER_PER_PIXEL=0` | 21 | lost -- decision sequence **identical** to baseline |
+| `render_cost` +30% (all scene terms x1.3) | 50 | **won**, energy 7, alive |
+| `render_cost` -30% (all scene terms x0.7) | 24 | lost (different line) |
+| fill +100% (x2) | 17 | lost, alive |
+| object term zeroed `RENDER_C_VERTEX=0 RENDER_C_PREP_CALL=0` | 18 | lost |
+
+Facts this experiment proves (ls42/seed-66 only -- one board, a knife-edge losing case;
+this does **not** generalize to all landscapes):
+
+- A **+30% perturbation -- smaller than the model's own ~27% median error vs py65** --
+  flips ls42 from a loss to a win. A within-error cost change alters the game outcome, so
+  the residual is not behaviorally negligible on this board.
+- The **opening 14 actions (the entire build: every create/transfer/absorb) are
+  byte-identical across ALL perturbations, including +/-100%.** Divergence begins only at
+  action 15, the endgame -- exactly where ls42 is won or lost.
+- **Direction matters.** Under-counting (fill zeroed) left the decision sequence
+  identical here; the realistic +/-30% band straddles win/loss.
+
+Env knobs used: `RENDER_PER_SCANLINE`, `RENDER_PER_PIXEL` (terrain fill term (b)) and
+`RENDER_C_VERTEX`, `RENDER_C_PREP_CALL` (object term (c)).
+
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
 | term | model | accuracy vs py65 |
@@ -242,7 +278,10 @@ curve fit until the stateful whole-scene fill emulation lands.
 Fixing the plotted set (subsystem A) dropped the total-cost median error from 41% to 27%
 (max 62%) and the transfer-settle median from ~9% to ~8%. The remaining error is the
 per-tile terrain-fill and object `span_fill` cycle model (the DDA rasteriser), not the
-tile/object selection, which is now byte-exact.
+tile/object selection, which is now byte-exact. This residual is a cycle-accuracy number
+but not only that: on ls42/seed-66 a within-error (+30%) change of it flips the game from
+a loss to a win (see "Behavioral sensitivity (measured)"), so on knife-edge boards it can
+change player outcomes rather than just the predicted frame count.
 
 The **object-base term (c)** (`_inview_object_base`, `C_VERTEX`=2200, `C_PREP_CALL`=625,
 `SECTIONS`=2, per-type `(verts,polys)` model sizes) adds `plot_object`'s per-object
@@ -309,7 +348,9 @@ folded into this and the tune base.
 Median **~9%**, max ~29% (was ~22%, and ~10x / ~90% under before the settle base). The
 object-base term (c) closes most of the object-view gap; the residual is the documented
 `render_cost` terrain fill-proxy swing plus the object `span_fill` fill and the
-single-constant occlusion approximation.
+single-constant occlusion approximation. This swing is not merely a numeric-accuracy
+matter: on knife-edge boards it can change the player's decisions and the game outcome
+(measured on ls42/seed-66 -- see "Behavioral sensitivity (measured)").
 
 A u-turn (EOR $80 bearing flip) scrolls 0 frames (instant) and is not a viewpoint
 replot.
