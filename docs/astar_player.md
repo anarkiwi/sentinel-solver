@@ -82,13 +82,30 @@ record object positions but **not enemy `h_angle` / rotation cooldowns** — so 
 gaze verdict taken off a fixture state uses baseline (`landscape.generate`)
 facings, not the true mid-game phase.
 
-**Next step:** get enemy-facing ground truth for the human line — re-extract it
-from the raw `watch_play` memory dumps (or via the sim-vs-emulator instrument)
-into the audit — then decide which mechanism drives the `window = 0`: our
-aim-cost frame count rotating the enemies to a *wrong* phase (an aim-cost
-fidelity error), or the gaze/exposure model over-classifying the sentry's real
-sight there (partial-vs-full, LOS occlusion, or FOV cone width). The persistent
-audit tooling (`sentinel/tests/human_audit.py`, `human_wins/*_audit.json`) is the
-reference to validate the fix against. Fixing it should unblock both this planner
-and the reactive player (shared `BasePlayer` threat model), and is the last gate
-before an ls42 live-recorded win.
+**Diagnosis (resolved by the human-log replay).** `driver/replay_human.py`
+re-runs the recorded human line in VICE and captures the true per-enemy
+`h_angle` / rotation cooldowns, committed as `human_wins/*_truth.json`. With true
+facings the aim-cost clock is exonerated — our sim's enemy phase drifts at most
+one rotation step (±20) from truth across the suspect steps. The defect is the
+**gaze/exposure model over-classifying** the sentry's real sight at the human's
+own winning tiles, two ways:
+
+- **Partial sight scored as an immediate drain.** At (2,24) the Sentinel's cone
+  is on the tile with only *partial* (head) sight; the ROM drains only on *full*
+  sight (`$1838`) — partial merely arms a meanie when a tree is near. But
+  `_gaze_window` promotes partial → dangerous whenever `_tree_near`, and
+  `_account` flags any create exposure, so an undrainable glimpse scores
+  `window = 0` / breach.
+- **Placement judged as a body that never stands there.** At (5,22) the human
+  places only a *boulder* while standing safely on (2,24), and the Sentinel
+  rotates off before the later robot/transfer; but `_exposing_enemies` evaluates
+  a phantom *robot* at placement and flags it, missing that the player never
+  occupies the tile while exposed (and a boulder is not drainable).
+
+**Fix:** in `BasePlayer`, stop treating partial sight as a `window = 0` drain
+(partial + tree is the slower meanie-arming path, not an immediate loss), and
+gate placement exposure on whether a *drainable body* actually stands exposed
+(boulder creates and transit tiles are not bodies). Validate against the truth
+fixtures (`test_human_audit` pins the current over-classifications). This is the
+last gate before an ls42 win — for both this planner and the reactive player
+(shared threat model).

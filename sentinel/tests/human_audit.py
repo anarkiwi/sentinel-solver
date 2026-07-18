@@ -17,6 +17,37 @@ from sentinel.test_human_win_logs import state_from_event, _load, FIXTURES
 _FIX_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "human_wins")
 _HALF = FOV_HALF + FOV_MARGIN
 
+
+def _load_truth(name):
+    """The replayed enemy-phase ground truth for ``name`` (``<name>_truth.json``,
+    written by ``driver.replay_human``), as ``{step_i: {slot: enemy_dict}}`` over
+    reproduced steps only, or ``None`` when the fixture is absent."""
+    path = os.path.join(_FIX_DIR, name[:-5] + "_truth.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        truth = json.load(fh)
+    out = {}
+    for s in truth.get("steps", []):
+        rep = s.get("replay", {})
+        if rep.get("diverged_since") or not rep.get("matched_recording", True):
+            continue  # only the clean pre-divergence prefix is on the human's line
+        out[s["i"]] = {e["slot"]: e for e in s["enemies"]}
+    return out
+
+
+def _apply_truth(st, phase):
+    """Overwrite the reconstructed baseline enemy facing + rotation/drain cooldowns
+    with the replayed true values for every enemy slot present in ``phase``."""
+    for slot, e in phase.items():
+        st.obj_h_angle[slot] = e["h_angle"] & 0xFF
+        st.obj_v_angle[slot] = e["v_angle"] & 0xFF
+        st.mem[mm.ROTATION_SPEED_TABLE + slot] = e["rot_step"] & 0xFF
+        st.mem[mm.ENEMIES_ROTATION_COOLDOWN + slot] = e["rot_cooldown"] & 0xFF
+        st.mem[mm.ENEMIES_DRAINING_COOLDOWN + slot] = e["drain_cooldown"] & 0xFF
+        st.mem[mm.ENEMIES_UPDATE_COOLDOWN + slot] = e["update_cooldown"] & 0xFF
+
+
 _NOTES = (
     "Enemy h_angle / rotation cooldowns are NOT recorded in the fixture; every "
     "reconstructed enemy facing is the landscape.generate baseline, not the true "
@@ -91,9 +122,14 @@ def _enemies_block(bp, st, exposed):
     return out
 
 
-def _audit_step(i, ev, evs, seed):
-    """One step's full model-vs-human record with a per-step disagreement list."""
+def _audit_step(i, ev, evs, seed, truth=None):
+    """One step's full model-vs-human record with a per-step disagreement list.
+    With ``truth`` (replayed enemy phase) the reconstructed enemy facings/cooldowns
+    are the TRUE mid-game values, else the ``landscape.generate`` baseline."""
     st = state_from_event(ev, seed)
+    phase = None if truth is None else truth.get(i)
+    if phase:
+        _apply_truth(st, phase)
     bp = BasePlayer(types.SimpleNamespace(state=st), audit=True)
     verb, otype, tgt = ev["verb"], ev["otype"], tuple(ev["target"])
     pl = ev["player"]
@@ -162,6 +198,7 @@ def _audit_step(i, ev, evs, seed):
             "v_angle": int(st.obj_v_angle[st.player]),
         },
         "energy": en,
+        "enemy_facings_source": "replay_truth" if phase else "generate_baseline",
         "enemies": _enemies_block(bp, st, exposed_t),
         "exposure_target": {
             "n_exposed": len(exposed_t),
@@ -216,13 +253,22 @@ def audit_fixture(name):
     data = _load(name)
     seed = data["landscape"]
     evs = data["events"]
-    steps = [_audit_step(i, ev, evs, seed) for i, ev in enumerate(evs)]
+    truth = _load_truth(name)
+    steps = [_audit_step(i, ev, evs, seed, truth) for i, ev in enumerate(evs)]
+    notes = list(_NOTES)
+    if truth:
+        notes.insert(
+            0,
+            f"{len(truth)} steps use TRUE replayed enemy facings/cooldowns "
+            "(enemy_facings_source=replay_truth); the rest fall back to baseline.",
+        )
     return {
         "fixture": name,
         "seed": seed,
         "entered_code": data["entered_code"],
         "n_events": len(evs),
-        "notes": list(_NOTES),
+        "enemy_truth_steps": 0 if truth is None else len(truth),
+        "notes": notes,
         "summary": _summarise(steps),
         "steps": steps,
     }

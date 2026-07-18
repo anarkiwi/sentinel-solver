@@ -3,7 +3,9 @@
  "seed": 821,
  "entered_code": 335,
  "n_events": 168,
+ "enemy_truth_steps": 25,
  "notes": [
+  "25 steps use TRUE replayed enemy facings/cooldowns (enemy_facings_source=replay_truth); the rest fall back to baseline.",
   "Enemy h_angle / rotation cooldowns are NOT recorded in the fixture; every reconstructed enemy facing is the landscape.generate baseline, not the true mid-game facing. Exposure/gaze/breach verdicts run against baseline facings. On a human WIN every placement survived, so any model REJECT/BREACH is a model false-positive against ground truth.",
   "energy note 'tree_spawn' = a create of a TREE the human paid nothing for: an enemy-discharge-spawned tree ($1A5D) mis-kept as a player build. 'drain' = the human lost energy to an enemy drain between actions (real exposure)."
  ],
@@ -211,17 +213,9 @@
    122
   ],
   "view_facing_matches": 1,
-  "n_steps_with_disagreement": 83,
+  "n_steps_with_disagreement": 76,
   "disagreement_steps_by_code": {
    "account_breach": [
-    5,
-    7,
-    11,
-    12,
-    13,
-    14,
-    16,
-    20,
     22,
     27,
     29,
@@ -306,15 +300,7 @@
     127
    ],
    "gate_reject": [
-    3,
-    4,
     5,
-    6,
-    7,
-    11,
-    12,
-    13,
-    14,
     15,
     16,
     20,
@@ -406,6 +392,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -593,6 +580,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -604,7 +592,7 @@
      "h_angle": 228,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 135,
+     "rot_cooldown": 99,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -620,7 +608,7 @@
      "h_angle": 116,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 111,
+     "rot_cooldown": 81,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -636,7 +624,7 @@
      "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 117,
+     "rot_cooldown": 81,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -652,7 +640,7 @@
      "h_angle": 188,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 133,
+     "rot_cooldown": 97,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -668,7 +656,7 @@
      "h_angle": 20,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 87,
+     "rot_cooldown": 81,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -684,7 +672,7 @@
      "h_angle": 100,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 141,
+     "rot_cooldown": 105,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -700,7 +688,7 @@
      "h_angle": 196,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 109,
+     "rot_cooldown": 84,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -780,6 +768,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -791,7 +780,7 @@
      "h_angle": 228,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 135,
+     "rot_cooldown": 21,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -804,10 +793,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 136,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 111,
+     "rot_cooldown": 177,
      "drain_cooldown": 0,
      "target_angle_hi": 64,
      "target_full_sight": false,
@@ -820,10 +809,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 117,
+     "rot_cooldown": 177,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -839,7 +828,7 @@
      "h_angle": 188,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 133,
+     "rot_cooldown": 13,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -852,10 +841,10 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 87,
+     "rot_cooldown": 177,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -871,7 +860,7 @@
      "h_angle": 100,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 141,
+     "rot_cooldown": 2,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -884,10 +873,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 109,
+     "rot_cooldown": 177,
      "drain_cooldown": 0,
      "target_angle_hi": 92,
      "target_full_sight": true,
@@ -898,11 +887,11 @@
     "n_exposed": 3,
     "n_full": 2,
     "seen_now": false,
-    "gaze_window": 3746.3,
+    "gaze_window": 3450.4,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 3746.3,
+    "player_window": 3450.4,
     "own_tile_transfer": false
    },
    "aim": {
@@ -967,6 +956,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -978,7 +968,7 @@
      "h_angle": 228,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 160,
+     "rot_cooldown": 17,
      "drain_cooldown": 0,
      "target_angle_hi": 194,
      "target_full_sight": false,
@@ -991,10 +981,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 136,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 136,
+     "rot_cooldown": 172,
      "drain_cooldown": 0,
      "target_angle_hi": 64,
      "target_full_sight": true,
@@ -1007,10 +997,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 142,
+     "rot_cooldown": 172,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1026,7 +1016,7 @@
      "h_angle": 188,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 158,
+     "rot_cooldown": 9,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1039,10 +1029,10 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 112,
+     "rot_cooldown": 172,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1055,10 +1045,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 166,
+     "rot_cooldown": 199,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -1071,10 +1061,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 134,
+     "rot_cooldown": 172,
      "drain_cooldown": 0,
      "target_angle_hi": 92,
      "target_full_sight": true,
@@ -1084,12 +1074,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 3341.7,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 3746.3,
+    "player_window": 3341.7,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1107,13 +1097,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 4,
@@ -1156,6 +1144,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -1164,10 +1153,10 @@
       28,
       17
      ],
-     "h_angle": 228,
+     "h_angle": 248,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 39,
+     "rot_cooldown": 30,
      "drain_cooldown": 0,
      "target_angle_hi": 194,
      "target_full_sight": false,
@@ -1180,10 +1169,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 156,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 15,
+     "rot_cooldown": 188,
      "drain_cooldown": 0,
      "target_angle_hi": 64,
      "target_full_sight": true,
@@ -1196,10 +1185,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 21,
+     "rot_cooldown": 188,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1212,10 +1201,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 168,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 37,
+     "rot_cooldown": 23,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1228,10 +1217,10 @@
       7,
       11
      ],
-     "h_angle": 40,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 192,
+     "rot_cooldown": 186,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1244,10 +1233,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 45,
+     "rot_cooldown": 12,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -1260,10 +1249,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 13,
+     "rot_cooldown": 186,
      "drain_cooldown": 0,
      "target_angle_hi": 92,
      "target_full_sight": true,
@@ -1273,12 +1262,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 3094.5,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 3746.3,
+    "player_window": 3094.5,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1296,13 +1285,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 5,
@@ -1345,6 +1332,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -1353,10 +1341,10 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 248,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1369,10 +1357,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 136,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 77,
      "drain_cooldown": 0,
      "target_angle_hi": 47,
      "target_full_sight": true,
@@ -1385,10 +1373,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 184,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1401,10 +1389,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 168,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 200,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1417,14 +1405,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 154,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": 15,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -1433,10 +1421,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 147,
      "drain_cooldown": 0,
      "target_angle_hi": 252,
      "target_full_sight": true,
@@ -1449,10 +1437,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 176,
+     "rot_cooldown": 147,
      "drain_cooldown": 0,
      "target_angle_hi": 80,
      "target_full_sight": true,
@@ -1462,12 +1450,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 4,
-    "seen_now": false,
+    "seen_now": true,
     "gaze_window": 0.0,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 2993.3,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1487,25 +1475,10 @@
    "verdict": {
     "gate_allow": false,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       11,
-       21
-      ],
-      "seen_by": [
-       [
-        4,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
    "disagreements": [
-    "gate_reject",
-    "account_breach"
+    "gate_reject"
    ]
   },
   {
@@ -1549,6 +1522,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -1557,14 +1531,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 248,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 90,
      "drain_cooldown": 0,
      "target_angle_hi": 201,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -1573,10 +1547,10 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 156,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 184,
      "drain_cooldown": 0,
      "target_angle_hi": 47,
      "target_full_sight": true,
@@ -1589,10 +1563,10 @@
       2,
       1
      ],
-     "h_angle": 80,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 89,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1605,10 +1579,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 168,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 89,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1621,14 +1595,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 191,
+     "rot_cooldown": 71,
      "drain_cooldown": 0,
      "target_angle_hi": 15,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -1637,10 +1611,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 44,
      "drain_cooldown": 0,
      "target_angle_hi": 252,
      "target_full_sight": true,
@@ -1653,10 +1627,10 @@
       4,
       24
      ],
-     "h_angle": 176,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 44,
      "drain_cooldown": 0,
      "target_angle_hi": 80,
      "target_full_sight": true,
@@ -1666,12 +1640,12 @@
    "exposure_target": {
     "n_exposed": 5,
     "n_full": 4,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 2468.8,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 2468.8,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1689,12 +1663,11 @@
     "view_matches_human_facing": true
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": false,
     "breaches": []
    },
    "disagreements": [
-    "gate_reject",
     "fire_fail"
    ]
   },
@@ -1739,6 +1712,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -1747,14 +1721,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 12,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 77,
+     "rot_cooldown": 160,
+     "drain_cooldown": 0,
      "target_angle_hi": 201,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -1763,10 +1737,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 156,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 133,
+     "rot_cooldown": 55,
      "drain_cooldown": 0,
      "target_angle_hi": 47,
      "target_full_sight": true,
@@ -1779,10 +1753,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 139,
+     "rot_cooldown": 160,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1795,10 +1769,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 148,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 155,
+     "rot_cooldown": 160,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -1811,14 +1785,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 109,
-     "drain_cooldown": 32,
+     "rot_cooldown": 141,
+     "drain_cooldown": 0,
      "target_angle_hi": 15,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -1827,10 +1801,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 163,
+     "rot_cooldown": 114,
      "drain_cooldown": 0,
      "target_angle_hi": 252,
      "target_full_sight": true,
@@ -1843,10 +1817,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 131,
+     "rot_cooldown": 115,
      "drain_cooldown": 0,
      "target_angle_hi": 80,
      "target_full_sight": true,
@@ -1856,12 +1830,12 @@
    "exposure_target": {
     "n_exposed": 5,
     "n_full": 4,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 2292.8,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 2292.8,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1879,32 +1853,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "transfer",
-      "tile": [
-       11,
-       21
-      ],
-      "seen_by": [
-       [
-        0,
-        false
-       ],
-       [
-        4,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 8,
@@ -1947,6 +1900,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -1955,14 +1909,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 12,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 152,
      "drain_cooldown": 0,
      "target_angle_hi": 194,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -1971,10 +1925,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 156,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 180,
+     "rot_cooldown": 18,
      "drain_cooldown": 0,
      "target_angle_hi": 64,
      "target_full_sight": true,
@@ -1987,10 +1941,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 186,
+     "rot_cooldown": 149,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2003,10 +1957,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 148,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2019,11 +1973,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 156,
-     "drain_cooldown": 79,
+     "rot_cooldown": 150,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -2035,10 +1989,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -2051,10 +2005,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": 92,
      "target_full_sight": true,
@@ -2064,12 +2018,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 2251.6,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 2251.6,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2134,6 +2088,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -2142,14 +2097,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 32,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 168,
      "drain_cooldown": 0,
      "target_angle_hi": 194,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -2158,10 +2113,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 176,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 180,
+     "rot_cooldown": 50,
      "drain_cooldown": 0,
      "target_angle_hi": 64,
      "target_full_sight": true,
@@ -2174,10 +2129,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 186,
+     "rot_cooldown": 167,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2190,10 +2145,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 148,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 2,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2206,11 +2161,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 156,
-     "drain_cooldown": 79,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -2222,10 +2177,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 115,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -2238,10 +2193,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 183,
      "drain_cooldown": 0,
      "target_angle_hi": 92,
      "target_full_sight": true,
@@ -2251,12 +2206,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 2116.7,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 2116.7,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2321,6 +2276,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -2329,11 +2285,11 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 32,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 110,
+     "rot_cooldown": 135,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -2345,10 +2301,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 196,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 166,
+     "rot_cooldown": 198,
      "drain_cooldown": 0,
      "target_angle_hi": 69,
      "target_full_sight": false,
@@ -2361,10 +2317,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 172,
+     "rot_cooldown": 136,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2377,10 +2333,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 128,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 188,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2393,11 +2349,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 142,
-     "drain_cooldown": 65,
+     "rot_cooldown": 148,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -2409,10 +2365,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 196,
+     "rot_cooldown": 62,
      "drain_cooldown": 0,
      "target_angle_hi": 250,
      "target_full_sight": true,
@@ -2425,10 +2381,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 164,
+     "rot_cooldown": 136,
      "drain_cooldown": 0,
      "target_angle_hi": 96,
      "target_full_sight": true,
@@ -2439,11 +2395,11 @@
     "n_exposed": 3,
     "n_full": 2,
     "seen_now": false,
-    "gaze_window": 3746.3,
+    "gaze_window": 1970.6,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1970.6,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2508,6 +2464,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -2516,10 +2473,10 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 32,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 74,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2532,10 +2489,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 196,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 148,
      "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
@@ -2548,10 +2505,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 184,
+     "rot_cooldown": 92,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2564,10 +2521,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 128,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 118,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2580,14 +2537,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 154,
-     "drain_cooldown": 77,
+     "rot_cooldown": 118,
+     "drain_cooldown": 0,
      "target_angle_hi": 11,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -2596,10 +2553,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 1,
      "drain_cooldown": 0,
      "target_angle_hi": 0,
      "target_full_sight": true,
@@ -2612,10 +2569,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 176,
+     "rot_cooldown": 75,
      "drain_cooldown": 0,
      "target_angle_hi": 41,
      "target_full_sight": false,
@@ -2625,12 +2582,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 1225.1,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1697.1,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2648,28 +2605,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       12,
-       29
-      ],
-      "seen_by": [
-       [
-        4,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 12,
@@ -2712,6 +2652,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -2720,14 +2661,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 52,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 120,
+     "rot_cooldown": 185,
+     "drain_cooldown": 0,
      "target_angle_hi": 218,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -2736,10 +2677,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 196,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 176,
+     "rot_cooldown": 59,
      "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
@@ -2752,10 +2693,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 182,
+     "rot_cooldown": 3,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2768,10 +2709,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 128,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 198,
+     "rot_cooldown": 29,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2784,14 +2725,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 152,
-     "drain_cooldown": 75,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
      "target_angle_hi": 11,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -2800,10 +2741,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 117,
      "drain_cooldown": 0,
      "target_angle_hi": 0,
      "target_full_sight": true,
@@ -2816,10 +2757,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 174,
+     "rot_cooldown": 185,
      "drain_cooldown": 0,
      "target_angle_hi": 41,
      "target_full_sight": false,
@@ -2829,12 +2770,12 @@
    "exposure_target": {
     "n_exposed": 5,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 899.1,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1389.9,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2852,28 +2793,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "robot",
-      "tile": [
-       12,
-       29
-      ],
-      "seen_by": [
-       [
-        4,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 13,
@@ -2916,6 +2840,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -2924,14 +2849,14 @@
       28,
       17
      ],
-     "h_angle": 228,
+     "h_angle": 52,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 166,
-     "drain_cooldown": 89,
+     "rot_cooldown": 124,
+     "drain_cooldown": 0,
      "target_angle_hi": 218,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -2940,10 +2865,10 @@
       4,
       18
      ],
-     "h_angle": 116,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 142,
+     "rot_cooldown": 199,
      "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
@@ -2956,10 +2881,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 148,
+     "rot_cooldown": 142,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2972,10 +2897,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 108,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 164,
+     "rot_cooldown": 169,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -2988,14 +2913,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 100,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 118,
-     "drain_cooldown": 41,
+     "rot_cooldown": 169,
+     "drain_cooldown": 0,
      "target_angle_hi": 11,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -3004,10 +2929,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 172,
+     "rot_cooldown": 57,
      "drain_cooldown": 0,
      "target_angle_hi": 0,
      "target_full_sight": true,
@@ -3020,10 +2945,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 140,
+     "rot_cooldown": 127,
      "drain_cooldown": 0,
      "target_angle_hi": 41,
      "target_full_sight": false,
@@ -3033,12 +2958,12 @@
    "exposure_target": {
     "n_exposed": 5,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 801.7,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1292.5,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3056,32 +2981,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "transfer",
-      "tile": [
-       12,
-       29
-      ],
-      "seen_by": [
-       [
-        0,
-        false
-       ],
-       [
-        4,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 14,
@@ -3124,6 +3028,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -3132,10 +3037,10 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 52,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3148,14 +3053,14 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": 89,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 2,
@@ -3164,10 +3069,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 186,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3180,10 +3085,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 108,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 150,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3196,11 +3101,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 100,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 156,
-     "drain_cooldown": 79,
+     "rot_cooldown": 150,
+     "drain_cooldown": 0,
      "target_angle_hi": 45,
      "target_full_sight": false,
      "in_cone_now": false
@@ -3212,10 +3117,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 183,
      "drain_cooldown": 0,
      "target_angle_hi": 242,
      "target_full_sight": true,
@@ -3228,10 +3133,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 153,
      "drain_cooldown": 0,
      "target_angle_hi": 104,
      "target_full_sight": true,
@@ -3241,12 +3146,12 @@
    "exposure_target": {
     "n_exposed": 4,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 872.9,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 753.0,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3264,28 +3169,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       11,
-       13
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 15,
@@ -3328,6 +3216,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -3336,10 +3225,10 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 52,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 140,
      "drain_cooldown": 0,
      "target_angle_hi": 182,
      "target_full_sight": false,
@@ -3352,14 +3241,14 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 140,
      "drain_cooldown": 0,
      "target_angle_hi": 89,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 2,
@@ -3368,10 +3257,10 @@
       2,
       1
      ],
-     "h_angle": 80,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 141,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3384,10 +3273,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 108,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 141,
      "drain_cooldown": 0,
      "target_angle_hi": 166,
      "target_full_sight": false,
@@ -3400,11 +3289,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 100,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 181,
-     "drain_cooldown": 104,
+     "rot_cooldown": 141,
+     "drain_cooldown": 0,
      "target_angle_hi": 45,
      "target_full_sight": false,
      "in_cone_now": false
@@ -3416,10 +3305,10 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 175,
      "drain_cooldown": 0,
      "target_angle_hi": 242,
      "target_full_sight": true,
@@ -3432,10 +3321,10 @@
       4,
       24
      ],
-     "h_angle": 176,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 140,
      "drain_cooldown": 0,
      "target_angle_hi": 104,
      "target_full_sight": true,
@@ -3445,12 +3334,12 @@
    "exposure_target": {
     "n_exposed": 6,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 753.0,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 618.1,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3518,6 +3407,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -3526,10 +3416,10 @@
       28,
       17
      ],
-     "h_angle": 228,
+     "h_angle": 72,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 159,
+     "rot_cooldown": 183,
      "drain_cooldown": 0,
      "target_angle_hi": 182,
      "target_full_sight": false,
@@ -3542,14 +3432,14 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 55,
+     "rot_cooldown": 183,
+     "drain_cooldown": 0,
      "target_angle_hi": 89,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 2,
@@ -3558,10 +3448,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 141,
+     "rot_cooldown": 185,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3574,10 +3464,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 157,
+     "rot_cooldown": 185,
      "drain_cooldown": 0,
      "target_angle_hi": 166,
      "target_full_sight": false,
@@ -3590,11 +3480,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 111,
-     "drain_cooldown": 34,
+     "rot_cooldown": 186,
+     "drain_cooldown": 0,
      "target_angle_hi": 45,
      "target_full_sight": false,
      "in_cone_now": false
@@ -3606,10 +3496,10 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 20,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 165,
+     "rot_cooldown": 19,
      "drain_cooldown": 0,
      "target_angle_hi": 242,
      "target_full_sight": true,
@@ -3622,10 +3512,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 133,
+     "rot_cooldown": 183,
      "drain_cooldown": 0,
      "target_angle_hi": 104,
      "target_full_sight": true,
@@ -3635,12 +3525,12 @@
    "exposure_target": {
     "n_exposed": 6,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 427.1,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 296.0,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3660,25 +3550,10 @@
    "verdict": {
     "gate_allow": false,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "transfer",
-      "tile": [
-       11,
-       13
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
    "disagreements": [
-    "gate_reject",
-    "account_breach"
+    "gate_reject"
    ]
   },
   {
@@ -3722,6 +3597,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -3730,14 +3606,14 @@
       28,
       17
      ],
-     "h_angle": 228,
+     "h_angle": 72,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 192,
+     "rot_cooldown": 137,
      "drain_cooldown": 0,
      "target_angle_hi": 218,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -3746,11 +3622,11 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 88,
+     "rot_cooldown": 138,
+     "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
      "in_cone_now": false
@@ -3762,10 +3638,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 174,
+     "rot_cooldown": 138,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3778,10 +3654,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 190,
+     "rot_cooldown": 138,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3794,14 +3670,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 144,
-     "drain_cooldown": 97,
+     "rot_cooldown": 138,
+     "drain_cooldown": 0,
      "target_angle_hi": 11,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -3810,14 +3686,14 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 198,
-     "drain_cooldown": 0,
+     "rot_cooldown": 168,
+     "drain_cooldown": 97,
      "target_angle_hi": 0,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -3826,25 +3702,25 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 166,
+     "rot_cooldown": 140,
      "drain_cooldown": 0,
      "target_angle_hi": 41,
      "target_full_sight": false,
-     "in_cone_now": false
+     "in_cone_now": true
     }
    ],
    "exposure_target": {
     "n_exposed": 5,
     "n_full": 3,
-    "seen_now": true,
-    "gaze_window": 0.0,
+    "seen_now": false,
+    "gaze_window": 3.7,
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 116.1,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3909,6 +3785,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -3917,14 +3794,14 @@
       28,
       17
      ],
-     "h_angle": 228,
+     "h_angle": 72,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 192,
+     "rot_cooldown": 90,
      "drain_cooldown": 0,
      "target_angle_hi": 218,
      "target_full_sight": false,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -3933,11 +3810,11 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 88,
+     "rot_cooldown": 109,
+     "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
      "in_cone_now": false
@@ -3949,10 +3826,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 174,
+     "rot_cooldown": 109,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3965,10 +3842,10 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 190,
+     "rot_cooldown": 109,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -3981,14 +3858,14 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 144,
-     "drain_cooldown": 67,
+     "rot_cooldown": 109,
+     "drain_cooldown": 0,
      "target_angle_hi": 11,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -3997,14 +3874,14 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 198,
-     "drain_cooldown": 0,
+     "rot_cooldown": 138,
+     "drain_cooldown": 61,
      "target_angle_hi": 0,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -4013,14 +3890,14 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 166,
+     "rot_cooldown": 91,
      "drain_cooldown": 0,
      "target_angle_hi": 41,
      "target_full_sight": false,
-     "in_cone_now": false
+     "in_cone_now": true
     }
    ],
    "exposure_target": {
@@ -4031,7 +3908,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 3.7,
     "own_tile_transfer": false
    },
    "aim": {
@@ -4096,6 +3973,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -4104,10 +3982,10 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 72,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 76,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4120,11 +3998,11 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 100,
+     "rot_cooldown": 95,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -4136,10 +4014,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 186,
+     "rot_cooldown": 95,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4152,10 +4030,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 95,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4168,11 +4046,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 156,
-     "drain_cooldown": 79,
+     "rot_cooldown": 95,
+     "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -4184,11 +4062,11 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 0,
+     "rot_cooldown": 150,
+     "drain_cooldown": 72,
      "target_angle_hi": null,
      "target_full_sight": null,
      "in_cone_now": null
@@ -4200,10 +4078,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
+     "rot_cooldown": 77,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4283,6 +4161,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -4291,14 +4170,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 72,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 10,
      "drain_cooldown": 0,
      "target_angle_hi": 210,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -4307,11 +4186,11 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 99,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
      "target_angle_hi": 8,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4323,10 +4202,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 185,
+     "rot_cooldown": 29,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4339,10 +4218,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 29,
      "drain_cooldown": 0,
      "target_angle_hi": 193,
      "target_full_sight": true,
@@ -4355,11 +4234,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 155,
-     "drain_cooldown": 78,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
      "target_angle_hi": 253,
      "target_full_sight": false,
      "in_cone_now": false
@@ -4371,14 +4250,14 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 0,
+     "rot_cooldown": 84,
+     "drain_cooldown": 69,
      "target_angle_hi": 242,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -4387,10 +4266,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 40,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 177,
+     "rot_cooldown": 11,
      "drain_cooldown": 0,
      "target_angle_hi": 18,
      "target_full_sight": true,
@@ -4425,25 +4304,10 @@
    "verdict": {
     "gate_allow": false,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       6,
-       28
-      ],
-      "seen_by": [
-       [
-        0,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
    "disagreements": [
-    "gate_reject",
-    "account_breach"
+    "gate_reject"
    ]
   },
   {
@@ -4487,6 +4351,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -4495,14 +4360,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 92,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 181,
      "drain_cooldown": 0,
      "target_angle_hi": 210,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -4511,10 +4376,10 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 1,
      "drain_cooldown": 0,
      "target_angle_hi": 8,
      "target_full_sight": true,
@@ -4527,10 +4392,10 @@
       2,
       1
      ],
-     "h_angle": 80,
+     "h_angle": 216,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 1,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4543,10 +4408,10 @@
       30,
       27
      ],
-     "h_angle": 208,
+     "h_angle": 88,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 1,
      "drain_cooldown": 0,
      "target_angle_hi": 193,
      "target_full_sight": true,
@@ -4559,11 +4424,11 @@
       7,
       11
      ],
-     "h_angle": 20,
+     "h_angle": 120,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 178,
-     "drain_cooldown": 101,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
      "target_angle_hi": 253,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4575,14 +4440,14 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 0,
+     "rot_cooldown": 56,
+     "drain_cooldown": 92,
      "target_angle_hi": 242,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -4591,10 +4456,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 200,
+     "rot_cooldown": 184,
      "drain_cooldown": 0,
      "target_angle_hi": 18,
      "target_full_sight": true,
@@ -4677,6 +4542,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -4685,14 +4551,14 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 92,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 72,
+     "rot_cooldown": 98,
+     "drain_cooldown": 0,
      "target_angle_hi": 210,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 1,
@@ -4701,14 +4567,14 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 48,
+     "rot_cooldown": 98,
+     "drain_cooldown": 21,
      "target_angle_hi": 8,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 2,
@@ -4717,10 +4583,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 196,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 134,
+     "rot_cooldown": 101,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -4733,14 +4599,14 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 68,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 150,
-     "drain_cooldown": 73,
+     "rot_cooldown": 98,
+     "drain_cooldown": 0,
      "target_angle_hi": 193,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 4,
@@ -4749,14 +4615,14 @@
       7,
       11
      ],
-     "h_angle": 0,
+     "h_angle": 140,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 24,
+     "rot_cooldown": 98,
+     "drain_cooldown": 0,
      "target_angle_hi": 253,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 5,
@@ -4765,14 +4631,14 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 158,
-     "drain_cooldown": 0,
+     "rot_cooldown": 1,
+     "drain_cooldown": 18,
      "target_angle_hi": 242,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -4781,10 +4647,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 126,
+     "rot_cooldown": 98,
      "drain_cooldown": 0,
      "target_angle_hi": 18,
      "target_full_sight": true,
@@ -4828,15 +4694,7 @@
       ],
       "seen_by": [
        [
-        0,
-        true
-       ],
-       [
-        3,
-        true
-       ],
-       [
-        4,
+        1,
         true
        ]
       ]
@@ -4889,6 +4747,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -4897,11 +4756,11 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 92,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 67,
+     "rot_cooldown": 93,
+     "drain_cooldown": 0,
      "target_angle_hi": 237,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4913,11 +4772,11 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 43,
+     "rot_cooldown": 1,
+     "drain_cooldown": 13,
      "target_angle_hi": 41,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4929,10 +4788,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 176,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 129,
+     "rot_cooldown": 165,
      "drain_cooldown": 0,
      "target_angle_hi": 25,
      "target_full_sight": true,
@@ -4945,14 +4804,14 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 48,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 145,
-     "drain_cooldown": 68,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
      "target_angle_hi": 201,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 4,
@@ -4961,11 +4820,11 @@
       7,
       11
      ],
-     "h_angle": 0,
+     "h_angle": 160,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 19,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
      "target_angle_hi": 28,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4977,11 +4836,11 @@
       12,
       10
      ],
-     "h_angle": 100,
+     "h_angle": 236,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 153,
-     "drain_cooldown": 0,
+     "rot_cooldown": 189,
+     "drain_cooldown": 112,
      "target_angle_hi": 19,
      "target_full_sight": true,
      "in_cone_now": false
@@ -4993,14 +4852,14 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 60,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 121,
+     "rot_cooldown": 96,
      "drain_cooldown": 0,
      "target_angle_hi": 52,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     }
    ],
    "exposure_target": {
@@ -5080,6 +4939,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "replay_truth",
    "enemies": [
     {
      "slot": 0,
@@ -5088,11 +4948,11 @@
       28,
       17
      ],
-     "h_angle": 208,
+     "h_angle": 112,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 115,
+     "rot_cooldown": 156,
+     "drain_cooldown": 0,
      "target_angle_hi": 182,
      "target_full_sight": false,
      "in_cone_now": false
@@ -5104,14 +4964,14 @@
       4,
       18
      ],
-     "h_angle": 96,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 0,
+     "rot_cooldown": 1,
+     "drain_cooldown": 64,
      "target_angle_hi": 89,
      "target_full_sight": true,
-     "in_cone_now": true
+     "in_cone_now": false
     },
     {
      "slot": 2,
@@ -5120,10 +4980,10 @@
       2,
       1
      ],
-     "h_angle": 60,
+     "h_angle": 176,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 177,
+     "rot_cooldown": 141,
      "drain_cooldown": 0,
      "target_angle_hi": null,
      "target_full_sight": null,
@@ -5136,11 +4996,11 @@
       30,
       27
      ],
-     "h_angle": 188,
+     "h_angle": 48,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 193,
-     "drain_cooldown": 116,
+     "rot_cooldown": 99,
+     "drain_cooldown": 0,
      "target_angle_hi": 166,
      "target_full_sight": false,
      "in_cone_now": false
@@ -5152,11 +5012,11 @@
       7,
       11
      ],
-     "h_angle": 0,
+     "h_angle": 160,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 0,
-     "drain_cooldown": 67,
+     "rot_cooldown": 98,
+     "drain_cooldown": 0,
      "target_angle_hi": 45,
      "target_full_sight": false,
      "in_cone_now": false
@@ -5168,14 +5028,14 @@
       12,
       10
      ],
-     "h_angle": 120,
+     "h_angle": 0,
      "v_angle": 245,
      "rot_step": -20,
-     "rot_cooldown": 0,
+     "rot_cooldown": 1,
      "drain_cooldown": 0,
      "target_angle_hi": 242,
      "target_full_sight": true,
-     "in_cone_now": false
+     "in_cone_now": true
     },
     {
      "slot": 6,
@@ -5184,10 +5044,10 @@
       4,
       24
      ],
-     "h_angle": 196,
+     "h_angle": 80,
      "v_angle": 245,
      "rot_step": 20,
-     "rot_cooldown": 169,
+     "rot_cooldown": 156,
      "drain_cooldown": 0,
      "target_angle_hi": 104,
      "target_full_sight": true,
@@ -5267,6 +5127,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -5454,6 +5315,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -5643,6 +5505,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -5847,6 +5710,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6037,6 +5901,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6241,6 +6106,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6428,6 +6294,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6615,6 +6482,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6786,6 +6654,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -6952,6 +6821,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -7140,6 +7010,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -7315,6 +7186,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -7481,6 +7353,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -7655,6 +7528,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -7847,6 +7721,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8002,6 +7877,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8161,6 +8037,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8316,6 +8193,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8471,6 +8349,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8626,6 +8505,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8781,6 +8661,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -8936,6 +8817,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9091,6 +8973,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9246,6 +9129,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9401,6 +9285,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9556,6 +9441,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9706,6 +9592,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9845,6 +9732,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -9987,6 +9875,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10128,6 +10017,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10262,6 +10152,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10419,6 +10310,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10558,6 +10450,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10700,6 +10593,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10834,6 +10728,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -10976,6 +10871,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11110,6 +11006,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11251,6 +11148,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11408,6 +11306,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11547,6 +11446,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11681,6 +11581,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11820,6 +11721,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -11954,6 +11856,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12093,6 +11996,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12250,6 +12154,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12411,6 +12316,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12552,6 +12458,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12686,6 +12593,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12809,6 +12717,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -12949,6 +12858,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13067,6 +12977,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13207,6 +13118,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13333,6 +13245,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13458,6 +13371,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13584,6 +13498,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13709,6 +13624,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13827,6 +13743,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -13953,6 +13870,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14071,6 +13989,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14196,6 +14115,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14336,6 +14256,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14463,6 +14384,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14588,6 +14510,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14711,6 +14634,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14834,6 +14758,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -14957,6 +14882,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15080,6 +15006,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15203,6 +15130,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15326,6 +15254,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15449,6 +15378,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15574,6 +15504,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15697,6 +15628,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15820,6 +15752,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -15943,6 +15876,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16050,6 +15984,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16174,6 +16109,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16276,6 +16212,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16400,6 +16337,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16502,6 +16440,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16626,6 +16565,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16750,6 +16690,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16859,6 +16800,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -16984,6 +16926,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17093,6 +17036,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17200,6 +17144,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17307,6 +17252,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17414,6 +17360,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17521,6 +17468,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17628,6 +17576,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17735,6 +17684,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17837,6 +17787,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -17939,6 +17890,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18063,6 +18015,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18165,6 +18118,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18272,6 +18226,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18381,6 +18336,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18483,6 +18439,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18608,6 +18565,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18710,6 +18668,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18817,6 +18776,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -18927,6 +18887,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19034,6 +18995,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19141,6 +19103,7 @@
     "agree": false,
     "note": "tree_spawn"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19252,6 +19215,7 @@
     "agree": false,
     "note": "drain"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19361,6 +19325,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19468,6 +19433,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19575,6 +19541,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19682,6 +19649,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19789,6 +19757,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -19913,6 +19882,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20037,6 +20007,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20161,6 +20132,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20268,6 +20240,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20375,6 +20348,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20482,6 +20456,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20589,6 +20564,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20696,6 +20672,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20803,6 +20780,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -20912,6 +20890,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21021,6 +21000,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21128,6 +21108,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21235,6 +21216,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21342,6 +21324,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21449,6 +21432,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21556,6 +21540,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21663,6 +21648,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21770,6 +21756,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21877,6 +21864,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -21984,6 +21972,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22091,6 +22080,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22198,6 +22188,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22289,6 +22280,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22380,6 +22372,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22471,6 +22464,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22562,6 +22556,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22653,6 +22648,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22744,6 +22740,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22835,6 +22832,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -22926,6 +22924,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -23017,6 +23016,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [
     {
      "slot": 0,
@@ -23108,6 +23108,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [],
    "exposure_target": {
     "n_exposed": 0,
@@ -23182,6 +23183,7 @@
     "agree": true,
     "note": "ok"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [],
    "exposure_target": {
     "n_exposed": 0,
@@ -23256,6 +23258,7 @@
     "agree": true,
     "note": "terminal"
    },
+   "enemy_facings_source": "generate_baseline",
    "enemies": [],
    "exposure_target": {
     "n_exposed": 0,

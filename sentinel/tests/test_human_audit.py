@@ -8,14 +8,6 @@ from sentinel.tests import human_audit
 
 # Pinned CURRENT disagreements (regenerable via ``python -m sentinel.tests.human_audit``); a model fix that clears any changes the set -> update here.
 _BREACH335 = [
-    5,
-    7,
-    11,
-    12,
-    13,
-    14,
-    16,
-    20,
     22,
     27,
     29,
@@ -40,15 +32,7 @@ _BREACH335 = [
     135,
 ]
 _GATE335 = [
-    3,
-    4,
     5,
-    6,
-    7,
-    11,
-    12,
-    13,
-    14,
     15,
     16,
     20,
@@ -148,9 +132,14 @@ _TREE335 = [
 ]
 _ENERGY335 = sorted(set(_DRAIN335) | set(_TREE335))
 
+# ls42: TRUE replayed facings applied -> winning tiles (2,24)/(5,22) flag gate_reject+breach.
 EXPECTED_CODES = {
     "ls0.json": {},
-    "ls42.json": {"energy": [15]},
+    "ls42.json": {
+        "account_breach": [13, 14, 17, 23],
+        "energy": [15],
+        "gate_reject": [13, 14, 17, 23],
+    },
     "ls335.json": {
         "account_breach": _BREACH335,
         "energy": _ENERGY335,
@@ -193,3 +182,40 @@ def test_ls0_is_clean_baseline():
     assert summ["energy_model_agree"] == summ["n_steps"] == 25
     assert summ["landable_view_agree"] == 25
     assert summ["n_steps_with_disagreement"] == 0
+
+
+# Human's own winning steps at (2,24)/(5,22): create-robot, transfer, create-boulder.
+_LS42_WIN_STEPS = {13: [2, 24], 14: [2, 24], 17: [5, 22]}
+
+
+def test_ls42_truth_over_classifies():
+    """DECISIVE A-vs-B result: with the TRUE replayed enemy facings (ls42_truth.json),
+    the model STILL flags the human's own winning tiles as seen/window=0/breach even
+    though the human built/transferred there and won -- hypothesis B (over-classify),
+    not A (a wrong-phase aim clock)."""
+    audit = human_audit.audit_fixture("ls42.json")
+    assert audit["enemy_truth_steps"] == 24  # reproduced steps in the committed truth
+    by_i = {s["i"]: s for s in audit["steps"]}
+    for i, tile in _LS42_WIN_STEPS.items():
+        s = by_i[i]
+        assert s["target"] == tile
+        assert s["enemy_facings_source"] == "replay_truth"
+        assert s["verdict"]["gate_allow"] is False  # rejects the human's winning move
+        assert s["verdict"][
+            "breaches"
+        ]  # placement ends in a live cone under true phase
+    # steps 14/17 land under a cone on the tile NOW, yet the human survived.
+    assert by_i[14]["exposure_target"]["seen_now"]
+    assert by_i[17]["exposure_target"]["seen_now"]
+    assert by_i[14]["verdict"]["breaches"][0]["seen_by"][0][1] is False  # PARTIAL sight
+    assert by_i[17]["verdict"]["breaches"][0]["seen_by"][0][1] is True  # FULL sight
+
+
+def test_truth_provenance():
+    """ls42 (24 steps) and ls335 (25) have committed replay-truth fixtures; ls0 has
+    none and falls back to baseline facings for every step."""
+    assert human_audit.audit_fixture("ls42.json")["enemy_truth_steps"] == 24
+    assert human_audit.audit_fixture("ls335.json")["enemy_truth_steps"] == 25
+    assert human_audit.audit_fixture("ls0.json")["enemy_truth_steps"] == 0
+    for s in human_audit.audit_fixture("ls0.json")["steps"]:
+        assert s["enemy_facings_source"] == "generate_baseline"

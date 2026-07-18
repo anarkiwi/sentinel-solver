@@ -1,0 +1,1334 @@
+{
+ "fixture": "ls42.json",
+ "landscape": 66,
+ "entered_code": 42,
+ "source": "live asid-vice replay of the recorded human ACTION line",
+ "reproduced": 26,
+ "n_events": 42,
+ "won_at_step": null,
+ "divergence": null,
+ "steps": [
+  {
+   "i": 0,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 62,
+    "x": 13,
+    "y": 29,
+    "z": 5,
+    "zf": 224,
+    "hang": 48,
+    "vang": 245,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 128,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 23
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 184,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 15
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 1,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 62,
+    "x": 13,
+    "y": 29,
+    "z": 5,
+    "zf": 224,
+    "hang": 200,
+    "vang": 237,
+    "energy": 11
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 130,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 122,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 2,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 62,
+    "x": 13,
+    "y": 29,
+    "z": 5,
+    "zf": 224,
+    "hang": 200,
+    "vang": 237,
+    "energy": 9
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 107,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 99,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 3,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 62,
+    "x": 13,
+    "y": 29,
+    "z": 5,
+    "zf": 224,
+    "hang": 200,
+    "vang": 245,
+    "energy": 6
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 59,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 204,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 51,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 4,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    29
+   ],
+   "player": {
+    "slot": 49,
+    "x": 9,
+    "y": 30,
+    "z": 6,
+    "zf": 96,
+    "hang": 72,
+    "vang": 245,
+    "energy": 6
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 224,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 5,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "player": {
+    "slot": 49,
+    "x": 9,
+    "y": 30,
+    "z": 6,
+    "zf": 96,
+    "hang": 72,
+    "vang": 233,
+    "energy": 9
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 135,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 224,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 135,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 6,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    26
+   ],
+   "player": {
+    "slot": 49,
+    "x": 9,
+    "y": 30,
+    "z": 6,
+    "zf": 96,
+    "hang": 88,
+    "vang": 245,
+    "energy": 7
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 224,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 7,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    13,
+    26
+   ],
+   "player": {
+    "slot": 49,
+    "x": 9,
+    "y": 30,
+    "z": 6,
+    "zf": 96,
+    "hang": 96,
+    "vang": 245,
+    "energy": 4
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 244,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 8,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 224,
+    "vang": 245,
+    "energy": 4
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 91,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 244,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 90,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 9,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    9,
+    30
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 224,
+    "vang": 229,
+    "energy": 7
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 23,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 244,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 22,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 10,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    5,
+    30
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 224,
+    "vang": 229,
+    "energy": 9
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 3,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 244,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 2,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 11,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    4,
+    27
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 208,
+    "vang": 245,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 125,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 8,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 125,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 12,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    2,
+    24
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 192,
+    "vang": 245,
+    "energy": 11
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 70,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 8,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 70,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 13,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 184,
+    "vang": 245,
+    "energy": 9
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 23,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 8,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 23,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 14,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "player": {
+    "slot": 48,
+    "x": 13,
+    "y": 26,
+    "z": 7,
+    "zf": 96,
+    "hang": 184,
+    "vang": 245,
+    "energy": 6
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 28,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 15,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "player": {
+    "slot": 53,
+    "x": 2,
+    "y": 24,
+    "z": 8,
+    "zf": 96,
+    "hang": 56,
+    "vang": 245,
+    "energy": 6
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 100,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 28,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 99,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "best_effort_miss",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 16,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    13,
+    26
+   ],
+   "player": {
+    "slot": 53,
+    "x": 2,
+    "y": 24,
+    "z": 8,
+    "zf": 96,
+    "hang": 56,
+    "vang": 237,
+    "energy": 9
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 46,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 28,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "best_effort_miss",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 17,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    5,
+    22
+   ],
+   "player": {
+    "slot": 53,
+    "x": 2,
+    "y": 24,
+    "z": 8,
+    "zf": 96,
+    "hang": 56,
+    "vang": 237,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 1,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 28,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "diverge",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 18,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    5,
+    22
+   ],
+   "player": {
+    "slot": 53,
+    "x": 2,
+    "y": 24,
+    "z": 8,
+    "zf": 96,
+    "hang": 80,
+    "vang": 245,
+    "energy": 8
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 248,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 99,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 48,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 114,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 19,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    5,
+    22
+   ],
+   "player": {
+    "slot": 53,
+    "x": 2,
+    "y": 24,
+    "z": 8,
+    "zf": 96,
+    "hang": 88,
+    "vang": 245,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 248,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 30,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 48,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 45,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 20,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    2,
+    24
+   ],
+   "player": {
+    "slot": 49,
+    "x": 5,
+    "y": 22,
+    "z": 9,
+    "zf": 96,
+    "hang": 216,
+    "vang": 245,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 12,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 68,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 21,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    2,
+    24
+   ],
+   "player": {
+    "slot": 49,
+    "x": 5,
+    "y": 22,
+    "z": 9,
+    "zf": 96,
+    "hang": 216,
+    "vang": 221,
+    "energy": 8
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 12,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 79,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 68,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 79,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 22,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    12,
+    14
+   ],
+   "player": {
+    "slot": 49,
+    "x": 5,
+    "y": 22,
+    "z": 9,
+    "zf": 96,
+    "hang": 216,
+    "vang": 221,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 12,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 54,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 68,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 54,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "best_effort_miss",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 23,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    15,
+    11
+   ],
+   "player": {
+    "slot": 49,
+    "x": 5,
+    "y": 22,
+    "z": 9,
+    "zf": 96,
+    "hang": 96,
+    "vang": 233,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      21,
+      3
+     ],
+     "h_angle": 32,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 189,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 88,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 135,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  }
+ ],
+ "truth_steps_kept": 24,
+ "note": "steps are the clean pre-divergence prefix (true enemy phase on the human line); reproduced/n_events count the full replay attempt."
+}
