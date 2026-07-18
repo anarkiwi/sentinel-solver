@@ -44,8 +44,12 @@ Terms (b)+(c) are the "fill". Golden fractions across the sweep:
 | term | share of plot_world | exactness in `render_cost` |
 | --- | --- | --- |
 | (a) examine | 16-78% (median 35%) | count **exact**; cost `N*1737` (median 5.6%, max 14%) |
-| (b) terrain fill | 15-84% (median 33%) | approximated (residual, below) |
-| (c) object fill | 0-42% (median 14%) | **not modelled** (residual, below) |
+| (b) terrain fill | 15-84% (median 33%) | **set exact** ($0180 gate); per-tile cycles approximated (residual, below) |
+| (c) object fill | 0-42% (median 14%) | **set exact**; per-object base floor, `span_fill` residual (below) |
+
+The **plotted set** (which tiles/objects reach `plot_tile`/`plot_object`) is now
+byte-exact -- see "$0180 plotted-set gate" below. Only the per-tile/per-object fill
+*cycle count* remains approximate.
 
 ## Occlusion: $245B -> $24DA -> $2845 (EXACT)
 
@@ -75,6 +79,34 @@ the examine walk untouched (`N_examine` stays 0-mismatch) and drops hidden non-o
 tiles before the fill sum. Object tiles ($28F0 `CMP #$C0`) bypass occlusion and always
 plot, so the grid gates terrain only. In the sweep this removes roughly half of the
 "would-be-filled" tiles (e.g. ls0 view 0,0,0: 61 plot_tile calls, 48 hidden -> 13 filled).
+
+## The $0180 plotted-set gate: $295D -> $2A24 (EXACT)
+
+`project_scene`'s plotted-tile loop is a byte-exact port of the ROM's plot pass
+(`plot_row_of_tiles_or_block` $295D -> `plot_tile` $2A24), validated tile-for-tile and
+object-for-object against the real `$0180` reads (0 mismatches, all 15 sweep views).
+The examine pass (`$2845`) writes each tile's content byte to `$0180[col|$0005]` and
+`$291B` zeroes it if the tile is occlusion-hidden; the plot pass then re-walks each row
+and draws every column whose `$0180` slot is nonzero. Three facts make it exact:
+
+1. **Plot range is `[$0037, $0038)`** -- the split forward/backward loops
+   (`plot_start_of_row_loop $2961` / `plot_end_of_row_end $2975`) together cover
+   `[$0037, $0038-1]`; column `$0038` is never plotted. `$0037/$0038` equal the
+   merged extent `(min(start,p_start), max(end,p_end))` `_scan_visible` already emits.
+2. **No on-screen filter.** `plot_tile` gates only on `$0180 != 0`, i.e. the tile byte
+   is nonzero *and* (for non-object tiles) not occlusion-hidden. Off-screen tiles whose
+   byte is nonzero are still drawn (they clip inside the rasteriser). Height-0 flat tiles
+   have byte 0 and are skipped.
+3. **Slot remap.** `plot_tile` reads `$0180` at `(($0025|$0005)+$001B)&$3F`, so the drawn
+   tile is examine `(col+offc, row+offr)` with `offc=$001B&1`, `offr=($001B>>5)&1` and
+   `$001B = offset_to_tile_table $27D3 = [$00,$01,$21,$20]` by quadrant. `offr=1` reads
+   the other buffer bank = the previous (further) row. Measured drawn-tile offsets confirm
+   `(0,0)/(1,0)/(1,1)/(0,1)` for quadrants 0/1/2/3.
+
+The **observer row** ($276F) additionally plots a single tile: `$0037` when
+`$0037+1==$0003` (case A) or `$0038-1` when `$0038-2==$0003` (case B); the observer's own
+tile is drawn directly by `plot_checkerboard_tile` ($27CE), outside the `$0180` gate.
+`len(project_scene tiles)` now equals the golden `n_filled` exactly on every view.
 
 ## Exact tile selection (find_visible_extent)
 
@@ -134,25 +166,25 @@ then per polygon it calls the same `prepare_polygon`+`span_fill`. Per-type model
 **~63k-95k base** (vertex trig + `np x 2` `prepare_polygon`) plus distance-dependent
 fill up to ~213k when close -- the largest single error source (0-42% of plot_world).
 
-### Why the native drivers diverge (the port gap)
+### Why the per-tile fill cycles still diverge (the remaining port gap)
 
-The projector's per-tile `H`/`W` and kept-tile set are NOT the ROM's rasterised
-polygons:
+The kept-tile/object **set** is now exact (the `$0180` gate above). What remains is the
+per-tile/per-object fill *cycle count*, which is the full self-modifying DDA rasteriser:
 
 - **`H` is 0 where the ROM fills 100k+ cyc.** All-prep views (e.g. `0,48,8`,
   `335,64,16`) project every corner `screen_y` below the inner band, so the
   `[0,240]`-clamped `H` is 0 while `process_line` spends its full prep cost.
-- **The kept-tile set undercounts.** `plot_tile` gates on the `$0180` scan buffer, a
-  DIFFERENT table from the `$3E80` occlusion bitmap `project_scene` filters on; ROM
-  `plot_object` calls exceed the projector's object-tile count (e.g. `777,32,0`: ROM
-  plots 5 objects, projector finds 0). So even a perfect rasteriser fed the projector's
-  tiles would undercount.
+- **The fill is neither area- nor H-linear.** Measured per-tile fill costs span
+  2.5k-170k cyc; `span_fill` (8 cyc/byte middle + ~60 cyc/row edge) and the
+  `process_line`/`rasterise_polygon_edge` edge walk each dominate different tiles, both
+  gated by the exact per-section vertical/horizontal clip to `[$0052,$0051]=[48,240]`.
 
-Cycle-exactness therefore requires porting three more subsystems, in order: the
-`$0180` plotted-set gate (so the polygon set matches), the self-modifying
-`process_line`/`span_fill` rasteriser (edge tables + cycle count per polygon), and the
-`plot_object` vertex transform/projection (so object polygon geometry is native). All
-were RE'd to the block level here; none is curve-fit into `render_cost`.
+Cycle-exactness for the fill requires porting the self-modifying edge-walker
+(`prepare_polygon $2D6C` -> `process_lines $2DF2` -> `process_line $3002` /
+`rasterise_polygon_edge $2EE4`, steep/shallow x narrow/wide x 2 buffer sections) plus
+`span_fill $22AA`, driven by the now-exact projected vertices. This pass ships the exact
+plotted set (subsystem A) and keeps the terrain area-proxy and object base-floor as the
+documented fill residual; neither is curve-fit into `render_cost`.
 
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
@@ -160,9 +192,16 @@ were RE'd to the block level here; none is curve-fit into `render_cost`.
 | --- | --- | --- |
 | `N_examine` (count) | `_scan_visible` port | **exact** (0 mismatches) |
 | occlusion `$3E80` bitmap | `_occlusion_visible` port | **exact** (0 mismatches) |
+| plotted-tile set / `n_filled` | `$0180` gate in `project_scene` | **exact** (0 mismatches, 15 views) |
+| in-view object set | `$0180 >= $C0` tiles | **exact** (0 mismatches) |
 | examine cost | `N_examine * 1737` | median 5.6%, max 14% |
 | object base floor | `_inview_object_base` | floor, ratio 0.16-0.92 (never overshoots) |
-| total frames | + area-proxy fill + object base | median err 41% (was 53%) |
+| total frames | + area-proxy fill + object base | median err 27% (was 41%) |
+
+Fixing the plotted set (subsystem A) dropped the total-cost median error from 41% to 27%
+(max 62%) and the transfer-settle median from ~9% to ~8%. The remaining error is the
+per-tile terrain-fill and object `span_fill` cycle model (the DDA rasteriser), not the
+tile/object selection, which is now byte-exact.
 
 The **object-base term (c)** (`_inview_object_base`, `C_VERTEX`=2200, `C_PREP_CALL`=625,
 `SECTIONS`=2, per-type `(verts,polys)` model sizes) adds `plot_object`'s per-object
