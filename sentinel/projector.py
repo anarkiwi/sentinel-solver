@@ -464,14 +464,43 @@ def _inview_object_base(state, tiles):
     return total
 
 
+_EXACT_WARNED = [False]
+
+
+def _exact_render_cost(state, h, v, observer):
+    """The py65 exact backend when ``RENDER_COST_BACKEND=py65`` selects it and the ROM
+    is present, else None (warn once and fall back to the proxy). Player-view only."""
+    if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() != "py65":
+        return None
+    if observer is not None and observer != state.player:
+        return None
+    try:
+        from sentinel.tests import oracle
+
+        if not oracle.available():
+            raise FileNotFoundError("ROM fixture absent")
+        from sentinel import rendercost_py65
+
+        return rendercost_py65.render_cost_exact(state, h, v)
+    except (ImportError, FileNotFoundError) as exc:
+        if not _EXACT_WARNED[0]:
+            _EXACT_WARNED[0] = True
+            print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
+        return None
+
+
 def render_cost(state, view, observer=None):
     """One plot_world pass in PAL frames (docs/render_cost.md):
     ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W) + object_base)/19656``.
-    ``view`` maps ``h_angle``/``v_angle``; 0.0 if none."""
+    ``view`` maps ``h_angle``/``v_angle``; 0.0 if none. With ``RENDER_COST_BACKEND=py65``
+    (ROM present) the exact emulated plot_world cost replaces this proxy."""
     if not view or view.get("h_angle") is None:
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
+    exact = _exact_render_cost(state, h, v, observer)
+    if exact is not None:
+        return exact
     tiles, n_examine = project_scene(state, h, v, observer)
     area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
     obj_base = _inview_object_base(state, tiles)
