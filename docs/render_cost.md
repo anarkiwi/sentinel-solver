@@ -215,9 +215,17 @@ subtrees, object subtree excluded). Two results, both derived from the 6502:
   byte count -- so exact `span_fill` cycles require a **stateful emulation of the entire
   `plot_world` fill sequence in render order**, including the interleaved object
   polygons (which write the same two tables). This is why the prior pass saw a
-  filled-rows/y-extent ratio of 0.38-2.26 with no per-tile closed form. The exact
-  edge-build cost is shipped/derivable; the cross-polygon-coupled `span_fill` middle
-  remains the honest residual, kept as the area-proxy rather than a curve fit.
+  filled-rows/y-extent ratio of 0.38-2.26 with no per-tile closed form.
+
+Status of the port: `convert_angles` is cycle-exact; the DDA edge walk
+(`process_lines`/`rasterise_polygon_edge`, steep/shallow x inside/outside) reproduces the
+ROM `$0AD00`/`$0AE00` edge-table writes **byte-for-byte on every narrow polygon-section
+of the sweep** (534/534 verified against instrumented ROM stores). The per-section
+edge-build cycle count is transcribed to within a few percent (residual: a handful of
+branch-taken constant corrections, the wide-line `process_line` sectioning, and
+`span_fill`). Because the dominant `span_fill` term is cross-polygon coupled it is not a
+per-tile function, so the terrain fill in `render_cost` stays the area-proxy rather than a
+curve fit until the stateful whole-scene fill emulation lands.
 
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
