@@ -49,7 +49,10 @@ Terms (b)+(c) are the "fill". Golden fractions across the sweep:
 
 The **plotted set** (which tiles/objects reach `plot_tile`/`plot_object`) is now
 byte-exact -- see "$0180 plotted-set gate" below. Only the per-tile/per-object fill
-*cycle count* remains approximate.
+*cycle count* remains approximate. That residual is a cycle-accuracy gap, but it is
+**not behaviorally negligible**: on a knife-edge board a within-error fill/object cost
+change can flip the game outcome (measured on ls42/seed-66 -- see "Behavioral
+sensitivity (measured)" below).
 
 ## Occlusion: $245B -> $24DA -> $2845 (EXACT)
 
@@ -186,6 +189,80 @@ Cycle-exactness for the fill requires porting the self-modifying edge-walker
 plotted set (subsystem A) and keeps the terrain area-proxy and object base-floor as the
 documented fill residual; neither is curve-fit into `render_cost`.
 
+### Subsystem B (fill rasteriser): what is exact, and the cross-polygon coupling
+
+This pass reverse-engineered and cycle-bracketed the whole fill rasteriser per
+polygon-section (py65 `processorCycles` deltas around `$2D6C` prepare + `$22AA` span
+subtrees, object subtree excluded). Two results, both derived from the 6502:
+
+- **`convert_angles_into_screen_coordinates` ($2DCF/$2D93) is ported cycle-exact.** The
+  per-vertex `screen_x = high byte of ((h_angle16 + $0011:$0029) << 3)` and the
+  sign-extended `$0B40` high byte reproduce the ROM `$A7A0`/`$0B40` byte-for-byte on all
+  3574 swept vertices, and the ported instruction-cycle sum equals the ROM `conv` bucket
+  **exactly** (258628 == 258628 cyc over the sweep). The double-coordinate restart
+  ($2D93, taken when any `h_angle16+$0011 >= $20`) is reproduced.
+- **The prepare/edge-BUILD cost is per-polygon independent** (convert + `process_lines`
+  dispatch + `rasterise_polygon_edge` + `process_line`): it reads only the polygon's own
+  projected vertices and the fixed buffer/band vars, and its cycle count does not depend
+  on any table state. So the "prep-dominated" majority of the fill is, in principle,
+  exactly computable from `project_scene`'s corners once the steep/shallow x narrow/wide
+  edge walk is transcribed.
+
+- **`span_fill` cost is NOT a per-tile function -- it couples across polygons.** The
+  `polygon_left_edge_table $0AD00` / `polygon_right_edge_table $0AE00` are **never
+  cleared** between polygons. A polygon that clips to a sliver (e.g. a single band-edge
+  row) writes only some of the `[$0004,$0006]` rows; `span_fill` then reads **stale**
+  left/right columns left by a *previous* polygon (verified: a row's `$0AE0` byte matched
+  none of the current triangle's three `$A7A0` values, only a prior polygon's). Because
+  the middle-fill length is `right_col - left_col`, that stale state changes the span
+  byte count -- so exact `span_fill` cycles require a **stateful emulation of the entire
+  `plot_world` fill sequence in render order**, including the interleaved object
+  polygons (which write the same two tables). This is why the prior pass saw a
+  filled-rows/y-extent ratio of 0.38-2.26 with no per-tile closed form.
+
+Status of the port: `convert_angles` is cycle-exact; the DDA edge walk
+(`process_lines`/`rasterise_polygon_edge`, steep/shallow x inside/outside) reproduces the
+ROM `$0AD00`/`$0AE00` edge-table writes **byte-for-byte on every narrow polygon-section
+of the sweep** (534/534 verified against instrumented ROM stores). The per-section
+edge-build cycle count is transcribed to within a few percent (residual: a handful of
+branch-taken constant corrections, the wide-line `process_line` sectioning, and
+`span_fill`). Because the dominant `span_fill` term is cross-polygon coupled it is not a
+per-tile function, so the terrain fill in `render_cost` stays the area-proxy rather than a
+curve fit until the stateful whole-scene fill emulation lands.
+
+### Behavioral sensitivity (measured)
+
+The fill/object residual is a cycle-accuracy gap, but on a knife-edge board it is **not
+behaviorally negligible**. Measured on landscape 42 (typed `0042` = `0x42` = seed 66) by
+perturbing `render_cost`'s scene-dependent cost terms via env overrides and diffing the
+player's verb+tile decision log:
+
+    python -m sentinel.player 66 --max-actions 250
+
+| variant (env) | actions | outcome |
+| --- | --- | --- |
+| baseline (default) | 21 | lost, energy 0, dead |
+| fill zeroed `RENDER_PER_SCANLINE=0 RENDER_PER_PIXEL=0` | 21 | lost -- decision sequence **identical** to baseline |
+| `render_cost` +30% (all scene terms x1.3) | 50 | **won**, energy 7, alive |
+| `render_cost` -30% (all scene terms x0.7) | 24 | lost (different line) |
+| fill +100% (x2) | 17 | lost, alive |
+| object term zeroed `RENDER_C_VERTEX=0 RENDER_C_PREP_CALL=0` | 18 | lost |
+
+Facts this experiment proves (ls42/seed-66 only -- one board, a knife-edge losing case;
+this does **not** generalize to all landscapes):
+
+- A **+30% perturbation -- smaller than the model's own ~27% median error vs py65** --
+  flips ls42 from a loss to a win. A within-error cost change alters the game outcome, so
+  the residual is not behaviorally negligible on this board.
+- The **opening 14 actions (the entire build: every create/transfer/absorb) are
+  byte-identical across ALL perturbations, including +/-100%.** Divergence begins only at
+  action 15, the endgame -- exactly where ls42 is won or lost.
+- **Direction matters.** Under-counting (fill zeroed) left the decision sequence
+  identical here; the realistic +/-30% band straddles win/loss.
+
+Env knobs used: `RENDER_PER_SCANLINE`, `RENDER_PER_PIXEL` (terrain fill term (b)) and
+`RENDER_C_VERTEX`, `RENDER_C_PREP_CALL` (object term (c)).
+
 ## Achieved accuracy (vs py65 exact plot_world cycles)
 
 | term | model | accuracy vs py65 |
@@ -201,7 +278,10 @@ documented fill residual; neither is curve-fit into `render_cost`.
 Fixing the plotted set (subsystem A) dropped the total-cost median error from 41% to 27%
 (max 62%) and the transfer-settle median from ~9% to ~8%. The remaining error is the
 per-tile terrain-fill and object `span_fill` cycle model (the DDA rasteriser), not the
-tile/object selection, which is now byte-exact.
+tile/object selection, which is now byte-exact. This residual is a cycle-accuracy number
+but not only that: on ls42/seed-66 a within-error (+30%) change of it flips the game from
+a loss to a win (see "Behavioral sensitivity (measured)"), so on knife-edge boards it can
+change player outcomes rather than just the predicted frame count.
 
 The **object-base term (c)** (`_inview_object_base`, `C_VERTEX`=2200, `C_PREP_CALL`=625,
 `SECTIONS`=2, per-type `(verts,polys)` model sizes) adds `plot_object`'s per-object
@@ -268,7 +348,9 @@ folded into this and the tune base.
 Median **~9%**, max ~29% (was ~22%, and ~10x / ~90% under before the settle base). The
 object-base term (c) closes most of the object-view gap; the residual is the documented
 `render_cost` terrain fill-proxy swing plus the object `span_fill` fill and the
-single-constant occlusion approximation.
+single-constant occlusion approximation. This swing is not merely a numeric-accuracy
+matter: on knife-edge boards it can change the player's decisions and the game outcome
+(measured on ls42/seed-66 -- see "Behavioral sensitivity (measured)").
 
 A u-turn (EOR $80 bearing flip) scrolls 0 frames (instant) and is not a viewpoint
 replot.
