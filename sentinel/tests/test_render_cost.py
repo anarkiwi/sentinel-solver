@@ -120,8 +120,9 @@ def _check(data):
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        _tiles, n_examine = projector.project_scene(state, h, v)
+        tiles, n_examine = projector.project_scene(state, h, v)
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine} != {rec}"
+        assert len(tiles) == rec["n_filled"], f"{key} plots {len(tiles)} != {rec}"
         pred_ex = n_examine * projector.C_EXAMINE  # examine cycles ~ count * mean floor
         assert pred_ex == pytest.approx(rec["examine_cycles"], rel=0.16), key
         want = (
