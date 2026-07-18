@@ -52,15 +52,9 @@ def available():
     return os.path.exists(IMG)
 
 
-def fresh_machine():
-    """A machine with the image loaded and the uninitialised RAM zeroed."""
-    if not available():
-        raise FileNotFoundError(f"{IMG} missing: place the game memory image there")
-    with open(IMG, "rb") as f:
-        img = f.read()
-    mem = bytearray(0x10000)
-    for a, b in LOADED:
-        mem[a : b + 1] = img[a : b + 1]
+def _wrap(mem):
+    """Wrap a 64 KB image in an ObservableMemory play machine: the keyboard/raster
+    read hooks, the render-buffer stop-write hook and the KERNAL RTS stubs."""
     state = {"stop": False, "raster": 0}
     m = ObservableMemory()
 
@@ -86,6 +80,33 @@ def fresh_machine():
     return cpu, mem, state
 
 
+def _rom_image():
+    if not available():
+        raise FileNotFoundError(f"{IMG} missing: place the game memory image there")
+    with open(IMG, "rb") as f:
+        return f.read()
+
+
+def fresh_machine():
+    """A machine with the image loaded and the uninitialised RAM zeroed."""
+    img = _rom_image()
+    mem = bytearray(0x10000)
+    for a, b in LOADED:
+        mem[a : b + 1] = img[a : b + 1]
+    return _wrap(mem)
+
+
+def machine_from_image(src):
+    """A play machine whose board is ``src`` (a live 64 KB sim image, e.g.
+    ``State.mem``) with the ROM code/tables overlaid from the game image; the
+    board lives in low RAM outside the ROM ``LOADED`` regions, so it survives."""
+    img = _rom_image()
+    mem = bytearray(src)
+    for a, b in LOADED:
+        mem[a : b + 1] = img[a : b + 1]
+    return _wrap(mem)
+
+
 def call(cpu, mem, addr, a=0, x=0, y=0, maxins=40_000_000, state=None, stop_pc=None):
     """JSR-style call: run from `addr` until it returns to a guard, reaches
     `stop_pc`, or the keyboard is scanned (frame complete)."""
@@ -106,6 +127,41 @@ def call(cpu, mem, addr, a=0, x=0, y=0, maxins=40_000_000, state=None, stop_pc=N
         if state is not None and state["stop"]:
             break
     return n
+
+
+PLOT_WORLD = 0x2625  # plot_world
+FRAME_CYCLES = 19656.0  # PAL frame
+
+
+def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
+    """Run the real plot_world ($2625) once headless with the raytraced occlusion
+    table ($245B) active, from the player at (h_angle, v_angle); return the exact
+    frame cost = plot_world CPU-cycle delta / 19656. Mirrors the golden setup."""
+    player = mem[0x000B]
+    mem[0x006E] = player
+    mem[0x09C0 + player] = h_angle & 0xFF  # objects_h_angle
+    mem[0x0140 + player] = v_angle & 0xFF  # objects_v_angle
+    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
+        mem[addr] = 0
+    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
+    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
+    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window ($994b/$994d)
+    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
+    state["stop"] = False
+    call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    ret = 0xFFF0
+    mem[ret] = 0x60
+    sp = cpu.sp
+    mem[0x0100 + sp] = (ret - 1) >> 8
+    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
+    cpu.sp = (sp - 2) & 0xFF
+    cpu.pc = PLOT_WORLD
+    c0 = cpu.processorCycles
+    steps = 0
+    while cpu.pc != ret and steps < maxins:
+        cpu.step()
+        steps += 1
+    return (cpu.processorCycles - c0) / FRAME_CYCLES
 
 
 def generate_machine(landscape):
