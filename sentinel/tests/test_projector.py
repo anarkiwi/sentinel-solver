@@ -143,7 +143,8 @@ def test_visible_tiles_and_replot():
     p = s.player
     h, v = s.obj_h_angle[p], s.obj_v_angle[p]
     tiles = projector.visible_tiles(s, h, v)
-    assert tiles and all(t["onscreen"] for t in tiles)
+    # plot_tile ($2A24) draws every nonzero-$0180 tile, incl off-screen ones that clip in the rasteriser.
+    assert tiles and all(t["tile_byte"] for t in tiles)
     assert all(t["h"] >= 0 and t["w"] >= 0 for t in tiles)
     settle = projector.viewpoint_replot_frames(s, {"h_angle": h, "v_angle": v})
     single = projector.render_cost(s, {"h_angle": h, "v_angle": v})

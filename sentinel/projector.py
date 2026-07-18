@@ -107,7 +107,6 @@ def _project(state, setup, col, row):
 _SCREEN_H = int(os.environ.get("RENDER_SCREEN_H", "240"))  # $F0 fillable scanlines
 _W_SCALE = int(os.environ.get("RENDER_W_SCALE", "32"))  # angle16 -> screen pixels
 _W_SCREEN = int(os.environ.get("RENDER_W_SCREEN", "160"))  # screen width, pixels
-_W_WRAP = int(os.environ.get("RENDER_W_WRAP", "200"))  # skip angle-wrapped tiles
 
 
 def _signed16(hi, lo):
@@ -124,6 +123,12 @@ def _clamp(v, lo, hi):
 # $0C48 furthest-row extent hint ($26CD); 0 in every fresh play state, env-overridable.
 _ROW_HINT = int(os.environ.get("RENDER_ROW_HINT", "0"))
 _LAST = mm.N - 1  # 0x1F
+_OFFSET_TO_TILE = (
+    0x00,
+    0x01,
+    0x21,
+    0x20,
+)  # offset_to_tile_table $27D3, indexed by quadrant
 
 
 def _scan_visible(state, setup):
@@ -212,15 +217,17 @@ def _scan_visible(state, setup):
             break
         if row == c1d:  # consider_plotting_observer_row $276F: last, observer row
             y = (start + 1) & 0xFF
-            if y == c3:
+            if y == c3:  # plot_observer_row $2786: plots the single tile $0037
                 probe(start, row)
                 probe(y, row)
                 probe(c3, row)
-            elif (end - 2) & 0xFF == c3:
+                rows.append((row, start, (start + 1) & 0xFF))
+            elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
                 probe((end - 1) & 0xFF, row)
                 probe(end, row)
                 probe(c3, row)
-            else:
+                rows.append((row, (end - 1) & 0xFF, end))
+            else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
                 probe(c3, row)
             break
         p_start, p_end = start, end
@@ -367,34 +374,38 @@ def project_scene(state, h_angle, v_angle, observer=None):
             cache[(col, row)] = cached
         return cached
 
+    s1b = _OFFSET_TO_TILE[setup["quadrant"]]
+    # plot_tile ($2A24) reads $0180 slot (($0025|$0005)+$001B)&$3F: drawn tile is examine (col+offc,row+offr); $001B=$27D3[quad], bit0=col, bit5=bank(row+1).
+    offc, offr = s1b & 1, (s1b >> 5) & 1
     tiles = []
     for row, lo, hi in rows:
-        for col in range(lo, hi + 1):
-            res = proj(col, row)
-            if not res[5]:
+        re = (row + offr) & 0xFF
+        for col in range(lo, hi):  # plot range [$0037, $0038); $0038 excluded
+            ce = (col + offc) & 0xFF
+            res = proj(ce, re)
+            tb = res[4]
+            if tb == 0:  # $0180 slot zero: nothing to plot ($2A27 BEQ)
                 continue
-            tx, ty = _tile_xy(setup["quadrant"], col, row)
-            if res[4] < mm.OBJECT_TILE and not visible[ty][tx]:
-                continue  # $2A27: hidden non-object tiles are examined, never filled
-            c1, r1 = min(col + 1, _LAST), min(row + 1, _LAST)
-            corners = (res, proj(c1, row), proj(col, r1), proj(c1, r1))
+            tx, ty = _tile_xy(setup["quadrant"], ce, re)
+            if tb < mm.OBJECT_TILE and not visible[ty][tx]:
+                continue  # $291B zeroes $0180 for hidden non-object tiles
+            c1, r1 = min(ce + 1, _LAST), min(re + 1, _LAST)
+            corners = (res, proj(c1, re), proj(ce, r1), proj(c1, r1))
             ys = [_signed16(c[3], c[2]) for c in corners]
             xs = [_signed16(c[1], c[0]) for c in corners]
             top = _clamp(min(ys), 0, _SCREEN_H)
             bot = _clamp(max(ys), 0, _SCREEN_H)
             span = (max(xs) - min(xs)) / _W_SCALE
-            if span > _W_WRAP:  # a tile straddling the angle wrap: not on screen
-                continue
             tiles.append(
                 {
-                    "col": col,
-                    "row": row,
+                    "col": ce,
+                    "row": re,
                     "tile": (tx, ty),
                     "sx_lo": res[0],
                     "sx_hi": res[1],
                     "sy_lo": res[2],
                     "sy_hi": res[3],
-                    "tile_byte": res[4],
+                    "tile_byte": tb,
                     "onscreen": res[5],
                     "h": bot - top,
                     "w": max(min(span, _W_SCREEN), 0),
