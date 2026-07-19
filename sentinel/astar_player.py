@@ -33,12 +33,9 @@ from sentinel.playerbase import (
     SAFE_FRAMES,
     SIGHTS_CENTRE,
     TAP_FRAMES,
-    UNIT_FRAMES,
 )
 
 _ROBOT_EYE = 0.875
-_MARGIN = SAFE_FRAMES  # window slack a landed body needs beyond the action
-_DRAIN_DELAY = 120.0 * UNIT_FRAMES  # $0C20: frames from first-seen to first drain
 _RADIUS = 16  # tile scan radius for build candidates around the player
 # Per-op h floors from charged primitives: min aim == tap_action latch + per-verb settle floor.
 _AIM_FLOOR = float(TAP_FRAMES)  # minimal aim (_aim_frames with nu=ns=nv=cur=0)
@@ -502,11 +499,9 @@ class AStarPlayer(BasePlayer):
             if robot_eye <= my_eye + EYE_EPS:
                 continue
             exposed = self._exposing_enemies(tile)
-            if self._seen_now(exposed):
+            if not self._drain_gate("robot", tile, exposed, HOP_FRAMES):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
-            if window < HOP_FRAMES:
-                continue
             sees = self._tile_sees_target(tile, target)
             cands.append(((sees, robot_eye, window), tile, k))
         cands.sort(key=lambda c: c[0], reverse=True)
@@ -538,10 +533,8 @@ class AStarPlayer(BasePlayer):
         if not actions.transfer(st, top) or actions.player_dead(st):
             return None
         steps.append(("transfer", tile))
-        # a seen destination is a trap only if no seer is absorbable from it
-        if self._gaze_window(
-            tile
-        ) + _DRAIN_DELAY < _MARGIN and not self._absorbable_here(st):
+        # a body landed in a live full-sight cone is a trap unless a seer is absorbable from here
+        if not self._drain_gate("transfer", tile) and not self._absorbable_here(st):
             return None
         return g, steps
 

@@ -236,14 +236,15 @@ class Player(BasePlayer):
             if eye <= my_eye + EYE_EPS and not urgent:
                 continue
             exposed = self._exposing_enemies(tile)
-            window = self._gaze_window(tile, exposed=exposed)
             view = views.get(tile, band=True)
             if view is None:
                 continue
             aimf = self._aim_frames(view)
-            arrival = window - aimf - self._settle("transfer", view)
-            if arrival <= 0.0:
-                continue  # seen during the aim or the post-transfer settle
+            settle = self._settle("transfer", view)
+            if not self._drain_gate("transfer", tile, exposed, aimf + settle):
+                continue  # a body drainable during the aim or the post-transfer settle
+            window = self._gaze_window(tile, exposed=exposed)
+            arrival = window - aimf - settle
             if not urgent and (aimf >= self.tick_window or arrival < SAFE_FRAMES):
                 continue  # the destination clock starts at ARRIVAL, after the aim
             key = (eye, -aimf, window)
@@ -390,19 +391,21 @@ class Player(BasePlayer):
             if top is not None and st.obj_type[top] == mm.T_BOULDER:
                 robot_eye = self._base_z(top) + BOULDER_H
                 aimf = self._aim_frames(view)
-                exposed = self._exposing_enemies(tile)
-                if self._seen_now(exposed, full_only=seen_tier >= 1) and seen_tier < 2:
-                    continue  # never build under a live view, even a partial one
-                window = self._gaze_window(tile, exposed=exposed)
-                if window < aimf + need and seen_tier < 2:
-                    continue  # the destination clock starts at ARRIVAL
                 if not urgent and aimf >= self.tick_window:
                     continue  # the aim itself outlasts our own tile's safety
+                exposed = self._exposing_enemies(tile)
+                window = self._gaze_window(tile, exposed=exposed)
+                # a robot body is never left in a live FULL-sight cone; a boulder-raise is drain-exempt
+                robot_ok = seen_tier >= 2 or self._drain_gate(
+                    "robot", tile, exposed, aimf + need
+                )
                 sees = self._tile_sees_target(tile, target)
                 grows = robot_eye > my_eye + EYE_EPS or sees
                 if (
-                    grows or (urgent and window > SAFE_FRAMES)
-                ) and st.energy >= robot_min:
+                    robot_ok
+                    and (grows or (urgent and window > SAFE_FRAMES))
+                    and st.energy >= robot_min
+                ):
                     key = (sees, robot_eye, -aimf, window)
                     if best_robot is None or key > best_robot[0]:
                         best_robot = (key, tile, view)
@@ -419,11 +422,12 @@ class Player(BasePlayer):
                 if not urgent and aimf >= self.tick_window:
                     continue
                 exposed = self._exposing_enemies(tile)
-                if self._seen_now(exposed, full_only=seen_tier >= 1) and seen_tier < 2:
+                # a bare-tile boulder starts a hop: gate on the FUTURE robot's full-sight safety, not a partial glimpse
+                if seen_tier < 2 and not self._drain_gate(
+                    "robot", tile, exposed, aimf + need
+                ):
                     continue
                 window = self._gaze_window(tile, exposed=exposed)
-                if window < aimf + need and seen_tier < 2:
-                    continue
                 robot_eye = self._robot_eye_after_boulder(tile)
                 sees = self._tile_sees_target(tile, target)
                 if (

@@ -148,12 +148,12 @@ def _audit_step(i, ev, evs, seed, truth=None):
     if view is not None:
         view_matches = view["h_angle"] == pl["hang"] and view["v_angle"] == pl["vang"]
 
+    fverb = {"create": "boulder" if otype == mm.T_BOULDER else "robot"}.get(verb, verb)
     gate_allow = None
     if verb in ("create", "transfer") and view is not None:
         need = bp._settle("transfer", view) if verb == "transfer" else HOP_FRAMES
-        gate_allow = (not seen_now) and gaze >= aim_frames + need
+        gate_allow = bp._drain_gate(fverb, tgt, exposed_t, aim_frames + need)
 
-    fverb = {"create": "boulder" if otype == mm.T_BOULDER else "robot"}.get(verb, verb)
     fire_ok = None
     breaches = []
     if view is not None:

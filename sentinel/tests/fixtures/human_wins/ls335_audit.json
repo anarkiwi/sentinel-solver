@@ -213,13 +213,11 @@
    122
   ],
   "view_facing_matches": 1,
-  "n_steps_with_disagreement": 76,
+  "n_steps_with_disagreement": 65,
   "disagreement_steps_by_code": {
    "account_breach": [
     22,
-    27,
     29,
-    34,
     38,
     55,
     62,
@@ -228,14 +226,10 @@
     73,
     75,
     84,
-    99,
-    101,
     103,
     104,
     106,
-    116,
     121,
-    133,
     134,
     135
    ],
@@ -300,25 +294,17 @@
     127
    ],
    "gate_reject": [
-    5,
     15,
     16,
-    20,
     21,
     22,
     23,
-    27,
     28,
     29,
-    34,
-    35,
     37,
     38,
     40,
-    52,
-    53,
     55,
-    57,
     59,
     61,
     62,
@@ -328,24 +314,16 @@
     73,
     75,
     76,
-    78,
-    81,
     83,
     84,
     85,
-    94,
-    99,
-    101,
     103,
     104,
     106,
-    116,
     121,
     127,
-    133,
     134,
     135,
-    142,
     143
    ]
   }
@@ -1473,13 +1451,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 6,
@@ -2583,7 +2559,7 @@
     "n_exposed": 4,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 1225.1,
+    "gaze_window": 1697.1,
     "tree_near": true
    },
    "exposure_player": {
@@ -2771,7 +2747,7 @@
     "n_exposed": 5,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 899.1,
+    "gaze_window": 1389.9,
     "tree_near": true
    },
    "exposure_player": {
@@ -2959,7 +2935,7 @@
     "n_exposed": 5,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 801.7,
+    "gaze_window": 1292.5,
     "tree_near": true
    },
    "exposure_player": {
@@ -3151,7 +3127,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 753.0,
+    "player_window": 872.9,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3339,7 +3315,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 618.1,
+    "player_window": 753.0,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3530,7 +3506,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 296.0,
+    "player_window": 427.1,
     "own_tile_transfer": false
    },
    "aim": {
@@ -3716,7 +3692,7 @@
     "n_exposed": 5,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 3.7,
+    "gaze_window": 116.1,
     "tree_near": true
    },
    "exposure_player": {
@@ -3904,7 +3880,7 @@
     "n_exposed": 5,
     "n_full": 3,
     "seen_now": true,
-    "gaze_window": 0.0,
+    "gaze_window": 3.7,
     "tree_near": true
    },
    "exposure_player": {
@@ -4302,13 +4278,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 21,
@@ -5646,28 +5620,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       8,
-       13
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 28,
@@ -6946,28 +6903,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       4,
-       24
-      ],
-      "seen_by": [
-       [
-        0,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 35,
@@ -7113,7 +7053,7 @@
     "n_exposed": 6,
     "n_full": 5,
     "seen_now": false,
-    "gaze_window": 749.3,
+    "gaze_window": 1498.5,
     "tree_near": true
    },
    "exposure_player": {
@@ -7135,13 +7075,12 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": false,
     "breaches": []
    },
    "disagreements": [
     "energy:tree_spawn",
-    "gate_reject",
     "fire_fail"
    ]
   },
@@ -7964,7 +7903,7 @@
     "n_exposed": 2,
     "n_full": 1,
     "seen_now": false,
-    "gaze_window": 0.0,
+    "gaze_window": 1236.3,
     "tree_near": true
    },
    "exposure_player": {
@@ -9803,7 +9742,7 @@
     "n_exposed": 4,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 749.3,
+    "gaze_window": 1498.5,
     "tree_near": true
    },
    "exposure_player": {
@@ -9825,13 +9764,12 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
    "disagreements": [
-    "energy:tree_spawn",
-    "gate_reject"
+    "energy:tree_spawn"
    ]
   },
   {
@@ -9968,13 +9906,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 54,
@@ -10521,7 +10457,7 @@
     "n_exposed": 4,
     "n_full": 3,
     "seen_now": false,
-    "gaze_window": 749.3,
+    "gaze_window": 1498.5,
     "tree_near": true
    },
    "exposure_player": {
@@ -10543,13 +10479,12 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
    "disagreements": [
-    "energy:tree_spawn",
-    "gate_reject"
+    "energy:tree_spawn"
    ]
   },
   {
@@ -13448,13 +13383,12 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
    "disagreements": [
-    "energy:drain",
-    "gate_reject"
+    "energy:drain"
    ]
   },
   {
@@ -13798,7 +13732,7 @@
     "n_exposed": 3,
     "n_full": 1,
     "seen_now": false,
-    "gaze_window": 749.3,
+    "gaze_window": 1985.6,
     "tree_near": true
    },
    "exposure_player": {
@@ -13820,13 +13754,12 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
    "disagreements": [
-    "energy:tree_spawn",
-    "gate_reject"
+    "energy:tree_spawn"
    ]
   },
   {
@@ -15455,13 +15388,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 95,
@@ -16045,28 +15976,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       4,
-       24
-      ],
-      "seen_by": [
-       [
-        0,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 100,
@@ -16273,28 +16187,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       4,
-       24
-      ],
-      "seen_by": [
-       [
-        0,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 102,
@@ -17951,28 +17848,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       8,
-       11
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 117,
@@ -19818,28 +19698,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       9,
-       2
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 134,
@@ -20841,13 +20704,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
     "breaches": []
    },
-   "disagreements": [
-    "gate_reject"
-   ]
+   "disagreements": []
   },
   {
    "i": 143,
@@ -21471,7 +21332,7 @@
     "n_exposed": 2,
     "n_full": 1,
     "seen_now": false,
-    "gaze_window": 1498.5,
+    "gaze_window": 2734.8,
     "tree_near": true
    },
    "exposure_player": {

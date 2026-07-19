@@ -29,6 +29,13 @@ HOP_FRAMES = 700  # gaze window a full hop (2 creates + transfer + aims) needs
 SAFE_FRAMES = 250  # window below which the current tile is "urgent"
 WAIT_FRAMES = 60  # idle advance when no action is available
 EYE_EPS = 0.1  # minimum eye-height progress for a climb move
+DRAIN_DELAY = 120.0 * UNIT_FRAMES  # $0C20: first-seen -> first drain countdown
+MEANIE_SPAWN_FRAMES = enemies.UPDATE_COOLDOWN_MEANIE_MADE * UNIT_FRAMES  # $1869 hold
+MEANIE_ARM_FRAMES = (
+    (128 // enemies.MEANIE_ROTATE_STEP)
+    * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE
+    * UNIT_FRAMES
+)  # $171B worst-case meanie rotate-to-face the player
 
 
 def _signed(b):
@@ -232,33 +239,74 @@ class BasePlayer:
             if full or not full_only
         )
 
-    def _gaze_window(self, tile, exposed=None):
-        """Frames until an enemy that can DAMAGE a robot on `tile` has it in
-        its rotating cone: full visibility drains ($1838); partial visibility
-        counts only with a tree within 10 tiles (the meanie arm, $19C3).  0 ==
-        in such a cone now; inf == never.  Deterministic -- no PRNG."""
+    def _cone_onset(self, e, angle_hi, half):
+        """Frames until enemy `e`'s rotating scan cone ($1805, fixed +-step /
+        200-round reload) first covers `angle_hi`: 0 if it does now, inf if its
+        step never brings it round.  Deterministic -- no PRNG."""
         st = self.st
+        facing = st.obj_h_angle[e]
+        if self._in_cone(angle_hi, facing, half):
+            return 0.0
+        step = _signed(st.mem[mm.ROTATION_SPEED_TABLE + e])
+        if step == 0:
+            return math.inf
+        first = st.mem[mm.ENEMIES_ROTATION_COOLDOWN + e] * UNIT_FRAMES
+        for k in range(1, 256 // abs(step) + 2):
+            facing = (facing + step) & 0xFF
+            if self._in_cone(angle_hi, facing, half):
+                return first + (k - 1) * ROT_PERIOD_FRAMES
+        return math.inf
+
+    def _meanie_window(self, tile, exposed):
+        """Frames until a meanie armed from PARTIAL sight of a body on `tile`
+        could force a hyperspace ($1986): a partially-seeing enemy must rotate its
+        cone on, run the ~120-round drain countdown to the meanie branch
+        ($183D/$1852), spawn the meanie ($1869) and rotate it to face ($171B).
+        Needs a tree within 10 tiles ($19C3); inf otherwise.  Always far slower
+        than a drain -- this clock is NEVER 0."""
+        if not self._tree_near(tile):
+            return math.inf
+        half = FOV_HALF + FOV_MARGIN
+        onset = min(
+            (self._cone_onset(e, ah, half) for e, ah, full in exposed if not full),
+            default=math.inf,
+        )
+        if onset == math.inf:
+            return math.inf
+        return onset + DRAIN_DELAY + MEANIE_SPAWN_FRAMES + MEANIE_ARM_FRAMES
+
+    def _gaze_window(self, tile, exposed=None):
+        """Frames until an enemy can DRAIN a robot body on `tile`.  Only FULL
+        sight drains ($1838; $16E6 step 3 skips a partially-seen robot), so the
+        drain clock keys on full-sight enemies rotating their cone on.  The
+        partial+tree path is the MEANIE arm ($19C3) -- a SEPARATE, far slower
+        clock (`_meanie_window`), never an immediate drain.  0 == drainable now;
+        inf == never.  Deterministic -- no PRNG."""
         if exposed is None:
             exposed = self._exposing_enemies(tile)
-        dangerous = [x for x in exposed if x[2]]
-        if len(dangerous) < len(exposed) and self._tree_near(tile):
-            dangerous = exposed
-        best = math.inf
         half = FOV_HALF + FOV_MARGIN
-        for e, angle_hi, _ in dangerous:
-            facing = st.obj_h_angle[e]
-            if self._in_cone(angle_hi, facing, half):
-                return 0.0
-            step = _signed(st.mem[mm.ROTATION_SPEED_TABLE + e])
-            if step == 0:
+        best = self._meanie_window(tile, exposed)
+        for e, angle_hi, full in exposed:
+            if not full:
                 continue
-            first = st.mem[mm.ENEMIES_ROTATION_COOLDOWN + e] * UNIT_FRAMES
-            for k in range(1, 256 // abs(step) + 2):
-                facing = (facing + step) & 0xFF
-                if self._in_cone(angle_hi, facing, half):
-                    best = min(best, first + (k - 1) * ROT_PERIOD_FRAMES)
-                    break
+            best = min(best, self._cone_onset(e, angle_hi, half))
+            if best == 0.0:
+                break
         return best
+
+    def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
+        """Whether placing `verb` on `tile` is drain-safe.  A boulder is exempt
+        ($16E6 drains robots only, never a boulder body); a robot/transfer must be
+        clear of every live FULL-sight cone now and keep its full-sight drain
+        window past `budget` (the aim+settle it stands exposed).  Partial sight is
+        not a drain -- its slower meanie arm is priced into `_gaze_window`."""
+        if verb == "boulder":
+            return True
+        if exposed is None:
+            exposed = self._exposing_enemies(tile)
+        if self._seen_now(exposed, full_only=True):
+            return False
+        return self._gaze_window(tile, exposed=exposed) >= budget
 
     def _frozen(self):
         """World frozen until the player's first action ($0CE5 bit7, $3682)."""
@@ -382,25 +430,25 @@ class BasePlayer:
         return actioncost.SETTLE.get(key, 60)
 
     def _account(self, verb, tile):
-        """Strict post-settle invariant check on the ACTUAL placed object via the
-        ROM's own scan cone: record a create/transfer left in a DANGEROUS live
-        cone (full sight, or -- transfers -- partial with a tree within 10
-        tiles), the aim/settle exposure the plan-time gate misses."""
+        """Strict post-settle invariant on the ACTUAL placed object via the ROM's
+        own scan cone: record only a robot body left in a live FULL-sight cone
+        ($1838 drain) -- the sole immediate breach.  A boulder is not a drainable
+        body ($16E6 drains robots only), and a partially-seen robot cannot be
+        drained either (it only arms a slower meanie, `_meanie_window`), so
+        neither is an immediate breach the plan-time gate must have caught."""
+        if verb == "boulder":
+            return
         st = self.st
         top = terrain.top_object(st, *tile)
         if top is None:
             return
-        dangerous = []
-        tree = self._tree_near(tuple(tile))
-        for e in enemies.enemy_slots(st):
-            see = relative.can_see_object(
-                st, e, top, st.obj_type[top], enemies.FOV_SCAN
-            )
-            if not see["exposure"]:
-                continue
-            if verb == "transfer" and not (see["full"] or tree):
-                continue  # harmless partial glimpse: undrainable, arms no meanie
-            dangerous.append((int(e), bool(see["full"])))
+        dangerous = [
+            (int(e), True)
+            for e in enemies.enemy_slots(st)
+            if relative.can_see_object(st, e, top, st.obj_type[top], enemies.FOV_SCAN)[
+                "full"
+            ]
+        ]
         if dangerous:
             self.breaches.append((self.frames, verb, tuple(tile), dangerous))
             if self.verbose:

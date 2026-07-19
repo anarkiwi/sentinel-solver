@@ -65,22 +65,10 @@
   "landable_view_agree": 42,
   "own_tile_transfers": [],
   "view_facing_matches": 0,
-  "n_steps_with_disagreement": 5,
+  "n_steps_with_disagreement": 1,
   "disagreement_steps_by_code": {
-   "account_breach": [
-    13,
-    14,
-    17,
-    23
-   ],
    "energy": [
     15
-   ],
-   "gate_reject": [
-    13,
-    14,
-    17,
-    23
    ]
   }
  },
@@ -169,7 +157,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 2997.1,
+    "player_window": 4233.4,
     "own_tile_transfer": false
    },
    "aim": {
@@ -277,7 +265,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 2704.9,
+    "player_window": 3941.2,
     "own_tile_transfer": false
    },
    "aim": {
@@ -385,7 +373,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 2618.7,
+    "player_window": 3855.0,
     "own_tile_transfer": false
    },
    "aim": {
@@ -493,7 +481,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 2438.9,
+    "player_window": 3675.2,
     "own_tile_transfer": false
    },
    "aim": {
@@ -597,7 +585,7 @@
     "n_exposed": 1,
     "n_full": 0,
     "seen_now": false,
-    "gaze_window": 2244.1,
+    "gaze_window": 3480.4,
     "tree_near": true
    },
    "exposure_player": {
@@ -1569,7 +1557,7 @@
     "n_exposed": 2,
     "n_full": 1,
     "seen_now": false,
-    "gaze_window": 86.2,
+    "gaze_window": 1322.5,
     "tree_near": true
    },
    "exposure_player": {
@@ -1591,28 +1579,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "robot",
-      "tile": [
-       2,
-       24
-      ],
-      "seen_by": [
-       [
-        0,
-        false
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 14,
@@ -1694,7 +1665,7 @@
     "n_exposed": 2,
     "n_full": 1,
     "seen_now": true,
-    "gaze_window": 0.0,
+    "gaze_window": 1236.3,
     "tree_near": true
    },
    "exposure_player": {
@@ -1716,28 +1687,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "transfer",
-      "tile": [
-       2,
-       24
-      ],
-      "seen_by": [
-       [
-        0,
-        false
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 15,
@@ -1823,7 +1777,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1236.3,
     "own_tile_transfer": false
    },
    "aim": {
@@ -1933,7 +1887,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1236.3,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2041,7 +1995,7 @@
     "tree_near": true
    },
    "exposure_player": {
-    "player_window": 0.0,
+    "player_window": 1236.3,
     "own_tile_transfer": false
    },
    "aim": {
@@ -2059,28 +2013,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       5,
-       22
-      ],
-      "seen_by": [
-       [
-        0,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 18,
@@ -2724,28 +2661,11 @@
     "view_matches_human_facing": false
    },
    "verdict": {
-    "gate_allow": false,
+    "gate_allow": true,
     "fire_ok": true,
-    "breaches": [
-     {
-      "verb": "boulder",
-      "tile": [
-       15,
-       11
-      ],
-      "seen_by": [
-       [
-        1,
-        true
-       ]
-      ]
-     }
-    ]
+    "breaches": []
    },
-   "disagreements": [
-    "gate_reject",
-    "account_breach"
-   ]
+   "disagreements": []
   },
   {
    "i": 24,
