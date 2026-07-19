@@ -100,8 +100,13 @@ def live_image(bm):
     (threat.ticks_until_seen -> enemies.step), so a 4 KB slice throws IndexError.
 
     Read in two 32 KB halves: mem_get's response length is a u16, so a single
-    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty."""
-    return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(bm.mem_get(0x8000, 0xFFFF))
+    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty.  Both
+    halves are read HALTED: under auto_resume each half would resume the CPU, tearing
+    the image across a host-timing-dependent number of frames."""
+    with bm.halted():
+        return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(
+            bm.mem_get(0x8000, 0xFFFF)
+        )
 
 
 # ============================================================================
@@ -365,6 +370,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                     snapshot_container="/renders/" + CODE_ENTRY_SNAP,
                     snapshot_host=os.path.join(renders_host, CODE_ENTRY_SNAP),
                 )
+                bm.auto_resume = False  # in play: reads must not EXIT, or observing the machine advances it by host-timed frames; the world moves only in deliberate run windows
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")

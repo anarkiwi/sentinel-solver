@@ -6,9 +6,7 @@ logic (``_tick``, A*'s ``_search``) comes from the composed sim player via MRO.
 It goes first in the bases so its execution overrides win over ``BasePlayer``'s.
 """
 
-import time
-
-from driver import core, kbd_aim, sentinel_execute as sx
+from driver import clock, core, kbd_aim, sentinel_execute as sx
 from sentinel import astar_player, memmap as mm, player as sim_player, playerbase
 from sentinel.game import Game
 from sentinel.state import State
@@ -73,8 +71,22 @@ class LiveMixin:
             mem = core.live_image(self.bm)
         self.st = State.from_mem(mem)
         self.g.state = self.st
+        self._sync_aim_state()
         if self.acted and self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80:
             self.life_lost = "died (landscape auto-reset observed)"
+
+    def _sync_aim_state(self):
+        """Adopt the DRIVER's aim state as the model's.  What decides an aim REUSE at
+        execution time is ``sights_live_on() and committed_bearing() == view bearing``
+        (``sentinel_execute.perform_step``, ``_drive_transfer_aim``); the live ``_fire``
+        overrides ``BasePlayer._fire``, so the base's own ``last_bearing``/``cursor``
+        bookkeeping never runs here and would leave every live step charged a full aim.
+        Sights off == no committed bearing: the OFF->ON toggle re-centres the cursor
+        ($134C), which is exactly the non-reuse branch of ``_aim_frames``."""
+        mem = self.st.mem
+        on = bool(mem[kbd_aim.A_SFLAG] & 0x80)
+        self.last_bearing = self.kbd.committed_bearing() if on else None
+        self.cursor = [int(mem[kbd_aim.A_CX]), int(mem[kbd_aim.A_CY])]
 
     def _dead(self):
         if self.st.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80:
@@ -91,10 +103,14 @@ class LiveMixin:
         world moves only when ``_fire`` replays the plan's keystrokes."""
 
     def _wait(self):
-        """A deliberate wait spends REAL world time: resume the CPU (observe
-        left it halted), let PAL frames elapse, and re-observe."""
-        self.bm.exit()
-        time.sleep(playerbase.WAIT_FRAMES / 50.0)
+        """A deliberate wait spends REAL world time, FRAME-EXACT: step the $9630
+        per-frame marker ``WAIT_FRAMES`` times, leaving the CPU halted.  charged ==
+        measured now holds by construction whatever the warp state, so ``wait_audit``
+        is a regression pin; a stalled marker raises instead of being waited out."""
+        want = playerbase.WAIT_FRAMES
+        got = clock.run_frames(self.bm, want)
+        self.result.setdefault("wait_audit", []).append([self.step_no, want, got])
+        self.live_log(f"    [clock] wait: charged={want} measured={got} (exact frames)")
 
     def _drive_transfer_aim(self, tile, view):
         """Aim the sights onto `tile` for a transfer (perform_step drives the aim
@@ -144,9 +160,9 @@ class LiveMixin:
             return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
-        aim_charged = self._aim_frames(view)
+        aim_charged = self._step_aim_frames(pverb, view)
         # View-aware transfer settle: scene-dependent projector replot, not flat 47.
-        settle_charged = self._settle(pverb, view)
+        settle_charged = self._settle(pverb, view, self._settle_eye(pverb, tile))
         charged = aim_charged + settle_charged
         out = sx.perform_step(
             self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
@@ -207,6 +223,39 @@ class LiveMixin:
         self.acted = True
         self._observe()
         self._log("hyperspace", self.st.player_xy())
+
+    def _plan_step_stale(self, verb, tile, view):
+        """Re-validate the next planned step against the LIVE enemy phase. The plan's
+        drain-safety was gated on the sim's PREDICTED phase, which drifts from live
+        over multi-step execution; if the player's own gaze window no longer covers
+        this step's aim+settle plus one step's cost-interval margin (depth 0: the
+        board is freshly observed), replan from the observed board rather than stand
+        exposed for longer than the window.
+
+        The margin absorbs prediction error; it may not deadlock.  Once ``_restale``
+        has waited on this same step (``_stale`` count > 1, so the enemy phase behind
+        the earlier verdict is gone) and the RAW budget clears, the step proceeds."""
+        budget = self._step_aim_frames(verb, view) + self._settle(
+            verb, view, self._settle_eye(verb, tile)
+        )
+        margin_fn = getattr(self, "_margin", None)  # planner-only (greedy has none)
+        margin = margin_fn(0) if margin_fn is not None else 0.0
+        window = self._player_window()
+        if window >= budget + margin:
+            return False
+        stale = self._stale
+        waited = stale is not None and stale[0] == (verb, tuple(tile)) and stale[1] > 1
+        if waited and window >= budget:
+            self.live_log(
+                f"    (plan step {verb} {tile}: window {window:.0f}f clears the raw "
+                f"budget {budget:.0f}f after a wait; margin-only block released)"
+            )
+            return False
+        self.live_log(
+            f"    (plan step {verb} {tile}: live gaze window {window:.0f}f "
+            f"< step budget {budget:.0f}f + margin {margin:.0f}f; replan from live)"
+        )
+        return True
 
 
 class LiveGreedy(LiveMixin, sim_player.Player):

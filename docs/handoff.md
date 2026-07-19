@@ -88,6 +88,10 @@ rotation phases. Fixing item 2 is the way to close it. Do not work it as a searc
 - ls335 A* plans nothing (`1 nodes: None` -> `2 nodes: None`) from the start state at
   full energy, frozen and unfrozen. Open defect; reproduce offline by feeding a live-read
   ls335 start state to `_search`. It also voids ls335 as an experiment arm.
+  CAVEAT: measured with 4 arms in parallel while orphaned VICE containers were burning
+  ~2.2 cores. `_search` has a 30 s WALL-CLOCK deadline (`astar_player.py:312`), so load
+  can cut the node count. A 2-node stop looks like pruning, not a timeout, but re-run on
+  an idle box before spending time on it.
 - `SENTINEL_STEP_SIGMA` is 68.4 in code; clean runs measure **49.3 / 46.4**. Lowering it
   does not change the ls42 outcome and the margin tests pin concrete window/budget
   numbers, so the update needs a test-pin review.
@@ -96,9 +100,9 @@ rotation phases. Fixing item 2 is the way to close it. Do not work it as a searc
   non-player slot.
 - `actioncost.action_rounds` has zero callers — delete rather than maintain a duplicate
   of `playerbase._settle`.
-- Code comments contradict reality: `playerbase.py:15` calls `REDRAW_BASE` "measured",
-  `actioncost.py:42` calls `STEPS_PER_EDGE` "validated". Neither is derived from a loop
-  body. The docs say FITTED; fix the comments.
+- DONE: `REDRAW_BASE` / `STEPS_PER_EDGE` comments now declare FITTED, and
+  `sentinel/tests/test_timing_registry.py` fails CI on any timing constant that is
+  unregistered, claims evidence it lacks, or grows the 55-entry UNVALIDATED debt set.
 - `test_player_placement_invariant` (250 s) and `test_player_wins_landscape_0042` (183 s)
   far exceed the 60 s budget, and did so before this work.
 - `docs/player.md` was not reviewed this pass and may carry stale timing claims.
@@ -111,6 +115,46 @@ Multiple VICE containers run in parallel. `ViceContainer` now publishes `-p 0:65
 (docker picks a free host port; the fixed `6502:6502` bind was the hard blocker, failing
 8/8), and `boot.stale_filter()` scopes teardown to `name=^asid-vice-<own pid>-`.
 `VICE_REAP_ORPHANS=1` opts back into the blanket `ancestor=` sweep.
+
+`SIGKILL` on a run leaks its container: teardown is scoped to the owning pid, so nothing
+reaps it and it burns a core under warp indefinitely. Kill with TERM and check
+`docker ps` -- three orphans survived 8-10 h here (~2.2 cores) and contaminated
+measurements taken during that window.
+
+## Live determinism (open)
+
+`driver/test_live_determinism.py` runs the same frozen ls42 landscape twice: actions
+match, per-step measured frames differ by +-1 on 2-3 of 8 steps. A 1-frame shift moves
+the enemy cooldown phase (`UNIT_FRAMES` 3.746), which is the ~4 f window differences seen
+in `plan_audit`, which accumulate until a gate flips and trajectories split (16/18/22
+steps, 0/0/5 violations across three runs). `pred` is identical across runs -- the
+planner is deterministic; the live driver is not.
+
+Fixed so far: `clock.frames` and `core.live_image` read unguarded, so observing the
+machine advanced it (reproducer: `run_frames(10)` measured 11, scan windows 2 not 1);
+`auto_resume` is now cleared session-wide when play starts; vice-driver v0.4.1 scopes
+`run_until_pc`'s wait to its own checknum.
+
+Ruled out: wall-clock timeouts (none fire over a full run), warp (divergence persists
+with warp off), asynchronous emulator stop (two boots gave byte-identical post-hit PC
+sequences, so the off-target stop is state-deterministic).
+
+FOUND and fixed (vice-driver v0.5.0). An instrumented emulator build (`ASID_CPDBG`,
+logging every checkpoint hit with checknum/stop/clk) showed consecutive stop hits 1 frame
+apart 1615 times and **2 frames apart 37 times**, every checkpoint distinct, none hit
+twice: the stop was exact, the INSTALL was late. `CHECKPOINT_SET` sent to a running
+machine is only serviced at the next vsync poll (`monitor_check_binary`, once per frame),
+so the arm landed on a host-timed frame boundary. `run_until_pc` now caches one
+checkpoint per target and toggles it while halted. The +-1 divergence is gone.
+
+Residual (different bug): ~2 runs in 9, same actions but per-step frames differ by
+tens-to-hundreds (+93 / +17 / -715). That magnitude is a retry loop taking a different
+path -- `_run_to_scan` passes, `sentinel_execute` `range(3)`/`range(4)` retries -- not a
+frame-stepping race. `driver/test_live_determinism.py` carries it as a non-strict xfail.
+
+Also disproved on the way: stopping on a PC not shared with the frame counter ($9640)
+does not help, and the emulator's stop itself is exact (300 ms idle after a stop advances
+0 frames).
 
 `pytest.ini`'s `--dist loadgroup` and the `xdist_group("vice")` marks have been
 **reverted**: they were added on a misdiagnosis — the flaky live strict-xfail was the
