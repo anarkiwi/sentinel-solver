@@ -175,10 +175,10 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
         try:
             log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
             robust(bm, log, lambda: boot.load_snapshot(bm, snapshot_container))
-            try:
-                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
-            except Exception:
-                pass
+            # No bare exit() here: resuming leaves the CPU free-running until the next
+            # command halts it, a host-timed number of frames later, so entry starts at
+            # a different phase under load. run_frames advances it deliberately instead.
+            bm.auto_resume = False
             clock.run_frames(bm, 50)
             restored = True
         except Exception as e:
@@ -199,6 +199,10 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
                 robust(bm, log, lambda: boot.save_snapshot(bm, snapshot_container))
             except Exception as e:
                 log(f"  snapshot save failed ({e}); continuing without it")
+    # Tape/menu boot is over: from here every advance is an explicit run_frames, so
+    # stop resuming on each command -- a free-running key tap or poll advances the
+    # machine by a host-timed number of frames and entry lands at a different phase.
+    bm.auto_resume = False
     log(f"typing landscape digits {typed_digits!r}")
     tap_text(typed_digits)
     tap("RETURN", hold=30, settle=150)
@@ -209,15 +213,21 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
 
 def _generated(bm):
     """Landscape generation has finished: the ROM has installed the player object with
-    its starting energy (both $0B and $0C0A read 0 from the code-entry screen on)."""
-    return bool(bm.mem_get(A_ENERGY, A_ENERGY)[0] & 0x3F)
+    its starting energy (both $0B and $0C0A read 0 from the code-entry screen on).
+
+    Read HALTED: the poll must not advance the machine, or entry lands a host-timed
+    number of frames in and every later step inherits that phase."""
+    with bm.halted():
+        return bool(bm.mem_get(A_ENERGY, A_ENERGY)[0] & 0x3F)
 
 
 def _in_play(bm):
     """The interactive play loop is running: the busy-plotting gate ($0CE4 bit7), held
     SET across the code-entry menu, generation and the isometric preview, is released
-    the first time the foreground loop opens for input."""
-    return not bm.mem_get(A_ACTION_LATCH, A_ACTION_LATCH)[0] & 0x80
+    the first time the foreground loop opens for input.  Read HALTED (see _generated).
+    """
+    with bm.halted():
+        return not bm.mem_get(A_ACTION_LATCH, A_ACTION_LATCH)[0] & 0x80
 
 
 def _enter_play(bm, tap, log, chunk=25, gen_chunks=160, play_chunks=40, taps=6):

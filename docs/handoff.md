@@ -147,10 +147,15 @@ machine is only serviced at the next vsync poll (`monitor_check_binary`, once pe
 so the arm landed on a host-timed frame boundary. `run_until_pc` now caches one
 checkpoint per target and toggles it while halted. The +-1 divergence is gone.
 
-Residual (different bug): ~2 runs in 9, same actions but per-step frames differ by
-tens-to-hundreds (+93 / +17 / -715). That magnitude is a retry loop taking a different
-path -- `_run_to_scan` passes, `sentinel_execute` `range(3)`/`range(4)` retries -- not a
-frame-stepping race. `driver/test_live_determinism.py` carries it as a non-strict xfail.
+Residual FIXED too, and it was not a retry loop (that guess was wrong). Full-resolution
+tracing -- call sequence + `$0C00` state hash + frame count per monitor call -- put it in
+BOOT: `_generated`/`_in_play` polled unguarded, `keymatrix_tap` ran under auto_resume, and
+the post-snapshot `bm.exit()` left the CPU free-running. Each let the machine advance a
+host-timed number of frames, so entry landed at a different phase and every later step
+inherited it. Now: polls read halted, and `auto_resume` is cleared right after the tape
+phase (the snapshot restore no longer resumes). Progress comes only from explicit
+`run_frames`. 6/6 traced pairs byte-identical; determinism test green 4/4 standalone and
+twice under the full parallel suite -- the load condition that first exposed it.
 
 Also disproved on the way: stopping on a PC not shared with the frame counter ($9640)
 does not help, and the emulator's stop itself is exact (300 ms idle after a stop advances

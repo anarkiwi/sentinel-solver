@@ -73,15 +73,6 @@ def test_two_live_runs_take_the_same_actions():
 
 
 @pytest.mark.skipif(_SKIP, reason="needs docker + game tape + code-entry snapshot")
-@pytest.mark.xfail(
-    strict=False,
-    reason="Mostly deterministic since checkpoint installs became halted+toggled "
-    "(vice-driver _checkpoint_for): the +-1 frame install lottery is gone. Residual, "
-    "~2 runs in 9: same actions but per-step frames differ by tens-to-hundreds of "
-    "frames (observed +93 / +17 / -715), the signature of a retry loop taking a "
-    "different path (_run_to_scan passes, sentinel_execute range(3)/range(4) retries), "
-    "not a frame-stepping race. Non-strict: passes are the common case.",
-)
 def test_two_live_runs_measure_the_same_frames():
     """Per-step measured frames must match: a differing count is host-clock leakage."""
     (steps_a, _), (steps_b, _) = _run("A"), _run("B")
