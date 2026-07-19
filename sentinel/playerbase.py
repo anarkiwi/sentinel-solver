@@ -12,9 +12,12 @@ from sentinel import projector, relative, terrain, threat
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
 V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
-# Per-notch plot_world ($2625): per-pitch terrain base (~34, measured) + STEPS_PER_EDGE/edge.
+# Per-notch plot_world ($2625) terrain base + STEPS_PER_EDGE/edge. FITTED: no loop-body derivation and no fixture pins it; real per-notch redraw spans 25-27 f (empty) to 73-112 f (busy), which no flat base covers (docs/plan_fidelity.md problem 1).
 REDRAW_BASE = float(os.environ.get("REDRAW_BASE", "34"))
-CURSOR_PER_PX = 1.24  # sights-cursor rounds/pixel (gated move_sights, measured)
+CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
+CURSOR_RAMP = float(
+    bin(CURSOR_REPEAT_MASK).count("1")
+)  # $11F6 ASL $0CC8 / BCS: one gated scan skipped per set bit before the mask empties
 SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
 TOGGLE_FRAMES = 12  # sights OFF (~0) + ON (~10: $134C recentre + plot_sights), measured
 TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
@@ -131,6 +134,7 @@ class BasePlayer:
         self.st = game.state
         self.cursor = list(SIGHTS_CENTRE)
         self.last_bearing = None  # committed (h, v): a same-bearing aim reuses
+        self._stale = None  # (plan step key, consecutive stale verdicts on it)
         self.frames = 0
         self.verbose = verbose
         self.audit = audit  # strict post-settle invariant accounting (below)
@@ -352,10 +356,12 @@ class BasePlayer:
         else:
             cur_from = SIGHTS_CENTRE
             toggles = TOGGLE_FRAMES
+        # move_sights ($9958) steps cx and cy in ONE call: a diagonal drive costs max(|dx|,|dy|) gated scans, plus the $0CC8 ramp, and nothing at all when parked.
         cur = max(
             abs(view["cursor"][0] - cur_from[0]),
             abs(view["cursor"][1] - cur_from[1]),
         )
+        cur = cur + CURSOR_RAMP if cur else 0.0
         # per-notch plot_world cost, geometric in the in-view object edges ($2625 scene patch)
         redraw = REDRAW_BASE + actioncost.STEPS_PER_EDGE * actioncost.visible_edges(
             st.mem, view
@@ -366,16 +372,29 @@ class BasePlayer:
             + nu * TAP_FRAMES
             + ns * (H_SCROLL + redraw)
             + nv * (V_SCROLL + redraw)
-            + cur * CURSOR_PER_PX
+            + cur
             + TAP_FRAMES
         )
+
+    def _step_aim_frames(self, verb, view):
+        """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
+        committed bearing sends no aim keys ($21 fires on the object under the cursor the
+        preceding same-tile create/absorb parked there), so its aim is 0 (measured: every
+        recorded transfer); on a MISMATCHED bearing the executor drives the full view
+        (``live_player._drive_transfer_aim``), the same aim every other verb pays."""
+        if verb == "transfer" and self.last_bearing == (
+            view["h_angle"],
+            view["v_angle"],
+        ):
+            return 0.0
+        return self._aim_frames(view)
 
     def _fire(self, verb, tile, view):
         """Aim (world advances), re-gate, apply `verb` on `tile`, settle.
         Returns False if the gate fails after the aim (the world changed under
         us) -- the caller just re-plans next tick."""
         st = self.st
-        self._advance(self._aim_frames(view))
+        self._advance(self._step_aim_frames(verb, view))
         if actions.player_dead(st):
             return False
         me = st.player
@@ -413,18 +432,34 @@ class BasePlayer:
             self._log(verb, tile)
         return ok
 
-    def _settle(self, verb, view=None):
+    def _settle_eye(self, verb, tile):
+        """Eye the post-action settle is seen from: for a transfer the topmost
+        object of `tile` (the body $0C63 moves into BEFORE the $35C3/$35C6 replot
+        passes), else None -- the current viewpoint, unmoved."""
+        return self._top(tile) if verb == "transfer" else None
+
+    def _settle(self, verb, view=None, observer=None):
         """World frames the ROM advances AFTER `verb` fires; the placed object is
         on the board and exposable for this whole settle, so a danger window must
         cover the aim plus this before an enemy's cone can rotate in.
 
-        A transfer moves the eye ($0C63) and takes the viewpoint full-redraw path
-        ($357D): its settle is the scene-dependent projector cost for the aimed
-        `view` (~306-420 frames), not the view-less flat constant.  The flat
-        ``actioncost.SETTLE`` (env-overridable) remains the fallback with no view."""
-        if verb == "transfer" and view and view.get("h_angle") is not None:
+        A transfer moves the eye ($0C63) BEFORE the viewpoint full-redraw path
+        ($357D) runs its two plot_world passes ($35C3/$35C6), so its settle is the
+        projector cost of the scene as the NEW body sees it: observer `observer`
+        (the transferred-into slot; default the already-moved ``st.player``) at
+        THAT body's own bearing -- a created robot faces creator ^ $80 ($1BE0), not
+        the aim `view`, which belongs to the abandoned eye.  `view` is unused for a
+        transfer and prices nothing else here."""
+        del view
+        st = self.st
+        if verb == "transfer":
+            eye = st.player if observer is None else observer
+            eye_view = {
+                "h_angle": int(st.obj_h_angle[eye]),
+                "v_angle": int(st.obj_v_angle[eye]),
+            }
             return actioncost.FRAME_TICKS * projector.viewpoint_replot_frames(
-                self.st, view
+                st, eye_view, eye
             )
         key = {"boulder": "create", "robot": "create"}.get(verb, verb)
         return actioncost.SETTLE.get(key, 60)
