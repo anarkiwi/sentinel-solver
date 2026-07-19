@@ -8,6 +8,7 @@ window >= aim+settle, and defers the keyboard-aim sweep to execution.
 import argparse
 import heapq
 import math
+import os
 import time
 
 import numpy as np
@@ -59,6 +60,8 @@ _HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): n
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
+_STEP_SIGMA = float(os.environ.get("SENTINEL_STEP_SIGMA", "68.4"))  # see _margin
+_MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 
 
 class _Node:
@@ -94,10 +97,28 @@ class AStarPlayer(BasePlayer):
         self.plan = None
         self._pi = 0
         self.expansions = 0
-        self._deadline = None  # run-wide wall-clock deadline (set on first search)
+        self._deadline = None  # per-search wall-clock deadline (set at each _search)
         self._land_memo = {}  # search: coarse landable tile-sets
         self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
+        self._depth = 0  # steps charged ahead of the live board (margin scale)
+        self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
+
+    def _margin(self, depth=None):
+        """Frames of enemy-phase uncertainty a gate must hold back at plan depth
+        ``depth``.  Per-step charged-vs-measured frame error (frame_audit in
+        out/play_player_0042.json, n=15) is zero-mean (+1f) with rms sigma=68f and
+        does not cancel, so it accumulates as a random walk: k*sigma*sqrt(depth+1).
+        """
+        d = self._depth if depth is None else depth
+        return self._margin_k * _STEP_SIGMA * math.sqrt(d + 1.0)
+
+    def _hot(self, budget, window=None):
+        """Whether standing exposed for ``budget`` frames breaches the pessimistic
+        end of the step-cost interval (``budget + _margin()``)."""
+        if window is None:
+            window = self._body_drain_window()
+        return window < budget + self._margin()
 
     # ---------------------------------------------------------------- execute
     def _tick(self):
@@ -118,6 +139,10 @@ class AStarPlayer(BasePlayer):
             self._pi += 1
             return
         view = self._view_for(tile)
+        if view is not None and self._plan_step_stale(verb, tile, view):
+            self._restale((verb, tuple(tile)))
+            return
+        self._stale = None
         if view is None or not self._fire(verb, tile, view):
             self.plan = self._search()  # live/plan divergence: re-plan
             self._pi = 0
@@ -126,23 +151,50 @@ class AStarPlayer(BasePlayer):
             return
         self._pi += 1
 
+    def _restale(self, key=None):
+        """Ladder taken when the next planned step's premise is stale on the live
+        board: re-plan under the normal margin, else take a survivable defensive
+        move, else a last-chance zero-margin line, else wait.  Conceding an escape
+        hyperspace is left to ``_react``, after every non-conceding option.
+
+        ``key`` is the stale ``(verb, tile)``.  A REPEAT of the same verdict cannot
+        be re-planned away -- ``_search`` is a pure function of the board and does
+        not advance it, so it re-derives the same head and the gate re-fires on an
+        identical enemy phase -- so a repeat WAITS instead: the world moves, and
+        ``_plan_step_stale`` may then clear a step only the margin still blocks."""
+        repeat = key is not None and self._stale is not None and self._stale[0] == key
+        self._stale = (key, self._stale[1] + 1 if repeat else 1) if key else None
+        self._pi = 0
+        if repeat:
+            self._wait()
+            return
+        self.plan = self._search()
+        if self.plan:
+            return
+        if self._defend():
+            self._hs_streak = 0
+            return
+        self.plan = self._search(margin_k=0.0)
+        if not self.plan:
+            self._wait()  # let the enemy cone rotate (react acts once it is on us)
+
+    def _plan_step_stale(self, verb, tile, view):
+        """Whether the next planned step needs a fresh search before firing. The
+        offline plan is deterministic and already drain-gated, so it never goes
+        stale; the live player overrides this to re-check the real enemy phase."""
+        return False
+
     def _wait(self):
         self._advance(60)
 
-    def _react(self):
-        """Survival override: if a drainer has the current body, counterattack
-        (absorb a landable seer), else escape (hyperspace as last resort).  A
-        precomputed plan cannot predict enemy phase exactly, so execution guards
-        it.  Returns True if it deviated."""
+    def _defend(self):
+        """Non-conceding survival ladder on the observed board: counterattack a
+        landable dangerous seer, else flee to the widest-window body.  Returns True
+        if it acted."""
         st = self.st
-        if self._player_window() > SAFE_FRAMES:
-            return False  # not under threat: follow the plan
-        seers = self._dangerous_seers()
-        if not seers:
-            return False
         foes = enemies.enemy_slots(st)
         cands = []
-        for e in seers:
+        for e in self._dangerous_seers():
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue  # the $1B8E lock forbids the Sentinel before the rest
             etile = st.tile_of(e)
@@ -154,9 +206,17 @@ class AStarPlayer(BasePlayer):
         cands.sort()
         for _, etile, view in cands:
             if self._fire("absorb", etile, view):
-                self._hs_streak = 0
                 return True  # counterattack: the seer is gone
-        if self._escape_transfer():
+        return self._escape_transfer()
+
+    def _react(self):
+        """Survival override: if a drainer has the current body, defend, else
+        hyperspace as the last resort.  A precomputed plan cannot predict enemy
+        phase exactly, so execution guards it.  Returns True if it deviated."""
+        st = self.st
+        if self._player_window() > SAFE_FRAMES:
+            return False  # not under threat: follow the plan
+        if self._defend():
             self._hs_streak = 0
             return True
         drain_now = self._player_window() <= 0
@@ -232,12 +292,14 @@ class AStarPlayer(BasePlayer):
         return view
 
     # ----------------------------------------------------------------- search
-    def _search(self):
+    def _search(self, margin_k=None):
         """Best-first search for a frame-cheap winning line; the list of
-        ``(verb, tile)`` steps, or ``None`` if none found in budget."""
+        ``(verb, tile)`` steps, or ``None`` if none found in budget.  ``margin_k``
+        overrides the drain-gate headroom (0 == the old zero-margin search)."""
         real = self.st  # the cheap executors rebind self.st to clones; restore after
         real_bearing = self.last_bearing
         real_cursor = list(self.cursor)
+        self._margin_k = _MARGIN_K if margin_k is None else margin_k
         try:
             start = _Node(
                 self.st.clone(), 0.0, (), None, self.last_bearing, self.cursor
@@ -246,8 +308,8 @@ class AStarPlayer(BasePlayer):
             heap = [(self._h(start.state), 0, start)]
             best_g = {start.key: 0.0}
             counter = 0
-            if self._deadline is None:
-                self._deadline = time.time() + self.time_budget
+            # per-search budget: each replan gets its own window (run-wide starves replans)
+            self._deadline = time.time() + self.time_budget
             self.expansions = 0
             while heap:
                 if self.expansions >= self.node_budget:
@@ -280,6 +342,8 @@ class AStarPlayer(BasePlayer):
             self.st = real
             self.last_bearing = real_bearing
             self.cursor = real_cursor
+            self._margin_k = _MARGIN_K
+            self._depth = 0
 
     def _key(self, st):
         """Dedup key: player tile+eye, energy, remaining enemies (bucketed
@@ -335,6 +399,15 @@ class AStarPlayer(BasePlayer):
                 children.append(child)
         return children
 
+    def _begin(self, node):
+        """Rebind the working stance (a clone of ``node``'s state) and the plan
+        depth the margin scales with; the shared child-builder prologue."""
+        self.st = node.state.clone()
+        self.last_bearing = node.last_bearing
+        self.cursor = list(node.cursor)
+        self._depth = len(node.path)
+        return self.st
+
     def _node(self, node, st, g, steps):
         return _Node(
             st,
@@ -352,12 +425,14 @@ class AStarPlayer(BasePlayer):
         an intra-hop follow-up on the same tile reuses the bearing.  Returns the
         frames spent."""
         self.st = st
+        self._depth += 1
+        eye = self._settle_eye(verb, tile)
         view = self._view_for(tile)
         if view is None:
-            cost = self._settle(verb)  # infeasible guard: the gates reject these
+            cost = self._settle(verb, None, eye)  # infeasible guard: gates reject these
             enemies.advance_frames(st, int(cost))
             return cost
-        cost = self._aim_frames(view) + self._settle(verb, view)
+        cost = self._step_aim_frames(verb, view) + self._settle(verb, view, eye)
         enemies.advance_frames(st, int(cost))
         me = st.player
         st.obj_h_angle[me] = view["h_angle"]
@@ -427,10 +502,7 @@ class AStarPlayer(BasePlayer):
         spent ones for energy) until ``e`` is landable, then absorb it -- ONE
         child node.  Each sub-action is charged the real aim+settle via
         ``_charge``; ``None`` if the climb cannot safely reach ``e``."""
-        st = node.state.clone()
-        self.st = st
-        self.last_bearing = node.last_bearing
-        self.cursor = list(node.cursor)
+        st = self._begin(node)
         g = node.g
         steps = []
         target = st.tile_of(e)
@@ -450,13 +522,14 @@ class AStarPlayer(BasePlayer):
                     g += got[0]
                     steps.append(got[1])
                     continue
-            bearing, cursor = self.last_bearing, list(self.cursor)
+            bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
             advanced = False
             for tile, k in self._pick_hop(target):
                 trial = st.clone()
                 self.st = trial
                 self.last_bearing = bearing
                 self.cursor = list(cursor)
+                self._depth = depth  # a rejected trial must not widen later margins
                 res = self._hop_exec(tile, k)
                 if res is not None:
                     st, advanced = trial, True
@@ -499,7 +572,9 @@ class AStarPlayer(BasePlayer):
             if robot_eye <= my_eye + EYE_EPS:
                 continue
             exposed = self._exposing_enemies(tile)
-            if not self._drain_gate("robot", tile, exposed, HOP_FRAMES):
+            if not self._drain_gate(
+                "robot", tile, exposed, HOP_FRAMES + self._margin()
+            ):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)
@@ -534,7 +609,9 @@ class AStarPlayer(BasePlayer):
             return None
         steps.append(("transfer", tile))
         # a body landed in a live full-sight cone is a trap unless a seer is absorbable from here
-        if not self._drain_gate("transfer", tile) and not self._absorbable_here(st):
+        if not self._drain_gate(
+            "transfer", tile, budget=self._margin()
+        ) and not self._absorbable_here(st):
             return None
         return g, steps
 
@@ -568,13 +645,29 @@ class AStarPlayer(BasePlayer):
                 out.append((tile, e))
         return out
 
+    def _body_drain_window(self, exclude=None):
+        """Frames until the player's OWN body is drainable (inf if never), ignoring
+        `exclude` -- the enemy an absorb is about to remove, so absorbing an attacker
+        still counts safe.  Bounds how long the player may stand exposed in an action.
+        """
+        st = self.st
+        if self._frozen():
+            return math.inf
+        exposed = [x for x in self._exposures(st, st.player) if x[0] != exclude]
+        if not exposed:
+            return math.inf
+        return self._gaze_window(st.player_xy(), exposed=exposed)
+
     def _c_absorb(self, node, tile, e):
-        st = node.state.clone()
-        self.st = st
-        self.last_bearing = node.last_bearing
-        self.cursor = list(node.cursor)
+        st = self._begin(node)
         if not actions.can_absorb(st, e):
             return None
+        view = self._view_for(tile)
+        if view is None:
+            return None
+        budget = self._aim_frames(view) + self._settle("absorb", view)
+        if self._hot(budget, self._body_drain_window(exclude=e)):
+            return None  # the player's body would be drained before the absorb fires
         g = node.g + self._charge(st, "absorb", tile)
         if not actions.absorb(st, e):
             return None
@@ -601,6 +694,11 @@ class AStarPlayer(BasePlayer):
                 continue
             if not threat.player_sees_tile(st, tile, st.player):
                 continue
+            view = self._view_for(tile)
+            if view is None or self._hot(
+                self._aim_frames(view) + self._settle("absorb", view)
+            ):
+                continue  # would be drained mid-reclaim: try a safer object
             g = self._charge(st, "absorb", tile)
             if not actions.absorb(st, s):
                 return None
@@ -610,10 +708,7 @@ class AStarPlayer(BasePlayer):
     def _c_reclaim(self, node):
         """Absorb landable spent pedestals, shells and, when short, trees, up to
         eight in one macro; the player stays put throughout."""
-        st = node.state.clone()
-        self.st = st
-        self.last_bearing = node.last_bearing
-        self.cursor = list(node.cursor)
+        st = self._begin(node)
         g = node.g
         steps = []
         for _ in range(8):
@@ -629,10 +724,7 @@ class AStarPlayer(BasePlayer):
     def _c_endgame(self, node):
         """Sentinel gone (no enemy remains): robot on the platform, transfer,
         hyperspace -- the win."""
-        st = node.state.clone()
-        self.st = st
-        self.last_bearing = node.last_bearing
-        self.cursor = list(node.cursor)
+        st = self._begin(node)
         ptile = st.platform_xy
         g = node.g
         if not actions.on_platform(st):

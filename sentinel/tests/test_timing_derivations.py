@@ -4,7 +4,8 @@ cites.  Each case names the primitive symbols, not the derived literal."""
 import pytest
 
 from driver import kbd_aim
-from sentinel import actioncost, aimcost, enemies, memmap as mm, playerbase, projector
+from sentinel import actioncost, aimcost, enemies, memmap as mm
+from sentinel import pancost, playerbase, projector
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
 
@@ -82,6 +83,15 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
             "_PAN_STALL_FRAMES",
             kbd_aim._PAN_STALL_FRAMES,
             playerbase.H_SCROLL + playerbase.V_SCROLL,
+        ),
+        # $3912 stores 24 bytes per iteration over 64, $38AD 32 over 40; each strip
+        # clear calls its loop twice (odd then even X) at 5 cycles a store, 7 per tail.
+        ("_CLEAR_CYCLES_H", pancost._CLEAR_CYCLES_H, 2 * 64 * (24 * 5 + 7)),
+        ("_CLEAR_CYCLES_V", pancost._CLEAR_CYCLES_V, 2 * 40 * (32 * 5 + 7)),
+        (
+            "CLEAR_FRAMES[h]",
+            pancost.CLEAR_FRAMES[0],
+            pancost._CLEAR_CYCLES_H / projector.FRAME_CYCLES,
         ),
     ],
 )

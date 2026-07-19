@@ -11,8 +11,9 @@ so the revert cost nothing. Run it with the project venv
 
 New untracked files: `docs/{handoff,plan_fidelity}.md`, `driver/{clock,frozen_run,
 plan_audit,test_enemy_sim_divergence,test_live_player,test_no_sleep,
-test_sentinel_execute}.py`, `sentinel/tests/{test_aim_subterms,test_kbd_scan_gate}.py`
-+ `fixtures/live_aim_subframes.json`, `out/FACTS.md`.
+test_sentinel_execute}.py`, `sentinel/pancost.py`,
+`sentinel/tests/{test_aim_subterms,test_kbd_scan_gate,test_pan_cost}.py`
++ `fixtures/live_aim_subframes.json` + `golden_pan_cost.json`, `out/FACTS.md`.
 
 ## Settled
 
@@ -60,7 +61,8 @@ Verdict and numbers in [plan_fidelity.md](plan_fidelity.md). Frozen on both side
 is **won** in sim (36 actions, 12.1 s, no emulator) and **won live** (36 actions,
 energy 11), with all 35 pre-win steps matching on `(action, tile, energy)`; step 36 is
 the PRNG hyperspace landing, which differs by design and wins either way. The search is
-exonerated -- the live loss is enemy-phase timing. Item 2 is now the sole critical path.
+exonerated -- the live loss is enemy-phase timing. Item 3 is now the critical path, item
+4 the verification that closes it.
 
 Residue from this experiment:
 - ls335 is not a usable arm: A* takes 0 actions there frozen **and** unfrozen (separate
@@ -69,22 +71,56 @@ Residue from this experiment:
 - Frozen greedy on ls335 stopped at 6 actions with energy 10 (live greedy: 15 actions,
   energy 2), both losses -- unexplained, low priority.
 
-### 2. Per-notch pan redraw model
-Largest remaining frame error (ls335 p21 **-383 f**, p8 -268 f, ls42 p15 -125 f). Each
-`pan_viewpoint` attempt is one `plot_world` at the *intermediate* bearing into the pan
-strip buffer (`$10D7`/`$111C`) plus the notch's 16 h / 8 v scroll steps; measured 25-27 f
-empty vs 73-112 f busy. `REDRAW_BASE = 34` and `STEPS_PER_EDGE = 0.02` are **fitted** and
-cannot span that — price each notch with a `render_cost`-class model at that notch's
-bearing. Blockers: `projector.render_cost` models the full play buffer (`$14..$8A`), not
-the pan strip, and costs ~60 ms/call, so it needs a bearing-keyed memo before it can sit
-in `_aim_frames`' A* inner loop. Do not retune the two constants instead.
+### 2. DONE -- per-notch pan redraw is modelled
+`sentinel/pancost.py` ports `pan_viewpoint` ($10B7): one strip clear ($3912 h / $38AD v)
++ exactly one `plot_world` ($2625) + the notch's queued scroll steps ($10EE 16 h /
+$1135 8 v). The plot runs at the *intermediate* angle -- the $9925 delta is added before
+`JSR $2625` and fixed after, so a right pan plots at h+$14 ($10E9 `SBC #$0C`) and a
+downward pitch at v-$0C ($1130 `ADC #$08`); left pans and upward pitches land on the
+destination. A horizontal pan renders through a different window: $10EE reaches
+`initialise_buffer_variables` ($2993) via $994F with A=#$02, whose $29C4 entry gives
+$0007=$08 / $0012=$84, culling tiles the play window ($14/$8A) keeps; vertical pans
+($9939, A=#$00) share the play window. `projector.project_scene` threads that window
+through the $293C on-screen test. Examined ($2845) and filled ($2A24) counts are
+byte-exact against the 6502 on all 288 rows of `sentinel/tests/golden_pan_cost.json`
+(ls0/42/335).
 
-### 3. CLOSED -- the energy-2 dead-end is a symptom
+`REDRAW_BASE` is **deleted** from `playerbase._aim_frames` with its registry entry;
+`actioncost.STEPS_PER_EDGE` survives but no longer prices the aim path. Accuracy over
+the golden (measured notch plot cost 3.8-99.8 f, median 22.2): flat
+`REDRAW_BASE`+`STEPS_PER_EDGE` rms 18.3 f / mean +9.3 / median abs 16.5 / max 63.7;
+derived per-notch rms **7.6 f** / mean -3.3 / median abs 4.5 / max 37.7.
+
+Despite ~24 extra plots per aim this is a net **speed-up**: the view-independent $245B
+occlusion raytrace (~62% of a ~5.8 ms `render_cost` call) is memoized as
+`projector.occlusion_visible`, and `pancost.notch_frames` per (scene, observer,
+direction, plot angle), both keyed on `projector.scene_key` (a digest of every byte
+`plot_world` reads). `test_player_placement_invariant` 250 s -> **33 s**,
+`test_player_wins_landscape_0042` 183 s -> **21 s**.
+
+Outcomes unchanged where measurable: frozen sim A* still wins ls42 in 36 actions with 0
+breaches, identical under both models. Unfrozen ls42 A* takes 0 actions under **both**
+models (A/B'd in one build) -- the same root-prune defect already recorded for ls335,
+neither caused nor cured by pan cost.
+
+### 3. Terrain fill cost -- now the top open problem
+The residual is not the notch model's: tile selection is exact and `C_EXAMINE` is centred
+(measured mean 1704 cycles/examine vs 1737 charged). It is the fill proxy
+([render_cost.md](render_cost.md) "Known gaps" item 2), systematic in scene busy-ness.
+Binning the golden by measured cost, mean error runs **+1.8, -1.4, -4.5, -9.0 f** across
+quartiles whose mean costs are 9.5, 17.8, 29.0, 49.0 f -- busy scenes under-price.
+
+### 4. Live ls42 under the new model -- not re-measured
+The frozen-sim and unfrozen-sim arms above were A/B'd offline. The LIVE ls42 run has not
+been re-run under `pancost`; that needs VICE and is the open verification.
+
+### 5. CLOSED -- the energy-2 dead-end is a symptom
 Frozen, the same `_search` wins ls42 in 36 actions from the same start state, so it is
 not deficient: the live run drifts into the energy-2 position once mispriced frames shift
-rotation phases. Fixing item 2 is the way to close it. Do not work it as a search defect.
+rotation phases. Item 2 removed the largest mispricing; item 3 is what remains of it. Do
+not work it as a search defect.
 
-### 4. Smaller items
+### 6. Smaller items
 - ls335 A* plans nothing (`1 nodes: None` -> `2 nodes: None`) from the start state at
   full energy, frozen and unfrozen. Open defect; reproduce offline by feeding a live-read
   ls335 start state to `_search`. It also voids ls335 as an experiment arm.
@@ -100,12 +136,16 @@ rotation phases. Fixing item 2 is the way to close it. Do not work it as a searc
   non-player slot.
 - `actioncost.action_rounds` has zero callers — delete rather than maintain a duplicate
   of `playerbase._settle`.
-- DONE: `REDRAW_BASE` / `STEPS_PER_EDGE` comments now declare FITTED, and
-  `sentinel/tests/test_timing_registry.py` fails CI on any timing constant that is
-  unregistered, claims evidence it lacks, or grows the 55-entry UNVALIDATED debt set.
-- `test_player_placement_invariant` (250 s) and `test_player_wins_landscape_0042` (183 s)
-  far exceed the 60 s budget, and did so before this work.
-- `docs/player.md` was not reviewed this pass and may carry stale timing claims.
+- DONE: `sentinel/tests/test_timing_registry.py` fails CI on any timing constant that is
+  unregistered, claims evidence it lacks, or grows the UNVALIDATED debt set.
+  `REDRAW_BASE` and its entry are gone; new DERIVED `_CLEAR_CYCLES_H` / `_CLEAR_CYCLES_V`
+  and MEASURED `CLEAR_FRAMES` are registered, with derivations in
+  `test_timing_derivations.py`.
+- DONE: `test_player_placement_invariant` 250 s -> 33 s and
+  `test_player_wins_landscape_0042` 183 s -> 21 s, both now inside the 60 s budget, via
+  the `scene_key` memos (item 2).
+- `test_human_audit.py`'s pinned ls335 `gate_reject` list lost step 40 under `pancost` —
+  one fewer false disagreement with the human win log.
 - `_RU_COMMIT` (4 s) on `run_until_pc(PC_PAN_DONE)` aborted 1 live run in 5 (`won=None`)
   before the conversion. Confirm it can no longer fire.
 

@@ -14,9 +14,21 @@ and the memory map).
 | `driver/core.py` | the canonical `SentinelDriver` + the container/boot/connect/navigate/record lifecycle (`boot_and_play`, `GameSession`, `validate_avi`), object-array reads, native aim snap (`snap_view`), live LOS probe (`probe_tile`). |
 | `driver/kbd_aim.py` | keyboard aim geometry: the verified pan/cursor cycles, `snap_keyboard_view` (native grid search for a view landing on a tile), and `KbdDriver` (checkpoint-driven, U-turn-aware key driver). |
 | `driver/sentinel_execute.py` | `Executor` (raw reads + decoded live state), `perform_step` (the aim → fire → verify plan-step primitive), `fire_hyperspace`, and `verify` (memory-delta arbiter). |
+| `driver/clock.py` | machine-side clocks: `frames`/`run_frames` (exact `$9630` frame stepping) and `advance_machine_frames` (instruction stepping for pre-play phases). No host clock. |
 | `driver/boot.py` | robust tape boot with load-signature polling and the reusable VICE snapshot save/load (`boot.vsf`, code-entry `.vsf`). |
 | `driver/sentinel_state.py` | read live 64 KB memory into a structured `GameState` (`ViceSource`/`Py65Source`), `verify_entry` against the standalone generator, `mem_image` for wrapping in a sim `State`. |
 | `driver/watch_play.py` | passive logger of a **human** playing (connects to a stock binary monitor, polls state + records video); the source of the recorded human-win fixtures. Does not send keys. |
+
+## No wall-clock waits
+
+Live play is 100% event driven: every wait keys on a PC or a memory predicate, never
+on `time.sleep`. A host delay is warp-dependent — with warp on (`NO_RECORD=1`) the
+same delay spans several times the emulated frames it does with recording forcing warp
+off — so a sleep makes measured frame counts differ between modes. `driver/clock.py`
+provides the two machine-side clocks; `driver/test_no_sleep.py` is an AST guard that
+fails on any unmarked `time.sleep` in the live-play modules. Waits genuinely outside
+the emulated machine (docker lifecycle, the VICE AVI muxer, the tape loader's own
+polling) carry an inline `# sleep-ok: <reason>` marker and are pinned in that test.
 
 ## Boot / enter / record lifecycle
 
@@ -180,6 +192,13 @@ so the arbiter of a fired action remains the ROM object-count/energy delta
   after `container.start()` so docker has assigned the IP before the lookup.
   `BINMON_HOST` / `BINMON_PORT` env vars override; a missing bridge IP falls back to
   `127.0.0.1`. A headless boot is therefore just:
+
+- **Concurrent runs are safe.** The host publish is `-p 0:6502` (docker picks a free
+  host port) so two containers never contend for host 6502, and teardown
+  (`boot.kill_stale`, `core.free_stale_containers`) is scoped by
+  `boot.stale_filter()` to containers named `asid-vice-<own pid>-*`. A blanket
+  `ancestor=` sweep would force-remove another live driver's healthy container; set
+  `VICE_REAP_ORPHANS=1` to opt into that when no other run is in flight.
 
   ```python
   from driver import core

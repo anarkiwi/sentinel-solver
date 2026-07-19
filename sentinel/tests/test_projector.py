@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, projector
+from sentinel import landscape, memmap as mm, projector
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_projector.json")
@@ -136,6 +136,25 @@ def test_render_cost_is_scene_dependent():
     assert c0 > 0 and c42 > 0
     assert projector.render_cost(s0, None) == 0.0
     assert projector.render_cost(s0, {"h_angle": None}) == 0.0
+
+
+def test_render_cost_observer_moves_the_occlusion_rays_too():
+    """``observer`` selects the viewpoint object end to end: $245B raytraces from the
+    eye ($0C63), so a different observer must change the occlusion bitmap and the
+    cost, not just the $2625 setup."""
+    s = landscape.generate(42)
+    other = next(
+        i
+        for i in range(mm.NUM_SLOTS)
+        if not s.is_empty(i)
+        and i != s.player
+        and (s.obj_x[i], s.obj_y[i]) != (s.obj_x[s.player], s.obj_y[s.player])
+    )
+    mine = projector._occlusion_visible(s)
+    theirs = projector._occlusion_visible(s, other)
+    assert mine != theirs
+    view = {"h_angle": 0x50, "v_angle": 0x04}
+    assert projector.render_cost(s, view, other) != projector.render_cost(s, view)
 
 
 def test_visible_tiles_and_replot():

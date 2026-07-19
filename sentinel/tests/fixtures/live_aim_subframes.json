@@ -1,0 +1,991 @@
+{
+ "0042": [
+  {
+   "step": "p1",
+   "verb": "create",
+   "tile": [
+    9,
+    26
+   ],
+   "aim_charged": 183,
+   "aim_exact": 250,
+   "settle_charged": 93.75,
+   "settle_exact": 99,
+   "pan_h": 155,
+   "pan_v": 66,
+   "toggle": 10,
+   "cursor": 19,
+   "ach": [
+    160,
+    241,
+    [
+     82,
+     81
+    ]
+   ]
+  },
+  {
+   "step": "p2",
+   "verb": "create",
+   "tile": [
+    9,
+    26
+   ],
+   "aim_charged": 121,
+   "aim_exact": 116,
+   "settle_charged": 93.75,
+   "settle_exact": 100,
+   "pan_h": 0,
+   "pan_v": 51,
+   "toggle": 10,
+   "cursor": 55,
+   "ach": [
+    160,
+    245,
+    [
+     104,
+     45
+    ]
+   ]
+  },
+  {
+   "step": "p3",
+   "verb": "transfer",
+   "tile": [
+    9,
+    26
+   ],
+   "aim_charged": 0,
+   "aim_exact": 0,
+   "settle_charged": 371.98,
+   "settle_exact": 270,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p4",
+   "verb": "absorb",
+   "tile": [
+    13,
+    29
+   ],
+   "aim_charged": 120,
+   "aim_exact": 89,
+   "settle_charged": 93.75,
+   "settle_exact": 74,
+   "pan_h": 0,
+   "pan_v": 60,
+   "toggle": 10,
+   "cursor": 19,
+   "ach": [
+    32,
+    237,
+    [
+     81,
+     81
+    ]
+   ]
+  },
+  {
+   "step": "p5",
+   "verb": "create",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 235,
+   "aim_exact": 162,
+   "settle_charged": 93.75,
+   "settle_exact": 99,
+   "pan_h": 54,
+   "pan_v": 64,
+   "toggle": 10,
+   "cursor": 34,
+   "ach": [
+    48,
+    245,
+    [
+     78,
+     66
+    ]
+   ]
+  },
+  {
+   "step": "p6",
+   "verb": "create",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 46,
+   "aim_exact": 31,
+   "settle_charged": 93.75,
+   "settle_exact": 97,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 31,
+   "ach": [
+    48,
+    245,
+    [
+     105,
+     71
+    ]
+   ]
+  },
+  {
+   "step": "p7",
+   "verb": "transfer",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 0,
+   "aim_exact": 0,
+   "settle_charged": 342.39,
+   "settle_exact": 302,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p8",
+   "verb": "absorb",
+   "tile": [
+    9,
+    26
+   ],
+   "aim_charged": 265,
+   "aim_exact": 335,
+   "settle_charged": 93.75,
+   "settle_exact": 88,
+   "pan_h": 0,
+   "pan_v": 296,
+   "toggle": 10,
+   "cursor": 29,
+   "ach": [
+    176,
+    225,
+    [
+     104,
+     101
+    ]
+   ]
+  },
+  {
+   "step": "p9",
+   "verb": "absorb",
+   "tile": [
+    9,
+    26
+   ],
+   "aim_charged": 45,
+   "aim_exact": 0,
+   "settle_charged": 93.75,
+   "settle_exact": 88,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": [
+    176,
+    225,
+    [
+     104,
+     101
+    ]
+   ]
+  },
+  {
+   "step": "p10",
+   "verb": "create",
+   "tile": [
+    30,
+    30
+   ],
+   "aim_charged": 305,
+   "aim_exact": 311,
+   "settle_charged": 93.75,
+   "settle_exact": 91,
+   "pan_h": 83,
+   "pan_v": 191,
+   "toggle": 10,
+   "cursor": 27,
+   "ach": [
+    56,
+    245,
+    [
+     78,
+     117
+    ]
+   ]
+  },
+  {
+   "step": "p11",
+   "verb": "create",
+   "tile": [
+    30,
+    30
+   ],
+   "aim_charged": 42,
+   "aim_exact": 8,
+   "settle_charged": 93.75,
+   "settle_exact": 94,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 8,
+   "ach": [
+    56,
+    245,
+    [
+     82,
+     117
+    ]
+   ]
+  },
+  {
+   "step": "p12",
+   "verb": "transfer",
+   "tile": [
+    30,
+    30
+   ],
+   "aim_charged": 0,
+   "aim_exact": 0,
+   "settle_charged": 344.59,
+   "settle_exact": 303,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p13",
+   "verb": "absorb",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 60,
+   "aim_exact": 212,
+   "settle_charged": 93.75,
+   "settle_exact": 92,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 171,
+   "cursor": 41,
+   "ach": [
+    184,
+    245,
+    [
+     82,
+     59
+    ]
+   ]
+  },
+  {
+   "step": "p14",
+   "verb": "absorb",
+   "tile": [
+    5,
+    30
+   ],
+   "aim_charged": 73,
+   "aim_exact": 54,
+   "settle_charged": 93.75,
+   "settle_exact": 124,
+   "pan_h": 25,
+   "pan_v": 0,
+   "toggle": 18,
+   "cursor": 11,
+   "ach": [
+    192,
+    245,
+    [
+     74,
+     94
+    ]
+   ]
+  },
+  {
+   "step": "p15",
+   "verb": "absorb",
+   "tile": [
+    10,
+    12
+   ],
+   "aim_charged": 270,
+   "aim_exact": 379,
+   "settle_charged": 93.75,
+   "settle_exact": 99,
+   "pan_h": 335,
+   "pan_v": 0,
+   "toggle": 18,
+   "cursor": 26,
+   "ach": [
+    160,
+    245,
+    [
+     95,
+     74
+    ]
+   ]
+  }
+ ],
+ "0335": [
+  {
+   "step": "p1",
+   "verb": "absorb",
+   "tile": [
+    10,
+    19
+   ],
+   "aim_charged": 161,
+   "aim_exact": 171,
+   "settle_charged": 93.75,
+   "settle_exact": 104,
+   "pan_h": 0,
+   "pan_v": 155,
+   "toggle": 10,
+   "cursor": 6,
+   "ach": [
+    248,
+    233,
+    [
+     77,
+     98
+    ]
+   ]
+  },
+  {
+   "step": "p2",
+   "verb": "create",
+   "tile": [
+    10,
+    19
+   ],
+   "aim_charged": 19,
+   "aim_exact": 0,
+   "settle_charged": 93.75,
+   "settle_exact": 114,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": [
+    248,
+    233,
+    [
+     77,
+     98
+    ]
+   ]
+  },
+  {
+   "step": "p3",
+   "verb": "absorb",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 110,
+   "aim_exact": 103,
+   "settle_charged": 93.75,
+   "settle_exact": 109,
+   "pan_h": 0,
+   "pan_v": 93,
+   "toggle": 10,
+   "cursor": 0,
+   "ach": [
+    248,
+    225,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p4",
+   "verb": "create",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 15,
+   "aim_exact": 0,
+   "settle_charged": 93.75,
+   "settle_exact": 134,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": [
+    248,
+    225,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p5",
+   "verb": "create",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 15,
+   "aim_exact": 0,
+   "settle_charged": 93.75,
+   "settle_exact": 135,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": [
+    248,
+    225,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p6",
+   "verb": "transfer",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 15,
+   "aim_exact": 0,
+   "settle_charged": 110.19,
+   "settle_exact": 259,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p7",
+   "verb": "absorb",
+   "tile": [
+    11,
+    17
+   ],
+   "aim_charged": 321,
+   "aim_exact": 346,
+   "settle_charged": 93.75,
+   "settle_exact": 95,
+   "pan_h": 0,
+   "pan_v": 336,
+   "toggle": 10,
+   "cursor": 0,
+   "ach": [
+    120,
+    217,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p8",
+   "verb": "absorb",
+   "tile": [
+    10,
+    19
+   ],
+   "aim_charged": 126,
+   "aim_exact": 394,
+   "settle_charged": 93.75,
+   "settle_exact": 109,
+   "pan_h": 376,
+   "pan_v": 0,
+   "toggle": 18,
+   "cursor": 0,
+   "ach": [
+    232,
+    217,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p9",
+   "verb": "create",
+   "tile": [
+    8,
+    21
+   ],
+   "aim_charged": 363,
+   "aim_exact": 336,
+   "settle_charged": 93.75,
+   "settle_exact": 103,
+   "pan_h": 0,
+   "pan_v": 301,
+   "toggle": 10,
+   "cursor": 25,
+   "ach": [
+    232,
+    245,
+    [
+     60,
+     75
+    ]
+   ]
+  },
+  {
+   "step": "p10",
+   "verb": "create",
+   "tile": [
+    8,
+    21
+   ],
+   "aim_charged": 70,
+   "aim_exact": 68,
+   "settle_charged": 93.75,
+   "settle_exact": 121,
+   "pan_h": 50,
+   "pan_v": 0,
+   "toggle": 18,
+   "cursor": 0,
+   "ach": [
+    224,
+    245,
+    [
+     80,
+     95
+    ]
+   ]
+  },
+  {
+   "step": "p11",
+   "verb": "transfer",
+   "tile": [
+    8,
+    21
+   ],
+   "aim_charged": 15,
+   "aim_exact": 0,
+   "settle_charged": 363.89,
+   "settle_exact": 333,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p12",
+   "verb": "absorb",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 179,
+   "aim_exact": 279,
+   "settle_charged": 93.75,
+   "settle_exact": 104,
+   "pan_h": 0,
+   "pan_v": 238,
+   "toggle": 10,
+   "cursor": 31,
+   "ach": [
+    96,
+    233,
+    [
+     78,
+     69
+    ]
+   ]
+  },
+  {
+   "step": "p13",
+   "verb": "absorb",
+   "tile": [
+    11,
+    18
+   ],
+   "aim_charged": 47,
+   "aim_exact": 0,
+   "settle_charged": 93.75,
+   "settle_exact": 106,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": [
+    96,
+    233,
+    [
+     78,
+     69
+    ]
+   ]
+  },
+  {
+   "step": "p14",
+   "verb": "absorb",
+   "tile": [
+    14,
+    19
+   ],
+   "aim_charged": 242,
+   "aim_exact": 303,
+   "settle_charged": 93.75,
+   "settle_exact": 89,
+   "pan_h": 77,
+   "pan_v": 215,
+   "toggle": 10,
+   "cursor": 1,
+   "ach": [
+    80,
+    245,
+    [
+     79,
+     94
+    ]
+   ]
+  },
+  {
+   "step": "p15",
+   "verb": "create",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 325,
+   "aim_exact": 316,
+   "settle_charged": 93.75,
+   "settle_exact": 119,
+   "pan_h": 290,
+   "pan_v": 0,
+   "toggle": 20,
+   "cursor": 6,
+   "ach": [
+    32,
+    245,
+    [
+     77,
+     97
+    ]
+   ]
+  },
+  {
+   "step": "p16",
+   "verb": "create",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 35,
+   "aim_exact": 177,
+   "settle_charged": 93.75,
+   "settle_exact": 13,
+   "pan_h": 120,
+   "pan_v": 0,
+   "toggle": 19,
+   "cursor": 38,
+   "ach": [
+    32,
+    245,
+    [
+     64,
+     100
+    ]
+   ]
+  },
+  {
+   "step": "p17",
+   "verb": "create",
+   "tile": [
+    12,
+    28
+   ],
+   "aim_charged": 73,
+   "aim_exact": 45,
+   "settle_charged": 93.75,
+   "settle_exact": 104,
+   "pan_h": 17,
+   "pan_v": 0,
+   "toggle": 18,
+   "cursor": 10,
+   "ach": [
+    24,
+    245,
+    [
+     75,
+     100
+    ]
+   ]
+  },
+  {
+   "step": "p18",
+   "verb": "create",
+   "tile": [
+    12,
+    28
+   ],
+   "aim_charged": 27,
+   "aim_exact": 9,
+   "settle_charged": 93.75,
+   "settle_exact": 112,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 9,
+   "ach": [
+    24,
+    245,
+    [
+     70,
+     101
+    ]
+   ]
+  },
+  {
+   "step": "p19",
+   "verb": "transfer",
+   "tile": [
+    12,
+    28
+   ],
+   "aim_charged": 27,
+   "aim_exact": 0,
+   "settle_charged": 421.71,
+   "settle_exact": 371,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p20",
+   "verb": "absorb",
+   "tile": [
+    8,
+    21
+   ],
+   "aim_charged": 119,
+   "aim_exact": 186,
+   "settle_charged": 93.75,
+   "settle_exact": 111,
+   "pan_h": 0,
+   "pan_v": 158,
+   "toggle": 10,
+   "cursor": 18,
+   "ach": [
+    152,
+    237,
+    [
+     67,
+     82
+    ]
+   ]
+  },
+  {
+   "step": "p21",
+   "verb": "absorb",
+   "tile": [
+    13,
+    27
+   ],
+   "aim_charged": 476,
+   "aim_exact": 859,
+   "settle_charged": 93.75,
+   "settle_exact": 114,
+   "pan_h": 367,
+   "pan_v": 450,
+   "toggle": 10,
+   "cursor": 32,
+   "ach": [
+    112,
+    221,
+    [
+     53,
+     68
+    ]
+   ]
+  },
+  {
+   "step": "p22",
+   "verb": "absorb",
+   "tile": [
+    14,
+    30
+   ],
+   "aim_charged": 480,
+   "aim_exact": 403,
+   "settle_charged": 93.75,
+   "settle_exact": 5,
+   "pan_h": 69,
+   "pan_v": 296,
+   "toggle": 10,
+   "cursor": 28,
+   "ach": [
+    32,
+    213,
+    [
+     57,
+     72
+    ]
+   ]
+  }
+ ],
+ "0000": [
+  {
+   "step": "p1",
+   "verb": "create",
+   "tile": [
+    10,
+    12
+   ],
+   "aim_charged": 446,
+   "aim_exact": 435,
+   "settle_charged": 93.75,
+   "settle_exact": 107,
+   "pan_h": 347,
+   "pan_v": 0,
+   "toggle": 20,
+   "cursor": 68,
+   "ach": [
+    112,
+    245,
+    [
+     62,
+     32
+    ]
+   ]
+  },
+  {
+   "step": "p2",
+   "verb": "create",
+   "tile": [
+    10,
+    12
+   ],
+   "aim_charged": 86,
+   "aim_exact": 10,
+   "settle_charged": 93.75,
+   "settle_exact": 108,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 10,
+   "ach": [
+    112,
+    245,
+    [
+     64,
+     38
+    ]
+   ]
+  },
+  {
+   "step": "p3",
+   "verb": "transfer",
+   "tile": [
+    10,
+    12
+   ],
+   "aim_charged": 86,
+   "aim_exact": 0,
+   "settle_charged": 363.35,
+   "settle_exact": 348,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 0,
+   "ach": null
+  },
+  {
+   "step": "p4",
+   "verb": "absorb",
+   "tile": [
+    8,
+    17
+   ],
+   "aim_charged": 188,
+   "aim_exact": 151,
+   "settle_charged": 93.75,
+   "settle_exact": 77,
+   "pan_h": 17,
+   "pan_v": 90,
+   "toggle": 10,
+   "cursor": 34,
+   "ach": [
+    232,
+    237,
+    [
+     109,
+     88
+    ]
+   ]
+  },
+  {
+   "step": "p5",
+   "verb": "create",
+   "tile": [
+    5,
+    5
+   ],
+   "aim_charged": 428,
+   "aim_exact": 388,
+   "settle_charged": 93.75,
+   "settle_exact": 88,
+   "pan_h": 267,
+   "pan_v": 92,
+   "toggle": 10,
+   "cursor": 19,
+   "ach": [
+    152,
+    245,
+    [
+     66,
+     103
+    ]
+   ]
+  },
+  {
+   "step": "p6",
+   "verb": "create",
+   "tile": [
+    5,
+    5
+   ],
+   "aim_charged": 26,
+   "aim_exact": 15,
+   "settle_charged": 93.75,
+   "settle_exact": 90,
+   "pan_h": 0,
+   "pan_v": 0,
+   "toggle": 0,
+   "cursor": 15,
+   "ach": [
+    152,
+    245,
+    [
+     77,
+     104
+    ]
+   ]
+  }
+ ]
+}

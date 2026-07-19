@@ -240,7 +240,7 @@ class Player(BasePlayer):
             if view is None:
                 continue
             aimf = self._aim_frames(view)
-            settle = self._settle("transfer", view)
+            settle = self._settle("transfer", view, slot)
             if not self._drain_gate("transfer", tile, exposed, aimf + settle):
                 continue  # a body drainable during the aim or the post-transfer settle
             window = self._gaze_window(tile, exposed=exposed)
@@ -462,7 +462,7 @@ class Player(BasePlayer):
             arrival = (
                 self._gaze_window(tile)
                 - self._aim_frames(view)
-                - self._settle("transfer", view)
+                - self._settle("transfer", view, slot)
             )
             if arrival <= self.tick_window:
                 continue  # seen during the hop, or no improvement: not an escape

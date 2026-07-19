@@ -3,8 +3,11 @@
 A ROM-faithful model of **The Sentinel** (Geoff Crammond, Firebird, 1986) on the
 Commodore 64, plus a live driver that plays the real game in
 [VICE](https://vice-emu.sourceforge.io/) (asid-vice) by keyboard input and records
-it as an AVI. The model is validated byte-for-byte against the real 6502 code,
-frozen as golden fixtures so CI proves correctness without the ROM.
+it as an AVI. Transition primitives are validated byte-for-byte against the real
+6502 code (golden fixtures, so CI proves them without the ROM); live frame-cadence
+and aim-cost fidelity is gated frame-for-frame by the divergence instrument
+([docs/instrument.md](docs/instrument.md)) — any gap is a defect to close, not
+tolerated error.
 
 ## Layout
 
@@ -52,4 +55,6 @@ pytest -n auto
 - [docs/render_cost.md](docs/render_cost.md) — the `plot_world` render/settle frame-cost model that prices redraw and transfer settle.
 - [docs/driver.md](docs/driver.md) — the live driver: boot/enter/record, keyboard aim → fire → verify, container plumbing.
 - [docs/instrument.md](docs/instrument.md) — the shared frame-locked divergence instrument: schema, tiers, first-disagreement report.
+- [docs/plan_fidelity.md](docs/plan_fidelity.md) — A* plan-vs-live frame fidelity: the measured error budget and the open problems.
+- [docs/handoff.md](docs/handoff.md) — current state and ranked next steps.
 </content>

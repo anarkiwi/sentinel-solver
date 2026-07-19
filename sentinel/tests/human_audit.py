@@ -151,7 +151,11 @@ def _audit_step(i, ev, evs, seed, truth=None):
     fverb = {"create": "boulder" if otype == mm.T_BOULDER else "robot"}.get(verb, verb)
     gate_allow = None
     if verb in ("create", "transfer") and view is not None:
-        need = bp._settle("transfer", view) if verb == "transfer" else HOP_FRAMES
+        need = (
+            bp._settle("transfer", view, bp._top(tgt))
+            if verb == "transfer"
+            else HOP_FRAMES
+        )
         gate_allow = bp._drain_gate(fverb, tgt, exposed_t, aim_frames + need)
 
     fire_ok = None

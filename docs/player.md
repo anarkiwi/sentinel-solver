@@ -76,9 +76,10 @@ Every tile-targeted action resolves through the ROM aim oracle
 (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path): an action fires only on a
 keyboard-lattice view whose ray lands the target. Aim time is priced from the
 pan cadence (16-step scroll per ±8 bearing notch `$10EE`, 8-step per ±4 pitch
-notch `$1135`, u-turn `$1B2F` flip, 1px/frame cursor) and settle time from the
-redraw/projector cost model ([render_cost.md](render_cost.md)); both advance the
-world before/after the action fires.
+notch `$1135`, u-turn `$1B2F` flip, 1px/frame cursor); each notch's own
+`plot_world` ($2625) and the post-action settle are both priced from the
+projector cost model ([render_cost.md](render_cost.md)). All advance the world
+before/after the action fires.
 
 Landability queries use one cheap primary-plane sweep per tick, falling back to
 one full pitch-band sweep only for down-looks that a single-ray visibility check
@@ -162,8 +163,9 @@ empty — an outcome flip, not a rounding detail. The 0042 regression is exactly
 that: the sim under-charged the long (13,27)→(5,30) reclaim aim, the enemy
 rotated further than modelled, and the body was drained where safety was
 predicted. The faithful charge is `_aim_frames(view) + _settle(verb, view)`
-(bearing/pitch pan + cursor travel + scene-dependent redraw via `visible_edges`;
-settle model in [render_cost.md](render_cost.md)), applied *before* advancing the
+(bearing/pitch pan + cursor travel + per-notch redraw priced from the scene by
+`pancost.notch_frames`; redraw and settle models in
+[render_cost.md](render_cost.md)), applied *before* advancing the
 enemies. Both the reactive player and the A* search
 ([astar_player.md](astar_player.md)) charge this.
 

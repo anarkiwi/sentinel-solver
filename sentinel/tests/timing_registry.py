@@ -217,6 +217,7 @@ def _u(module, note):
 
 _PRIMITIVE = "test_derived_constant_matches_primitive"
 _SETTLE_FIT = "test_create_settle_prediction_is_accurate"
+_PAN_FIT = "test_pan_notch_cost_matches_the_measured_plot"
 
 
 def _d(module, note):
@@ -226,6 +227,7 @@ def _d(module, note):
 _AC = "sentinel.actioncost"
 _PB = "sentinel.playerbase"
 _PR = "sentinel.projector"
+_PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
@@ -254,7 +256,14 @@ REGISTRY = {
         "create settle within 5 f of frozen_ls42_audit.json; absorb bias is xfailed",
         _SETTLE_FIT,
     ),
-    "REDRAW_BASE": _u(_PB, "fitted per-pitch terrain base; no fixture comparison"),
+    "_CLEAR_CYCLES_H": _d(_PN, "$3912 store-loop cycle count"),
+    "_CLEAR_CYCLES_V": _d(_PN, "$38AD store-loop cycle count"),
+    "CLEAR_FRAMES": entry(
+        _PN,
+        MEASURED,
+        "within 1 f of the py65-measured clear subtree in golden_pan_cost.json",
+        _PAN_FIT,
+    ),
     "H_SCROLL": _u(_PB, "pan scroll step; no derivation test"),
     "V_SCROLL": _u(_PB, "pan scroll step; no derivation test"),
     "TOGGLE_FRAMES": entry(
@@ -345,7 +354,6 @@ UNVALIDATED_PIN = frozenset(
         "FRAME_TICKS",
         "HOP_FRAMES",
         "H_SCROLL",
-        "REDRAW_BASE",
         "REDRAW_FRAMES",
         "ROTATION_COOLDOWN_RELOAD",
         "SAFE_FRAMES",

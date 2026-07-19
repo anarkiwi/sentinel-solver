@@ -3,7 +3,6 @@ import pytest
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 IMG = os.path.join(ROOT, "out", "sentinel_stage2.bin")
-TAP = os.path.join(ROOT, "sentinel-gold.tap")
 
 
 def pytest_configure(config):
@@ -14,16 +13,10 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    have_img = os.path.exists(IMG)
-    have_tap = os.path.exists(TAP)
-    have_docker = os.system("docker info >/dev/null 2>&1") == 0
+    # Only `oracle` tests (differential against the real 6502) need the ROM fixture.
+    if os.path.exists(IMG):
+        return
     no_img = pytest.mark.skip(reason="needs out/sentinel_stage2.bin fixture")
     for item in items:
-        if "test_video_record" in item.nodeid:
-            if not (have_tap and have_docker):
-                item.add_marker(pytest.mark.skip(reason="needs tape fixture + docker"))
-        elif not have_img and item.get_closest_marker("oracle"):
-            # Only tests that differentially validate against the real 6502 code
-            # (marked `oracle`) need the ROM fixture; the rest of the sentinel
-            # package's model tests run without it.
+        if item.get_closest_marker("oracle"):
             item.add_marker(no_img)

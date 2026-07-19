@@ -3,17 +3,15 @@ threat/gaze windows, aim cost, action firing, and the run loop. Player
 subclasses implement _tick()."""
 
 import math
-import os
 
 import numpy as np
 
 from sentinel import actioncost, actions, aim, aimcost, enemies, los, memmap as mm
-from sentinel import projector, relative, terrain, threat
+from sentinel import pancost, projector, relative, terrain, threat
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
 V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
-# Per-notch plot_world ($2625) terrain base + STEPS_PER_EDGE/edge. FITTED: no loop-body derivation and no fixture pins it; real per-notch redraw spans 25-27 f (empty) to 73-112 f (busy), which no flat base covers (docs/plan_fidelity.md problem 1).
-REDRAW_BASE = float(os.environ.get("REDRAW_BASE", "34"))
+SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -348,8 +346,8 @@ class BasePlayer:
         st = self.st
         me = st.player
         want = (view["h_angle"], view["v_angle"])
-        nu, ns = aimcost.h_press_count(st.obj_h_angle[me], view["h_angle"])
-        nv = aimcost.v_steps(st.obj_v_angle[me], view["v_angle"])
+        h0, v0 = int(st.obj_h_angle[me]), int(st.obj_v_angle[me])
+        nu = aimcost.h_press_count(h0, view["h_angle"])[0]
         if self.last_bearing == want:
             cur_from = self.cursor
             toggles = 0
@@ -362,19 +360,11 @@ class BasePlayer:
             abs(view["cursor"][1] - cur_from[1]),
         )
         cur = cur + CURSOR_RAMP if cur else 0.0
-        # per-notch plot_world cost, geometric in the in-view object edges ($2625 scene patch)
-        redraw = REDRAW_BASE + actioncost.STEPS_PER_EDGE * actioncost.visible_edges(
-            st.mem, view
+        # Each notch scrolls then replots the strip at its own intermediate angle; the u-turn ($1B2F EOR $80) is one keystroke with no scroll and no replot.
+        pan = pancost.pan_frames(
+            st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, me
         )
-        # u-turn ($1B2F EOR $80 flip): one keystroke, 0 scroll frames, no redraw (measured)
-        return (
-            toggles
-            + nu * TAP_FRAMES
-            + ns * (H_SCROLL + redraw)
-            + nv * (V_SCROLL + redraw)
-            + cur
-            + TAP_FRAMES
-        )
+        return toggles + nu * TAP_FRAMES + pan + cur + TAP_FRAMES
 
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
