@@ -124,3 +124,24 @@ def test_won_reads_landscape_complete_bit():
     assert _driver(bm).won() is False
     bm.mem[core.A_LANDSCAPE_DONE] = 0x40
     assert _driver(bm).won() is True
+
+
+def test_landscape_from_digits_keeps_the_high_bcd_byte():
+    """The seed is the whole packed-BCD code, not just its low byte: the PRNG is
+    seeded from both bytes ($0C7B/$0C7C), so dropping the leading pair selects a
+    different landscape for any code above 0099."""
+    assert core.landscape_from_digits("0042") == 0x0042
+    assert core.landscape_from_digits("0335") == 0x0335
+    assert core.landscape_from_digits("2024") == 0x2024
+
+
+def test_landscape_from_digits_inverts_enter_landscape():
+    for seed in (0x0000, 0x0042, 0x0335, 0x2024, 0x9999):
+        assert core.landscape_from_digits(f"{seed:04x}") == seed
+
+
+def test_landscape_from_digits_matches_prng_seed_bytes():
+    from sentinel import prng
+
+    seed = core.landscape_from_digits("0335")
+    assert prng.seed_state(seed)[:2] == [0x35, 0x03]
