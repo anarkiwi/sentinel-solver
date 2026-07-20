@@ -231,11 +231,14 @@ class AStarPlayer(BasePlayer):
         return False
 
     def _escape_transfer(self):
-        """Transfer to the landable robot with the widest rotation window, if it
-        is strictly safer than staying put."""
+        """Transfer to the safer landable robot the player can actually REACH: cheapest
+        aim first, widest window breaking ties, and only bodies whose aim+settle fits
+        inside the window the current body has left. Ranking on window alone picks a
+        wide-window body half a pan away and is drained mid-aim -- while escaping, the
+        aim IS the exposure, which is why the counterattack above sorts the same way."""
         st = self.st
         here = self._player_window()
-        best = None
+        cands = []
         for s in range(mm.NUM_SLOTS):
             if st.is_empty(s) or s == st.player or st.obj_type[s] != mm.T_ROBOT:
                 continue
@@ -246,11 +249,19 @@ class AStarPlayer(BasePlayer):
             if view is None:
                 continue
             window = self._gaze_window(tile)
-            if window > here and (best is None or window > best[0]):
-                best = (window, tile, view)
-        if best is None:
-            return False
-        return self._fire("transfer", best[1], best[2])
+            if window <= here:
+                continue
+            cost = self._step_aim_frames("transfer", view) + self._settle(
+                "transfer", view, s
+            )
+            if cost > here:
+                continue  # drained mid-aim: a safer perch it cannot live to reach
+            cands.append((cost, -window, tile, view))
+        cands.sort()
+        for _cost, _w, tile, view in cands:
+            if self._fire("transfer", tile, view):
+                return True
+        return False
 
     def _dangerous_seers(self):
         """Living enemies whose cone is on the player NOW and can damage it (full
