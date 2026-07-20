@@ -76,7 +76,9 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
     player._view_for = lambda tile: _VIEW
     player._step_aim_frames = lambda verb, view: 100.0
     player._settle = lambda verb, view=None, observer=None: 210.0
-    player._player_window = lambda: 348.0  # >= 310 budget, < 310 + margin
+    # margin-only block: >= the 310 raw budget, < budget + margin, whatever sigma is
+    budget = 310.0
+    player._player_window = lambda: budget + 0.5 * player._margin(0)
     player.live_log = lambda msg: None
     _live(player, "_plan_step_stale")
     waits, fired = [], []

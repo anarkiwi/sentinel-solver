@@ -60,7 +60,9 @@ _HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): n
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
-_STEP_SIGMA = float(os.environ.get("SENTINEL_STEP_SIGMA", "68.4"))  # see _margin
+_STEP_SIGMA = float(
+    os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
+)  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 
 

@@ -93,6 +93,26 @@ The hop cost itself is sound: `HOP_FRAMES = 700` sits under two live-measured ho
 (745, 879 f) and within 25% (`test_hop_budget.py`). An earlier claim here that it
 under-budgets 2-3x was wrong and is retracted below.
 
+### The obvious fix does not work live (attempted, reverted)
+
+Gating the hop on the player's own body window -- `_hot(HOP_FRAMES + (k-1)*SETTLE)`
+alongside the existing tile gate -- takes the live player from 12 actions to **0**. It
+was reverted. Two things this exposed, both of which invalidate the offline evidence
+that made it look right:
+
+- **`Game.new(42)` starts FROZEN**, so `_body_drain_window()` is `inf` and the gate is
+  inert. Every pure-sim A/B of a body-window gate is therefore vacuous -- the sim "win"
+  under the gate exercised a path where the gate never fired.
+- Clearing the frozen bit offline reproduces a root that returns `None`, and the margin
+  is implicated: with the gate on, `_search` finds a 29-step plan at
+  `SENTINEL_STEP_SIGMA` 24.1 or 0, and **nothing** at 49.3 or 68.4. But live still
+  returns `None` at sigma 24.1, so an unfrozen fresh board is *still* not a faithful
+  stand-in for the live root (real facings and cooldowns differ).
+
+So the diagnosis above (the hop is gated on the destination tile, never on the body)
+is measured and stands, but no gate formulation has yet survived live. Anything
+attempted next must be A/B'd **live**, not in the sim.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled

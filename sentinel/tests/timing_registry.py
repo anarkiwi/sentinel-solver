@@ -316,7 +316,13 @@ REGISTRY = {
     "COOLDOWN_BRESENHAM_STEP": _u(_MM, "ROM Bresenham step; no derivation test"),
     "ENERGY_MASK": _u(_MM, "bit mask, not a duration"),
     "_MASK_TABLE": _u("sentinel.landscape", "bit mask table, not a duration"),
-    "_STEP_SIGMA": _u("sentinel.astar_player", "planner cost jitter; unmeasured"),
+    "_STEP_SIGMA": entry(
+        "sentinel.astar_player",
+        MEASURED,
+        "whole-step charged-vs-measured rms of the live ls42 run in "
+        "live_ls42_hops.json; one run, n=11",
+        "test_step_sigma_is_the_measured_whole_step_rms",
+    ),
     "_march_python.max_steps": _u(_LOS, _ROW),
     "_march_jit.max_steps": _u(_LOS, _ROW),
     "check_for_line_of_sight_to_tile.max_steps": _u(_LOS, _ROW),
@@ -385,7 +391,6 @@ UNVALIDATED_PIN = frozenset(
         "_RU_PAN",
         "_RU_STA",
         "_SCAN_WAIT_PASSES",
-        "_STEP_SIGMA",
         "_enter_play.chunk",
         "_march_jit.max_steps",
         "_march_python.max_steps",
