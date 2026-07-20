@@ -259,6 +259,40 @@ That is the next thread -- and it matters beyond phase, since the PRNG drives me
 spawns and the discharge-tree scatter (the live human replay diverged with exactly a
 "create changed global object count by 2 (meanie/extra?)").
 
+### The PRNG cannot be tracked frame-by-frame (hard limit, not a bug to fix)
+
+Measured live: recover k such that applying the model's `prnd` k times to the state at
+frame N gives the state at frame N+1, over 200 frames.
+
+    prnd calls per frame: {19: 40, 11: 2, no-match-within-32: 158}
+    cursor decrements per frame: {2: 17, 3: 128, 4: 53}
+
+The ROM advances the PRNG **~19+ times per frame -- often more than 32** while the cursor
+moves only 3. So `update_enemies` is NOT the main consumer: the stream is being drawn by
+callers the model does not have (renderer/sound/IRQ side). The model's LFSR itself is
+correct -- `prng._shuffle` matches `$31CA` instruction for instruction (8 shuffles, tap
+`bit3(s[2]) ^ bit0(s[4])`, ROL through five bytes) -- it is the *rate* that is
+unmodellable without porting every caller.
+
+Consequence: every PRNG-driven event -- meanie spawn target, the discharge-tree scatter
+($1A5D), the hyperspace landing -- is **not predictable by the model at frame
+granularity**, and no amount of cost-model work changes that. The live human replay
+diverging at h17 with "create changed global object count by 2 (meanie/extra?)" is this.
+Plans must be robust to those events, not predict them.
+
+### Rotation phase: still open
+
+At the frame-50 CORE divergence the emulator has `update_cd = 4` -- exactly
+`UPDATE_COOLDOWN_SCAN`, i.e. it *just* ran `consider_enemy_state` and rotated -- while the
+sim has `update_cd = 1` and `rotation_cd = 0`: it ran its consideration EARLIER, when the
+rotation was not yet due, and must now wait for the next one. The two clocks (update
+cooldown vs rotation cooldown) are phased differently against the frame.
+
+Leading hypothesis, untested: the ROM's cooldown tick is a raster IRQ ($9663) that can
+fire BETWEEN foreground passes, whereas `advance_frame` runs all `UPDATES_PER_FRAME`
+passes and only then calls `cooldown_frame`. That ordering would shift by one
+consideration when an enemy first sees `rotation_cd == 0`.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled
