@@ -53,3 +53,14 @@ def test_whole_step_books_are_unbiased_and_bounded():
     assert rms < 40.0, f"whole-step rms {rms:.1f} f"
     assert abs(statistics.fmean(errs)) < 20.0, f"bias {statistics.fmean(errs):+.1f} f"
     assert max(abs(e) for e in errs) < 100.0, "a step is mispriced by 100+ frames"
+
+
+def test_uturn_is_charged_as_an_action_tap_not_a_keystroke():
+    """A u-turn goes through tap_action (want-flag $23), so it costs the idle+press
+    scans and the action's own consumption -- not one keystroke. Charging TAP_FRAMES
+    left p1 mispriced by +64 f, the largest residual in the run."""
+    ut = _data()["uturns"]
+    assert ut, "no u-turn recorded to pin against"
+    for rec in ut:
+        assert pb.UTURN_FRAMES == rec["measured"], rec["step"]
+    assert pb.UTURN_FRAMES > 10 * pb.TAP_FRAMES  # it is nothing like a bare tap

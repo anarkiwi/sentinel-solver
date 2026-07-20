@@ -1,20 +1,148 @@
 {
  "source": "live VICE ls42, A* player, renders/player_ls42_uturnfix.avi; per-step whole-step charged-vs-measured from the $9630 frame counter (frame_audit)",
  "steps": [
-  {"step": "p1",  "verb": "absorb",   "tile": [9, 30],  "charged": 299, "measured": 363},
-  {"step": "p2",  "verb": "boulder",  "tile": [9, 26],  "charged": 402, "measured": 392},
-  {"step": "p3",  "verb": "robot",    "tile": [9, 26],  "charged": 224, "measured": 217},
-  {"step": "p4",  "verb": "transfer", "tile": [9, 26],  "charged": 316, "measured": 270},
-  {"step": "p5",  "verb": "absorb",   "tile": [13, 29], "charged": 205, "measured": 164},
-  {"step": "p6",  "verb": "boulder",  "tile": [13, 27], "charged": 297, "measured": 264},
-  {"step": "p7",  "verb": "robot",    "tile": [13, 27], "charged": 129, "measured": 128},
-  {"step": "p8",  "verb": "transfer", "tile": [13, 27], "charged": 357, "measured": 353},
-  {"step": "p9",  "verb": "absorb",   "tile": [9, 26],  "charged": 383, "measured": 375},
-  {"step": "p10", "verb": "absorb",   "tile": [9, 26],  "charged": 97,  "measured": 88},
-  {"step": "p11", "verb": "create",   "tile": [1, 24],  "charged": 399, "measured": 433}
+  {
+   "step": "p1",
+   "verb": "absorb",
+   "tile": [
+    9,
+    30
+   ],
+   "charged": 299,
+   "measured": 363
+  },
+  {
+   "step": "p2",
+   "verb": "boulder",
+   "tile": [
+    9,
+    26
+   ],
+   "charged": 402,
+   "measured": 392
+  },
+  {
+   "step": "p3",
+   "verb": "robot",
+   "tile": [
+    9,
+    26
+   ],
+   "charged": 224,
+   "measured": 217
+  },
+  {
+   "step": "p4",
+   "verb": "transfer",
+   "tile": [
+    9,
+    26
+   ],
+   "charged": 316,
+   "measured": 270
+  },
+  {
+   "step": "p5",
+   "verb": "absorb",
+   "tile": [
+    13,
+    29
+   ],
+   "charged": 205,
+   "measured": 164
+  },
+  {
+   "step": "p6",
+   "verb": "boulder",
+   "tile": [
+    13,
+    27
+   ],
+   "charged": 297,
+   "measured": 264
+  },
+  {
+   "step": "p7",
+   "verb": "robot",
+   "tile": [
+    13,
+    27
+   ],
+   "charged": 129,
+   "measured": 128
+  },
+  {
+   "step": "p8",
+   "verb": "transfer",
+   "tile": [
+    13,
+    27
+   ],
+   "charged": 357,
+   "measured": 353
+  },
+  {
+   "step": "p9",
+   "verb": "absorb",
+   "tile": [
+    9,
+    26
+   ],
+   "charged": 383,
+   "measured": 375
+  },
+  {
+   "step": "p10",
+   "verb": "absorb",
+   "tile": [
+    9,
+    26
+   ],
+   "charged": 97,
+   "measured": 88
+  },
+  {
+   "step": "p11",
+   "verb": "create",
+   "tile": [
+    1,
+    24
+   ],
+   "charged": 399,
+   "measured": 433
+  }
  ],
  "hops": [
-  {"tiles": [9, 26],  "steps": ["p2", "p3", "p4"], "measured": 879},
-  {"tiles": [13, 27], "steps": ["p6", "p7", "p8"], "measured": 745}
+  {
+   "tiles": [
+    9,
+    26
+   ],
+   "steps": [
+    "p2",
+    "p3",
+    "p4"
+   ],
+   "measured": 879
+  },
+  {
+   "tiles": [
+    13,
+    27
+   ],
+   "steps": [
+    "p6",
+    "p7",
+    "p8"
+   ],
+   "measured": 745
+  }
+ ],
+ "uturns": [
+  {
+   "step": "p1",
+   "measured": 74,
+   "note": "kbd_aim._uturn timed separately inside coarse_h's pan_h"
+  }
  ]
 }

@@ -22,6 +22,7 @@ CURSOR_RAMP = float(
 SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
 TOGGLE_FRAMES = 12  # sights OFF (~0) + ON (~10: $134C recentre + plot_sights), measured
 TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
+UTURN_FRAMES = 74  # a u-turn is a full action tap (want-flag $23, kbd_aim._uturn), not a bare keystroke: idle+press scans plus the action's own consumption. Live ls42 p1, n=1.
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
 FOV_HALF = enemies.FOV_SCAN // 2  # +-10 units of the enemy scan cone
@@ -380,7 +381,7 @@ class BasePlayer:
         pan = pancost.pan_frames(
             st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, me
         )
-        return toggles + nu * TAP_FRAMES + pan + cur + TAP_FRAMES
+        return toggles + nu * UTURN_FRAMES + pan + cur + TAP_FRAMES
 
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
