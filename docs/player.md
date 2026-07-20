@@ -1,179 +1,115 @@
 # The reactive player (`sentinel/player.py`)
 
-A tick-by-tick greedy player over the `sentinel/` model. No search tree, no
-lookahead branching, and **no PRNG reads**: each decision tick observes the live
-`State` and commits one action. Wins landscapes 0000 (53 actions) and 0042
-(Sentinel + 1 sentry, 78 actions) in the simulator, hunting and clearing every
-enemy; the counts rose with the ROM-faithful settle/aim clock (§ Sim-vs-live),
-under which 0335 (three sentries) and the live 0042 win no longer reproduce.
+A tick-by-tick greedy player over the `sentinel/` model. No search tree, no lookahead
+branching, and **no PRNG reads**: each decision tick observes the live `State` and commits
+one action. It wins landscape 0; it does not win seed 66 (typed `0042`) under the
+ROM-faithful aim/settle clock — see the tests below and
+[plan_fidelity.md](plan_fidelity.md). The planning alternative is
+[astar_player.md](astar_player.md); both share `BasePlayer` (`sentinel/playerbase.py`).
 
 ```bash
-python -m sentinel.player 0        # play landscape 0, print the action trace
+python -m sentinel.player 0            # play landscape 0, print the action trace
+python -m sentinel.player 0 --audit    # + strict post-settle invariant accounting
 ```
 
-## Decision loop
+## Decision loop (`_tick`)
 
-Each tick picks the first applicable action, then advances the world by that
-action's real duration (aim pan + settle frames via `enemies.advance_frames`),
-so enemies rotate, target and drain while the player aims — there are no free
-moves.
+Each tick picks the first applicable action, then advances the world by that action's real
+duration (aim pan + settle frames via `enemies.advance_frames`), so enemies rotate, target
+and drain while the player aims — there are no free moves. `urgent` means the player's own
+tile window is at or below `SAFE_FRAMES`.
 
-1. **Win move** — Sentinel absorbed: create a robot on the platform tile,
-   transfer in, hyperspace (`do_hyperspace $2156` sets the complete flag),
-   waiting out any surviving cone on the platform first.
-2. **Dissolve a meanie** — absorb it, but only when the aim beats the meanie's
-   rotate-to-face window (`$16F2`: ±8 units per ~10-unit reload); otherwise the
-   transfer-out dissolve outruns it.
-3. **Counterattack** — seen by an absorbable enemy: absorb IT (no facing
-   requirement; the budget is the seer's own drain countdown `$0C20`) rather
-   than flee; the Sentinel qualifies only as the last enemy standing.
-4. **Hunt enemies** — absorb any sentry whose tile is aim-landable within the
-   current safety window, cheapest aim first: each one permanently deletes a
-   rotating gaze, worth far more than its +3.
-5. **Absorb the Sentinel** — dead last (the `$1B8E` slot-0 lock would strand
-   every remaining enemy), with the endgame affordable (energy ≥ 2).
-6. **Transfer up** — into the highest aim-landable robot that raises the eye.
-7. **Reclaim / harvest** — absorb old shells and spent pedestals from the new
-   vantage, trees while below headroom, ordered by aim-frames per energy unit,
-   and only when the aim leaves room for the hop that must follow.
-8. **Climb** — the ping-pong hop toward LOS on the hunt target: boulder on the
-   best safe landable tile, robot on the pedestal, transfer. A pedestal that
-   would leave the next hop unaffordable is refused unless the abandoned shell
-   stays aim-landable from the destination (no stranding).
-9. **Wait / escape** — idle when the world may improve; when cornered, a
-   strictly-window-improving transfer, then hyperspace as the true last resort.
+1. **Endgame** (Sentinel already absorbed, `_endgame`) — robot on the platform tile,
+   transfer in, hyperspace (`do_hyperspace $2156` sets the complete flag), waiting out a
+   surviving cone on the platform for up to one rotation period first.
+2. **Dissolve a meanie** (`_meanie_response`) — absorb it, but only when the aim beats its
+   rotate-to-face window (`$16F2`: ±8 units per update reload); otherwise the transfer-out
+   dissolve outruns it.
+3. **Counterattack** (urgent only, `_counterattack`) — seen by an absorbable enemy: absorb
+   IT rather than flee. No facing requirement; the budget is the seer's own drain
+   countdown (`$0C20`). The Sentinel qualifies only as the last enemy standing.
+4. **Hunt enemies** (non-urgent, `_hunt_enemies`) — absorb any sentry whose tile is
+   aim-landable, cheapest aim first, and only while the aim leaves `SAFE_FRAMES` of the
+   own-tile window intact. Each kill permanently deletes a rotating gaze.
+5. **Absorb the Sentinel** (non-urgent, `_absorb_sentinel`) — dead last (the `$1B8E`
+   slot-0 lock would strand every remaining enemy), no meanie alive, and the endgame
+   affordable (robot 3 + hyperspace 3 − Sentinel's +4 => energy >= 2).
+6. **Transfer up** (`_transfer_up`) — into the highest aim-landable robot that raises the
+   eye, never into a gaze, safe window required unless urgent.
+7. **Finish the hop in progress** (`_climb(only_tile=self.hop_tile)`).
+8. **Reclaim / harvest** (non-urgent, `_reclaim`) — absorb old shells and spent pedestals
+   below the eye, trees while energy is under `HOP_COST + 6`, ordered by aim-frames per
+   energy unit, and only when the aim leaves room for the hop that must follow.
+9. **Climb** (`_climb`) — boulder on the best safe landable tile, robot on the pedestal,
+   transfer. `_no_strand` refuses a pedestal that leaves the next hop unaffordable unless
+   the abandoned shell stays keyboard-landable from the destination.
+10. **Urgent fallbacks** — a cheap reclaim when cornered and under `HOP_COST`; `_escape`
+    (a transfer that strictly improves the arrival window, else hyperspace as the true
+    last resort); a least-bad hop while the world is still frozen; otherwise `_wait`
+    (`WAIT_FRAMES`).
 
-Placements obey one invariant: **never create on a tile any enemy sees right
-now** (any exposure, the ROM's own `$8401` bearing and `$18B8` cone gate);
-transfers refuse the DANGER basis — full visibility (`$1838` drains), or
-partial with a tree within 10 tiles (the meanie arm, `$19C3`) — so a harmless
-partial glimpse cannot orphan a pedestal the build was allowed to make. Every
-destination's danger window must cover the aim **plus the post-action settle**
-(the object is on the board and exposable for the whole settle) plus a safety
-margin — measured at ARRIVAL, not at plan time; graded last-resort tiers
-(partial-only sight, then least-exposed) unlock only when no unseen tile exists.
-The strict `--audit` flag re-checks this on the actual object after each settle
-(`Player._account`), so an aim/settle exposure the plan-time gate missed is
+`_climb_scan` ranks builds by `(gains LOS on the hunt target, robot eye height, cheaper
+aim, wider window)` over the primary-plane view dict, falling back to the full pitch band,
+then to graded relaxations: `seen_tier` 1 tolerates undrainable partial sight, 2 is
+least-exposed no-other-choice (urgent or frozen only).
+
+## Placement invariant
+
+`_drain_gate` (`playerbase`): a boulder is exempt (`$16E6` drains robots only); a robot or
+transfer destination must be outside every live **full**-sight cone now and keep its
+full-sight drain window past the budget it will stand exposed — the aim **plus** the
+post-action settle, since the object is on the board and exposable for the whole settle.
+Partial sight is not a drain; its slower meanie arm (a tree within 10 tiles, `$19C3`) is
+priced into `_gaze_window` instead. Exposure is judged at ARRIVAL, on the ROM's own `$8401`
+bearing and `$18B8` cone gate.
+
+`--audit` (`_account`) re-checks the invariant on the ACTUAL placed object after each
+settle, via `relative.can_see_object`: only a robot body left in a live full-sight cone is
 recorded as a breach.
+
+Creates also respect `_reserve`: while any enemy or meanie lives, energy must never drop
+below the 3 a forced hyperspace costs (`$215F` kills below it).
 
 ## Enemy model (deterministic only)
 
-- **Gaze window** per tile: frames until some enemy's rotating ±10-unit scan
-  cone (`$0C68`) covers a robot on that tile while `$1CDD` gives it full line of
-  sight — computed from current facing, the fixed ±20 rotation step, and the
-  `$130C`/`$1317` cooldown cadence. `0` = in a gaze now, `inf` = blocked from
-  every facing.
-- Transfers/builds **never target a tile in a live gaze**; hop destinations need
-  a hop-sized window. When the player's own tile turns urgent, requirements relax
-  in order (equal-height transfer, then least-bad transfer, then hyperspace as
-  the true last resort).
-- Hyperspace and meanie landings are treated as unknowable (PRNG-driven); the
-  PRNG is never read.
+- **Gaze window** per tile (`_gaze_window`): frames until some enemy's rotating ±10-unit
+  scan cone (`$0C68`, ±4 margin) covers a robot there with full line of sight — from
+  current facing, the fixed rotation step and the `$130C`/`$1317` cooldown cadence
+  (`_cone_onset`). `0` = drainable now, `inf` = never.
+- **Meanie window** (`_meanie_window`): a partially-seeing enemy must rotate on, run the
+  ~120-round drain countdown to the meanie branch (`$183D`/`$1852`), spawn (`$1869`) and
+  rotate the meanie to face (`$171B`) — always far slower than a drain, never 0.
+- Hyperspace and meanie landing tiles are treated as unknowable; the PRNG is never read.
 
 ## Aiming and cost
 
-Every tile-targeted action resolves through the ROM aim oracle
-(`aim.propose`/`aim.gate`, the `$1B40-$1B46` path): an action fires only on a
-keyboard-lattice view whose ray lands the target. Aim time is priced from the
-pan cadence (16-step scroll per ±8 bearing notch `$10EE`, 8-step per ±4 pitch
-notch `$1135`, u-turn `$1B2F` flip, 1px/frame cursor); each notch's own
-`plot_world` ($2625) and the post-action settle are both priced from the
-projector cost model ([render_cost.md](render_cost.md)). All advance the world
-before/after the action fires.
+Every tile-targeted action resolves through the ROM aim oracle (`aim.propose`/`aim.gate`,
+the `$1B40-$1B46` path): an action fires only on a keyboard-lattice view whose ray lands
+the target. `_aim_frames` prices sights toggle (`$134C` recentre) or bearing reuse, the pan
+cadence (16-step scroll per ±8 bearing notch `$10EE`, 8-step per ±4 pitch notch `$1135`,
+u-turn `$1B2F` as a full action tap), cursor travel, and each notch's own `plot_world`
+redraw; `_settle` prices the post-action redraw. Both come from the projector cost model
+([render_cost.md](render_cost.md)). The world advances by the aim before the action fires
+and by the settle after, so aim cost is outcome-determining: under-charging it places a
+body into a gaze the planner modelled as empty.
 
-Landability queries use one cheap primary-plane sweep per tick, falling back to
-one full pitch-band sweep only for down-looks that a single-ray visibility check
-first confirms plausible.
+Landability queries use one cheap primary-plane sweep per tick (`_Views`), falling back to
+one full pitch-band sweep only for down-looks a single-ray visibility check first confirms
+plausible.
 
-## Why landscape 0335 is hard
+## Tests (`sentinel/tests/test_player.py`)
 
-Typed `0335` is internal seed `$35`: the Sentinel on its platform at (26,18)
-height 11 plus **three sentries** at (0,9), (5,22) and (18,3), all at height 9
-(the enemy-count draw `$3426` landed 4 under the ≥0100 cap of 8), against a
-player starting at (17,28) with the usual 10 energy. Each mechanic that makes
-one enemy manageable compounds against four:
+- `test_player_wins_landscape_0` — wins landscape 0 alive and solvent, last verb
+  `hyperspace`, Sentinel slot empty.
+- `test_player_wins_landscape_0042` — **xfail** (non-strict): under the accurate
+  view-aware transfer settle the greedy heuristics have no safe winning line on seed 66
+  and the player dies escaping.
+- `test_player_placement_invariant` — the built-in audit records zero breaches on
+  landscape 0 (still a win) and on seed 66 (loss, but breach-free): the planner correctly
+  refuses the unsafe transfers rather than taking them.
 
-- **The union of four any-rotation cones covers almost the whole board.** A
-  tile is only safe if blocked from *every* facing an enemy rotates through
-  (§6 of gameplay.md); with enemies spread to three corners by the
-  section-placement rule (`$1528`, no two in adjacent 4×4 sections), the
-  never-be-seen placement set is empty for long stretches of the climb. The
-  player's graded relaxations (partial-only sight, least-exposed) engage
-  constantly rather than exceptionally.
-- **Safe windows are short and out of phase.** Each enemy rotates ±20 units
-  every ~200 cooldown units (~750 frames); four independent phases interleave,
-  so windows long enough for a full hop (~700 frames of aim + create + create +
-  transfer) on a *useful* tile are rare. The player provably stalls: measured
-  runs spend most ticks waiting for a window that three other cones keep
-  closing.
-- **Meanie pressure everywhere.** A meanie needs only a *partially* visible
-  player and a fully-visible tree within 10 tiles (`$19A1`/`$19C3`). With four
-  scanners and the board's trees concentrated on the low ground where the
-  player must start, the arm condition is satisfied on most low tiles, forcing
-  hyperspaces (3 energy each, death below 3, `$215F`).
-- **The energy economy decays under gaze.** Reclaiming the shell and pedestal
-  a hop leaves behind (+3/+2) is what makes climbing affordable; here the
-  abandoned bodies usually sit in someone's cone and are dismantled
-  robot→boulder→tree (`$1A08`) before the player can re-aim, so reclaims pay
-  +2 or +1 instead. Every hop leaks energy the board cannot replace (more
-  enemies also means fewer trees at generation: `48 − 3·enemies`, §3).
-- **Hunting is circular — until the seer is treated as a target.** The
-  absorb-lock (`$1B8E`) forces all three sentries before the Sentinel, but
-  gaining line of sight on any sentry at height 9 generally means standing
-  where a height-9 sentry sees back. What breaks the circle is the
-  **counterattack**: being seen starts the seer's ~120-unit drain countdown
-  (`$0C20`), not an instant loss — absorbs have no facing requirement and a
-  u-turn costs one keystroke, so an absorbable seer whose tile is landable
-  inside its own countdown is absorbed instead of fled from (fleeing spends
-  energy and leaves the circle intact).
-
-With the counterattack tier (and transfers gated on the same danger basis as
-builds, so a harmless partial glimpse cannot orphan a fresh pedestal), the
-player beats 0335 in the simulator (295 actions, all four enemies cleared). It
-remains the stress case: most of its length is spent waiting out four
-interleaved cones, so any regression in the time model or the invariant shows up
-here first.
-
-## Sim-vs-live verification (landscapes 0000 and 0042)
-
-Outcome matrix under the quantized live clock (world frames advance only in
-deliberate run-to-PC windows) and the executor-true sim charges:
-
-| landscape | sim | live | outcome match | live/sim actions | charged vs measured frames |
-|---|---|---|---|---|---|
-| 0000 | WON | WON | yes | 38 / 19 | 5479 / 3616 (1.52x, over-charged) |
-| 0042 | WON | WON | yes | 43 / 41 | 5659 / 5680 (1.00x) |
-| 0335 | LOST (honest clock) | not attempted | — | — | — |
-
-The rows above predate the ROM-faithful settle/aim clock; under it the sim
-action counts rise (0000 53, 0042 78, still won, seen 0 times) and the **live
-0042 win regressed** — it now loses deterministically by being seen during the
-(13,27)→(5,30) reclaim, a sim-vs-live aim-cost gap (the sim under-charges the
-long reclaim aim, so an enemy rotates into view where it predicted safety).
-
-`measured` comes from the game's own per-frame accumulator ($1335 advances
-205/frame; 205^-1 = 5 mod 256 turns the delta into an exact frame count under
-256).  Paths still diverge at the tile level (identical prefix 7 actions on
-0000, 1 on 0042; shared strategic skeleton throughout).
-
-**Live aim cost is outcome-determining.** Aim cost is the world frames that pass
-while lining up a move, so it sets how far every rotating enemy turns before the
-move lands; under-charging it places a body into a gaze the planner modelled as
-empty — an outcome flip, not a rounding detail. The 0042 regression is exactly
-that: the sim under-charged the long (13,27)→(5,30) reclaim aim, the enemy
-rotated further than modelled, and the body was drained where safety was
-predicted. The faithful charge is `_aim_frames(view) + _settle(verb, view)`
-(bearing/pitch pan + cursor travel + per-notch redraw priced from the scene by
-`pancost.notch_frames`; redraw and settle models in
-[render_cost.md](render_cost.md)), applied *before* advancing the
-enemies. Both the reactive player and the A* search
-([astar_player.md](astar_player.md)) charge this.
-
-## Test
-
-`sentinel/tests/test_player.py` — the player wins landscapes 0000 and seed 66
-(typed 0042) alive and solvent, and no create or transfer leaves an object
-inside an enemy's live scan cone POST-SETTLE (the player's built-in `--audit`,
-`Player._account`, judged by the ROM's own visibility on the actual object) —
-the settle-aware gate refusing an aim/settle exposure the plan-time window
-would miss. Run `--audit` on the 0335 stress board to exercise that path.
+Landscape 0335 (typed; internal `$35` = `Game.new(53)`: Sentinel at (26,18) plus sentries
+at (0,9), (5,22) and (18,3)) is the stress board
+for this path — four interleaved cones, short out-of-phase windows, constant meanie arm
+pressure. Run it with `--audit` to exercise the graded relaxation tiers. The mechanics
+that make it hard are game rules, documented in [gameplay.md](gameplay.md).
