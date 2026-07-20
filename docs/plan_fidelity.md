@@ -156,6 +156,40 @@ So the diagnosis above (the hop is gated on the destination tile, never on the b
 is measured and stands, but no gate formulation has yet survived live. Anything
 attempted next must be A/B'd **live**, not in the sim.
 
+## The human's winning line is pruned by the beam, not gated out
+
+Replaying the human ls42 (internal 66) line through the model: the energy curve matches
+the log **exactly for 16 steps**, the first divergence is the enemy drain the audit
+already records (`drain: [15]`), and the line reaches **eye 11.875** -- the Sentinel's
+plinth. Our planner never passes 7.375. So the model can represent and execute the
+human's line.
+
+Asking `_pick_hop`, at each human hop, whether the human's destination tile is even a
+candidate:
+
+| human step | tile | landable | in top-8 candidates | rank |
+|---|---|---|---|---|
+| 1 | (9,30) | yes | **no** | - |
+| 5 | (13,26) | yes | **no** | - |
+| 12 | (2,24) | yes | **no** | - |
+| 17 | (5,22) | yes | **no** | - |
+| 23 | (15,11) | yes | yes | 2 |
+| 29 | (4,18) | yes | yes | 4 |
+| 34 | (21,4) | yes | yes | 1 |
+
+The first four hops -- the ones that build the climb off the floor -- are **never
+generated**. And they are not filtered: each passes `_tile_base`, `k=1`, energy,
+raise-the-eye and the drain gate. They are **ranked out of `_TOP_HOPS = 8`**.
+
+The rank key is `(sees, robot_eye, window)` descending, so it maximises the eye gained
+per hop. The human does the opposite: every one of those hops raises the eye by exactly
+**+0.5**, the minimum a single boulder buys, on a steady staircase. Our ranking prefers
+the biggest available rise, which is what sends it to distant tiles like (1,24) with a
+long exposed aim -- the hop the live run dies on.
+
+So the search never had the human's line to reject. Beam width and rank order are the
+lever, ahead of any further work on gates, margins or frame cost.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled
