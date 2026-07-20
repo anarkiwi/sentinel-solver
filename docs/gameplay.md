@@ -741,129 +741,77 @@ afford to complete.
 
 ## Writing a solver
 
-This section frames the search problem the mechanics above define; the
-implemented players are documented in [player.md](player.md) (reactive) and
-[astar_player.md](astar_player.md) (A* search). (The sibling bit-exact forward
-model is documented in [simulator.md](simulator.md); the ROM mechanics above are
-its specification.)
+The mechanics above are the specification. The implementation is documented
+separately and is not restated here: the bit-exact forward model in
+[simulator.md](simulator.md), the search and its cost model in
+[astar_player.md](astar_player.md), the reactive player in [player.md](player.md),
+model-vs-game accuracy in [plan_fidelity.md](plan_fidelity.md). This section keeps
+only what those do not cover.
 
 ### State
 
 The minimal search state is the game's own RAM view: the 64 object slots
 (`x,y,z_height,z_fraction,flags,h_angle,type`), `player_object`, `player_energy`,
 the tile map (derivable from objects + terrain), and the per-enemy cooldowns/
-targets. Terrain (height + slope field) is fixed per landscape and can be
-precomputed once via [§3](#3-landscape-generation). **The PRNG state is
-deliberately *not* part of the solver's search state** — a player cannot observe
-it, so a faithful solver must not either (below).
+targets. Terrain (height + slope field) is fixed per landscape and precomputable
+once via [§3](#3-landscape-generation).
 
 ### What is deterministic vs not
 
-- **Deterministic** (fair game for planning): terrain, initial object/enemy/player
+- **Deterministic** — fair game for planning: terrain, initial object/enemy/player
   placement, energy economy, LOS, enemy rotation direction/step, all cooldown
   cadences (in *units*).
-- **PRNG-driven and off-limits to the solver**: hyperspace and meanie destinations,
-  enemy discharge tree placement. These come from the PRNG, which the player cannot
-  observe — so **a faithful solver must not read or predict them**. Model them as
-  nondeterministic: treat a hyperspace as a jump to an unknown low tile, and plan
-  so you never *depend* on where it lands. (The PRNG is used only to reproduce a
-  landscape's fixed generation, never a runtime outcome.)
-- **Not ROM-defined**: wall-clock timing. The world clock is compute-bound, so a
-  solver should reason in **cooldown units / enemy service rounds**, not seconds.
-  A move is a *duration*, not an instant — enemies keep rotating and draining
-  throughout a build-and-transfer sequence.
+- **PRNG-driven and off-limits**: hyperspace and meanie destinations, enemy
+  discharge tree placement. A player cannot observe the PRNG, so a faithful solver
+  must not read or predict it; the PRNG reproduces a landscape's fixed generation
+  only, never a runtime outcome. Treat a hyperspace as a jump to an unknown low
+  tile and never depend on where it lands.
+- **Not ROM-defined**: wall-clock timing. The world clock is compute-bound, so
+  reason in frames / cooldown units, not seconds. A move is a *duration*: enemies
+  keep rotating and draining throughout a build-and-transfer sequence.
 
-### Core queries to implement (all reducible to the ROM routines above)
+### Core queries
 
-- **LOS(observer, target)** — the `$1CDD` march with true facet surfaces and the
-  look-up rule. This is the workhorse; make it fast (it gates every action and
-  every enemy sighting).
-- **Buildable/absorbable/transferable set** from a given eye position — sweep the
-  sights over the reachable angle lattice (8-unit h, 4-unit v, pitch-clamped) and
-  collect the tiles `$1CDD` stamps as reachable.
-- **Aim cost(target)** — the number of cursor frames to move the sights from the
-  current cursor/facing onto a target tile's angle. Model it in **angle/cursor
-  space**, not tile-distance, and get the mapping right, because it drives every
-  routing decision:
-  - The cost is roughly `max(Δcursor_x, Δcursor_y)` in cursor steps, **not the sum**
-    — the cursor moves **diagonally** (both axes per frame, `move_sights $9958`), so
-    off-axis targets are cheaper than they look.
-  - Keystroke→world-distance is **non-linear and view-dependent**: from a high,
-    long-range vantage, far tiles are compressed into a small angular span, so
-    distant targets cost *few* cursor steps while near tiles are spread over wide
-    angles and cost more. This is why long-range high placements are efficient, not
-    expensive — favour them.
-  - The facing after a transfer is **deterministic**: a created robot faces
-    `creator_angle ⊕ $80` (`$1BE0`), so on transferring in you are pre-aimed back
-    across the gap — compute that return aim as (near-)zero and exploit the
-    **ping-pong** (alternating high placements across a large gap, paying the big
-    aim only outbound).
-  - Don't model a sights **off/on toggle** as free re-centring: `initialise_sights
-    $134C` resets the cursor to (80, 95), discarding position — only ever a win when
-    that centre is closer to the next target than the current cursor.
-  Each cursor frame advances the world clock, so aim cost is a first-class term in
-  the plan's cost, and cheap-to-aim targets are worth a lot.
-- **Any-rotation exposure**: is a tile visible to an enemy at **any** facing it
-  rotates through (not just now)? A tile is safe only if blocked from every such
-  facing (§6 rotation + FOV + `$1CDD`). Treat a gaze-exposed tile as (near-)
-  forbidden, not merely costly — see below.
-- **Ticks-until-seen / drain-over-window**: given cooldown state and rotation
-  step, how many service rounds until an enemy faces and can drain a body, and how
-  much energy it costs to sit there.
-- **Gaze-entry penalty**: standing (even briefly) in an enemy's gaze costs energy
-  *twice*: ≥1 unit off the current body before a slow aim+transfer can leave, and
-  the continued draining/downgrading of the **body you abandon** there (robot →
-  boulder → tree, banked by the enemy). Both must be charged to any move that
-  passes through an exposed tile, which is why such moves are last-resort.
-- **Meanie safety**: a meanie spawns iff, at an enemy's drain countdown, the player
-  is **partially** visible (not fully) **and** that enemy can fully see a **tree
-  within 10 tiles in x and y** of the player-body. Model all three conditions and
-  avoid the standing-position that satisfies them; also model the meanie as a
-  *dynamic* enemy once spawned (turns ±8 units/tick toward you, hyperspaces you when
-  it faces you with LOS) and the three dissolves — absorb the meanie (Sentinel
-  alive), absorb the bound body, or transfer out of it — as available responses.
-- **Sentry value ≫ its energy**: absorbing a sentry deletes one of the rotating
-  gazes, which shrinks the *any-rotation exposure* hazard set and relaxes the time
-  budget for the whole remaining plan. Value a sentry-absorb well above its +3
-  energy — score it by the safe tiles / time windows it unlocks downstream — and
-  prioritise clearing sentries early.
+Each reduces to a ROM routine cited above.
 
-### Search shape
+| Query | ROM | Module |
+|-------|-----|--------|
+| LOS(observer, target) — true facet surfaces + the look-up rule | `$1CDD` | `los.check_for_line_of_sight_to_tile`, `los_jit` |
+| Buildable/absorbable/transferable set, and the view that lands a tile | sights sweep | `los.landable_views` / `landable_view`, gated by `aim.gate` |
+| Aim cost (cursor + body pan, u-turn-aware) | `move_sights $9958`, `$10EE`/`$1135` | `aimcost`, `playerbase._aim_frames` |
+| Per-action world advance | `$1335`/`$0C50` | `actioncost`, `playerbase._settle` |
+| Any-rotation exposure, gaze distance, ticks-until-seen, drain-over-window, meanie safety | [§6](#6-enemies) | `threat` |
 
-The action space is small and structured — the tile-targeted actions (absorb /
-create{robot,tree,boulder} / transfer) each fire on a LOS-reachable tile, plus the
-untargeted hyperspace and the u-turn (a free aiming flip) — but the game is a
-**continuous-time, adversarial** problem. Key modelling points, all detailed in
-[§7](#7-how-a-human-wins-quick-strategy):
+LOS is the workhorse — it gates every action and every enemy sighting, so it must
+be fast. Two mechanics drive routing and are easy to model wrongly:
 
-- **Gaze is a near-hard wall.** The gaze-entry penalty makes exposed tiles
-  last-resort, not merely expensive; route over safe standing tiles and climbed
-  stacks toward a sight line on the platform.
-- **Reducing the enemy set is its own objective.** Each sentry absorbed removes a
-  wall, so clear sentries early rather than tiptoeing around them.
-- **Energy is conserved and largely recoverable.** Reachable energy is bounded by
-  the loose energy (trees/scenery) you can safely reach *plus* your own invested
-  boulders/shells; model the climb as create→transfer→**reclaim** so the accounting
-  nets out the hop cost.
-- **Cost every plan in time.** Each action costs *aim + act* against a running
-  world clock; pick targets jointly on position quality and aim cost from the
-  current facing, and let the current tile's *ticks-until-seen* set the aim budget.
-- **The win is a specific terminal sequence.** Absorb the Sentinel → robot onto the
-  platform tile → transfer in → hyperspace; encode it explicitly. Because the
-  Sentinel-absorb is the one-way absorb lock (`$1B8E`, [§4](#absorb--try_to_absorb_object-1b8e)),
-  it must be the **last** absorb node — an ordering constraint, not a forced prefix.
-- **Hyperspace landing is unknowable.** Treat it as a random relocation to a lower,
-  more exposed tile; use only when any landing beats staying put.
+- **Aim cost lives in angle/cursor space, not tile distance.** The cursor moves
+  **diagonally** (both axes per frame), so a drive costs `max(Δcx, Δcy)` steps, not
+  their sum. Keystroke→world-distance is view-dependent: from a high vantage far
+  terrain is compressed into a small angular span, so long-range placements are
+  *cheap* to aim and near tiles expensive. A sights off/on toggle is not free
+  re-centring — `initialise_sights $134C` discards the cursor position and resets it
+  to (80, 95), a win only when that centre is nearer the next target.
+- **Facing after a transfer is deterministic**: a created robot faces
+  `creator_angle ⊕ $80` (`$1BE0`), so transferring in leaves you pre-aimed back
+  across the gap — the ping-pong of [§7](#7-how-a-human-wins-quick-strategy) pays
+  the large aim only outbound.
+
+Two valuations follow from the mechanics rather than from any single query: a
+gaze-exposed tile costs energy *twice* (≥1 unit before a slow aim+transfer can
+leave, plus the continued draining and downgrading of the body abandoned there), so
+treat it as near-forbidden; and absorbing a sentry is worth far more than its +3
+energy, because it deletes a rotating gaze and so shrinks the any-rotation hazard
+set for the whole remaining plan.
 
 ### Faithfulness discipline
 
-When the solver's model disagrees with the game, **read the cited ROM routine**
-and fix the model to match what the 6502 does, **and trust operands over
-comments** — annotator comments can mislead (e.g. `try_to_absorb_object $1B8E`
-reads absolute `$0100`, the Sentinel's slot 0, not the target slot a comment might
-imply). Known traps: the
-absorb lock after the Sentinel falls (`$1B8E`, slot 0), the energy `AND #$3F` wrap
-on over-absorb, the ½-unit (`$80`) LOS tolerance (there is no explicit multi-unit
-build slack), the toroidal width-4 smoothing and 81 throwaway PRNG draws in
-generation, and enemy FOV being relative to *current* facing so safety must
-quantify over all rotations.
+When the model disagrees with the game, **read the cited ROM routine** and fix the
+model to match what the 6502 does, and **trust operands over comments** —
+annotator comments can mislead (e.g. `try_to_absorb_object $1B8E` reads absolute
+`$0100`, the Sentinel's slot 0, not the target slot a comment might imply). Known
+traps: the absorb lock after the Sentinel falls (`$1B8E`, slot 0), the energy
+`AND #$3F` wrap on over-absorb, the ½-unit (`$80`) LOS tolerance (there is no
+explicit multi-unit build slack), the toroidal width-4 smoothing and 81 throwaway
+PRNG draws in generation, and enemy FOV being relative to *current* facing so
+safety must quantify over all rotations.

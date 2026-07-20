@@ -230,12 +230,16 @@ class LiveMixin:
         self._log("hyperspace", self.st.player_xy())
 
     def _plan_step_stale(self, verb, tile, view):
-        """Re-validate the next planned step against the LIVE enemy phase. The plan's
-        drain-safety was gated on the sim's PREDICTED phase, which drifts from live
-        over multi-step execution; if the player's own gaze window no longer covers
-        this step's aim+settle plus one step's cost-interval margin (depth 0: the
-        board is freshly observed), replan from the observed board rather than stand
-        exposed for longer than the window.
+        """Re-validate the next planned step against the LIVE enemy phase, on the
+        window the PLAN gated it with: the body window for an absorb (``_c_absorb`` /
+        ``_reclaim_one`` via ``_hot``), the target tile's for a build or transfer
+        (``_pick_hop`` / ``_hop_exec`` via ``_drain_gate``).
+
+        Re-deriving a stricter rule here instead -- the body window for every verb --
+        refuses steps the plan never promised and cannot re-plan away, because
+        ``_search`` re-derives the same head: ls42 live looped on `robot (2,24)`,
+        then on `boulder (0,25)`, and conceded the escape hyperspace that lost the
+        run, at a point the offline line fires and survives.
 
         The margin absorbs prediction error; it may not deadlock.  Once ``_restale``
         has waited on this same step (``_stale`` count > 1, so the enemy phase behind
@@ -245,7 +249,7 @@ class LiveMixin:
         )
         margin_fn = getattr(self, "_margin", None)  # planner-only (greedy has none)
         margin = margin_fn(0) if margin_fn is not None else 0.0
-        window = self._player_window()
+        window = self._player_window() if verb == "absorb" else self._gaze_window(tile)
         if window >= budget + margin:
             return False
         stale = self._stale

@@ -42,7 +42,7 @@ def main(argv=None):
     parser.add_argument("--player", choices=("greedy", "astar"), default="greedy")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--node-budget", type=int, default=200000)
-    parser.add_argument("--time-budget", type=float, default=30.0)
+    parser.add_argument("--time-budget", type=float, default=60.0)
     parser.add_argument("--weight", type=float, default=1.4)
     parser.add_argument("--video", default=None)
     args = parser.parse_args(argv)

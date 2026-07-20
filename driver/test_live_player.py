@@ -79,6 +79,8 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
     # margin-only block: >= the 310 raw budget, < budget + margin, whatever sigma is
     budget = 310.0
     player._player_window = lambda: budget + 0.5 * player._margin(0)
+    # a build re-gates on the TILE window the plan gated it with, not the body's
+    player._gaze_window = lambda tile, exposed=None: budget + 0.5 * player._margin(0)
     player.live_log = lambda msg: None
     _live(player, "_plan_step_stale")
     waits, fired = [], []
@@ -105,6 +107,7 @@ def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
     player._step_aim_frames = lambda verb, view: 100.0
     player._settle = lambda verb, view=None, observer=None: 210.0
     player._player_window = lambda: 10.0
+    player._gaze_window = lambda tile, exposed=None: 10.0
     player.live_log = lambda msg: None
     _live(player, "_plan_step_stale")
     waits, fired = [], []
@@ -115,3 +118,29 @@ def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
         player._tick()
     assert not fired
     assert len(waits) >= 2  # every repeat spends real world time, never a spin
+
+
+def test_stale_gate_uses_the_window_the_plan_gated_the_step_with():
+    """A build is re-gated on its TARGET TILE's window (what ``_pick_hop``/``_hop_exec``
+    gated it with), an absorb on the player's own body window (what ``_c_absorb`` and
+    ``_reclaim_one`` gated it with).  Re-deriving a stricter body-window rule for every
+    verb refuses steps the plan never promised, and ``_search`` re-derives the same head,
+    so the refusal repeats until the ladder concedes a hyperspace -- the ls42 live loss.
+    """
+    game = Game.new(_LANDSCAPE)
+    player = AStarPlayer(game, time_budget=0.01, node_budget=1)
+    player._view_for = lambda tile: _VIEW
+    player._step_aim_frames = lambda verb, view: 100.0
+    player._settle = lambda verb, view=None, observer=None: 100.0
+    player.live_log = lambda msg: None
+    _live(player, "_plan_step_stale")
+    wide, narrow = 100000.0, 1.0
+    player._player_window = lambda: narrow
+    player._gaze_window = lambda tile, exposed=None: wide
+    assert not player._plan_step_stale("boulder", (9, 8), _VIEW)
+    assert not player._plan_step_stale("transfer", (9, 8), _VIEW)
+    assert player._plan_step_stale("absorb", (9, 8), _VIEW)
+    player._player_window = lambda: wide
+    player._gaze_window = lambda tile, exposed=None: narrow
+    assert player._plan_step_stale("boulder", (9, 8), _VIEW)
+    assert not player._plan_step_stale("absorb", (9, 8), _VIEW)

@@ -11,10 +11,11 @@ import pytest
 
 from sentinel import actions, enemies, memmap as mm, projector, terrain
 from sentinel.game import Game
-from sentinel.astar_player import AStarPlayer
+from sentinel.astar_player import AStarPlayer, _Node
 from sentinel.playerbase import SIGHTS_CENTRE
 
 _LANDSCAPE = 42  # player starts at (14,27), a down-look hollow adjacent to (13,27)
+_LS42 = 66  # what typing "0042" seeds: landscape_from_digits reads the code as HEX
 
 
 def _reset_stance(player, st):
@@ -164,6 +165,38 @@ def test_macro_search_wins_landscape0_without_breaches():
     assert "absorb" in verbs and "hyperspace" in verbs
 
 
+def test_pursuit_yields_partial_progress():
+    """A pursuit that cannot reach its enemy returns the climb it DID make.  Returning
+    ``None`` there discards every step before the first unsurvivable one; on ls42
+    (internal 66) it left the root with no child that raises the eye at all --
+    `plan (2 nodes): None`, 0 actions."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
+    root.key = player._key(root.state)
+    player._deadline = math.inf
+    start_eye = root.state.eye_z()
+    climbs = [c for c in player._expand(root) if c.state.eye_z() > start_eye]
+    assert climbs, "no child raises the eye: the pursuit discarded its whole climb"
+    for c in climbs:
+        verbs = [v for v, _ in c.path]
+        assert "transfer" in verbs  # it is a climb, not a strike
+        assert verbs[-1] != "absorb" or len(verbs) > 1
+    assert not any(actions.won(c.state) for c in climbs)  # partial, not a solve
+
+
+def test_macro_search_wins_ls42_internal_66():
+    """The board the live driver plays when `0042` is typed (hex -> internal 66).  It is
+    NOT ``_LANDSCAPE`` (42), which is a different board with no slot overlap."""
+    game = Game.new(_LS42)
+    # generous budget on purpose: the search's ONLY nondeterminism is its wall-clock
+    # deadline, and this is a "does the planner find the line" assertion, not a
+    # "in N seconds" one -- it wins in ~25 s idle, several times that under -n auto.
+    player = AStarPlayer(game, audit=True, time_budget=600.0)
+    won = player.run(max_actions=80)
+    assert won, f"lost ls42 in {len(player.trace)} actions, energy {game.energy}"
+    assert not player.breaches, f"body left in a live cone: {player.breaches}"
+
+
 def test_margin_rejects_a_step_inside_the_cost_interval():
     """A step whose predicted window clears the raw budget but not the step-cost
     interval's pessimistic end is rejected; the margin widens with plan depth
@@ -210,3 +243,28 @@ def test_stale_step_prefers_a_survivable_replan_over_escape_hyperspace():
     player._restale()
     assert searches == [None, 0.0]  # relaxed last-chance line, not a hyperspace
     assert calls == ["wait"] and "hyperspace" not in calls
+
+
+def test_react_takes_the_plans_own_transfer_before_conceding_a_hyperspace():
+    """Hot, with the plan's next step being the transfer off this tile: the pedestal the
+    pursuit just built IS the escape, so ``_react`` takes it and KEEPS the plan.  Ranking
+    escapes by window alone rejects it (the pedestal's window is no wider than here) and
+    the ladder falls through to a hyperspace -- one keystroke short of the climb, the
+    ls42 live loss."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=0.01, node_budget=1)
+    player.plan = [("transfer", (9, 26)), ("absorb", (13, 29))]
+    player._pi = 0
+    player._player_window = lambda: 0.0  # hot: react must deviate
+    player._defend = lambda: False  # no counterattack, no window-ranked escape
+    player._view_for = lambda tile: {
+        "h_angle": 0x60,
+        "v_angle": 0x35,
+        "cursor": [80, 95],
+    }
+    fired, hs = [], []
+    player._fire = lambda verb, tile, view: fired.append((verb, tuple(tile))) or True
+    player._hyperspace = lambda: hs.append(1)
+    assert player._react() is True
+    assert fired == [("transfer", (9, 26))] and not hs
+    assert player.plan is not None and player._pi == 1
+    assert player._on_plan  # _tick must NOT throw the plan away
