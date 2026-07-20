@@ -123,7 +123,7 @@ def test_cooldown_cadence_is_one_in_three():
     state = landscape.generate(42)
     m = state.mem
     m[mm.COOLDOWN_GATE] = 0
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     m[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = 9
     # gate 0 -> decrement now, reload gate to 2; then two rounds of no decrement.
     enemies.tick_cooldowns(state)
@@ -147,7 +147,7 @@ def test_cooldown_sticks_at_one():
 
 def test_rotation_steps_by_speed_table():
     state = landscape.generate(42)
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     before = state.obj_h_angle[enemy]
     step = state.mem[mm.ROTATION_SPEED_TABLE + enemy]
     enemies._rotate_enemy(state, enemy)
@@ -157,7 +157,7 @@ def test_rotation_steps_by_speed_table():
 
 def test_reduce_object_energy_downgrades():
     state = landscape.generate(42)
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     # a tree is removed, a boulder becomes a tree, a robot becomes a boulder.
     tree = state.slot_of_type(mm.T_TREE)
     d0 = state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy]
@@ -174,7 +174,7 @@ def test_reduce_object_energy_downgrades():
 
 def test_consider_discharging_scatters_tree():
     state = landscape.generate(42)
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     # nothing banked -> no discharge.
     state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 0
     assert enemies._consider_discharging_enemy_energy(state, enemy) is False
@@ -197,7 +197,7 @@ def test_consider_discharging_scatters_tree():
 
 def test_drain_at_zero_energy_kills_player():
     state = landscape.generate(42)
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     player = state.mem[mm.PLAYER_OBJECT]
     state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
     # draining the player with energy left just decrements and does not kill.
@@ -212,7 +212,7 @@ def test_drain_at_zero_energy_kills_player():
 
 def test_meanie_threat_signature():
     state = landscape.generate(42)
-    enemy = enemies._enemy_slots(state)[0]
+    enemy = enemies.enemy_slots(state)[0]
     # returns None or the player slot; never raises.
     res = enemies.meanie_threat(state, enemy)
     assert res in (None, state.mem[mm.PLAYER_OBJECT])

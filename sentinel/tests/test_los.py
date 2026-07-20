@@ -59,10 +59,10 @@ def test_tile_byte_matches_memmap_index_in_range():
             )
 
 
-def test_height_slope_grid_shape():
+def test_resolve_ground_is_in_range():
     g = next(iter(_golden().values()))
     state = _rebuild(g["regions"])
-    height, slope = terrain.height_slope_grid(state)
-    assert len(height) == mm.N and len(height[0]) == mm.N
-    assert all(0 <= height[y][x] <= 15 for y in range(mm.N) for x in range(mm.N))
-    assert len(slope) == mm.N
+    for y in range(mm.N):
+        for x in range(mm.N):
+            h, s = terrain.resolve_ground(state, x, y)
+            assert 0 <= h <= 15 and 0 <= s <= 15

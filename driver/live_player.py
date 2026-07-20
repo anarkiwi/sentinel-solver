@@ -46,6 +46,25 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         return self._timed("toggle", super().sights_set, on)
 
 
+def drive_transfer_aim(kbd, tile, view, log):
+    """Aim the sights onto `tile` for a transfer (perform_step drives the aim only for
+    create/absorb).  Reuses a matching committed bearing, else drives the full view;
+    the live ray probe confirms the landing."""
+    want = (view["h_angle"], view["v_angle"])
+    if kbd.sights_live_on() and kbd.committed_bearing() == want:
+        kbd.fine_cursor(*view["cursor"])
+    else:
+        ach = kbd.drive_to(view)
+        if not ach["ok"]:
+            kbd.clear_bearing()
+            return False
+        kbd.set_bearing(*want)
+    rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+    if (rx, ry) != tuple(tile) or not los_hit:
+        log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
+    return True
+
+
 class LiveMixin:
     """Observation + execution over live VICE memory; no decision logic.
 
@@ -117,24 +136,7 @@ class LiveMixin:
         self.live_log(f"    [clock] wait: charged={want} measured={got} (exact frames)")
 
     def _drive_transfer_aim(self, tile, view):
-        """Aim the sights onto `tile` for a transfer (perform_step drives the aim
-        only for create/absorb).  Reuses a matching committed bearing, else drives
-        the full view; the live ray probe confirms the landing."""
-        want = (view["h_angle"], view["v_angle"])
-        if self.kbd.sights_live_on() and self.kbd.committed_bearing() == want:
-            self.kbd.fine_cursor(*view["cursor"])
-        else:
-            ach = self.kbd.drive_to(view)
-            if not ach["ok"]:
-                self.kbd.clear_bearing()
-                return False
-            self.kbd.set_bearing(*want)
-        rx, ry, los_hit, _ = core.probe_tile(self.bm)
-        if (rx, ry) != tuple(tile) or not los_hit:
-            self.live_log(
-                f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}"
-            )
-        return True
+        return drive_transfer_aim(self.kbd, tile, view, self.live_log)
 
     def _fire(self, verb, tile, view):
         st = self.st

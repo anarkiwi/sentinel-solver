@@ -254,7 +254,7 @@ def test_react_takes_the_plans_own_transfer_before_conceding_a_hyperspace():
     player = AStarPlayer(Game.new(_LS42), time_budget=0.01, node_budget=1)
     player.plan = [("transfer", (9, 26)), ("absorb", (13, 29))]
     player._pi = 0
-    player._player_window = lambda: 0.0  # hot: react must deviate
+    player._player_window = lambda exclude=None: 0.0  # hot: react must deviate
     player._defend = lambda: False  # no counterattack, no window-ranked escape
     player._view_for = lambda tile: {
         "h_angle": 0x60,

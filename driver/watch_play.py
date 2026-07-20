@@ -49,20 +49,6 @@ _DO_LOS = 0x0C6E  # do_line_of_sight_checks; bit7 waives the looking-up rejectio
 _PRNG = mm.PRND_STATE  # 40-bit LFSR, 5 bytes -- makes each capture deterministic
 
 
-class _BatchSource:
-    """A sentinel_state.MemorySource backed by ONE already-fetched buffer, so
-    read_game_state()'s many per-table reads cost zero extra monitor calls."""
-
-    def __init__(self, buf):
-        self.buf = buf
-
-    def read(self, addr, length):
-        return bytes(self.buf[addr : addr + length])
-
-    def byte(self, addr):
-        return self.buf[addr]
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -117,7 +103,9 @@ def main():
         """Decode a captured [0,_SNAPSHOT_END] buffer into one log record. The full
         buffer is stored base64 under "mem" so the exact state can be reloaded into a
         sim State or the ROM oracle later; the decoded fields are conveniences."""
-        st = gs.read_game_state(_BatchSource(buf))
+        st = gs.read_game_state(
+            gs.Py65Source(buf)
+        )  # one fetched buffer, no extra reads
         p = st.player
         rec = {
             "t": round(t0 - t_start, 3),

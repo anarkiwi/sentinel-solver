@@ -21,7 +21,7 @@ ROM image.
 | `sentinel/pancost.py` | per-notch pan redraw cost derived from `pan_viewpoint $10B7` (see [render_cost.md](render_cost.md)) |
 | `sentinel/projector.py` | `plot_world $2625` terrain projector, ported bit-exactly; feeds the render-cost proxy |
 | `sentinel/rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in py65, memoized; optional and ROM-gated |
-| `sentinel/actioncost.py` | per-action world-advance cost in `enemies.step` units — the ROM-cited dither/redraw/tune frame counts and the `$1335/$0C50` frame→tick cadence. `action_rounds` has no callers repo-wide; live pricing goes through `playerbase._settle` |
+| `sentinel/actioncost.py` | per-action world-advance cost in `enemies.step` units — the ROM-cited dither/replot frame counts and the `$1335/$0C50` frame→tick cadence; live pricing goes through `playerbase._settle` |
 | `sentinel/actions.py` | absorb / create / transfer / hyperspace / win (mechanics; the LOS gate is the caller's, via `aim.py`) |
 | `sentinel/energy.py` | the energy economy (`$2136` table `$214F`, 6-bit mask, underflow) |
 | `sentinel/landscape.py` | `generate(landscape) -> State`: the from-scratch board generator |
@@ -146,16 +146,13 @@ redraw term is in [render_cost.md](render_cost.md).
 ### Threat-layer gaps
 
 - **Gaze-entry double penalty is not a query.** Entering a gaze costs ≥1 off the current
-  body *plus* continued draining/downgrading of the abandoned body.
-  `threat.drain_over_window` tracks only the current player object; the abandoned-body
-  loss is realised only by actually stepping the enemies, never priced up-front.
-- **Any-rotation exposure counts only full visibility.** `threat.is_exposed` /
-  `exposed_tiles` test `["full"]`, so a partially-visible tile (head seen, base blocked)
-  reads as safe — yet partial visibility is exactly what arms a meanie. Under-reports the
-  hazard set.
-- **`enemies.meanie_threat` omits the tree gate.** `threat.meanie_safe` is the full
-  `attempt_to_create_meanie $19A1` condition (partial player visibility + a fully-visible
-  tree within 10 tiles in both axes, no tree→player LOS test, matching the ROM);
-  `meanie_threat` tests only partial visibility, so it over-reports.
+  body *plus* continued draining/downgrading of the abandoned body. The players price
+  only the body they stand in (`playerbase._player_window`); the abandoned-body loss is
+  realised only by actually stepping the enemies, never priced up-front.
+- **`enemies.meanie_threat` omits the tree gate.** The full
+  `attempt_to_create_meanie $19A1` condition is partial player visibility **plus** a
+  fully-visible tree within 10 tiles in both axes (no tree→player LOS test, matching the
+  ROM); `meanie_threat` tests only partial visibility, so it over-reports.
+  `playerbase._tree_near`/`_meanie_window` apply the tree gate.
 - Reclaim-energy and sentry-value are search policy, not model gaps: the model supports
   the underlying absorbs (energy gain; the `$1BE0` face-back is in `actions.create`).

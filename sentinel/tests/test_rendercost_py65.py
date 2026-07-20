@@ -40,8 +40,7 @@ def test_memoization_hits_and_bounds():
     a = rendercost_py65.render_cost_exact(st, 0x60, 0x10)
     b = rendercost_py65.render_cost_exact(st.clone(), 0x60, 0x10)
     assert a == b
-    s = rendercost_py65.stats()
-    assert s["hits"] == 1 and s["misses"] == 1
+    assert rendercost_py65._STATS == {"hits": 1, "misses": 1}
 
 
 @pytest.mark.oracle

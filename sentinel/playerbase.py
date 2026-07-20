@@ -139,6 +139,11 @@ class _Views:
             return view
         return self.band().get(tuple(tile))
 
+    def band_get(self, tile):
+        """The full pitch-band view for `tile`; the lazy fallback lookup passed
+        to :meth:`BasePlayer._view_with_band`."""
+        return self.band().get(tuple(tile))
+
 
 class BasePlayer:
     """Shared machinery for a player bound to a live :class:`Game`: the sights
@@ -184,6 +189,56 @@ class BasePlayer:
         """Cheap geometric pre-filter (one ray march) before a full-band
         landability sweep: can the player's eye see `tile` at all?"""
         return threat.player_sees_tile(self.st, tile, self.st.player)
+
+    def _view_with_band(self, tile, primary, band):
+        """The `primary`-plane view for `tile`, else `band(tile)` -- the wider
+        down-look lookup, consulted only when the eye can see `tile` at all, so
+        the one ray march gates the costlier band sweep/march."""
+        tile = tuple(tile)
+        view = primary.get(tile)
+        if view is not None or not self._sees_tile(tile):
+            return view
+        return band(tile)
+
+    # ------------------------------------------------------------ candidates
+    def _robot_bodies(self):
+        """(slot, tile) for every foreign robot body topping its own tile: the
+        transfer/escape candidate set.  Callers rank and gate it themselves."""
+        st = self.st
+        for slot in range(mm.NUM_SLOTS):
+            if st.is_empty(slot) or slot == st.player:
+                continue
+            if st.obj_type[slot] != mm.T_ROBOT:
+                continue
+            tile = st.tile_of(slot)
+            if self._top(tile) != slot:
+                continue
+            yield slot, tile
+
+    def _reclaim_targets(self, st, want_trees, skip=None):
+        """(energy value, tile) for every absorbable spent investment on `st`:
+        shells and pedestals at or below the eye (a taller one is a live
+        pedestal, not a spent one) and, when `want_trees`, trees.  Never the
+        player's own tile nor `skip` (the hop in progress).  Slot order; callers
+        rank and gate it themselves."""
+        my_eye = st.eye_z()
+        here = st.player_xy()
+        for slot in range(mm.NUM_SLOTS):
+            if st.is_empty(slot) or slot == st.player:
+                continue
+            otype = st.obj_type[slot]
+            tile = st.tile_of(slot)
+            if tile == skip or tile == here:
+                continue
+            if terrain.top_object(st, *tile) != slot:
+                continue
+            if otype in (mm.T_ROBOT, mm.T_BOULDER):
+                base = st.obj_z_height[slot] + st.obj_z_frac[slot] / 256.0
+                if base > my_eye + EYE_EPS:
+                    continue
+            elif not (otype == mm.T_TREE and want_trees):
+                continue
+            yield mm.ENERGY_IN_OBJECTS[otype], tile
 
     # ---------------------------------------------------------------- threat
     @staticmethod
@@ -343,13 +398,14 @@ class BasePlayer:
                 return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         return 0
 
-    def _player_window(self):
-        """Gaze window of the player's own current body (no phantom)."""
+    def _player_window(self, exclude=None):
+        """Frames until the player's OWN body is drainable (inf if never; no
+        phantom), ignoring enemy `exclude` -- the one an absorb is about to
+        remove, so absorbing an attacker still counts safe."""
         st = self.st
         if self._frozen():
             return math.inf  # no drain/meanie clock runs before the first action
-        me = st.player
-        exposed = self._exposures(st, me)
+        exposed = [x for x in self._exposures(st, st.player) if x[0] != exclude]
         if not exposed:
             return math.inf
         return self._gaze_window(st.player_xy(), exposed=exposed)

@@ -116,14 +116,16 @@ def kill_stale(log=print):
             ["docker", "ps", "-aq", *stale_filter()],
             capture_output=True,
             text=True,
+            timeout=15,
         ).stdout.split()
-        for cid in ids:
-            subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
         if ids:
+            subprocess.run(
+                ["docker", "rm", "-f", *ids], capture_output=True, timeout=30
+            )
             log(f"  removed {len(ids)} stale container(s)")
             time.sleep(1.5)  # sleep-ok: docker rm teardown, outside the machine
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"  container cleanup warning: {e}")
 
 
 def bridge_ip(container_id, log=print):

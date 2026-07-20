@@ -74,24 +74,3 @@ def h_press_count(h0, h1):
     if 1 + (UTURN_STEP - d) < d:
         return (1, UTURN_STEP - d)
     return (0, d)
-
-
-def bearing_rounds(h0, h1, rounds_per_step, rounds_per_uturn):
-    """Enemy rounds to pan the bearing ``h0 -> h1`` using the minimal U-turn-aware key
-    plan (:func:`h_press_count`).  Keeps the move cost consistent with what the live
-    driver actually keys: a far-bearing swing costs one U-turn + a short correction,
-    not up to sixteen +-8 pans."""
-    nu, ns = h_press_count(h0, h1)
-    return nu * rounds_per_uturn + ns * rounds_per_step
-
-
-def pan_steps(h0, v0, h1, v1):
-    """Total keystrokes to pan the view from heading (h0, v0) to (h1, v1): the sum
-    of the bearing and pitch lattice distances.  ``None`` coordinates contribute 0
-    (an aim that carries no angle for that axis)."""
-    n = 0
-    if h0 is not None and h1 is not None:
-        n += h_steps(h0, h1)
-    if v0 is not None and v1 is not None:
-        n += v_steps(v0, v1)
-    return n

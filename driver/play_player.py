@@ -12,13 +12,7 @@ import os
 import time
 
 from driver import core
-from driver.live_player import (  # re-exported for driver.replay_human
-    LiveAStar,
-    LiveGreedy,
-    MeasuringKbdDriver,
-)
-
-__all__ = ["MeasuringKbdDriver", "LiveGreedy", "LiveAStar", "main"]
+from driver.live_player import LiveAStar, LiveGreedy
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

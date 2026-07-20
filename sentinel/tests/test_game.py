@@ -45,14 +45,7 @@ def test_step_enemies_advances_cursor_and_rotates():
     assert after != before  # the enemy has rotated over 300 rounds
 
 
-def test_player_sees_returns_bool():
-    g = Game.new(42)
-    assert isinstance(g.player_sees(g.platform_xy()), bool)
-
-
-def test_enemy_sees_and_meanie_threat():
+def test_meanie_threat():
     g = Game.new(42)
     enemy = g.enemy_slots()[0]
-    sentinel_slot = g.state.slot_of_type(mm.T_SENTINEL)
-    assert isinstance(g.enemy_sees(enemy, sentinel_slot), bool)
     assert g.meanie_threat(enemy) in (None, g.state.mem[mm.PLAYER_OBJECT])

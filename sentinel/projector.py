@@ -458,11 +458,6 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
     return tiles, n_examine
 
 
-def visible_tiles(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
-    """The plotted-tile list from :func:`project_scene` (drops n_examine)."""
-    return project_scene(state, h_angle, v_angle, observer, mode)[0]
-
-
 FRAME_CYCLES = 19656.0  # PAL frame
 BASE_CYCLES = float(os.environ.get("RENDER_BASE_CYCLES", "0"))
 # term (a) per-$2845-calltree cost ($2845+$9287+$937F+$933D), py65 mean (1551-2046).

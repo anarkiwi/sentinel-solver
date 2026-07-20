@@ -118,11 +118,11 @@ def test_provenance_comments_are_truthful():
 
 
 def test_comment_attribution_detects_both_directions():
-    """Discovery must attribute each comment to its own constant: STEPS_PER_EDGE and
+    """Discovery must attribute each comment to its own constant: FRAME_TICKS and
     TAP_FRAMES claim nothing and must not read as claimants, while _RU_PAN's block
     still carries the word."""
     for name, module in (
-        ("STEPS_PER_EDGE", "sentinel.actioncost"),
+        ("FRAME_TICKS", "sentinel.actioncost"),
         ("TAP_FRAMES", "sentinel.playerbase"),
     ):
         assert DISCOVERED[name]["module"] == module

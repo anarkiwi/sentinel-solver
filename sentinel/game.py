@@ -1,6 +1,6 @@
 """A small facade tying the simulator together: build a board, read it, take the
-player actions, advance the enemies and ask the line-of-sight questions -- all on
-one bit-exact state, with no emulator.
+player actions and advance the enemies -- all on one bit-exact state, with no
+emulator.  Line-of-sight questions go to :mod:`sentinel.threat`/:mod:`sentinel.los`.
 
     >>> from sentinel.game import Game
     >>> g = Game.new(42)
@@ -10,12 +10,11 @@ one bit-exact state, with no emulator.
     >>> won = g.won()
 
 Every method delegates to the package modules (:mod:`sentinel.landscape`,
-:mod:`sentinel.actions`, :mod:`sentinel.enemies`, :mod:`sentinel.los`,
-:mod:`sentinel.relative`); ``Game`` just holds the :class:`~sentinel.state.State`
-and offers them under one object.
+:mod:`sentinel.actions`, :mod:`sentinel.enemies`); ``Game`` just holds the
+:class:`~sentinel.state.State` and offers them under one object.
 """
 
-from sentinel import landscape, actions, enemies, threat, relative, memmap as mm
+from sentinel import landscape, actions, enemies, memmap as mm
 
 
 class Game:
@@ -84,18 +83,6 @@ class Game:
 
     def won(self):
         return actions.won(self.state)
-
-    # -- line of sight -------------------------------------------------------
-    def player_sees(self, tile, eye_z=None):
-        """Whether the player can see ``tile`` from its current position, via the ROM's
-        direct observer->tile geometric march ($0C76 check_for_line_of_sight_to_tile).
-        """
-        return threat.player_sees_tile(self.state, tile, self.state.player, eye_z=eye_z)
-
-    def enemy_sees(self, enemy, target, fov=enemies.FOV_SCAN):
-        """Whether ``enemy`` can currently, fully see object ``target``."""
-        etype = self.state.obj_type[target]
-        return relative.can_see_object(self.state, enemy, target, etype, fov)["full"]
 
     # -- enemy dynamics ------------------------------------------------------
     def step_enemies(self):

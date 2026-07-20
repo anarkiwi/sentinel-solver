@@ -66,9 +66,6 @@ def enemy_slots(state):
     ]
 
 
-_enemy_slots = enemy_slots  # internal alias kept for existing call sites
-
-
 # ---------------------------------------------------------------------------
 # update_enemy_cooldowns $1317
 # ---------------------------------------------------------------------------

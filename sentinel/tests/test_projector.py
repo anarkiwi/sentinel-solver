@@ -157,11 +157,11 @@ def test_render_cost_observer_moves_the_occlusion_rays_too():
     assert projector.render_cost(s, view, other) != projector.render_cost(s, view)
 
 
-def test_visible_tiles_and_replot():
+def test_project_scene_tiles_and_replot():
     s = landscape.generate(0)
     p = s.player
     h, v = s.obj_h_angle[p], s.obj_v_angle[p]
-    tiles = projector.visible_tiles(s, h, v)
+    tiles = projector.project_scene(s, h, v)[0]
     # plot_tile ($2A24) draws every nonzero-$0180 tile, incl off-screen ones that clip in the rasteriser.
     assert tiles and all(t["tile_byte"] for t in tiles)
     assert all(t["h"] >= 0 and t["w"] >= 0 for t in tiles)

@@ -12,7 +12,7 @@ import os
 import time
 
 from driver import core, sentinel_execute as sx
-from driver.play_player import MeasuringKbdDriver
+from driver.live_player import MeasuringKbdDriver, drive_transfer_aim
 from sentinel import enemies, los, memmap as mm
 from sentinel.state import State
 
@@ -59,24 +59,6 @@ def _player_truth(mem):
         "vang": int(mem[mm.OBJECTS_V_ANGLE + ps]),
         "energy": int(mem[mm.PLAYER_ENERGY] & 0x3F),
     }
-
-
-def _drive_transfer_aim(kbd, tile, view, log):
-    """Drive the sights onto ``tile`` for a transfer (``perform_step`` drives the aim
-    only for create/absorb): reuse a matching bearing else drive the full view."""
-    want = (view["h_angle"], view["v_angle"])
-    if kbd.sights_live_on() and kbd.committed_bearing() == want:
-        kbd.fine_cursor(*view["cursor"])
-    else:
-        ach = kbd.drive_to(view)
-        if not ach["ok"]:
-            kbd.clear_bearing()
-            return False
-        kbd.set_bearing(*want)
-    rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
-    if (rx, ry) != tuple(tile) or not los_hit:
-        log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
-    return True
 
 
 def _snap_view(mem, tile):
@@ -126,7 +108,7 @@ def replay(session, events, log, result):
         try:
             if view is None:
                 outcome = "no_view"
-            elif verb == "transfer" and not _drive_transfer_aim(kbd, tile, view, log):
+            elif verb == "transfer" and not drive_transfer_aim(kbd, tile, view, log):
                 outcome = "aim_miss"
             else:
                 outcome = sx.perform_step(ex, kbd, f"h{i}", stp, log, result)

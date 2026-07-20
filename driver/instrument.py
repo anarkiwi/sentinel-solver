@@ -15,10 +15,12 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from sentinel import enemies, memmap as mm, statecmp as sc
 from sentinel.state import State
-from driver import core
+from driver import clock, core
 
 RENDERS = os.path.join(core.boot.ROOT, "renders")
-FRAME_PC = 0x9630  # once-per-frame raster-IRQ top marker (the frame-step anchor)
+FRAME_PC = (
+    clock.FRAME_PC
+)  # once-per-frame raster-IRQ top marker (the frame-step anchor)
 
 
 class SimClock:
