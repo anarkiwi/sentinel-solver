@@ -37,7 +37,6 @@ from sentinel.playerbase import (
 )
 
 _ROBOT_EYE = 0.875
-_RADIUS = 16  # tile scan radius for build candidates around the player
 # Per-op h floors from charged primitives: min aim == tap_action latch + per-verb settle floor.
 _AIM_FLOOR = float(TAP_FRAMES)  # minimal aim (_aim_frames with nu=ns=nv=cur=0)
 _OP_FLOOR = {
@@ -55,7 +54,6 @@ _ENDGAME_EST = (
 )  # robot+xfer+hs
 _EYE_PER_HOP = 0.9
 _TARGET_EYE = 9.0
-_MAX_BOULDERS = 12
 _HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): never >2
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step

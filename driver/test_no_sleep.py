@@ -32,7 +32,6 @@ PINNED = {
     ("driver/boot.py", "docker rm teardown, outside the machine"),
     ("driver/boot.py", "docker bridge IP assignment, no PC exists"),
     ("driver/boot.py", "container relaunch backoff, no machine to poll"),
-    ("driver/core.py", "docker rm teardown, outside the emulated machine"),
     ("driver/core.py", "docker bridge IP assignment, no PC exists"),
     ("driver/core.py", "VICE AVI encoder start, not the CPU"),
     ("driver/core.py", "VICE AVI muxer drain, not the CPU"),

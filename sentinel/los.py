@@ -69,13 +69,6 @@ def invert16(high, frac):
     return (neg >> 8) & 0xFF, neg & 0xFF
 
 
-def invert16_if_negative(high, frac):
-    """invert_A_and_a_fraction_if_negative $1007."""
-    if high & 0x80:
-        return invert16(high, frac)
-    return high & 0xFF, frac & 0xFF
-
-
 def multiply_double_by_byte(low74, high75, byte76):
     """multiply_double_by_byte $0F4A: ($0075:$0074) * $0076, the double (16-bit)
     times byte. Returns (low=$0074, high=$0075).
@@ -1093,13 +1086,9 @@ CURSOR_CY_FULL = list(range(_CURSOR_CY_LO, _CURSOR_CY_HI + 1))
 _V_PRIORITY = [KBD_V_ANGLE] + [v for v in PITCH_BAND if v != KBD_V_ANGLE]
 
 # The pitched-body angles sweep the SAME 1px cursor window as $F5 (the full 4-DOF brute
-# sweep = the ROM via aim_target).  The whole lattice vector set is built ONCE by the numba
-# batch builder (:func:`sentinel.los_jit.build_lattice`) and cached (:data:`_VEC_CACHE`);
-# each state sweep is a single batched numba march.
-CURSOR_CX_PITCHED = CURSOR_CX
-CURSOR_CY_PITCHED = CURSOR_CY
-
-# Precomputed lattice ray vectors, keyed by the (h, v, cx, cy) grid.  The ray vector for an
+# sweep = the ROM via aim_target).  Precomputed lattice ray vectors, keyed by the
+# (h, v, cx, cy) grid, are built ONCE by the numba batch builder
+# (:func:`sentinel.los_jit.build_lattice`) and cached here.  The ray vector for an
 # aim depends ONLY on the aim params (prepare_vector_from_player_sights reads neither `state`
 # nor `slot`), so the whole lattice is built ONCE and reused for every state/sweep -- the
 # only per-state work left is the march itself (batched in los_jit.march_batch).

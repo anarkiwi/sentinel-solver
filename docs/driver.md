@@ -14,8 +14,8 @@ Accuracy and ranked open problems: [plan_fidelity.md](plan_fidelity.md). Game ru
 
 | Module | Role |
 |--------|------|
-| `core.py` | container/boot/connect/navigate/record lifecycle (`boot_and_play`, `GameSession`, `validate_avi`), `SentinelDriver`, object-array reads, `live_image`, `snap_view`, live LOS probe `probe_tile`. |
-| `kbd_aim.py` | keyboard aim geometry: pan/cursor cycles, `snap_keyboard_view`, `KbdDriver` (checkpoint-driven, U-turn-aware key driver). |
+| `core.py` | container/boot/connect/navigate/record lifecycle (`boot_and_play`, `GameSession`, `validate_avi`), `SentinelDriver`, `live_image`, live LOS probe `probe_tile`. |
+| `kbd_aim.py` | keyboard aim geometry: pan/cursor cycles, `KbdDriver` (checkpoint-driven, U-turn-aware key driver). |
 | `sentinel_execute.py` | `Executor`, `perform_step` (aim → fire → verify), `fire_hyperspace`, `verify` (memory-delta arbiter). |
 | `live_player.py` | `LiveMixin` (observation + execution over live memory, no decision logic) composed with the sim players into `LiveGreedy`/`LiveAStar`; `MeasuringKbdDriver` times each aim primitive. |
 | `play_player.py` | runner: `boot_and_play` + a player + AVI validation → `out/play_player_<digits>.json`. |
@@ -71,13 +71,12 @@ leaves warp on.
 **Choosing a view.** A view is a bearing `h_angle` (8-unit lattice, `h0 + 8k`), a pitch
 `v_angle` (4-unit lattice, band `$CD..$35`), and the sights cursor `(cx, cy)`;
 `prepare_vector_from_player_sights` (`$1C10`) combines them as `h_eff = h + cx>>3`,
-`v_eff = v + (cy-5)>>4`. A settled press moves the cursor 9 px (`CX_GRID`/`CY_GRID`) but
-the ROM cursor routines (`$9965`/`$9994`) step 1 px, so any pixel is reachable; the search
-uses a step-3 window. `snap_keyboard_view`/`snap_view` search that grid with
+`v_eff = v + (cy-5)>>4`. A settled press moves the cursor 9 px but the ROM cursor
+routines (`$9965`/`$9994`) step 1 px, so any pixel is reachable; the search uses a step-3
+window. The shared proposer `sentinel.aim.propose` searches that grid with
 `sentinel.los.aim_target` (bit-exact vs the ROM aim) for a `(h, v, cursor)` whose native
-ray lands on the tile with LOS — centred-cursor lattice first, then a bounded cursor
-window — preferring a low pan and a small tile-centre fraction, with the **CPU halted** so
-enemies do not advance while the driver thinks.
+ray lands on the tile with LOS, preferring a low pan and a small tile-centre fraction,
+with the **CPU halted** so enemies do not advance while the driver thinks.
 
 **Driving the keys.** `KbdDriver` gates on memory reads and checkpoint PCs only:
 
@@ -138,7 +137,7 @@ or a non-converged pan clears the committed bearing.
 - **Bridge IP, not published ports.** Host `-p` publishing is not reachable here
   (`127.0.0.1:6502` is unreachable); every boot path connects to the container's docker
   bridge IP, resolved by `boot.bridge_ip` (`docker inspect` of `NetworkSettings.Networks`)
-  and used by `boot_loaded` and `connect_binmon` alike. `BINMON_HOST`/`BINMON_PORT`
+  and used by `boot_loaded` and `boot_and_play` alike. `BINMON_HOST`/`BINMON_PORT`
   override; a missing bridge IP falls back to `127.0.0.1`. A headless boot is:
 
   ```python
@@ -152,7 +151,7 @@ or a non-converged pan clears the committed bearing.
   The container launches `warp=True`; `WarpMode` is not settable on this asid-vice build
   (opcode `0x52` → err `0x8f`), so a failed warp set is non-fatal.
 - **Concurrent runs are safe.** The host publish is `-p 0:6502` (docker picks a free
-  port), and teardown (`boot.kill_stale`, `core.free_stale_containers`) is scoped by
+  port), and teardown (`boot.kill_stale`) is scoped by
   `boot.stale_filter()` to containers named `asid-vice-<own pid>-*`; a blanket `ancestor=`
   sweep would remove another run's healthy container (`VICE_REAP_ORPHANS=1` opts in).
 - **Bind-mounts.** Tape image and `/renders` are bind-mounted in; the AVI, `boot.vsf` and
@@ -189,10 +188,3 @@ the CPU halted, `_advance` is a no-op, `_wait` spends real time frame-exactly vi
 enemy phase **on the window the plan gated it with** — the body window for an absorb, the
 target tile's gaze window for a build or transfer — and releases a margin-only block once
 the step has already waited and the raw budget clears.
-
-`KbdDriver.idle_until_rotation` idles the *inert* game — no keystrokes, so only the
-enemies precess — frame-stepping via `run_until_pc($9630)` while reading
-`OBJECTS_H_ANGLE[enemy]` until a threatening enemy's facing changes (`ROTATION_COOLDOWN`
-reloaded to 200, `rotate_enemy $1805`) or a bounded cap trips, so a move waits out a cone
-from readable cooldown bytes and the fixed rotation step only (`ROTATION_SPEED_TABLE`,
-`ROTATION_COOLDOWN`, the 1-in-3 `$0C50` gate) — no frame model.

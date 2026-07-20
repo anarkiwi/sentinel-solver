@@ -140,7 +140,7 @@ def _tile_is_bare(state, tile):
 def test_generated_landscape_oracle_invariants():
     """CI-safe (no external fixture): on the deterministic landscape 0 board, the aim
     lattice sweep and the single-tile query agree, and every landable tile is also
-    geometrically visible (aim-landability is a STRICT subset of visible_tiles)."""
+    geometrically visible (aim-landability is a STRICT subset of the plotted scene)."""
     st = landscape.generate(0)
     views = los.landable_views(st, st.player)
     assert views, "expected some aim-landable tiles from the start"

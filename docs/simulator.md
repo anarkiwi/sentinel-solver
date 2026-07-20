@@ -21,7 +21,7 @@ ROM image.
 | `sentinel/pancost.py` | per-notch pan redraw cost derived from `pan_viewpoint $10B7` (see [render_cost.md](render_cost.md)) |
 | `sentinel/projector.py` | `plot_world $2625` terrain projector, ported bit-exactly; feeds the render-cost proxy |
 | `sentinel/rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in py65, memoized; optional and ROM-gated |
-| `sentinel/actioncost.py` | per-action world-advance cost in `enemies.step` units — the ROM-cited dither/redraw/tune frame counts and the `$1335/$0C50` frame→tick cadence. `action_rounds` has no callers repo-wide; live pricing goes through `playerbase._settle` |
+| `sentinel/actioncost.py` | per-action world-advance cost in `enemies.step` units — the ROM-cited dither/replot frame counts and the `$1335/$0C50` frame→tick cadence; live pricing goes through `playerbase._settle` |
 | `sentinel/actions.py` | absorb / create / transfer / hyperspace / win (mechanics; the LOS gate is the caller's, via `aim.py`) |
 | `sentinel/energy.py` | the energy economy (`$2136` table `$214F`, 6-bit mask, underflow) |
 | `sentinel/landscape.py` | `generate(landscape) -> State`: the from-scratch board generator |

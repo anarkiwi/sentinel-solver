@@ -274,7 +274,7 @@ def test_transfer_tune_is_96_frames():
             else:
                 total += length  # a note holds `length` frames in $0CDF
 
-    assert tune_frames(0x00) == 96  # matches actioncost.TUNE_FRAMES
+    assert tune_frames(0x00) == 96  # matches projector.TUNE_TRANSFER_FRAMES
     assert tune_frames(0x19) == 96 == projector.TUNE_TRANSFER_FRAMES
 
 

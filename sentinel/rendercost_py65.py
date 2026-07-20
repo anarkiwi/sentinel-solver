@@ -46,11 +46,6 @@ def render_cost_exact(state, h_angle, v_angle):
     return frames
 
 
-def stats():
-    """Cache hit/miss counters and current size (for measurement/reporting)."""
-    return {**_STATS, "size": len(_CACHE)}
-
-
 def reset():
     """Clear the cache and counters (tests)."""
     _CACHE.clear()

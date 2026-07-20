@@ -168,7 +168,8 @@ walks `$AB50 + tune_number` ($AB69 for #$19): a byte >=$C8 sets note length
 `$0C70 = (byte-$C8)*4`, a byte <$C8 holds `$0C70` frames in the `$0CDF` countdown, $FF ends.
 `$0CDF` decrements once per frame in the raster IRQ (`$9630 DEC $0CDF`, floored at 0). Note
 holds sum to **96 frames**, the same as the #$0 hyperspace tune ($AB50,
-`actioncost.TUNE_FRAMES`); `test_transfer_tune_is_96_frames` decodes both from the image.
+`projector.TUNE_TRANSFER_FRAMES`); `test_transfer_tune_is_96_frames` decodes both from the
+image.
 
 **`SETTLE_FIXED_FRAMES ~ 176` (fitted stand-in).** Four fixed foreground routines run
 before the two `plot_world` passes and are absent from `render_cost`; py65 foreground

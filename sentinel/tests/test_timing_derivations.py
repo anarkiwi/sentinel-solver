@@ -42,8 +42,7 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
             * UNIT,
         ),
         # $16F2 FOV width $14 -> +-10 units.
-        ("playerbase.FOV_HALF", playerbase.FOV_HALF, enemies.FOV_SCAN // 2),
-        ("actioncost.FOV_HALF", actioncost.FOV_HALF, enemies.FOV_SCAN // 2),
+        ("FOV_HALF", playerbase.FOV_HALF, enemies.FOV_SCAN // 2),
         # $11E0 auto-repeat mask: one gated scan skipped per set bit.
         (
             "CURSOR_RAMP",
@@ -55,8 +54,6 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
         # $1FA4/$86A5 dither loop cycles at the PAL frame.
         ("DITHER_FRAMES", actioncost.DITHER_FRAMES, 977904.0 / projector.FRAME_CYCLES),
         ("FRAME_CYCLES", projector.FRAME_CYCLES, 19656.0),
-        # #$0 hyperspace tune wait == #$19 transfer tune hold ($AB69).
-        ("TUNE_FRAMES", actioncost.TUNE_FRAMES, projector.TUNE_TRANSFER_FRAMES),
         # $357D view-less fallback: tune wait + fixed foreground.
         (
             "VIEWPOINT_REPLOT_FRAMES",

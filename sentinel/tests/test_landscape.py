@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, memmap as mm
+from sentinel import landscape, memmap as mm, terrain
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_landscape.json")
@@ -68,13 +68,9 @@ def test_generated_state_is_sane():
     assert state.obj_type[state.player] == mm.T_ROBOT
     assert state.energy == 10
     # every terrain height is in the legal 1..11 band.
-    height, _slope = None, None
-    from sentinel import terrain
-
-    height, _slope = terrain.height_slope_grid(state)
-    for row in height:
-        for h in row:
-            assert 0 <= h <= 11
+    for y in range(mm.N):
+        for x in range(mm.N):
+            assert 0 <= terrain.resolve_ground(state, x, y)[0] <= 11
 
 
 def test_landscape_0_player_is_fixed():

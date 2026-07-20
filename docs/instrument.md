@@ -18,7 +18,6 @@ schema is directly meaningful on both.
 - **Emulator** (`EmuClock`) — `advance_instructions(1)` off the per-frame raster
   marker `$9630`, then `run_until_pc($9630)`. One `$9630`→`$9630` span is exactly one
   ROM frame (one `$9663` raster cooldown tick + the frame's `update_enemies` passes).
-  Same frame anchor `kbd_aim.idle_until_rotation` uses.
 - **Simulator** (`SimClock`) — `sentinel.enemies.advance_frame`: the `$130C`/`$1335`
   Bresenham cooldown tick first, then `UPDATES_PER_FRAME` (8) `update_enemies` passes,
   suppressed entirely when `plotting=True`.

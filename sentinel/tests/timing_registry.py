@@ -240,8 +240,6 @@ _GUARD = "wall-clock guard; unmeasured"
 REGISTRY = {
     "FRAME_TICKS": _u(_AC, "unit scalar; no test pins it to a ROM primitive"),
     "DITHER_FRAMES": _d(_AC, "977904 dither cycles / projector.FRAME_CYCLES"),
-    "TUNE_FRAMES": _d(_AC, "#$0 tune wait == #$19 transfer tune hold ($AB69)"),
-    "REDRAW_FRAMES": _u(_AC, "py65 plot_world estimate; no fixture comparison"),
     "VIEWPOINT_REPLOT_FRAMES": _d(_AC, "TUNE_TRANSFER_FRAMES + SETTLE_FIXED_FRAMES"),
     "POST_ACTION_REPLOT_FRAMES": entry(
         _AC,
@@ -249,7 +247,6 @@ REGISTRY = {
         "validated only inside the create settle sum vs frozen_ls42_audit.json (<5 f)",
         _SETTLE_FIT,
     ),
-    "STEPS_PER_EDGE": _u(_AC, "fitted per-edge scaling; no fixture comparison"),
     "SETTLE": entry(
         _AC,
         MEASURED,
@@ -372,11 +369,9 @@ UNVALIDATED_PIN = frozenset(
         "ENERGY_MASK",
         "FRAME_TICKS",
         "H_SCROLL",
-        "REDRAW_FRAMES",
         "ROTATION_COOLDOWN_RELOAD",
         "SAFE_FRAMES",
         "SETTLE_FIXED_FRAMES",
-        "STEPS_PER_EDGE",
         "TAP_FRAMES",
         "TUNE_TRANSFER_FRAMES",
         "UPDATE_COOLDOWN_DRAIN",
