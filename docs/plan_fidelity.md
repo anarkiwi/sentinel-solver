@@ -1,5 +1,22 @@
 # Plan-vs-live frame fidelity
 
+## READ FIRST: "landscape 42" is two different boards
+
+`landscape_from_digits` (driver/core.py) parses the typed code as **hex**: typing `0042`
+seeds internal landscape **0x42 = 66**. So:
+
+- `driver/play_player.py 42` and the human logs (`ls42.json` carries
+  `entered_code 42, landscape 66`) both play **internal 66** -- player starts at (13,29).
+- `Game.new(42)` / `sentinel/tests/test_astar_player.py::_LANDSCAPE = 42` build **internal
+  42** -- a DIFFERENT board, player at (14,27), 17 objects vs 66's 16, zero slot overlap.
+
+`Game.new(66)` matches the human ls42 fixture exactly (16/16 objects, same slots), and the
+live replay confirms it: `entry match vs generate(66): (16, 16)`.
+
+**The sim tests and the live driver have therefore never exercised the same board.** Any
+sim-vs-live comparison keyed on the number 42 is void, including "A* wins ls42 in 28
+actions" (that is internal 42) against the live 12-action loss (internal 66).
+
 The planner gates every action on `window >= aim + settle`. Both sides are model
 predictions: `BasePlayer._charge` advances the simulated enemy phase by exactly the
 aim+settle frames it charges, so a charged-vs-measured error on one step shifts *when*
