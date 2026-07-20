@@ -184,8 +184,18 @@ raise-the-eye and the drain gate. They are **ranked out of `_TOP_HOPS = 8`**.
 The rank key is `(sees, robot_eye, window)` descending, so it maximises the eye gained
 per hop. The human does the opposite: every one of those hops raises the eye by exactly
 **+0.5**, the minimum a single boulder buys, on a steady staircase. Our ranking prefers
-the biggest available rise, which is what sends it to distant tiles like (1,24) with a
-long exposed aim -- the hop the live run dies on.
+the biggest available rise, and the rank key cannot see the aim it will pay to get there
+-- the hop the live run dies on.
+
+**Aim cost is angular, not spatial.** Over the 23 landable tiles at the ls42 start,
+`corr(aim, manhattan distance)` is **-0.54** -- farther is CHEAPER -- against +0.60 for
+pitch notches and +0.44 for bearing notches. An adjacent tile needs a steep down-look:
+(12,29) at distance 1 costs **667 f**, while (8,28) at distance 6 costs **159 f**, because
+a far tile sits near the horizon and needs almost no pitch change. The fatal `(1,24)`
+build measured `pan_h 18 f` and `pan_v 271 f`: its bearing was nearly free and its whole
+expense was swinging pitch. So the term a hop ranker needs is the angular delta from the
+CURRENT stance -- and it is path-dependent, which is why alternating between near
+recycles and far builds costs more than the human's consistent staircase.
 
 So the search never had the human's line to reject. Beam width and rank order are the
 lever, ahead of any further work on gates, margins or frame cost.
