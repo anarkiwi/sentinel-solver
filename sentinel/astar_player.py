@@ -105,6 +105,7 @@ class AStarPlayer(BasePlayer):
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
+        self._hop_audit = None  # list => shadow-record the body-window hop gate
 
     def _margin(self, depth=None):
         """Frames of enemy-phase uncertainty a gate must hold back at plan depth
@@ -576,6 +577,33 @@ class AStarPlayer(BasePlayer):
             return True
         return bool(self._pick_hop(target))
 
+    def _record_hop_gate(self, tile, k, exposed, tile_ok):
+        """SHADOW record of the body-window gate: what it WOULD decide, deciding nothing.
+
+        The tile gate above clears the tile built on; this records the player's own body
+        window against the same hop budget, so a live run shows whether gating on it is
+        right-but-unaffordable or mis-specified. Enforcing it live took the player from
+        12 actions to 0, and the pure sim cannot see the question at all -- a fresh board
+        is FROZEN, where _body_drain_window() is inf and the gate never fires."""
+        budget = HOP_FRAMES + (k - 1) * actioncost.SETTLE["create"]
+        margin = self._margin()
+        body = self._body_drain_window()
+        self._hop_audit.append(
+            {
+                "depth": self._depth,
+                "tile": tuple(tile),
+                "k": k,
+                "tile_window": self._gaze_window(tile, exposed=exposed),
+                "body_window": body,
+                "budget": budget,
+                "margin": margin,
+                "tile_ok": bool(tile_ok),
+                "body_ok": bool(body >= budget + margin),
+                "body_ok_raw": bool(body >= budget),
+                "frozen": bool(self._frozen()),
+            }
+        )
+
     def _pick_hop(self, target):
         """Ranked pedestal builds directed at ``target``: prefer tiles that gain
         LOS on it, then raise the eye, then the widest window -- gated on the
@@ -598,9 +626,12 @@ class AStarPlayer(BasePlayer):
             if robot_eye <= my_eye + EYE_EPS:
                 continue
             exposed = self._exposing_enemies(tile)
-            if not self._drain_gate(
+            tile_ok = self._drain_gate(
                 "robot", tile, exposed, HOP_FRAMES + self._margin()
-            ):
+            )
+            if self._hop_audit is not None:
+                self._record_hop_gate(tile, k, exposed, tile_ok)
+            if not tile_ok:
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)

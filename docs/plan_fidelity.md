@@ -93,6 +93,32 @@ The hop cost itself is sound: `HOP_FRAMES = 700` sits under two live-measured ho
 (745, 879 f) and within 25% (`test_hop_budget.py`). An earlier claim here that it
 under-budgets 2-3x was wrong and is retracted below.
 
+### What the shadow instrumentation showed: the pursuit is all-or-nothing
+
+`AStarPlayer._hop_audit = []` makes `_pick_hop` record what the body-window gate WOULD
+decide without enforcing it. One live ls42 run, behaviour unchanged (12 actions), 353
+records. The gate is **not** unaffordable:
+
+- 225/353 candidates pass the tile gate; **181 of those would also pass the body gate**.
+- The margin is irrelevant here: `body_ok` equals `body_ok_raw` on every row.
+- Every rejection sits at **depth 10 and nowhere else**, and all 44 are identical:
+  `body_window = 656`, `need = 780`, short by **124 f**.
+
+They are identical because the body window is a property of the PLAYER, not of the
+candidate tile -- at depth 10 the player has 656 f wherever it builds, and every hop
+needs 780, so all 22 candidate tiles fail at once. `(1,24)`, the tile the live run dies
+on, is one of them. The gate is right.
+
+The damage is structural: `_c_pursue` is an all-or-nothing macro. It chains hops until
+the enemy is landable and returns ONE child, or `None`. One unsurvivable hop at depth 10
+discards the ten good steps before it, the root loses its only child generator, and
+`_search` returns `None` from the start -- which is exactly the 0-action live run.
+
+Both failure modes are the same defect. Ungated, the pursuit "reaches" the enemy on paper
+and the player dies executing step 11; gated, it returns nothing at all. The fix is
+neither a looser gate nor a bigger margin: **the pursuit must be able to return partial
+progress**, so the search can expand from a truncated climb and solve step 11 separately.
+
 ### The obvious fix does not work live (attempted, reverted)
 
 Gating the hop on the player's own body window -- `_hot(HOP_FRAMES + (k-1)*SETTLE)`
