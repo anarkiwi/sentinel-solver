@@ -231,33 +231,33 @@ window AND the window it reads is 243 f optimistic. Fix the phase before any fur
 gate, margin or frame-cost work: every gate in the planner is a comparison against a
 number that is systematically wrong by a third of a rotation.
 
-### Cause hunt: one defect found and fixed, the phase error NOT closed
+### FIXED: the cooldown tick ran AFTER the frame's enemy passes
 
-`driver/instrument.py` frame-locks the sim against the live game from a byte-identical
-seed. It reports, on ls42 (internal 66):
+`advance_frame` swept the enemy slots and THEN called `cooldown_frame`. The raster-IRQ
+cooldown tick ($9663/$1317) runs BEFORE the foreground passes, so an enemy the tick makes
+due rotates in the SAME frame; ticking last defers every rotation to the next frame.
 
-    first SWEEP divergence at frame 1   (cursor $0090 + all 5 PRNG bytes)
-    first CORE  divergence at frame 50  (obj[1].h_angle, enemy[1].rotation_cd/update_cd)
+Isolated with `driver/instrument.py` plus a captured 400-frame live image trace, racing
+variants offline on a clock+facing criterion (cooldown bresenham/gate, per-enemy
+rotation/update/draining cooldowns, enemy `h_angle`):
 
-**Defect found (fixed).** `advance_frame` called `update_enemies` `CURSOR_SLOTS = 8` times
-per frame, on the premise that the foreground loop "sweeps the cursor over every slot".
-It does not: `$129F` calls `update_enemies` ONCE per pass and `$16D9 DEC $90` steps the
-cursor one slot, so a frame covers only as many slots as the loop makes passes. Measured
-live over 300 frames, the cursor decrements `{2: 27, 3: 192, 4: 79}` -- **mean 3.18, mode
-3**, not 8. `UPDATES_PER_FRAME = 3` now. The `cursor` field drops out of the instrument's
-divergence report.
+| passes/frame | tick first | tick last |
+|---|---|---|
+| 2 | frame 50 | frame 50 |
+| 3 | frame 50 | frame 50 |
+| 4 | frame 73 | frame 50 |
+| 8 | **none in 400** | frame 50 |
 
-**But it does not close the phase error.** The CORE divergence is still at frame 50 with
-identical values: `obj[1].h_angle` emu 204 vs sim 184 -- the sim is exactly ONE 20-unit
-rotation step behind -- and `rotation_cd` emu 200 (just reloaded) vs sim 0 (due, not yet
-rotated). The sim rotates LATER than the ROM, which is the right sign for the +243 f
-optimism, but the update rate was not its cause.
+Live re-race after the fix: **`[CORE] no divergence within 1200 frames`**, against frame 50
+before. Every enemy facing, rotation cooldown, update cooldown and drain cooldown now
+tracks the real game exactly for 1200 frames.
 
-Still open, in the same report: all five PRNG bytes diverge at **frame 1**, so the PRNG
-stream is consumed at a different rate or by a different step than the model believes.
-That is the next thread -- and it matters beyond phase, since the PRNG drives meanie
-spawns and the discharge-tree scatter (the live human replay diverged with exactly a
-"create changed global object count by 2 (meanie/extra?)").
+**`UPDATES_PER_FRAME` is back to 8, and the earlier "the ROM does ~3/frame" change is
+reverted.** The cursor measurement behind it was right -- the ROM's foreground loop makes
+2/3/4 passes a frame -- but the cursor is not what rate-limits an enemy: its own $16E9
+`update_cd` gate (reload 4) is, and it is far tighter. Considering every slot each frame
+reproduces the ROM's clock exactly; a literal 3 does not (frame 50 either way). The
+remaining `cursor`/`prng` divergence is SWEEP-tier and does not move the modelled dynamics.
 
 ### The PRNG rate is unmodellable -- but it touches far less than I claimed
 

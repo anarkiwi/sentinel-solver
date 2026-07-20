@@ -51,8 +51,8 @@ UPDATE_COOLDOWN_MEANIE_MADE = 0x32  # $1869: 50 rounds after creating a meanie
 ROTATION_COOLDOWN_RELOAD = 0xC8  # $1813: 200 rounds after a rotation
 DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
-# update_enemies ($16B5) calls per video frame: the $1289 foreground loop calls it once per pass ($129F), so this is the loop's pass rate. Live ls42 cursor $0090 decrements over 300 frames: {2: 27, 3: 192, 4: 79}, mean 3.18, mode 3. NOT 8 -- a frame does not sweep every slot.
-UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "3"))
+# update_enemies ($16B5) calls modelled per frame. The ROM's foreground loop makes only ~3 passes/frame (measured cursor $0090 decrements {2:27, 3:192, 4:79}), but each enemy's own $16E9 update_cd gate (reload 4) rate-limits it far harder than the cursor does, so considering every slot each frame reproduces the ROM's clock and facings exactly (400/400 frames) while a literal 3 does not.
+UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "8"))  # == CURSOR_SLOTS
 MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
 MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
@@ -568,13 +568,14 @@ def cooldown_frame(state):
 def advance_frame(state, plotting=False):
     """Advance the world by ONE video frame, faithful to the ROM cadence.
 
-    The foreground loop ($1289) calls update_enemies ONCE per pass ($129F) and each call
-    steps the cursor one slot ($16D9 DEC $90), so a frame covers only as many slots as
-    the loop makes passes -- not all of them. ``plotting`` suppresses the sweep."""
+    The raster-IRQ cooldown tick ($9663/$1317) runs BEFORE the frame's foreground passes,
+    so an enemy the tick makes due rotates in the SAME frame, not the next one. Ticking
+    after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
+    """
+    cooldown_frame(state)
     if not plotting:
         for _ in range(UPDATES_PER_FRAME):
             update_enemies(state)
-    cooldown_frame(state)
 
 
 def advance_frames(state, n_frames, plotting=False):
