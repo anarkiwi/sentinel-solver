@@ -531,24 +531,37 @@ class AStarPlayer(BasePlayer):
                 self.cursor = list(cursor)
                 self._depth = depth  # a rejected trial must not widen later margins
                 res = self._hop_exec(tile, k)
-                if res is not None:
-                    st, advanced = trial, True
-                    g += res[0]
-                    steps.extend(res[1])
-                    break
+                if res is None:
+                    continue
+                # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
+                self.st = trial
+                recycled = []
+                for _ in range(_HOP_BOULDERS + 1):
+                    got = self._reclaim_one(trial, pedestal_only=True)
+                    if got is None:
+                        break
+                    recycled.append(got)
+                if not self._climb_continues(trial, target, e):
+                    continue  # stranded landing: try the next-ranked one
+                st, advanced = trial, True
+                g += res[0] + sum(r[0] for r in recycled)
+                steps.extend(res[1])
+                steps.extend(r[1] for r in recycled)
+                break
             if not advanced:
                 return None
-            # inchworm: recycle now-below shells/pedestals into energy after the
-            # transfer up (base_z <= new eye, not the current support/player tile),
-            # keeping the climb near the reserve floor -- the human's ls42 line.
-            self.st = st
-            for _ in range(_HOP_BOULDERS + 1):
-                got = self._reclaim_one(st, pedestal_only=True)
-                if got is None:
-                    break
-                g += got[0]
-                steps.append(got[1])
         return None
+
+    def _climb_continues(self, st, target, e):
+        """Whether the pursuit can still act after landing on ``st``: the target is
+        landable now, or another hop is affordable. Reclaim needs the abandoned stack
+        keyboard-AIMABLE from the landing (``_reclaim_one`` -> ``_view_for``), stronger
+        than the sight ``_pick_hop`` ranks on, so a landing can recycle nothing and --
+        a k=1 hop costing HOP_COST over the reserve, a tree returning 1 -- strand."""
+        self.st = st
+        if target in self._landset(st) and terrain.top_object(st, *target) == e:
+            return True
+        return bool(self._pick_hop(target))
 
     def _pick_hop(self, target):
         """Ranked pedestal builds directed at ``target``: prefer tiles that gain
