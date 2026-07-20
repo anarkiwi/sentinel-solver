@@ -366,6 +366,7 @@ def _occlusion_visible(state, observer=None):
 _SCENE_SPANS = ((0x0400, 0x0800), (0x0100, 0x0180), (0x0900, 0x0A80))
 _CACHE_MAX = int(os.environ.get("RENDER_CACHE_MAX", "20000"))
 _OCCLUSION_CACHE = {}
+_COST_CACHE = {}
 
 
 def scene_key(state):
@@ -507,6 +508,21 @@ def _inview_object_base(state, tiles):
     return total
 
 
+def _terrain_poly_base(tiles):
+    """prepare_polygon ($2D6C) floor over the plotted TERRAIN tiles: a flat tile is one
+    quad, a sloped one two triangles (plot_two_triangles $2A8A), each prepared once per
+    wide-buffer section ($0010 < 2 at $2AAB). Charged whether or not the polygon lands
+    in the fill band -- an off-band polygon still clips, which the area term prices 0.
+    A non-object tile byte carries its own slope nibble, so this needs no terrain read.
+    """
+    npoly = 0
+    for tile in tiles:
+        tb = tile["tile_byte"]
+        if tb < mm.OBJECT_TILE:
+            npoly += 2 if tb & 0x0F else 1
+    return npoly * SECTIONS * C_PREP_CALL
+
+
 _EXACT_WARNED = [False]
 
 
@@ -533,9 +549,9 @@ def _exact_render_cost(state, h, v, observer):
 
 
 def render_cost(state, view, observer=None, mode=PLAY_MODE):
-    """One plot_world pass in PAL frames (docs/render_cost.md):
-    ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W) + object_base)/19656``,
-    into ``mode``'s $2993 buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
+    """One plot_world pass in PAL frames (docs/render_cost.md): examine floor +
+    terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
+    buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
     ``RENDER_COST_BACKEND=py65`` (ROM present) replaces the proxy for the play buffer.
     """
     if not view or view.get("h_angle") is None:
@@ -546,10 +562,15 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE):
         exact = _exact_render_cost(state, h, v, observer)
         if exact is not None:
             return exact
-    tiles, n_examine = project_scene(state, h, v, observer, mode)
-    area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
-    obj_base = _inview_object_base(state, tiles)
-    return (BASE_CYCLES + n_examine * C_EXAMINE + area + obj_base) / FRAME_CYCLES
+    obs = state.player if observer is None else observer
+
+    def make():
+        tiles, n_examine = project_scene(state, h, v, obs, mode)
+        area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
+        base = _terrain_poly_base(tiles) + _inview_object_base(state, tiles)
+        return (BASE_CYCLES + n_examine * C_EXAMINE + area + base) / FRAME_CYCLES
+
+    return memo(_COST_CACHE, (scene_key(state), obs, h, v, mode), _CACHE_MAX, make)
 
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/render_cost.md).

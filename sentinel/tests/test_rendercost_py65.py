@@ -84,8 +84,10 @@ def test_default_backend_is_proxy():
         projector.PER_SCANLINE * t["h"] + projector.PER_PIXEL * t["h"] * t["w"]
         for t in tiles
     )
-    obj = projector._inview_object_base(st, tiles)
-    expect = (n * projector.C_EXAMINE + area + obj) / projector.FRAME_CYCLES
+    base = projector._terrain_poly_base(tiles) + projector._inview_object_base(
+        st, tiles
+    )
+    expect = (n * projector.C_EXAMINE + area + base) / projector.FRAME_CYCLES
     assert projector.render_cost(st, view) == pytest.approx(expect)
 
 

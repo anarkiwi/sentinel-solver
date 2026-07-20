@@ -3,6 +3,7 @@ threat/gaze windows, aim cost, action firing, and the run loop. Player
 subclasses implement _tick()."""
 
 import math
+import os
 
 import numpy as np
 
@@ -12,6 +13,8 @@ from sentinel import pancost, projector, relative, terrain, threat
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
 V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
 SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
+_VIEW_CACHE = {}
+_VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -103,15 +106,28 @@ class _Views:
         self._primary = None
         self._full = None
 
+    def _sweep(self, v_primary):
+        """The lattice sweep, memoized across ticks: it is a pure function of the board
+        and the facing it costs aims from, and a tick that gates out (a wait, a rejected
+        step) re-enters with both unchanged -- the sweep is ~90% of a player's runtime.
+        """
+        st = self.st
+        return projector.memo(
+            _VIEW_CACHE,
+            (projector.scene_key(st), st.player, self.aim_from, v_primary),
+            _VIEW_CACHE_MAX,
+            lambda: _cheap_views(st, v_primary, self.aim_from),
+        )
+
     def primary(self):
         if self._primary is None:
-            self._primary = _cheap_views(self.st, True, self.aim_from)
+            self._primary = self._sweep(True)
         return self._primary
 
     def band(self):
         """The full pitch-band landable views (down-looks included)."""
         if self._full is None:
-            self._full = _cheap_views(self.st, False, self.aim_from)
+            self._full = self._sweep(False)
         return self._full
 
     def get(self, tile, band=False):
