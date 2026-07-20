@@ -1429,11 +1429,16 @@ def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
     return np.sort(idx)  # copy: `order` slices are views into the cache
 
 
-def landable_view_targeted(state, tile, slot=None, eye_z=None, max_steps=6000):
+def landable_view_targeted(
+    state, tile, slot=None, eye_z=None, max_steps=6000, cxs=None, cys=None
+):
     """Full-pitch-band build view for a SINGLE ``tile`` -- bit-identical to
     ``landable_views(state).get(tile)`` but marching only the lattice rays whose heading
     points at the cell (:func:`_tile_arc_indices`), so a per-tile query costs a narrow cone
     instead of a whole-board sweep.  Falls back to the pure-Python probe when numba is absent.
+    ``cxs``/``cys`` override the sights-cursor grid (default the 1px window) so a caller that
+    sweeps a SUBSAMPLED cursor can query one tile against its own lattice, bit-identically to
+    that lattice's full sweep; the Python fallback ignores them (1px only).
     """
     if slot is None:
         slot = state.player
@@ -1441,7 +1446,9 @@ def landable_view_targeted(state, tile, slot=None, eye_z=None, max_steps=6000):
     if not _HAVE_JIT:
         return _landable_view_py(state, key, slot, eye_z, max_steps, True)
     hgrid = list(range(0, 256, AZIMUTH_STEP))
-    vgrid, cxs, cys = _V_PRIORITY, CURSOR_CX, CURSOR_CY
+    vgrid = _V_PRIORITY
+    cxs = CURSOR_CX if cxs is None else cxs
+    cys = CURSOR_CY if cys is None else cys
     head_sorted, order = _lattice_headings(hgrid, vgrid, cxs, cys)
     ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
     idx = _tile_arc_indices(head_sorted, order, ex, ey, key[0], key[1])

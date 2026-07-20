@@ -17,7 +17,8 @@ import os
 
 import pytest
 
-from sentinel import los, threat
+from sentinel import astar_player, los, memmap as mm, threat
+from sentinel.astar_player import AStarPlayer
 from sentinel.tests.telemetry import log_path, records, state_from_record, tile_ladder
 
 LS0 = log_path("play_20260707_193356.jsonl")
@@ -139,6 +140,19 @@ def test_targeted_view_matches_full_board_sweep(new_state):
     for tile in ((0, 0), (30, 30), (2, 2), (28, 5)):
         if tile not in full:
             assert los.landable_view_targeted(st, tile) is None, tile
+
+
+def test_targeted_view_matches_coarse_lattice_sweep(new_state):
+    """On the A* planner's SUBSAMPLED cursor lattice, the per-tile heading cone agrees with
+    that lattice's own full sweep on every tile of the board -- the membership equality
+    ``AStarPlayer._landable`` substitutes for ``tile in _landset``."""
+    st = new_state(0)
+    coarse = AStarPlayer._coarse_landable(st)
+    cxs, cys = astar_player._COARSE_CX, astar_player._COARSE_CY
+    for x in range(mm.N):
+        for y in range(mm.N):
+            got = los.landable_view_targeted(st, (x, y), cxs=cxs, cys=cys) is not None
+            assert got == ((x, y) in coarse), (x, y)
 
 
 @pytest.mark.skipif(not os.path.exists(LS0), reason="ls0 human-win log absent")

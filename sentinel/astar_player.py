@@ -65,6 +65,8 @@ _STEP_SIGMA = float(
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
+_COARSE_CX = list(range(48, 112, 2))  # landset sights-cursor grid: the 1px window 2:1
+_COARSE_CY = list(range(63, 127, 2))  # subsampled; _landable queries the SAME lattice
 
 GATE_BODY = "body"  # gated on the PLAYER'S body window (_hot): absorbs
 GATE_TILE = "tile"  # gated on the TARGET TILE's window (_drain_gate): builds/transfers
@@ -127,6 +129,7 @@ class AStarPlayer(BasePlayer):
         self.expansions = 0
         self._deadline = None  # per-search wall-clock deadline (set at each _search)
         self._land_memo = {}  # search: coarse landable tile-sets
+        self._tile_memo = {}  # per-(sig, tile) single-tile landability (targeted cone)
         self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
         self._cone_memo = {}  # per-(sig, tile) targeted band march results
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
@@ -559,15 +562,34 @@ class AStarPlayer(BasePlayer):
             self._land_memo[sig] = tiles
         return tiles
 
+    def _landable(self, st, tile):
+        """Whether ``tile`` alone is in :meth:`_landset` -- answered, when the whole set is
+        not already memoized, by a targeted cone march over the SAME coarse lattice
+        (:func:`los.landable_view_targeted`), which is bit-identical to the full sweep but
+        marches only the rays whose heading points at the cell."""
+        sig = self._sig(st)
+        tiles = self._land_memo.get(sig)
+        if tiles is not None:
+            return tile in tiles
+        if not los._HAVE_JIT:
+            return tile in self._landset(st)
+        key = (sig, tile)
+        hit = self._tile_memo.get(key)
+        if hit is None:
+            hit = (
+                los.landable_view_targeted(st, tile, cxs=_COARSE_CX, cys=_COARSE_CY)
+                is not None
+            )
+            self._tile_memo[key] = hit
+        return hit
+
     @staticmethod
-    def _coarse_landable(st, cstep=2):
+    def _coarse_landable(st):
         if not los._HAVE_JIT:
             return set(los.landable_views(st))
         hgrid = list(range(0, 256, los.AZIMUTH_STEP))
-        cxs = list(range(48, 112, cstep))
-        cys = list(range(63, 127, cstep))
         status, tx, ty, _, _ = los._landable_batch(
-            st, st.player, None, 6000, hgrid, los._V_PRIORITY, cxs, cys
+            st, st.player, None, 6000, hgrid, los._V_PRIORITY, _COARSE_CX, _COARSE_CY
         )
         clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
         return set(zip(tx[clear].tolist(), ty[clear].tolist()))
@@ -588,14 +610,13 @@ class AStarPlayer(BasePlayer):
         """Living enemies not landable from the current stance, nearest first
         (small branching); the Sentinel only once it stands alone ($1B8E lock)."""
         foes = enemies.enemy_slots(st)
-        land = self._landset(st)
         px, py = st.player_xy()
         out = []
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in land:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 continue  # already landable: _c_absorb handles the terminal strike
             out.append(((st.obj_x[e] - px) ** 2 + (st.obj_y[e] - py) ** 2, e))
         out.sort()
@@ -616,7 +637,7 @@ class AStarPlayer(BasePlayer):
         target = st.tile_of(e)
         for _ in range(_MAX_PURSUE):
             self.st = st
-            if target in self._landset(st) and terrain.top_object(st, *target) == e:
+            if terrain.top_object(st, *target) == e and self._landable(st, target):
                 if not actions.can_absorb(st, e):
                     break
                 bearing, cursor, depth = (
@@ -688,7 +709,7 @@ class AStarPlayer(BasePlayer):
         expansion profile).  Absorbing a spent pedestal below the eye only uncovers
         tiles, so the frozen set is the conservative side."""
         self.st = st
-        if target in self._landset(st) and terrain.top_object(st, *target) == e:
+        if terrain.top_object(st, *target) == e and self._landable(st, target):
             return True
         if self._pick_hop(target):
             return True
@@ -820,12 +841,11 @@ class AStarPlayer(BasePlayer):
         """Whether a living enemy is landable from the current stance (the
         counterattack is available)."""
         foes = enemies.enemy_slots(st)
-        land = self._landset(st)
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in land:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 return True
         return False
 
@@ -836,13 +856,12 @@ class AStarPlayer(BasePlayer):
 
     def _absorb_enemy_targets(self, st):
         foes = enemies.enemy_slots(st)
-        landset = self._landset(st)
         out = []
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue  # Sentinel dead last ($1B8E lock)
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in landset:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 out.append((tile, e))
         return out
 
@@ -908,7 +927,7 @@ class AStarPlayer(BasePlayer):
         g = node.g
         steps = []
         if not actions.on_platform(st):
-            if ptile not in self._landset(st):
+            if not self._landable(st, ptile):
                 return None
             cost = self._charge(st, "robot", ptile)
             g += cost
