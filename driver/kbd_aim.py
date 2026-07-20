@@ -391,37 +391,22 @@ class KbdDriver:
 
     def _uturn(self, max_passes=5):
         """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F,
-        objects_h_angle EOR $80) -- the fast way across half the compass. The u-turn is
-        edge-latched and auto-repeat gated like an action key ($0C51 ASL/BPL): update_game
-        zeroes the want-flag and only an IDLE full scan re-arms it, so a bare tap right after
-        a pan burst is dropped ($1B2F). So per pass run one idle full scan to re-arm, press U
-        WHILE HALTED through the next scan, release, and confirm the EOR $80 flip; retry
-        until it takes. Returns True on a confirmed flip -- purely an optimisation, the +-8
-        loop in coarse_h still converges if this is swallowed."""
+        objects_h_angle EOR $80) -- the fast way across half the compass.
+
+        U is an ordinary action key (want-flag $23), so ``tap_action`` already presses it
+        correctly. The flip itself lands in update_game's $1B2F, NOT in the scan that
+        latched the press, so reading objects_h_angle straight after that scan sees the
+        OLD bearing; a retry loop keyed on that read presses again, and an even number of
+        EOR $80s cancels. Confirm only after tap_action has let the action be consumed.
+        """
         addr = A_H + self.slot()
-        r, c = _k(K_UTURN)
-        flipped = False
-        with self.bm.halted():
-            try:
-                for _ in range(max_passes):
-                    before = self.rd(addr)
-                    self._run_to_scan()
-                    self.bm.advance_instructions(1)  # off the anchor
-                    self._run_to_scan()  # idle scan re-arms
-                    self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
-                    self.bm.run_until_pc(
-                        self.PC_IRQ_SCAN_DONE, timeout=6.0
-                    )  # scan consumed
-                    self.bm.keymatrix_release_all()  # before the next scan
-                    if ((self.rd(addr) - before) & 0xFF) == 0x80:
-                        flipped = True
-                        break
-            except Exception as e:
-                self.log(f"    uturn stop: {type(e).__name__}")
-            finally:
-                self.bm.keymatrix_release_all()
-        self._resume()
-        return flipped
+        for _ in range(max_passes):
+            before = self.rd(addr)
+            if not self.tap_action(K_UTURN):
+                continue
+            if ((self.rd(addr) - before) & 0xFF) == 0x80:
+                return True
+        return False
 
     def coarse_h(self, want):
         """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). D pans right
@@ -434,9 +419,14 @@ class KbdDriver:
         residual whether or not the U-turn latched (so this only ever saves time)."""
         addr = A_H + self.slot()
         want &= 0xFF
-        n_uturn, _n_step = ac.h_press_count(self.rd(addr), want)
-        if n_uturn:
-            self._uturn()
+        cur = self.rd(addr)
+        n_uturn, n_step = ac.h_press_count(cur, want)
+        if n_uturn and not self._uturn():
+            # Never silent: the residual pan is then the whole half-turn the u-turn was meant to skip, which the cost model charged one keystroke for.
+            self.log(
+                f"    uturn MISSED ${cur:02x}->${want:02x}: paying "
+                f"{ac.h_steps(cur, want)} notches instead of {n_step}"
+            )
         dir_fn = lambda cur: K_RIGHT if ((want - cur) & 0xFF) <= 0x80 else K_LEFT
         return self._pan_angle(addr, want, dir_fn)
 
