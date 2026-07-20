@@ -231,6 +231,34 @@ window AND the window it reads is 243 f optimistic. Fix the phase before any fur
 gate, margin or frame-cost work: every gate in the planner is a comparison against a
 number that is systematically wrong by a third of a rotation.
 
+### Cause hunt: one defect found and fixed, the phase error NOT closed
+
+`driver/instrument.py` frame-locks the sim against the live game from a byte-identical
+seed. It reports, on ls42 (internal 66):
+
+    first SWEEP divergence at frame 1   (cursor $0090 + all 5 PRNG bytes)
+    first CORE  divergence at frame 50  (obj[1].h_angle, enemy[1].rotation_cd/update_cd)
+
+**Defect found (fixed).** `advance_frame` called `update_enemies` `CURSOR_SLOTS = 8` times
+per frame, on the premise that the foreground loop "sweeps the cursor over every slot".
+It does not: `$129F` calls `update_enemies` ONCE per pass and `$16D9 DEC $90` steps the
+cursor one slot, so a frame covers only as many slots as the loop makes passes. Measured
+live over 300 frames, the cursor decrements `{2: 27, 3: 192, 4: 79}` -- **mean 3.18, mode
+3**, not 8. `UPDATES_PER_FRAME = 3` now. The `cursor` field drops out of the instrument's
+divergence report.
+
+**But it does not close the phase error.** The CORE divergence is still at frame 50 with
+identical values: `obj[1].h_angle` emu 204 vs sim 184 -- the sim is exactly ONE 20-unit
+rotation step behind -- and `rotation_cd` emu 200 (just reloaded) vs sim 0 (due, not yet
+rotated). The sim rotates LATER than the ROM, which is the right sign for the +243 f
+optimism, but the update rate was not its cause.
+
+Still open, in the same report: all five PRNG bytes diverge at **frame 1**, so the PRNG
+stream is consumed at a different rate or by a different step than the model believes.
+That is the next thread -- and it matters beyond phase, since the PRNG drives meanie
+spawns and the discharge-tree scatter (the live human replay diverged with exactly a
+"create changed global object count by 2 (meanie/extra?)").
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled

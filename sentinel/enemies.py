@@ -36,6 +36,8 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
+import os
+
 from sentinel import memmap as mm, relative, actions, terrain
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
@@ -49,6 +51,8 @@ UPDATE_COOLDOWN_MEANIE_MADE = 0x32  # $1869: 50 rounds after creating a meanie
 ROTATION_COOLDOWN_RELOAD = 0xC8  # $1813: 200 rounds after a rotation
 DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
+# update_enemies ($16B5) calls per video frame: the $1289 foreground loop calls it once per pass ($129F), so this is the loop's pass rate. Live ls42 cursor $0090 decrements over 300 frames: {2: 27, 3: 192, 4: 79}, mean 3.18, mode 3. NOT 8 -- a frame does not sweep every slot.
+UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "3"))
 MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
 MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
@@ -564,11 +568,11 @@ def cooldown_frame(state):
 def advance_frame(state, plotting=False):
     """Advance the world by ONE video frame, faithful to the ROM cadence.
 
-    The foreground loop ($1289) sweeps the cursor $0090 over every slot, THEN the
-    raster IRQ cooldown clock ($9663) ticks; an enemy the tick makes due acts on
-    the next frame's sweep. ``plotting`` suppresses the sweep (cooldown only)."""
+    The foreground loop ($1289) calls update_enemies ONCE per pass ($129F) and each call
+    steps the cursor one slot ($16D9 DEC $90), so a frame covers only as many slots as
+    the loop makes passes -- not all of them. ``plotting`` suppresses the sweep."""
     if not plotting:
-        for _ in range(CURSOR_SLOTS):
+        for _ in range(UPDATES_PER_FRAME):
             update_enemies(state)
     cooldown_frame(state)
 
