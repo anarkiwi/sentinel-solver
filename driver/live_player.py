@@ -32,6 +32,10 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
     def coarse_h(self, want):
         return self._timed("pan_h", super().coarse_h, want)
 
+    def _uturn(self, *a, **kw):
+        # nested inside coarse_h's pan_h, so the books must subtract it, not add it
+        return self._timed("uturn", super()._uturn, *a, **kw)
+
     def coarse_v(self, want):
         return self._timed("pan_v", super().coarse_v, want)
 
@@ -192,6 +196,7 @@ class LiveMixin:
                     sf.get("pan_v", 0),
                     sf.get("toggle", 0),
                     sf.get("cursor", 0),
+                    sf.get("uturn", 0),
                 ]
             )
         self.result.setdefault("frame_audit", []).append(

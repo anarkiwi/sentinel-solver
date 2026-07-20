@@ -279,7 +279,13 @@ REGISTRY = {
     "UNIT_FRAMES": _d(_PB, "3 x 256 / COOLDOWN_BRESENHAM_STEP gate+Bresenham divider"),
     "CURSOR_RAMP": _d(_PB, "popcount of the $11E0 CURSOR_REPEAT_MASK"),
     "CURSOR_REPEAT_MASK": _u(_PB, "cursor repeat mask; no derivation test"),
-    "HOP_FRAMES": _u(_PB, "does not match its claimed SETTLE composition; xfailed"),
+    "HOP_FRAMES": entry(
+        _PB,
+        MEASURED,
+        "under both live ls42 hops (745, 879 f) and within 25%; its claimed SETTLE "
+        "composition still does not add up (separately xfailed)",
+        "test_hop_frames_brackets_the_measured_hops",
+    ),
     "SAFE_FRAMES": _u(_PB, "post-action safety margin; unmeasured"),
     "WAIT_FRAMES": _u(_PB, "idle wait quantum; unmeasured"),
     "DRAIN_DELAY": _d(_PB, "DRAINING_COOLDOWN_RELOAD x UNIT_FRAMES ($1835)"),
@@ -352,7 +358,6 @@ UNVALIDATED_PIN = frozenset(
         "ENEMIES_UPDATE_COOLDOWN",
         "ENERGY_MASK",
         "FRAME_TICKS",
-        "HOP_FRAMES",
         "H_SCROLL",
         "REDRAW_FRAMES",
         "ROTATION_COOLDOWN_RELOAD",
