@@ -1,11 +1,19 @@
 # Plan-vs-live fidelity
 
-State: **the clocks are exact and the A\* player wins ls42 live, on the real game.**
-`python -m driver.play_player 42 --player astar` wins in **39 actions, final energy 11**
-(13646 recorded frames, [media/ls42_astar_win.png](media/ls42_astar_win.png)), and
-offline (`python -m sentinel.astar_player 66`) in 41 actions / 11263 f, eye 11.875 on the
-plinth — the human line's height. Landscapes 0 and internal 42 win offline (26 / 29
-actions). The reactive greedy player loses both ls42 boards.
+State: **the clocks are exact, the A\* player wins ls42 live on the real game, and the
+run reproduces frame for frame.** `python -m driver.play_player 42 --player astar` wins in
+**36 actions, final energy 10** (10962 recorded frames,
+[media/ls42_astar_win.png](media/ls42_astar_win.png)), and offline
+(`python -m sentinel.astar_player 66`) in 41 actions / 11263 f, eye 11.875 on the plinth —
+the human line's height. Landscape 0 wins offline (26 actions). The reactive greedy player
+loses both ls42 boards.
+
+**The plan is a pure function of the board.** Two live ls42 runs produce identical action
+sequences and identical per-step measured frame counts. `_search` is bounded by
+`node_budget` alone; `time_budget` (a wall-clock cut) is **off by default**, because a
+loaded host truncates the search sooner and plays a different — not cheaper — line. That
+wall-clock cut was worth 3 actions and 2684 frames on this board: it was ending the search
+early enough to miss the better plan.
 
 ## READ FIRST: "landscape 42" is two boards
 
@@ -48,13 +56,14 @@ Live ls42 whole-step charged-vs-measured: **rms 24.1 f, mean −12.0, max |e| 46
 redraw is derived (`sentinel/pancost.py`, [render_cost.md](render_cost.md)): tile
 selection byte-exact on all 288 golden notches, rms 18.3 → 6.4 f.
 
-`time_budget` defaults to 60 s per search (cold ls66 ~25 s, warm ~2.5 s). Think time is
-free live (`bm.auto_resume = False`: the world runs only in deliberate run windows).
+A cold ls66 search runs ~32 s, a warm one ~2.5 s. Think time is free live
+(`bm.auto_resume = False`: the world runs only in deliberate run windows), which is why
+bounding it by wall clock buys nothing and costs reproducibility.
 
 ## Open, ranked
 
-1. **Per-step frame drift is one-sided.** +86 f over the 40 steps of the winning live run
-   (mean +2.1, rms 52.9); charged exceeds measured on most steps. Decomposed over 15
+1. **Per-step frame drift.** −208 f over the 36 steps of the winning live run (mean −5.8,
+   rms 58.1), reproducible run to run. Decomposed over 15
    runs, the settle side is two constants the model merges: **create measures 99 f (n=71,
    sd 7.8), absorb ~90 f (n=65)** against a shared charge of 93.75 (`DITHER_FRAMES +
    POST_ACTION_REPLOT_FRAMES`). The ROM counter behind it is `$2099` (`$1FA4` loads #$19;
@@ -76,15 +85,15 @@ free live (`bm.auto_resume = False`: the world runs only in deliberate run windo
    `projector.PER_SCANLINE`/`PER_PIXEL` and the cross-polygon span coupling.
 5. **py65 exact backend skips transfer settles** — `_exact_render_cost` returns `None` for
    any non-player observer, and a transfer settle is always priced from one.
-6. **`time_budget` is wall-clock, so planning is load-sensitive.** A cold search on a
-   loaded host truncates and takes a different line;
-   `driver/test_live_determinism.py::test_two_live_runs_measure_the_same_frames` then
-   fails on differing step counts (observed 7 vs 8 under a parallel full-suite run, passes
-   on an idle host). A node-count or expansion budget would make the plan a pure function
-   of the board.
-7. **Pan-commit wall-clock timeout** — `run_until_pc(PC_PAN_DONE, timeout=_RU_COMMIT)`
-   (4 s). `$365D` recurs every frame, so a timeout there means the game left the play
-   loop. Confirm it can no longer fire.
+6. **The DRIVER's wall-clock timeouts are the residual load sensitivity** — `_RU_PAN`
+   (20 s), `_RU_STA` (8 s), `_RU_COMMIT` (4 s) in `kbd_aim`. The planner is now
+   reproducible, so these are what is left: on an idle host
+   `driver/test_live_determinism.py` passes (2/2 serial, and two full ls42 runs are
+   frame-identical), while under a saturated host (`pytest -n auto`, ~14 workers plus two
+   VICE containers) it still fails on differing step counts. A monitor round-trip costs
+   ~23.5 ms at real-time pace, so enough contention pushes a checkpoint wait past its
+   timeout and the aim re-drives. Since `$365D` recurs every frame, a timeout there means
+   the game left the play loop — it should be an error, not a retry.
 
 ## Limits
 

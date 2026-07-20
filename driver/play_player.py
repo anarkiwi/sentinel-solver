@@ -36,7 +36,12 @@ def main(argv=None):
     parser.add_argument("--player", choices=("greedy", "astar"), default="greedy")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--node-budget", type=int, default=200000)
-    parser.add_argument("--time-budget", type=float, default=60.0)
+    parser.add_argument(
+        "--time-budget",
+        type=float,
+        default=None,
+        help="wall-clock search cut (s); off by default -- setting it makes the plan depend on host load",
+    )
     parser.add_argument("--weight", type=float, default=1.4)
     parser.add_argument("--video", default=None)
     args = parser.parse_args(argv)

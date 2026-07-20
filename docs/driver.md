@@ -24,7 +24,7 @@ Accuracy and ranked open problems: [plan_fidelity.md](plan_fidelity.md). Game ru
 | `sentinel_state.py` | live memory → structured `GameState` (`ViceSource`/`Py65Source`), `verify_entry`, `mem_image`. |
 | `instrument.py` | frame-locked sim-vs-ROM divergence race (`python -m driver.instrument 42`). |
 | `frozen_run.py` | RTS-stubs `update_enemies` ($16B5) live: isolates frame-cost fidelity from search/energy. |
-| `plan_audit.py` | per-step plan-vs-live enemy-phase / dwell-window audit. |
+| `plan_audit.py` | per-step audit of each `PlanStep`'s recorded budget/windows vs live. |
 | `replay_human.py` | replays a recorded human line, capturing per-step enemy phase into `<fixture>_truth.json`. |
 | `watch_play.py` | passive logger of a **human** playing; sends no keys. |
 

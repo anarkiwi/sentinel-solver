@@ -10,6 +10,7 @@ import heapq
 import math
 import os
 import time
+import typing
 
 import numpy as np
 
@@ -65,6 +66,26 @@ _STEP_SIGMA = float(
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
 
+GATE_BODY = "body"  # gated on the PLAYER'S body window (_hot): absorbs
+GATE_TILE = "tile"  # gated on the TARGET TILE's window (_drain_gate): builds/transfers
+
+
+class PlanStep(typing.NamedTuple):
+    """One executable plan step, carrying what the search knew when it made it, so
+    execution re-validates the SAME premise instead of re-deriving one.
+
+    ``budget`` is what ``_charge`` charged; ``gate`` is which gaze window the
+    generator gated the step on, and ``window`` that window's predicted value;
+    ``pbody`` is the player body window at plan time (== ``window`` under
+    ``GATE_BODY``), which the live audit compares against reality."""
+
+    verb: str
+    tile: tuple
+    budget: float
+    gate: str
+    window: float
+    pbody: float
+
 
 class _Node:
     """A search node: a state, its estimated cost g, and the path that made it."""
@@ -81,7 +102,12 @@ class _Node:
 
 
 class AStarPlayer(BasePlayer):
-    """Search a winning line once, then execute it."""
+    """Search a winning line once, then execute it.
+
+    ``audit_pred`` records ``PlanStep.pbody``: a ``_player_window`` per charged step,
+    so per speculative branch.  Only ``driver.plan_audit`` reads it, never execution."""
+
+    audit_pred = False
 
     def __init__(
         self,
@@ -89,7 +115,7 @@ class AStarPlayer(BasePlayer):
         verbose=False,
         audit=False,
         node_budget=200000,
-        time_budget=60.0,  # cold ls42 (internal 66) search measures ~25 s; 30 s had none
+        time_budget=None,  # wall-clock cut: OFF by default, see _search
         weight=1.4,
     ):
         super().__init__(game, verbose=verbose, audit=audit)
@@ -108,6 +134,15 @@ class AStarPlayer(BasePlayer):
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
         self._hop_audit = None  # list => shadow-record the body-window hop gate
         self._on_plan = False  # last _react deviation WAS the plan's next step
+        self._last_pbody = math.inf  # body window at the last _charge's pre-step state
+
+    def _plan_step(self, verb, tile, budget, gate, window=None):
+        """Record the step just charged: ``window`` defaults to the body window
+        ``_charge`` measured, which IS the gated value under ``GATE_BODY``."""
+        pbody = self._last_pbody
+        return PlanStep(
+            verb, tuple(tile), budget, gate, pbody if window is None else window, pbody
+        )
 
     def _margin(self, depth=None):
         """Frames of enemy-phase uncertainty a gate must hold back at plan depth
@@ -131,7 +166,8 @@ class AStarPlayer(BasePlayer):
             self.plan = self._search()
             self._pi = 0
             if self.verbose:
-                print(f"  plan ({self.expansions} nodes): {self.plan}")
+                line = self.plan and [(s.verb, tuple(s.tile)) for s in self.plan]
+                print(f"  plan ({self.expansions} nodes): {line}")
         if not self._frozen() and self._react():
             if not self._on_plan:  # deviated for survival: re-plan from the new state
                 self.plan = None
@@ -140,13 +176,14 @@ class AStarPlayer(BasePlayer):
         if not self.plan or self._pi >= len(self.plan):
             self._wait()
             return
-        verb, tile = self.plan[self._pi]
+        step = self.plan[self._pi]
+        verb, tile = step.verb, step.tile
         if verb == "hyperspace":
             self._hyperspace()
             self._pi += 1
             return
         view = self._view_for(tile)
-        if view is not None and self._plan_step_stale(verb, tile, view):
+        if view is not None and self._plan_step_stale(step, view):
             self._restale((verb, tuple(tile)))
             return
         self._stale = None
@@ -185,8 +222,8 @@ class AStarPlayer(BasePlayer):
         if not self.plan:
             self._wait()  # let the enemy cone rotate (react acts once it is on us)
 
-    def _plan_step_stale(self, verb, tile, view):
-        """Whether the next planned step needs a fresh search before firing. The
+    def _plan_step_stale(self, step, view):
+        """Whether the next planned ``PlanStep`` needs a fresh search before firing. The
         offline plan is deterministic and already drain-gated, so it never goes
         stale; the live player overrides this to re-check the real enemy phase."""
         return False
@@ -249,8 +286,9 @@ class AStarPlayer(BasePlayer):
         the climb it had already paid for."""
         if not self.plan or self._pi >= len(self.plan):
             return False
-        verb, tile = self.plan[self._pi]
-        if verb != "transfer":
+        step = self.plan[self._pi]
+        tile = step.tile
+        if step.verb != "transfer":
             return False
         view = self._view_for(tile)
         if view is None or not self._fire("transfer", tile, view):
@@ -343,8 +381,13 @@ class AStarPlayer(BasePlayer):
     # ----------------------------------------------------------------- search
     def _search(self, margin_k=None):
         """Best-first search for a frame-cheap winning line; the list of
-        ``(verb, tile)`` steps, or ``None`` if none found in budget.  ``margin_k``
-        overrides the drain-gate headroom (0 == the old zero-margin search)."""
+        ``PlanStep`` records, or ``None`` if none found in budget.  ``margin_k``
+        overrides the drain-gate headroom (0 == the old zero-margin search).
+
+        The search is a PURE FUNCTION OF THE BOARD: ``node_budget`` bounds it, and
+        ``time_budget`` (a wall-clock cut) is off by default.  With one set, a loaded
+        host truncates the search sooner and plays a DIFFERENT line -- which is not a
+        cheaper plan, just a worse one, and it makes a live run unreproducible."""
         real = self.st  # the cheap executors rebind self.st to clones; restore after
         real_bearing = self.last_bearing
         real_cursor = list(self.cursor)
@@ -358,12 +401,14 @@ class AStarPlayer(BasePlayer):
             best_g = {start.key: 0.0}
             counter = 0
             # per-search budget: each replan gets its own window (run-wide starves replans)
-            self._deadline = time.time() + self.time_budget
+            self._deadline = (
+                time.time() + self.time_budget if self.time_budget else None
+            )
             self.expansions = 0
             while heap:
                 if self.expansions >= self.node_budget:
                     break
-                if time.time() >= self._deadline:
+                if self._deadline is not None and time.time() >= self._deadline:
                     break
                 _, _, node = heapq.heappop(heap)
                 if node.g > best_g.get(node.key, math.inf) + 1e-6:
@@ -472,9 +517,11 @@ class AStarPlayer(BasePlayer):
         faithful ``_aim_frames``/``_settle`` the executor prices with, over the
         same ``_view_for`` selector), then mirror the post-aim stance update so
         an intra-hop follow-up on the same tile reuses the bearing.  Returns the
-        frames spent."""
+        frames spent, and stashes the PRE-step body window ``_plan_step`` records."""
         self.st = st
         self._depth += 1
+        if self.audit_pred:
+            self._last_pbody = self._player_window()
         eye = self._settle_eye(verb, tile)
         view = self._view_for(tile)
         if view is None:
@@ -580,7 +627,7 @@ class AStarPlayer(BasePlayer):
                 strike = st.clone()
                 cost = self._charge(strike, "absorb", target)
                 if actions.absorb(strike, e):
-                    steps.append(("absorb", target))
+                    steps.append(self._plan_step("absorb", target, cost, GATE_BODY))
                     return self._node(node, strike, g + cost, steps)
                 self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
                 break  # keep the climb; the strike itself is what failed
@@ -592,13 +639,13 @@ class AStarPlayer(BasePlayer):
                     continue
             bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
             advanced = False
-            for tile, k in self._pick_hop(target):
+            for tile, k, window in self._pick_hop(target):
                 trial = st.clone()
                 self.st = trial
                 self.last_bearing = bearing
                 self.cursor = list(cursor)
                 self._depth = depth  # a rejected trial must not widen later margins
-                res = self._hop_exec(tile, k)
+                res = self._hop_exec(tile, k, window)
                 if res is None:
                     continue
                 # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
@@ -724,40 +771,48 @@ class AStarPlayer(BasePlayer):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)
-            cands.append(((sees, robot_eye, window), tile, k))
+            cands.append(((sees, robot_eye, window), tile, k, window))
         cands.sort(key=lambda c: c[0], reverse=True)
-        return [(t, k) for _, t, k in cands[:_TOP_HOPS]]
+        return [(t, k, w) for _, t, k, w in cands[:_TOP_HOPS]]
 
-    def _hop_exec(self, tile, k):
+    def _hop_exec(self, tile, k, window):
         """Build ``k`` boulders + a robot on ``tile`` and transfer up (``self.st``
         is the working clone); ``(g_delta, steps)`` or ``None`` if unsafe or
-        infeasible.  The lone-hop builder shared by every pursuit macro."""
+        infeasible.  The lone-hop builder shared by every pursuit macro.  ``window``
+        is the tile window ``_pick_hop`` gated the hop on, recorded on each step."""
         st = self.st
         g = 0.0
         steps = []
         for _ in range(k):
             if not self._can_build(st, tile, mm.T_BOULDER):
                 return None
-            g += self._charge(st, "boulder", tile)
+            cost = self._charge(st, "boulder", tile)
+            g += cost
             actions.create(st, mm.T_BOULDER, tile)
-            steps.append(("boulder", tile))
+            steps.append(self._plan_step("boulder", tile, cost, GATE_TILE, window))
         if not self._can_build(st, tile, mm.T_ROBOT):
             return None
-        g += self._charge(st, "robot", tile)
+        cost = self._charge(st, "robot", tile)
+        g += cost
         if actions.create(st, mm.T_ROBOT, tile) is None:
             return None
-        steps.append(("robot", tile))
+        steps.append(self._plan_step("robot", tile, cost, GATE_TILE, window))
         top = terrain.top_object(st, *tile)
         if not threat.player_sees_tile(st, tile, st.player):
             return None
-        g += self._charge(st, "transfer", tile)
+        cost = self._charge(st, "transfer", tile)
+        g += cost
         if not actions.transfer(st, top) or actions.player_dead(st):
             return None
-        steps.append(("transfer", tile))
         # a body landed in a live full-sight cone is a trap unless a seer is absorbable from here
-        if not self._drain_gate(
-            "transfer", tile, budget=self._margin()
-        ) and not self._absorbable_here(st):
+        # (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
+        exposed = self._exposing_enemies(tile)
+        landed = self._gaze_window(tile, exposed=exposed)
+        steps.append(self._plan_step("transfer", tile, cost, GATE_TILE, landed))
+        gate_ok = (
+            not self._seen_now(exposed, full_only=True) and landed >= self._margin()
+        )
+        if not gate_ok and not self._absorbable_here(st):
             return None
         return g, steps
 
@@ -799,12 +854,15 @@ class AStarPlayer(BasePlayer):
         if view is None:
             return None
         budget = self._aim_frames(view) + self._settle("absorb", view)
-        if self._hot(budget, self._player_window(exclude=e)):
+        window = self._player_window(exclude=e)
+        if self._hot(budget, window):
             return None  # the player's body would be drained before the absorb fires
-        g = node.g + self._charge(st, "absorb", tile)
+        cost = self._charge(st, "absorb", tile)
+        g = node.g + cost
         if not actions.absorb(st, e):
             return None
-        return self._node(node, st, g, [("absorb", tile)])
+        step = self._plan_step("absorb", tile, cost, GATE_BODY, window)
+        return self._node(node, st, g, [step])
 
     def _reclaim_one(self, st, pedestal_only=False):
         """Absorb ONE landable spent pedestal/shell (base <= eye), or a tree when
@@ -823,7 +881,7 @@ class AStarPlayer(BasePlayer):
             g = self._charge(st, "absorb", tile)
             if not actions.absorb(st, terrain.top_object(st, *tile)):
                 return None
-            return g, ("absorb", tile)
+            return g, self._plan_step("absorb", tile, g, GATE_BODY)
         return None
 
     def _c_reclaim(self, node):
@@ -848,21 +906,35 @@ class AStarPlayer(BasePlayer):
         st = self._begin(node)
         ptile = st.platform_xy
         g = node.g
+        steps = []
         if not actions.on_platform(st):
             if ptile not in self._landset(st):
                 return None
-            g += self._charge(st, "robot", ptile)
+            cost = self._charge(st, "robot", ptile)
+            g += cost
             slot = actions.create(st, mm.T_ROBOT, ptile)
             if slot is None:
                 return None
-            g += self._charge(st, "transfer", ptile)
+            steps.append(
+                self._plan_step(
+                    "robot", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+                )
+            )
+            cost = self._charge(st, "transfer", ptile)
+            g += cost
             if not actions.transfer(st, slot):
                 return None
-        g += self._charge(st, "hyperspace", ptile)
+            steps.append(
+                self._plan_step(
+                    "transfer", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+                )
+            )
+        cost = self._charge(st, "hyperspace", ptile)
+        g += cost
         actions.hyperspace(st)
         if not actions.won(st):
             return None
-        steps = [("robot", ptile), ("transfer", ptile), ("hyperspace", ptile)]
+        steps.append(self._plan_step("hyperspace", ptile, cost, GATE_TILE, math.inf))
         return self._node(node, st, g, steps)
 
 
@@ -870,7 +942,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("landscape", nargs="?", type=int, default=66)
     parser.add_argument("--max-actions", type=int, default=400)
-    parser.add_argument("--time-budget", type=float, default=60.0)
+    parser.add_argument(
+        "--time-budget",
+        type=float,
+        default=None,
+        help="wall-clock search cut (s); off by default -- setting it makes the plan depend on host load",
+    )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--audit",

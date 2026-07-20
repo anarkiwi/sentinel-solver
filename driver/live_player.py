@@ -231,11 +231,11 @@ class LiveMixin:
         self._observe()
         self._log("hyperspace", self.st.player_xy())
 
-    def _plan_step_stale(self, verb, tile, view):
+    def _plan_step_stale(self, step, view):
         """Re-validate the next planned step against the LIVE enemy phase, on the
-        window the PLAN gated it with: the body window for an absorb (``_c_absorb`` /
-        ``_reclaim_one`` via ``_hot``), the target tile's for a build or transfer
-        (``_pick_hop`` / ``_hop_exec`` via ``_drain_gate``).
+        window the PLAN gated it with -- ``step.gate``, carried by the search: the body
+        window for an absorb (``_c_absorb`` / ``_reclaim_one`` via ``_hot``), the target
+        tile's for a build or transfer (``_pick_hop`` / ``_hop_exec`` via ``_drain_gate``).
 
         Re-deriving a stricter rule here instead -- the body window for every verb --
         refuses steps the plan never promised and cannot re-plan away, because
@@ -243,15 +243,24 @@ class LiveMixin:
         then on `boulder (0,25)`, and conceded the escape hyperspace that lost the
         run, at a point the offline line fires and survives.
 
+        The BUDGET stays priced from the LIVE view (not ``step.budget``): the executor
+        pays the live aim cost, so that is what the live window must cover.  The plan
+        supplies the rule, reality the price.
+
         The margin absorbs prediction error; it may not deadlock.  Once ``_restale``
         has waited on this same step (``_stale`` count > 1, so the enemy phase behind
         the earlier verdict is gone) and the RAW budget clears, the step proceeds."""
+        verb, tile = step.verb, step.tile
         budget = self._step_aim_frames(verb, view) + self._settle(
             verb, view, self._settle_eye(verb, tile)
         )
         margin_fn = getattr(self, "_margin", None)  # planner-only (greedy has none)
         margin = margin_fn(0) if margin_fn is not None else 0.0
-        window = self._player_window() if verb == "absorb" else self._gaze_window(tile)
+        window = (
+            self._player_window()
+            if step.gate == astar_player.GATE_BODY
+            else self._gaze_window(tile)
+        )
         if window >= budget + margin:
             return False
         stale = self._stale

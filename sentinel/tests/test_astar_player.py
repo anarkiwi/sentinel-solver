@@ -11,7 +11,7 @@ import pytest
 
 from sentinel import actions, enemies, memmap as mm, projector, terrain
 from sentinel.game import Game
-from sentinel.astar_player import AStarPlayer, _Node
+from sentinel.astar_player import AStarPlayer, GATE_BODY, GATE_TILE, PlanStep, _Node
 from sentinel.playerbase import SIGHTS_CENTRE
 
 _LANDSCAPE = 42  # player starts at (14,27), a down-look hollow adjacent to (13,27)
@@ -178,7 +178,7 @@ def test_pursuit_yields_partial_progress():
     climbs = [c for c in player._expand(root) if c.state.eye_z() > start_eye]
     assert climbs, "no child raises the eye: the pursuit discarded its whole climb"
     for c in climbs:
-        verbs = [v for v, _ in c.path]
+        verbs = [s.verb for s in c.path]
         assert "transfer" in verbs  # it is a climb, not a strike
         assert verbs[-1] != "absorb" or len(verbs) > 1
     assert not any(actions.won(c.state) for c in climbs)  # partial, not a solve
@@ -227,10 +227,11 @@ def test_stale_step_prefers_a_survivable_replan_over_escape_hyperspace():
     player._hyperspace = lambda: calls.append("hyperspace")
     player._wait = lambda: calls.append("wait")
 
-    player._search = lambda margin_k=None: [("absorb", (1, 1))]
+    found = [PlanStep("absorb", (1, 1), 300.0, GATE_BODY, math.inf, math.inf)]
+    player._search = lambda margin_k=None: found
     player._defend = lambda: calls.append("defend") or True
     player._restale()
-    assert player.plan == [("absorb", (1, 1))] and player._pi == 0 and not calls
+    assert player.plan == found and player._pi == 0 and not calls
 
     searches = []
     player._search = lambda margin_k=None: searches.append(margin_k) or None
@@ -252,7 +253,10 @@ def test_react_takes_the_plans_own_transfer_before_conceding_a_hyperspace():
     the ladder falls through to a hyperspace -- one keystroke short of the climb, the
     ls42 live loss."""
     player = AStarPlayer(Game.new(_LS42), time_budget=0.01, node_budget=1)
-    player.plan = [("transfer", (9, 26)), ("absorb", (13, 29))]
+    player.plan = [
+        PlanStep("transfer", (9, 26), 300.0, GATE_TILE, math.inf, math.inf),
+        PlanStep("absorb", (13, 29), 300.0, GATE_BODY, math.inf, math.inf),
+    ]
     player._pi = 0
     player._player_window = lambda exclude=None: 0.0  # hot: react must deviate
     player._defend = lambda: False  # no counterattack, no window-ranked escape
