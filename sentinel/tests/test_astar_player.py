@@ -11,10 +11,11 @@ import pytest
 
 from sentinel import actions, enemies, memmap as mm, projector, terrain
 from sentinel.game import Game
-from sentinel.astar_player import AStarPlayer
+from sentinel.astar_player import AStarPlayer, _Node
 from sentinel.playerbase import SIGHTS_CENTRE
 
 _LANDSCAPE = 42  # player starts at (14,27), a down-look hollow adjacent to (13,27)
+_LS42 = 66  # what typing "0042" seeds: landscape_from_digits reads the code as HEX
 
 
 def _reset_stance(player, st):
@@ -162,6 +163,38 @@ def test_macro_search_wins_landscape0_without_breaches():
     assert not player.breaches, f"body left in a live cone: {player.breaches}"
     verbs = {rec[1] for rec in player.trace}
     assert "absorb" in verbs and "hyperspace" in verbs
+
+
+def test_pursuit_yields_partial_progress():
+    """A pursuit that cannot reach its enemy returns the climb it DID make.  Returning
+    ``None`` there discards every step before the first unsurvivable one; on ls42
+    (internal 66) it left the root with no child that raises the eye at all --
+    `plan (2 nodes): None`, 0 actions."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
+    root.key = player._key(root.state)
+    player._deadline = math.inf
+    start_eye = root.state.eye_z()
+    climbs = [c for c in player._expand(root) if c.state.eye_z() > start_eye]
+    assert climbs, "no child raises the eye: the pursuit discarded its whole climb"
+    for c in climbs:
+        verbs = [v for v, _ in c.path]
+        assert "transfer" in verbs  # it is a climb, not a strike
+        assert verbs[-1] != "absorb" or len(verbs) > 1
+    assert not any(actions.won(c.state) for c in climbs)  # partial, not a solve
+
+
+def test_macro_search_wins_ls42_internal_66():
+    """The board the live driver plays when `0042` is typed (hex -> internal 66).  It is
+    NOT ``_LANDSCAPE`` (42), which is a different board with no slot overlap."""
+    game = Game.new(_LS42)
+    # generous budget on purpose: the search's ONLY nondeterminism is its wall-clock
+    # deadline, and this is a "does the planner find the line" assertion, not a
+    # "in N seconds" one -- it wins in ~25 s idle, several times that under -n auto.
+    player = AStarPlayer(game, audit=True, time_budget=600.0)
+    won = player.run(max_actions=80)
+    assert won, f"lost ls42 in {len(player.trace)} actions, energy {game.energy}"
+    assert not player.breaches, f"body left in a live cone: {player.breaches}"
 
 
 def test_margin_rejects_a_step_inside_the_cost_interval():

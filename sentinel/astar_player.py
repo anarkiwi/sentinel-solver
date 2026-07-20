@@ -60,10 +60,12 @@ _HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): n
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
+_MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
+_NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
 
 
 class _Node:
@@ -89,7 +91,7 @@ class AStarPlayer(BasePlayer):
         verbose=False,
         audit=False,
         node_budget=200000,
-        time_budget=30.0,
+        time_budget=60.0,  # cold ls42 (internal 66) search measures ~25 s; 30 s had none
         weight=1.4,
     ):
         super().__init__(game, verbose=verbose, audit=audit)
@@ -102,6 +104,7 @@ class AStarPlayer(BasePlayer):
         self._deadline = None  # per-search wall-clock deadline (set at each _search)
         self._land_memo = {}  # search: coarse landable tile-sets
         self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
+        self._cone_memo = {}  # per-(sig, tile) targeted band march results
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
@@ -283,7 +286,7 @@ class AStarPlayer(BasePlayer):
         ``_land_memo``.  ``los.landable_view(st, tile, v_band=False)`` IS a lookup
         into exactly this dict, so one sweep per distinct sig serves every tile at
         that stance; below-eye tiles miss it and take the targeted band fallback."""
-        sig = bytes(self.st.mem[0x0400:0x0800]) + bytes([self.st.player])
+        sig = self._sig()
         primary = self._view_memo.get(sig)
         if primary is None:
             primary = los._landable_sweep(
@@ -292,17 +295,28 @@ class AStarPlayer(BasePlayer):
             self._view_memo[sig] = primary
         return primary
 
+    def _sig(self):
+        """Stance signature: object/terrain map + observer -- what every landability
+        answer is a pure function of (enemy facings never enter it)."""
+        return bytes(self.st.mem[0x0400:0x0800]) + bytes([self.st.player])
+
     def _view_for(self, tile):
         """Cheapest keyboard view landing ``tile`` (execution only): memoized
         F5-plane lookup, targeted single-tile band march as fallback.  The band
         fallback marches only the narrow cone of rays that can land on ``tile``
         (:func:`los.landable_view_targeted`) -- bit-identical to the full-board
         ``landable_views`` sweep, so ``_c_reclaim``'s per-iteration terrain sigs
-        each cost one cone instead of a whole-board re-sweep."""
+        each cost one cone instead of a whole-board re-sweep.  The cone is memoized
+        per (sig, tile) too: the same below-eye tile is re-priced by every trial hop,
+        probe and re-search at a stance, and the march was the search's top cost."""
         tile = tuple(tile)
         view = self._views_for_sig().get(tile)
         if view is None and self._sees_tile(tile):
-            view = los.landable_view_targeted(self.st, tile)
+            key = (self._sig(), tile)
+            view = self._cone_memo.get(key, _NO_VIEW)
+            if view is _NO_VIEW:
+                view = los.landable_view_targeted(self.st, tile)
+                self._cone_memo[key] = view
         return view
 
     # ----------------------------------------------------------------- search
@@ -521,9 +535,13 @@ class AStarPlayer(BasePlayer):
 
     def _c_pursue(self, node, e):
         """Directed climb to enemy ``e``: chain minimal pedestal hops (reclaiming
-        spent ones for energy) until ``e`` is landable, then absorb it -- ONE
-        child node.  Each sub-action is charged the real aim+settle via
-        ``_charge``; ``None`` if the climb cannot safely reach ``e``."""
+        spent ones for energy) until ``e`` is landable, then absorb it.  Each
+        sub-action is charged the real aim+settle via ``_charge``.
+
+        PARTIAL PROGRESS: a chain that stalls short of ``e`` still returns the hops
+        it did make.  Returning ``None`` there discarded every good step before the
+        first unsurvivable one and left the root with no child generator at all --
+        the search then reports 0 actions.  ``None`` only when nothing was done."""
         st = self._begin(node)
         g = node.g
         steps = []
@@ -532,12 +550,19 @@ class AStarPlayer(BasePlayer):
             self.st = st
             if target in self._landset(st) and terrain.top_object(st, *target) == e:
                 if not actions.can_absorb(st, e):
-                    return None
-                g += self._charge(st, "absorb", target)
-                if not actions.absorb(st, e):
-                    return None
-                steps.append(("absorb", target))
-                return self._node(node, st, g, steps)
+                    break
+                bearing, cursor, depth = (
+                    self.last_bearing,
+                    list(self.cursor),
+                    self._depth,
+                )
+                strike = st.clone()
+                cost = self._charge(strike, "absorb", target)
+                if actions.absorb(strike, e):
+                    steps.append(("absorb", target))
+                    return self._node(node, strike, g + cost, steps)
+                self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+                break  # keep the climb; the strike itself is what failed
             if st.energy < HOP_COST + self._reserve():
                 got = self._reclaim_one(st)
                 if got is not None:
@@ -571,19 +596,52 @@ class AStarPlayer(BasePlayer):
                 steps.extend(r[1] for r in recycled)
                 break
             if not advanced:
-                return None
-        return None
+                self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+                break
+        return self._node(node, st, g, steps) if steps else None
 
     def _climb_continues(self, st, target, e):
         """Whether the pursuit can still act after landing on ``st``: the target is
-        landable now, or another hop is affordable. Reclaim needs the abandoned stack
-        keyboard-AIMABLE from the landing (``_reclaim_one`` -> ``_view_for``), stronger
-        than the sight ``_pick_hop`` ranks on, so a landing can recycle nothing and --
-        a k=1 hop costing HOP_COST over the reserve, a tree returning 1 -- strand."""
+        landable now, another hop is affordable, or -- energy short -- reclaims
+        make one affordable.  Reclaim needs the abandoned stack keyboard-AIMABLE
+        from the landing (``_reclaim_one`` -> ``_view_for``), stronger than the sight
+        ``_pick_hop`` ranks on, so a landing can recycle nothing and -- a k=1 hop
+        costing HOP_COST over the reserve, a tree returning 1 -- strand.
+
+        The reclaim arm mirrors the pursuit loop's OWN next iteration: without it a
+        landing that lands one hop short of affordable is called stranded, which is
+        every landing on ls42's climb above eye 7.375 (a k=1 hop leaves E=6 against
+        the 8 the next hop needs) and is why the whole pursuit returned nothing.
+
+        The arm SIMULATES the reclaims -- a bound on recoverable energy accepts
+        landings whose stack is not aimable from them, and the pursuit then commits
+        to one and dies there -- but re-ranks against the landing's own tile set
+        rather than re-sweeping it per absorbed object (that sweep dominates the
+        expansion profile).  Absorbing a spent pedestal below the eye only uncovers
+        tiles, so the frozen set is the conservative side."""
         self.st = st
         if target in self._landset(st) and terrain.top_object(st, *target) == e:
             return True
-        return bool(self._pick_hop(target))
+        if self._pick_hop(target):
+            return True
+        if st.energy >= HOP_COST + self._reserve():
+            return False  # affordable already: no reclaim can add a hop
+        landset = self._landset(st)
+        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
+        probe = st.clone()
+        self.st = probe
+        ok = False
+        for _ in range(_MAX_RECLAIM):
+            if self._reclaim_one(probe) is None:
+                break  # nothing left to recycle from here
+            if self._pick_hop(target, landset=landset):
+                ok = True
+                break
+            if probe.energy >= HOP_COST + self._reserve():
+                break  # energy is the only budget filter: more of it adds nothing
+        self.st = st
+        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+        return ok
 
     def _record_hop_gate(self, tile, k, exposed, tile_ok):
         """SHADOW record of the body-window gate: what it WOULD decide, deciding nothing.
@@ -612,16 +670,18 @@ class AStarPlayer(BasePlayer):
             }
         )
 
-    def _pick_hop(self, target):
+    def _pick_hop(self, target, landset=None):
         """Ranked pedestal builds directed at ``target``: prefer tiles that gain
         LOS on it, then raise the eye, then the widest window -- gated on the
         rotation window (>= a full hop) and never under a live cone (the search's
-        placement safety).  The pursuit tries them in order until one hop lands."""
+        placement safety).  The pursuit tries them in order until one hop lands.
+        ``landset`` overrides the tile set (the frozen one ``_climb_continues``
+        probes a refuelled stance against)."""
         st = self.st
         my_eye = st.eye_z()
         reserve = self._reserve()
         cands = []
-        for tile in self._landset(st):
+        for tile in self._landset(st) if landset is None else landset:
             base = self._tile_base(st, tile)
             if base is None:
                 continue
@@ -776,7 +836,7 @@ class AStarPlayer(BasePlayer):
         st = self._begin(node)
         g = node.g
         steps = []
-        for _ in range(8):
+        for _ in range(_MAX_RECLAIM):
             got = self._reclaim_one(st)
             if got is None:
                 break
@@ -814,7 +874,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("landscape", nargs="?", type=int, default=66)
     parser.add_argument("--max-actions", type=int, default=400)
-    parser.add_argument("--time-budget", type=float, default=30.0)
+    parser.add_argument("--time-budget", type=float, default=60.0)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
         "--audit",

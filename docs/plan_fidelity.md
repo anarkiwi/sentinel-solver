@@ -1,7 +1,9 @@
 # Plan-vs-live fidelity
 
-State: **the clocks are correct; the players are broken.** The enemy simulation now
-tracks the real game exactly, and no player can find a line under it.
+State: **the clocks are correct; the A\* player wins ls42 offline.** The enemy simulation
+tracks the real game exactly, and under it `sentinel.astar_player` now plans and executes
+a win on internal 66 (the board typed `0042`) — 41 actions, 11263 f, eye 11.875 on the
+plinth, the human line's height. The reactive greedy player still loses both boards.
 
 ## READ FIRST: "landscape 42" is two boards
 
@@ -71,38 +73,48 @@ Per-notch pan redraw is derived rather than fitted (`sentinel/pancost.py`,
 [render_cost.md](render_cost.md)): tile selection byte-exact on all 288 golden notches,
 rms 18.3 → 6.4 f.
 
-## Players: broken
+## Players: the ls42 climb, fixed
 
-With the clocks correct, **live ls42 takes 0 actions** — `plan (2 nodes): None`
-throughout. Correcting the freeze removed roughly one action's worth of free frozen time
-the search had been planning against. Every line this planner has found on this board was
-priced against a world that started later than it really does.
+Offline (`python -m sentinel.astar_player 66`): **WON in 41 actions / 11263 f, energy 11**.
+Landscapes 0 and internal 42 still win (26 and 29 actions). The reactive player is
+untouched and still loses (17 actions on 66, 12 on 42).
 
-Before the clock fixes it reached 12 actions and lost the same way every run: the climb to
-eye 7.375, then `boulder (1,24)`, then a forced hyperspace back to eye 5.875 and death at
-energy 0.
+The 0-action state was **two** defects in the pursuit macro, both in the same place:
 
-Three player defects are measured and still open:
+1. **`_c_pursue` was all-or-nothing.** It chained hops and returned ONE child or `None`,
+   so a chain that stalled short of its enemy discarded the ten good steps before it and
+   left the root with no child generator. It now returns the node it reached — the search
+   resumes from a stalled climb instead of losing it.
+2. **`_climb_continues` did not model the loop's own reclaim.** It called a landing
+   stranded whenever no further hop was affordable *at that instant*, but the pursuit's
+   next iteration reclaims first when energy is short. On this board a k=1 hop leaves
+   E=6 against the 8 the next needs, so **every** landing above eye 7.375 was rejected —
+   the exact ceiling the planner sat at. It now simulates the reclaim chain (capped at
+   `_MAX_RECLAIM`, short-circuited once energy stops being the binding filter).
 
-1. **The hop gates the wrong window.** `_pick_hop` drain-gates on `_gaze_window(tile)` —
-   the tile being built on, 7983 f and predicted to within 2% — while the player's own
-   body window collapses 490 → 60 f standing on its old tile for the ~750 f the macro
-   takes. Each step passes its own gate (boulder needs 398 f, body has 655 f) while the
-   3-step macro does not. Shadow instrumentation (`AStarPlayer._hop_audit = []`, records
-   without enforcing) shows the body gate would reject only 44 of 205 candidates, all at
-   one depth, all short by the same 124 f — it is affordable, not the blocker.
-2. **`_c_pursue` is all-or-nothing.** It chains hops and returns ONE child or `None`, so a
-   single unsurvivable hop discards the ten good steps before it and the root loses its
-   only child generator. Enforcing the body gate therefore yields 0 actions; leaving it
-   off yields a plan that dies executing it. Same defect either way. The fix is partial
-   progress from `_c_pursue`.
-3. **The human's line is pruned by the beam.** Replaying the human ls42 (internal 66) line
-   through the model matches its energy curve exactly for 16 steps and reaches eye 11.875,
-   the Sentinel's plinth, against the planner's ceiling of 7.375 — the model can represent
-   it. But the first FOUR hops, (9,30), (13,26), (2,24), (5,22), are landable and pass
-   every filter yet never enter `_pick_hop`'s top 8: they are ranked out by `_TOP_HOPS`.
-   The key `(sees, robot_eye, window)` maximises eye gained per hop; the human raises the
-   eye by exactly +0.5 each time, on a staircase. Hops 5-7 do appear, at ranks 2, 4, 1.
+Simulating the reclaims rather than bounding the recoverable energy is load-bearing: an
+energy bound accepts landings whose abandoned stack is not keyboard-aimable from them, and
+the pursuit then commits to one and dies there (measured: back to 0 actions).
+
+Search cost fell out of the same work — a cold ls66 search is ~25 s, warm ~2.5 s, against
+~30 s / ~15 s before:
+
+- `_view_for`'s targeted band march is memoized per `(sig, tile)`, not just per sig. It was
+  the single largest cost (130 marches, 9.7 s of a 14.7 s warm search); every trial hop,
+  strand probe and re-search at a stance re-marched the same below-eye tiles.
+- The strand probe re-ranks against the landing's own tile set instead of re-sweeping the
+  board per absorbed object (`_landable_batch` is the other half of the profile).
+
+`time_budget` defaults moved 30 → 60 s. Think time is free live (`bm.auto_resume = False`:
+the world runs only in deliberate run windows), and at 30 s the cold search was a coin
+flip on a loaded machine — the losing side executes a truncated line and dies at eye 7.375.
+
+Still open on the ranker: **the human's line is pruned by the beam.** Replaying the human
+ls42 (internal 66) line matches its energy curve exactly for 16 steps. Its first FOUR hops,
+(9,30), (13,26), (2,24), (5,22), are landable and pass every filter yet never enter
+`_pick_hop`'s top 8: the key `(sees, robot_eye, window)` maximises eye gained per hop while
+the human raises the eye by exactly +0.5 each time, on a staircase. We reach the same
+plinth by a different route, so this is now a cost question, not a feasibility one.
 
 Aim cost is **angular, not spatial**: over the 23 landable tiles at the ls42 start,
 `corr(aim, manhattan distance)` is **−0.54** (farther is cheaper — far terrain compresses
@@ -130,7 +142,20 @@ bearing on every one is `previous ^ $80`, the new body inheriting `creator_angle
 
 ## Open, ranked
 
-1. **`_c_pursue` partial progress** — unblocks the 0-action state and both gate variants.
+1. **The live ls42 run: 14 actions, then an unrecoverable hyperspace.** The live A* now
+   plans the same 42-step win from live memory (`plan (7 nodes)`) and executes 13 steps of
+   it, through two transfers to eye 7.375 (`renders/player_ls42_astar_win.avi`, a LOSS).
+   It dies in two stages:
+   - **Drift makes a planned window stale.** Charged exceeds measured on nearly every
+     step (355/347, 316/270, 205/164, 331/289, ...), ~+250 f over 13 steps, so the live
+     enemy phase lags the plan. At p14 the `robot (2,24)` step reads a live gaze window of
+     30 f against a 179 f budget, re-plans, and concedes an escape hyperspace. The
+     `_margin` covers one step's sigma (24 f), not accumulated drift.
+   - **Post-hyperspace the root has no children at all.** Landed at eye 5.875 with E=6:
+     under `HOP_COST + reserve` so `_c_pursue` must reclaim first, nothing is reclaimable
+     from there, no enemy is landable — `plan (1 nodes): None` until it is drained. The
+     search has no hyperspace-as-relocation generator and cannot get one (the landing tile
+     is `$1224` PRNG, see Limits), so the only fix is not entering that state.
 2. **`_pick_hop` rank order and beam width** — the human's line is generated and then
    discarded. Two cheap offline experiments: rank by minimum sufficient rise rather than
    maximum, and widen `_TOP_HOPS`.
@@ -145,6 +170,14 @@ bearing on every one is `previous ^ $80`, the new body inheriting `creator_angle
    loop. Aborted 1 live run in 5 before the conversion; confirm it can no longer fire.
 
 ## Disproved (do not resurrect)
+
+- "A bound on recoverable energy can replace the strand probe's simulated reclaims." It
+  accepts landings whose abandoned stack is not keyboard-aimable from them; the pursuit
+  commits to the first such landing and dead-ends on it. Back to 0 actions.
+- "The climb ranker only needs the $F5 up/level pitch plane, so its sweep can drop the
+  other 26." A pedestal is aimed at by its TILE, which is routinely *below* the eye even
+  when the robot on top of it will not be. Restricting the plane empties `_pick_hop` at
+  the first hop.
 
 - "Transfer settle over-charges systematically." It was a 6.0 s wall-clock `run_until_pc`
   in `tap_action` clipping the measurement at ~300 frames.

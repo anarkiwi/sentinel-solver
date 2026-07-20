@@ -21,7 +21,8 @@ Landing coordinates of PRNG-driven hyperspace/meanie moves are never read.
   and cursor. **Dedup key** (`_key`): player tile + eye, energy, remaining enemies
   (bucketed facing), built boulder/robot stacks.
 - **Frontier**: `f = g + weight * h`, `weight = 1.4`; `node_budget` 200000 expansions,
-  `time_budget` 30 s per search (each replan gets its own window).
+  `time_budget` 60 s per search (each replan gets its own window; a cold ls42 search
+  measures ~25 s, a warm one ~2.5 s, and think time is free live).
 
 ## Candidate generators (`_expand`)
 
@@ -33,7 +34,12 @@ about the number of enemies, not the number of hops.
   last, the `$1B8E` lock).
 - `_c_pursue` — one child per not-yet-landable living enemy (nearest first, `_TOP_TARGETS`):
   directed climb via `_pick_hop`/`_hop_exec`, interleaving `_reclaim_one` when short, until
-  the enemy is landable, then absorb.
+  the enemy is landable, then absorb. A climb that stalls short still returns the node it
+  reached (**partial progress**) — returning `None` there discards every step before the
+  first unsurvivable one, and on ls42 that left the root with no children at all.
+  `_climb_continues` decides a landing is not stranded when the pursuit's own next
+  iteration could reclaim its way to an affordable hop, simulating that chain (up to
+  `_MAX_RECLAIM`) against the landing's frozen tile set.
 - `_c_reclaim` — absorb landable own boulders/shells (base <= eye) and, when short, trees;
   the player stays put so its own window bounds the aim.
 - `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace.
