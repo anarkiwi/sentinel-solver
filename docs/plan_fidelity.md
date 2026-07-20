@@ -200,6 +200,37 @@ recycles and far builds costs more than the human's consistent staircase.
 So the search never had the human's line to reject. Beam width and rank order are the
 lever, ahead of any further work on gates, margins or frame cost.
 
+## The enemy PHASE is off by 243 f -- 10x the frame-cost error I was chasing
+
+`driver/plan_audit.py` on the live ls42 (internal 66) run, plan's forward model vs the
+live board at every fired step:
+
+| | value |
+|---|---|
+| plan-vs-live window optimism | **mean +243 f**, min +165, max +333, **always positive** |
+| identical on tile window and body window | **11/11 rows** -> ONE shared phase error |
+| whole-step charged-vs-measured rms | 24.1 f |
+| cumulative charged-measured over the 11 steps | -61 f |
+| `_STEP_SIGMA` margin at depth 10 | 80 f |
+
+The model believes it has **243 f more time than it does**, on every step, in the same
+direction, from the first action onward. That is **32% of a 749 f rotation** and 3-14x the
+safety margin -- it swamps the margin completely, so no choice of sigma can cover it.
+
+It is NOT frame miscounting: cumulative charged-vs-measured is only -61 f over the same
+11 steps, while the phase error is already +292 f at step 1. The error is roughly constant
+rather than growing, which points at an initial-condition/phase problem in the enemy clock,
+not at a rate error -- the live rotation intervals themselves match `ROT_PERIOD_FRAMES`.
+
+A second signal in the same data: the model keeps its two enemies locked exactly 8 cooldown
+units apart for the whole run, while the live pair drifts (8 -> 9 -> 27). The model's
+enemies rotate in lockstep; the real ones do not.
+
+This subsumes the earlier "gate uses the wrong window" finding. The gate is on the wrong
+window AND the window it reads is 243 f optimistic. Fix the phase before any further
+gate, margin or frame-cost work: every gate in the planner is a comparison against a
+number that is systematically wrong by a third of a rotation.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled
