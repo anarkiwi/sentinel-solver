@@ -33,7 +33,7 @@ def wait_for_load(bm, log=print, total=80.0, poll=2.0):
                 return True
         except Exception:
             pass
-        time.sleep(poll)
+        time.sleep(poll)  # sleep-ok: tape-loader poll interval, no game code resident
     return False
 
 
@@ -89,19 +89,39 @@ def save_boot_snapshot_if_missing(bm, renders, log=print):
         return None
 
 
-def kill_stale():
-    """Remove any leftover asid-vice container that may still hold port 6502 (a
-    SIGKILLed driver process can orphan a detached --rm container)."""
+IMAGE = "anarkiwi/asid-vice:latest"
+HOST_BINMON_PORT = 0  # docker picks a free host port (concurrent runs must not contend for 6502); the driver connects to the container BRIDGE IP, never the host mapping
+
+
+def own_filter():
+    """docker filter selecting only containers THIS process created: ViceContainer
+    auto-names them ``asid-vice-<pid>-<ns>``, so the pid scopes the sweep."""
+    return ["--filter", f"name=^asid-vice-{os.getpid()}-"]
+
+
+def stale_filter():
+    """Teardown scope. Own containers only -- a blanket ``ancestor=`` sweep force-removes
+    a CONCURRENT driver's healthy container. VICE_REAP_ORPHANS=1 opts into reaping every
+    asid-vice container (for a host with no other run in flight)."""
+    if os.environ.get("VICE_REAP_ORPHANS") == "1":
+        return ["--filter", f"ancestor={IMAGE}"]
+    return own_filter()
+
+
+def kill_stale(log=print):
+    """Remove leftover asid-vice containers in scope (see :func:`stale_filter`) that a
+    SIGKILLed driver process may have orphaned."""
     try:
         ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=anarkiwi/asid-vice:latest"],
+            ["docker", "ps", "-aq", *stale_filter()],
             capture_output=True,
             text=True,
         ).stdout.split()
         for cid in ids:
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
         if ids:
-            time.sleep(1.5)
+            log(f"  removed {len(ids)} stale container(s)")
+            time.sleep(1.5)  # sleep-ok: docker rm teardown, outside the machine
     except Exception:
         pass
 
@@ -148,10 +168,11 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
             ],
             warp=True,
             silent=True,
+            binmon_port=HOST_BINMON_PORT,
         )
         try:
             container.start()
-            time.sleep(2)  # let docker assign the container its bridge IP
+            time.sleep(2)  # sleep-ok: docker bridge IP assignment, no PC exists
             # host: env override, else container bridge IP (host -p unreachable here), else loopback
             host = (
                 os.environ.get("BINMON_HOST")
@@ -177,5 +198,5 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
             container.stop()
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(2)  # sleep-ok: container relaunch backoff, no machine to poll
     raise RuntimeError(f"boot_loaded failed after {attempts} attempts (last={last})")

@@ -39,9 +39,9 @@ Per-phase frame counts, each cited to the ROM:
 
   * REDRAW: ``plot_world`` is a single blocking pass whose cost scales with the
     summed polygon EDGES of the objects in view; the raster IRQ keeps ticking
-    cooldowns while it runs.  The per-edge term (STEPS_PER_EDGE) was validated
-    against the py65 renderer and is a minor, scene-scaling correction on top of
-    the base terrain redraw.
+    cooldowns while it runs.  The per-edge term (STEPS_PER_EDGE) is FITTED -- no
+    fixture pins it -- and is a minor scene-scaling correction on top of the base
+    terrain redraw.
 
 Caveat: DITHER_FRAMES and REDRAW_FRAMES are py65 foreground cycle-counts (no
 raster-IRQ steal), so they are ~5-15% lower bounds; TUNE_FRAMES and the pan scroll
@@ -78,8 +78,7 @@ VIEWPOINT_REPLOT_FRAMES = float(
 # Post-create/absorb scene replot after the dither loop; VICE ~44 (vs incremental REDRAW 5).
 POST_ACTION_REPLOT_FRAMES = float(os.environ.get("POST_ACTION_REPLOT_FRAMES", "44"))
 
-# Redraw ticks per rasterised edge (frames/edge from the py65 plot_world
-# measurement, * FRAME_TICKS): a minor scene-scaling correction. Validated.
+# Redraw ticks per rasterised edge (* FRAME_TICKS): a minor scene-scaling correction. FITTED: no fixture pins it.
 STEPS_PER_EDGE = float(os.environ.get("STEPS_PER_EDGE", "0.02"))
 
 # Half-width of the on-screen field of view in compass units: the ROM reloads the
@@ -148,20 +147,25 @@ def visible_edges(mem, view):
     return total
 
 
-def action_rounds(mem, verb, view, stacked=False):
-    """Enemy-round (``enemies.step``) cost an action costs AFTER the aim pan: the
-    game-intrinsic per-verb settle, plus the scene redraw term.  STACK_CREATE is
-    ROM-zero (the stacked-create path is byte-identical) but still added when set,
-    for callers that want to model a VICE-measured surcharge.  The aim itself is
-    priced separately from the keyboard-scroll cadence."""
-    if verb == "transfer" and view and view.get("h_angle") is not None:
-        # Area-based plot_world replot cost, scene-dependent ~306-420 frames.
-        settle = FRAME_TICKS * projector.viewpoint_replot_frames(State(mem), view)
+def action_rounds(mem, verb, stacked=False, observer=None):
+    """Frames an action costs after the aim pan: the per-verb settle, identical to
+    ``playerbase._settle``.  No ``STEPS_PER_EDGE * visible_edges`` on top -- that
+    one-``plot_world`` scene scaling is already inside POST_ACTION_REPLOT_FRAMES
+    (create/absorb) and inside ``render_cost``'s object base (transfer)."""
+    if verb == "transfer":
+        # post-transfer eye ($0C63 moves before $35C3/$35C6), at its OWN bearing ($1BE0)
+        state = State(mem)
+        eye = state.player if observer is None else observer
+        view = {
+            "h_angle": int(state.obj_h_angle[eye]),
+            "v_angle": int(state.obj_v_angle[eye]),
+        }
+        settle = FRAME_TICKS * projector.viewpoint_replot_frames(state, view, eye)
     else:
         settle = SETTLE.get(verb, SETTLE["absorb"])
     if verb == "create" and stacked:
         settle += STACK_CREATE
-    return settle + STEPS_PER_EDGE * visible_edges(mem, view)
+    return settle
 
 
 def is_stacked(mem, tile):

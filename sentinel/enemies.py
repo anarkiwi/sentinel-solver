@@ -36,6 +36,8 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
+import os
+
 from sentinel import memmap as mm, relative, actions, terrain
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
@@ -49,6 +51,8 @@ UPDATE_COOLDOWN_MEANIE_MADE = 0x32  # $1869: 50 rounds after creating a meanie
 ROTATION_COOLDOWN_RELOAD = 0xC8  # $1813: 200 rounds after a rotation
 DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
+# update_enemies ($16B5) calls modelled per frame. The ROM's foreground loop makes only ~3 passes/frame (measured cursor $0090 decrements {2:27, 3:192, 4:79}), but each enemy's own $16E9 update_cd gate (reload 4) rate-limits it far harder than the cursor does, so considering every slot each frame reproduces the ROM's clock and facings exactly (400/400 frames) while a literal 3 does not.
+UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "8"))  # == CURSOR_SLOTS
 MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
 MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
@@ -542,23 +546,7 @@ def step(state):
 # ---------------------------------------------------------------------------
 # real-game frame cadence: update_game_loop $1289 + raster IRQ $9663 / scroll $3684
 # ---------------------------------------------------------------------------
-CURSOR_SLOTS = 8  # $0090 cycles 7->0: one cursor sweep considers every enemy slot once
-
-
-def _any_enemy_due(state):
-    """True if some enemy's update_cooldown has ticked below the stick threshold, so a
-    not-plotting update_enemies sweep would actually process it.  While every enemy is
-    still cooling ($16E9 skips them), a sweep only churns the cursor/PRNG (out of the lock
-    state), so it can be skipped -- the ~15x speedup that keeps the frame forecast fast.
-    """
-    mem = state.mem
-    for e in range(CURSOR_SLOTS):
-        if state.obj_flags[e] & 0x80:
-            continue
-        if state.obj_type[e] in mm.ENEMY_TYPES:
-            if mem[mm.ENEMIES_UPDATE_COOLDOWN + e] < COOLDOWN_STICK:
-                return True
-    return False
+CURSOR_SLOTS = 8  # $0090 cycles 7->0: a full cursor sweep considers every slot once
 
 
 def cooldown_frame(state):
@@ -578,26 +566,16 @@ def cooldown_frame(state):
 
 
 def advance_frame(state, plotting=False):
-    """Advance the world by ONE video frame.
+    """Advance the world by ONE video frame, faithful to the ROM cadence.
 
-    The ROM order within a frame is update_enemies (foreground $1289) THEN the
-    cooldown clock (raster IRQ $9663): the enemy sweep runs BEFORE that frame's
-    cooldown tick, so an enemy the tick makes due is acted on the NEXT frame, not the
-    same one.  Running :func:`cooldown_frame` first (the old order) fired a due enemy's
-    rotation one frame early -- the frame-locked instrument's first CORE divergence
-    (slot 0 facing $09C0 / rotation_cd $0C28 leading the ROM by one frame).  A full
-    8-slot cursor sweep lets every enemy already due at this frame act exactly once
-    (further sweeps are idempotent -- its update_cooldown was reloaded).
-
-    Validated against the live ROM: with the exact live frame count, the sentinel
-    facing, energy, objects, tiles and every cooldown reproduce the running game
-    byte-for-byte.  ``plotting`` gates the update_enemies spin per the ROM's
-    is_plotting path; the caller supplies the plot schedule (the live driver reads
-    $0CE4; a plot-independent caller runs the cooldown clock unconditionally)."""
-    if not plotting and _any_enemy_due(state):
-        for _ in range(CURSOR_SLOTS):
-            update_enemies(state)
+    The raster-IRQ cooldown tick ($9663/$1317) runs BEFORE the frame's foreground passes,
+    so an enemy the tick makes due rotates in the SAME frame, not the next one. Ticking
+    after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
+    """
     cooldown_frame(state)
+    if not plotting:
+        for _ in range(UPDATES_PER_FRAME):
+            update_enemies(state)
 
 
 def advance_frames(state, n_frames, plotting=False):

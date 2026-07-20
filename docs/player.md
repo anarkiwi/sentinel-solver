@@ -76,8 +76,9 @@ Every tile-targeted action resolves through the ROM aim oracle
 (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path): an action fires only on a
 keyboard-lattice view whose ray lands the target. Aim time is priced from the
 pan cadence (16-step scroll per ±8 bearing notch `$10EE`, 8-step per ±4 pitch
-notch `$1135`, u-turn `$1B2F` flip, 1px/frame cursor) and settle time from the
-dither/redraw frame counts (`sentinel/actioncost.py`); both advance the world
+notch `$1135`, u-turn `$1B2F` flip, 1px/frame cursor); each notch's own
+`plot_world` ($2625) and the post-action settle are both priced from the
+projector cost model ([render_cost.md](render_cost.md)). All advance the world
 before/after the action fires.
 
 Landability queries use one cheap primary-plane sweep per tick, falling back to
@@ -108,9 +109,8 @@ one enemy manageable compounds against four:
 - **Meanie pressure everywhere.** A meanie needs only a *partially* visible
   player and a fully-visible tree within 10 tiles (`$19A1`/`$19C3`). With four
   scanners and the board's trees concentrated on the low ground where the
-  player must start, the arm condition is satisfied on most low tiles — early
-  runs died to forced hyperspaces (3 energy each, death below 3, `$215F`)
-  before the drain economy even mattered.
+  player must start, the arm condition is satisfied on most low tiles, forcing
+  hyperspaces (3 energy each, death below 3, `$215F`).
 - **The energy economy decays under gaze.** Reclaiming the shell and pedestal
   a hop leaves behind (+3/+2) is what makes climbing affordable; here the
   abandoned bodies usually sit in someone's cone and are dismantled
@@ -124,15 +124,15 @@ one enemy manageable compounds against four:
   **counterattack**: being seen starts the seer's ~120-unit drain countdown
   (`$0C20`), not an instant loss — absorbs have no facing requirement and a
   u-turn costs one keystroke, so an absorbable seer whose tile is landable
-  inside its own countdown is absorbed instead of fled from. Fleeing was the
-  stall: it spent energy, reset nothing, and the circle remained.
+  inside its own countdown is absorbed instead of fled from (fleeing spends
+  energy and leaves the circle intact).
 
 With the counterattack tier (and transfers gated on the same danger basis as
 builds, so a harmless partial glimpse cannot orphan a fresh pedestal), the
-player now beats 0335 in the simulator — 295 actions, all four enemies
-cleared. The board remains the stress case: most of its length is spent
-waiting out four interleaved cones, and any regression in the time model or
-the invariant shows up here first.
+player beats 0335 in the simulator (295 actions, all four enemies cleared). It
+remains the stress case: most of its length is spent waiting out four
+interleaved cones, so any regression in the time model or the invariant shows up
+here first.
 
 ## Sim-vs-live verification (landscapes 0000 and 0042)
 
@@ -154,9 +154,20 @@ long reclaim aim, so an enemy rotates into view where it predicted safety).
 `measured` comes from the game's own per-frame accumulator ($1335 advances
 205/frame; 205^-1 = 5 mod 256 turns the delta into an exact frame count under
 256).  Paths still diverge at the tile level (identical prefix 7 actions on
-0000, 1 on 0042; shared strategic skeleton throughout): outcome-level agreement
-holds, trajectory-level agreement needs per-step frame parity — the residual
-per-step scatter and the 0000 over-charge are the open accounting items.
+0000, 1 on 0042; shared strategic skeleton throughout).
+
+**Live aim cost is outcome-determining.** Aim cost is the world frames that pass
+while lining up a move, so it sets how far every rotating enemy turns before the
+move lands; under-charging it places a body into a gaze the planner modelled as
+empty — an outcome flip, not a rounding detail. The 0042 regression is exactly
+that: the sim under-charged the long (13,27)→(5,30) reclaim aim, the enemy
+rotated further than modelled, and the body was drained where safety was
+predicted. The faithful charge is `_aim_frames(view) + _settle(verb, view)`
+(bearing/pitch pan + cursor travel + per-notch redraw priced from the scene by
+`pancost.notch_frames`; redraw and settle models in
+[render_cost.md](render_cost.md)), applied *before* advancing the
+enemies. Both the reactive player and the A* search
+([astar_player.md](astar_player.md)) charge this.
 
 ## Test
 

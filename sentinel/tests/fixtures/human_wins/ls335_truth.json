@@ -1,0 +1,3139 @@
+{
+ "fixture": "ls335.json",
+ "landscape": 821,
+ "entered_code": 335,
+ "source": "live asid-vice replay of the recorded human ACTION line",
+ "reproduced": 25,
+ "n_events": 168,
+ "won_at_step": null,
+ "divergence": null,
+ "steps": [
+  {
+   "i": 0,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    10,
+    19
+   ],
+   "player": {
+    "slot": 62,
+    "x": 11,
+    "y": 17,
+    "z": 3,
+    "zf": 224,
+    "hang": 248,
+    "vang": 245,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 55
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 96,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 31
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 37
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 53
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 7
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 61
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 29
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 1,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 62,
+    "x": 11,
+    "y": 17,
+    "z": 3,
+    "zf": 224,
+    "hang": 240,
+    "vang": 225,
+    "energy": 11
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 19
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 116,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 208,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 17
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 25
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 0,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 2,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 62,
+    "x": 11,
+    "y": 17,
+    "z": 3,
+    "zf": 224,
+    "hang": 0,
+    "vang": 205,
+    "energy": 12
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 140,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 116,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 96,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 96,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 132,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 96,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 121,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 96,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 3,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 62,
+    "x": 11,
+    "y": 17,
+    "z": 3,
+    "zf": 224,
+    "hang": 0,
+    "vang": 205,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 111,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 116,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 67,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 67,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 103,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 67,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 92,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 67,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 4,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 62,
+    "x": 11,
+    "y": 17,
+    "z": 3,
+    "zf": 224,
+    "hang": 0,
+    "vang": 213,
+    "energy": 7
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 45,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 116,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 37,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 26,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 5,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    11,
+    21
+   ],
+   "player": {
+    "slot": 43,
+    "x": 11,
+    "y": 18,
+    "z": 4,
+    "zf": 96,
+    "hang": 128,
+    "vang": 245,
+    "energy": 7
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 228,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 136,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 129,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 188,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 6,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    21
+   ],
+   "player": {
+    "slot": 43,
+    "x": 11,
+    "y": 18,
+    "z": 4,
+    "zf": 96,
+    "hang": 0,
+    "vang": 241,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 248,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 105,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 156,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 104,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 104,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 86,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 59,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 59,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 7,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    21
+   ],
+   "player": {
+    "slot": 43,
+    "x": 11,
+    "y": 18,
+    "z": 4,
+    "zf": 96,
+    "hang": 0,
+    "vang": 245,
+    "energy": 2
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 248,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 58,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 156,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 152,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 57,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 57,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 39,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 12,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 12,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 8,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 128,
+    "vang": 245,
+    "energy": 2
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 248,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 156,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 68,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 168,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 9,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    11,
+    18
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 128,
+    "vang": 217,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 12,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 17,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 100,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 16,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 52,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 50,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 33,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 10,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    17
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 128,
+    "vang": 217,
+    "energy": 7
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 32,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 61,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 148,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 13,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 11,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 126,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 11,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    12,
+    29
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 120,
+    "vang": 225,
+    "energy": 10
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 32,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 126,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 144,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 128,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 170,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 53,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 127,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 12,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    12,
+    29
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 0,
+    "vang": 245,
+    "energy": 8
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 32,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 39,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 113,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 57,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 128,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 83,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 83,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 40,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 13,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    12,
+    29
+   ],
+   "player": {
+    "slot": 39,
+    "x": 11,
+    "y": 21,
+    "z": 5,
+    "zf": 96,
+    "hang": 0,
+    "vang": 245,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 32,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 13,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 87,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 31,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 128,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 57,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 57,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 145,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 14,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 14,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    11,
+    13
+   ],
+   "player": {
+    "slot": 55,
+    "x": 12,
+    "y": 29,
+    "z": 6,
+    "zf": 96,
+    "hang": 128,
+    "vang": 245,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 52,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 128,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 80,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 33,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 15,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    13
+   ],
+   "player": {
+    "slot": 55,
+    "x": 12,
+    "y": 29,
+    "z": 6,
+    "zf": 96,
+    "hang": 128,
+    "vang": 245,
+    "energy": 3
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 52,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 166,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 108,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 166,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 166,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 165,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 16,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    13
+   ],
+   "player": {
+    "slot": 55,
+    "x": 12,
+    "y": 29,
+    "z": 6,
+    "zf": 96,
+    "hang": 128,
+    "vang": 245,
+    "energy": 0
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 52,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 79,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 79,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 108,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 114,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 79,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 17,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    12,
+    29
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 0,
+    "vang": 245,
+    "energy": 0
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 199,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 108,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 100,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 31,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 18,
+   "verb": "absorb",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    12,
+    29
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 0,
+    "vang": 241,
+    "energy": 3
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 152,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 88,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 171,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 20,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 153,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 19,
+   "verb": "absorb",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    8,
+    29
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 0,
+    "vang": 241,
+    "energy": 5
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 126,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 145,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 145,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 88,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 145,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 145,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 127,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 20,
+   "verb": "create",
+   "otype": 3,
+   "otype_name": "BOULDER",
+   "target": [
+    6,
+    28
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 248,
+    "vang": 245,
+    "energy": 6
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 61,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 88,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 80,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 135,
+     "drain_cooldown": 74,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 62,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 21,
+   "verb": "create",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    6,
+    28
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 240,
+    "vang": 245,
+    "energy": 4
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 10,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 88,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 120,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 29,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 84,
+     "drain_cooldown": 23,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 11,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 22,
+   "verb": "transfer",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    6,
+    28
+   ],
+   "player": {
+    "slot": 38,
+    "x": 11,
+    "y": 13,
+    "z": 7,
+    "zf": 96,
+    "hang": 240,
+    "vang": 245,
+    "energy": 1
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 72,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 236,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 216,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 68,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 140,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 54,
+     "drain_cooldown": 1,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 23,
+   "verb": "create",
+   "otype": 2,
+   "otype_name": "TREE",
+   "target": [
+    22,
+    29
+   ],
+   "player": {
+    "slot": 60,
+    "x": 6,
+    "y": 28,
+    "z": 8,
+    "zf": 96,
+    "hang": 112,
+    "vang": 245,
+    "energy": 1
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 92,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 73,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 196,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 73,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 68,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 73,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 140,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 73,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 1,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 40,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 4
+    }
+   ],
+   "replay": {
+    "outcome": "ok",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  },
+  {
+   "i": 24,
+   "verb": "absorb",
+   "otype": 0,
+   "otype_name": "ROBOT",
+   "target": [
+    11,
+    13
+   ],
+   "player": {
+    "slot": 60,
+    "x": 6,
+    "y": 28,
+    "z": 8,
+    "zf": 96,
+    "hang": 64,
+    "vang": 245,
+    "energy": 0
+   },
+   "enemies": [
+    {
+     "slot": 0,
+     "type": "SENTINEL",
+     "tile": [
+      28,
+      17
+     ],
+     "h_angle": 92,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 14,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 1,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      18
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 13,
+     "update_cooldown": 4
+    },
+    {
+     "slot": 2,
+     "type": "SENTRY",
+     "tile": [
+      2,
+      1
+     ],
+     "h_angle": 176,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 200,
+     "drain_cooldown": 0,
+     "update_cooldown": 3
+    },
+    {
+     "slot": 3,
+     "type": "SENTRY",
+     "tile": [
+      30,
+      27
+     ],
+     "h_angle": 48,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 158,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 4,
+     "type": "SENTRY",
+     "tile": [
+      7,
+      11
+     ],
+     "h_angle": 160,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 157,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 5,
+     "type": "SENTRY",
+     "tile": [
+      12,
+      10
+     ],
+     "h_angle": 0,
+     "v_angle": 245,
+     "rot_step": -20,
+     "rot_cooldown": 1,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    },
+    {
+     "slot": 6,
+     "type": "SENTRY",
+     "tile": [
+      4,
+      24
+     ],
+     "h_angle": 60,
+     "v_angle": 245,
+     "rot_step": 20,
+     "rot_cooldown": 14,
+     "drain_cooldown": 0,
+     "update_cooldown": 1
+    }
+   ],
+   "replay": {
+    "outcome": "best_effort_miss",
+    "matched_recording": true,
+    "diverged_since": false
+   }
+  }
+ ],
+ "truth_steps_kept": 25,
+ "note": "steps are the clean pre-divergence prefix (true enemy phase on the human line); reproduced/n_events count the full replay attempt."
+}

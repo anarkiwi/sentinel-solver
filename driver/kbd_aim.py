@@ -44,6 +44,9 @@ _PAN_STALL_FRAMES = (
 _PAN_MAX_FRAMES = (
     400  # > a full pan (256 h / 208 v frames); real targets need far fewer
 )
+_SCAN_WAIT_PASSES = int(
+    os.environ.get("KBD_SCAN_WAIT_PASSES", "10")
+)  # hang guard only: a scan wait is bounded by the plot ($0CE4), never by a clock
 
 A_SLOT = 0x000B
 A_H = 0x09C0
@@ -337,16 +340,37 @@ class KbdDriver:
         self._resume()
         return result
 
+    def _run_to_scan(self, timeout=6.0):
+        """Run to the next GATED full input scan ($9678). The IRQ reaches it only with
+        the world NOT being plotted ($0CE4 bit7, set by set_busy_plotting $1214 and held
+        across a whole viewpoint redraw $3642->play_landscape_loop) and the $130B re-arm
+        expired ($966E), so a timeout while $0CE4 is set is a redraw still running, not a
+        stall: re-arm. Conceding there would leak the redraw's remaining frames into
+        whatever primitive runs next. A timeout with the gate OPEN is a real stall."""
+        for _ in range(_SCAN_WAIT_PASSES):
+            try:
+                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=timeout)
+                return True
+            except Exception:
+                if not self.rd(A_PLOT) & 0x80:
+                    raise
+        return False
+
     def _one_scan_press(self, key, timeout=10.0):
-        """Hold `key` for EXACTLY ONE gated full input scan ($9678->$967B). Anchor at the
-        gated scan CALL site (it fires only when a scan will actually run), press WHILE
-        HALTED, run to the return address, release -- the scan that consumed the key already
-        latched, and the next scan sees it released."""
+        """Hold `key` for EXACTLY ONE gated full input scan ($9678->$967B), after ONE
+        IDLE scan with the key released. check_for_full_player_input latches an EDGE:
+        SPACE toggles only when the previous scan saw it up ($11B5 LDA $1236 / BNE
+        skip_sights_toggle; $11D4 clears $1236 only on a scan with SPACE not pressed).
+        Without the idle re-arm, two presses with no released-key scan between them --
+        sights OFF then ON across coarse pans that are both no-ops, so nothing runs
+        frames in between -- have the second swallowed and retried by `sights_set`."""
         r, c = _k(key)
         with self.bm.halted():
             try:
-                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=timeout)
-                self.bm.keymatrix_set([(r, c, 1)])
+                self._run_to_scan(timeout)
+                self.bm.advance_instructions(1)  # off the anchor, into the scan
+                self._run_to_scan(timeout)  # that idle scan re-armed the latch
+                self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
                 self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=timeout)
             finally:
                 self.bm.keymatrix_release_all()
@@ -354,7 +378,8 @@ class KbdDriver:
 
     def sights_set(self, on):
         """Toggle SPACE (edge-latched $1236) until the sights flag ($0C5F bit7) matches.
-        One gated full scan == exactly one toggle."""
+        One `_one_scan_press` == exactly one toggle (it re-arms the latch first), so the
+        loop is a fault backstop, not the normal path."""
         for _ in range(6):
             if bool(self.rd(A_SFLAG) & 0x80) == on:
                 return True
@@ -366,39 +391,22 @@ class KbdDriver:
 
     def _uturn(self, max_passes=5):
         """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F,
-        objects_h_angle EOR $80) -- the fast way across half the compass. The u-turn is
-        edge-latched and auto-repeat gated like an action key ($0C51 ASL/BPL): update_game
-        zeroes the want-flag and only an IDLE full scan re-arms it, so a bare tap right after
-        a pan burst is dropped ($1B2F). So per pass run one idle full scan to re-arm, press U
-        WHILE HALTED through the next scan, release, and confirm the EOR $80 flip; retry
-        until it takes. Returns True on a confirmed flip -- purely an optimisation, the +-8
-        loop in coarse_h still converges if this is swallowed."""
+        objects_h_angle EOR $80) -- the fast way across half the compass.
+
+        U is an ordinary action key (want-flag $23), so ``tap_action`` already presses it
+        correctly. The flip itself lands in update_game's $1B2F, NOT in the scan that
+        latched the press, so reading objects_h_angle straight after that scan sees the
+        OLD bearing; a retry loop keyed on that read presses again, and an even number of
+        EOR $80s cancels. Confirm only after tap_action has let the action be consumed.
+        """
         addr = A_H + self.slot()
-        r, c = _k(K_UTURN)
-        flipped = False
-        with self.bm.halted():
-            try:
-                for _ in range(max_passes):
-                    before = self.rd(addr)
-                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
-                    self.bm.advance_instructions(1)  # off the anchor
-                    self.bm.run_until_pc(
-                        self.PC_IRQ_SCAN, timeout=6.0
-                    )  # idle scan re-arms
-                    self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
-                    self.bm.run_until_pc(
-                        self.PC_IRQ_SCAN_DONE, timeout=6.0
-                    )  # scan consumed
-                    self.bm.keymatrix_release_all()  # before the next scan
-                    if ((self.rd(addr) - before) & 0xFF) == 0x80:
-                        flipped = True
-                        break
-            except Exception as e:
-                self.log(f"    uturn stop: {type(e).__name__}")
-            finally:
-                self.bm.keymatrix_release_all()
-        self._resume()
-        return flipped
+        for _ in range(max_passes):
+            before = self.rd(addr)
+            if not self.tap_action(K_UTURN):
+                continue
+            if ((self.rd(addr) - before) & 0xFF) == 0x80:
+                return True
+        return False
 
     def coarse_h(self, want):
         """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). D pans right
@@ -411,9 +419,14 @@ class KbdDriver:
         residual whether or not the U-turn latched (so this only ever saves time)."""
         addr = A_H + self.slot()
         want &= 0xFF
-        n_uturn, _n_step = ac.h_press_count(self.rd(addr), want)
-        if n_uturn:
-            self._uturn()
+        cur = self.rd(addr)
+        n_uturn, n_step = ac.h_press_count(cur, want)
+        if n_uturn and not self._uturn():
+            # Never silent: the residual pan is then the whole half-turn the u-turn was meant to skip, which the cost model charged one keystroke for.
+            self.log(
+                f"    uturn MISSED ${cur:02x}->${want:02x}: paying "
+                f"{ac.h_steps(cur, want)} notches instead of {n_step}"
+            )
         dir_fn = lambda cur: K_RIGHT if ((want - cur) & 0xFF) <= 0x80 else K_LEFT
         return self._pan_angle(addr, want, dir_fn)
 
@@ -590,9 +603,9 @@ class KbdDriver:
         with self.bm.halted():
             try:
                 for _ in range(max_passes):
-                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)
+                    self._run_to_scan()
                     self.bm.advance_instructions(1)  # off the anchor
-                    self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=6.0)  # idle scan ran
+                    self._run_to_scan()  # idle scan ran
                     self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
                     self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=6.0)
                     flags = self.bm.mem_get(0x0CE8, 0x0CEB)
@@ -602,20 +615,12 @@ class KbdDriver:
                         if not settle:
                             break  # caller settles by its own condition (e.g. a
                             # hyperspace: the play-loop scan PC may never recur)
-                        # scans reopen only after $12D0 consumed the action. Running to the
-                        # NEXT gated scan carries the CPU through the whole settle: consume
-                        # the action -> object dither ($1FA4) -> plot_world ($2625) -> back
-                        # to $9678. In quantized mode this run IS the deterministic settle
-                        # window (the CPU halts at the PC; it never dwells at gameplay speed),
-                        # so allow the ~55-frame dither+replot to complete before the caller
-                        # reads state. Legacy (free-run) path caps it short: there the settle
-                        # runs during the post-resume bookkeeping and a long gameplay-speed
-                        # dwell would let the Sentinel spawn a meanie.
+                        # Scans reopen only after $12D0 consumed the action, so this run spans the whole settle ($1FA4 dither + $2625 plot_world); _run_to_scan's $0CE4 re-arm keeps a transfer's redraw from being cut short and leaking into the next aim. Legacy free-run caps it short (there the settle runs at gameplay speed during bookkeeping).
                         try:
-                            self.bm.run_until_pc(
-                                self.PC_IRQ_SCAN,
-                                timeout=(6.0 if self.quantized else 1.0),
-                            )
+                            if self.quantized:
+                                self._run_to_scan()
+                            else:
+                                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=1.0)
                         except Exception:
                             pass
                         break

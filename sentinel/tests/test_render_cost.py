@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, projector
+from sentinel import landscape, memmap as mm, projector, terrain
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
@@ -276,3 +276,38 @@ def test_transfer_tune_is_96_frames():
 
     assert tune_frames(0x00) == 96  # matches actioncost.TUNE_FRAMES
     assert tune_frames(0x19) == 96 == projector.TUNE_TRANSFER_FRAMES
+
+
+def test_offband_tiles_still_cost_their_prepare_polygon_calls():
+    """The area proxy prices a tile whose corners all fall outside the fill band at
+    zero H, hence zero cost -- but the ROM still runs prepare_polygon ($2D6C) per
+    polygon per section to clip it. Views exist where EVERY plotted tile is off-band
+    and the 6502 spends 100k+ cycles; the terrain polygon floor is what covers them."""
+    zero_area = []
+    for key, rec in sorted(json.load(open(GOLDEN)).items()):
+        ls, h, v = (int(x) for x in key.split(","))
+        state = landscape.generate(ls)
+        tiles, _ = projector.project_scene(state, h, v)
+        if not tiles or any(t["h"] for t in tiles):
+            continue
+        zero_area.append(key)
+        assert rec["terrain_fill_cycles"] > 0, f"{key}: golden claims no fill"
+        base = projector._terrain_poly_base(tiles)
+        assert base > 0, f"{key}: off-band view priced at zero"
+        assert projector.render_cost(state, {"h_angle": h, "v_angle": v}) > 0
+    assert zero_area, "no all-off-band view in the sweep to guard"
+
+
+def test_terrain_polygon_floor_counts_two_triangles_for_a_sloped_tile():
+    """plot_two_triangles ($2A8A) splits a sloped tile into two polygons and a flat one
+    stays a single quad, each prepared once per wide-buffer section ($2AAB)."""
+    mixed = 0
+    for ls, h, v in VIEWS:
+        state = landscape.generate(ls)
+        tiles, _ = projector.project_scene(state, h, v)
+        flat = [t for t in tiles if t["tile_byte"] < mm.OBJECT_TILE]
+        n_sloped = sum(1 for t in flat if terrain.resolve_ground(state, *t["tile"])[1])
+        want = (len(flat) + n_sloped) * projector.SECTIONS * projector.C_PREP_CALL
+        assert projector._terrain_poly_base(tiles) == want, f"{ls},{h},{v}"
+        mixed += 0 < n_sloped < len(flat)
+    assert mixed, "no swept view mixes flat and sloped tiles: the split is untested"

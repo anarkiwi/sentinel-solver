@@ -4,9 +4,9 @@ A reference for both **playing** *The Sentinel* (C64, Geoff Crammond / Firebird
 1986) and **writing an automated solver** for it. Every mechanic here is taken
 from the original C64 6502 code; routine names and `$hex` addresses cite the exact
 ROM source. No emulator or existing simulator was used to derive behaviour — the
-ROM is the ground truth. There is no solver yet; the last section,
-[Writing a solver](#writing-a-solver), distils the mechanics into what a search
-needs.
+ROM is the ground truth. The last section, [Writing a solver](#writing-a-solver),
+distils the mechanics into what a search needs; the implemented players
+([player.md](player.md), [astar_player.md](astar_player.md)) apply it.
 
 The board and object placement are **deterministic given the landscape number**,
 and the effect of each player action is deterministic. The one thing a player
@@ -729,13 +729,23 @@ would otherwise dismantle and drain ([§6](#6-enemies)). Leave that energy behin
 only when there is literally no other choice (e.g. a gaze makes reclaiming it a
 worse trade than moving on).
 
+Measured across the recorded human wins, this is an **inchworm**: a hop stacks at
+most two boulders (the observed count is `k ∈ {1, 2}` — never a tall ground-up
+tower), and every climb is followed by reclaiming the pedestal below, so energy
+rides the ~3-unit reserve floor rather than being locked up in height. A solver's
+directed climb should do the same — build ≤2, transfer up, recycle the abandoned
+pedestal, repeat — instead of committing energy to a single deep stack it cannot
+afford to complete.
+
 ---
 
 ## Writing a solver
 
-There is no solver yet. This section frames the problem for one. (The sibling
-bit-exact forward model is documented in [simulator.md](simulator.md); the ROM
-mechanics above are its specification.)
+This section frames the search problem the mechanics above define; the
+implemented players are documented in [player.md](player.md) (reactive) and
+[astar_player.md](astar_player.md) (A* search). (The sibling bit-exact forward
+model is documented in [simulator.md](simulator.md); the ROM mechanics above are
+its specification.)
 
 ### State
 
@@ -822,49 +832,28 @@ it, so a faithful solver must not either (below).
 
 The action space is small and structured — the tile-targeted actions (absorb /
 create{robot,tree,boulder} / transfer) each fire on a LOS-reachable tile, plus the
-untargeted hyperspace, and the u-turn as a free aiming flip — but the game is a
-**continuous-time, adversarial** problem: plan a route of *safe standing tiles*
-and *climb stacks* from start to a sight line on the platform, treating enemy
-gaze as a near-hard **wall** (the gaze-entry penalty makes exposed tiles
-last-resort, not just expensive) and energy as the budget. Sentries are the
-exception worth going out of your way for: each one absorbed removes a wall, so a
-good search treats *reducing the enemy set* as an objective in its own right and
-clears sentries early rather than tiptoeing around them for the whole solve.
-Because energy is conserved, the reachable energy at any point is bounded by the
-loose energy (trees + absorbable scenery) you can safely open sight lines to —
-**plus the energy you have already invested in your own boulders and abandoned
-robot shells**, which are recoverable, not sunk. Model the climb as
-create→transfer→**reclaim**: a boulder pedestal (2) and the shell you leave behind
-(3) should be re-absorbed from the new (higher, pre-aimed, look-down) vantage by
-default, so the search's energy accounting nets out the climb cost instead of
-paying full price per hop; only leave them behind when a gaze makes the reclaim a
-worse trade than moving on. Hyperspace is a last-resort escape whose landing is
-**unknowable** — you cannot steer it, so treat it as a random relocation to a
-lower, likely more exposed tile and only use it when any landing beats staying put.
+untargeted hyperspace and the u-turn (a free aiming flip) — but the game is a
+**continuous-time, adversarial** problem. Key modelling points, all detailed in
+[§7](#7-how-a-human-wins-quick-strategy):
 
-**Cost every plan in time, and let the safety of the current tile set the aim
-budget.** Each action's cost is *aim cost + act* (see the aim-cost query), and the
-world clock runs the whole time. So the transfer/build target you pick is a joint
-optimisation of **position quality** (height, onward sight lines, safety at the
-destination) **and aim cost** from where you're already looking — a cheap-to-reach
-decent tile frequently dominates an expensive-to-reach great one. How much aim cost
-you can afford is exactly the **time your current tile buys you** (from
-*ticks-until-seen* / *drain-over-window*): on a tile safe under every enemy
-rotation, spend freely to line up the strongest next move; when the current tile is
-about to be seen, take the cheapest hop to another safe-but-leverageable tile and
-re-plan. Model this as a time budget per waypoint, not a fixed per-move cost.
-
-The win is narrow and specific: **absorb the Sentinel → robot onto the platform
-tile → transfer in → hyperspace**. Encode that terminal sequence explicitly; do
-not expect "reach the platform" alone to register as a win. Crucially, **absorbing
-the Sentinel is a one-way gate that disables all further absorption** (`$1B8E`
-tests the Sentinel's slot 0), so the Sentinel-absorb must be the **last** absorb
-node in any plan. This is an ordering constraint, not a forced prefix: non-Sentinel
-absorbs are *optional, opportunistic* moves the search weighs like any other —
-energy harvesting valued for the future boulder/robot options it unlocks, costed in
-aim time, taken only when the current tile's time budget affords it — and simply
-scheduled before the Sentinel node. After that node, only create/transfer/
-hyperspace remain.
+- **Gaze is a near-hard wall.** The gaze-entry penalty makes exposed tiles
+  last-resort, not merely expensive; route over safe standing tiles and climbed
+  stacks toward a sight line on the platform.
+- **Reducing the enemy set is its own objective.** Each sentry absorbed removes a
+  wall, so clear sentries early rather than tiptoeing around them.
+- **Energy is conserved and largely recoverable.** Reachable energy is bounded by
+  the loose energy (trees/scenery) you can safely reach *plus* your own invested
+  boulders/shells; model the climb as create→transfer→**reclaim** so the accounting
+  nets out the hop cost.
+- **Cost every plan in time.** Each action costs *aim + act* against a running
+  world clock; pick targets jointly on position quality and aim cost from the
+  current facing, and let the current tile's *ticks-until-seen* set the aim budget.
+- **The win is a specific terminal sequence.** Absorb the Sentinel → robot onto the
+  platform tile → transfer in → hyperspace; encode it explicitly. Because the
+  Sentinel-absorb is the one-way absorb lock (`$1B8E`, [§4](#absorb--try_to_absorb_object-1b8e)),
+  it must be the **last** absorb node — an ordering constraint, not a forced prefix.
+- **Hyperspace landing is unknowable.** Treat it as a random relocation to a lower,
+  more exposed tile; use only when any landing beats staying put.
 
 ### Faithfulness discipline
 

@@ -32,7 +32,7 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from sentinel.state import State
 from sentinel import los
-from driver import boot, kbd_aim
+from driver import boot, clock, kbd_aim
 from driver import sentinel_state as gs
 
 # ---- live RAM addresses (the ROM's object-array + sights layout) -------------
@@ -100,8 +100,13 @@ def live_image(bm):
     (threat.ticks_until_seen -> enemies.step), so a 4 KB slice throws IndexError.
 
     Read in two 32 KB halves: mem_get's response length is a u16, so a single
-    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty."""
-    return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(bm.mem_get(0x8000, 0xFFFF))
+    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty.  Both
+    halves are read HALTED: under auto_resume each half would resume the CPU, tearing
+    the image across a host-timing-dependent number of frames."""
+    with bm.halted():
+        return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(
+            bm.mem_get(0x8000, 0xFFFF)
+        )
 
 
 # ============================================================================
@@ -124,11 +129,13 @@ CODE_PATCHES = [
 
 
 def landscape_from_digits(typed_digits):
-    """The player types a 4-digit landscape number; the game reads the last two digits
-    as a single BCD byte, whose value IS the internal seed (e.g. "0042" -> byte 0x42 ->
-    seed 66). Decimal digits are numerically identical to hex nibbles, so parsing the
-    last 2 characters as hex reproduces the BCD-to-binary step."""
-    return int(typed_digits[-2:], 16)
+    """The player types a 4-digit landscape number; the game stores it as a packed-BCD
+    word and seeds the PRNG with both bytes (seed_prnd_from_landscape_number $33ED:
+    $0C7B <- seed & $FF, $0C7C <- seed >> 8, :meth:`sentinel.prng.Prnd.seeded`).
+    Decimal digits are numerically identical to hex nibbles, so the seed is the whole
+    code parsed as hex: "0042" -> 0x0042, "0335" -> 0x0335. Inverse of the
+    ``f"{landscape:04x}"`` in :meth:`SentinelDriver.enter_landscape`."""
+    return int(typed_digits, 16)
 
 
 def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host=None):
@@ -140,7 +147,10 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
     (after the code-check patches, before the landscape digits) so the NEXT run is fast.
     The snapshot is landscape-agnostic -- the digits are always typed after restore."""
 
-    def tap(name, hold=20, settle=0.4):
+    def tap(name, hold=20, settle=40):
+        """Tap a chord, then step hold+settle EMULATED frames: VICE releases a
+        TAP_MODE_FIXED chord after ``hold`` frames and the menu consumes it within
+        ``settle``, so what the game sees cannot depend on warp or the host clock."""
         robust(
             bm,
             log,
@@ -148,7 +158,7 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
                 [keys.lookup(name)], mode=TAP_MODE_FIXED, frames=hold
             ),
         )
-        time.sleep(settle)
+        clock.run_frames(bm, hold + settle)
 
     def tap_text(t):
         for chord in keys.text_to_chords(t):
@@ -158,29 +168,28 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
                 log,
                 lambda ks=ks: bm.keymatrix_tap(ks, mode=TAP_MODE_FIXED, frames=20),
             )
-            time.sleep(0.4)
+            clock.run_frames(bm, 45)
 
     restored = False
     if snapshot_container and snapshot_host and os.path.exists(snapshot_host):
         try:
             log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
             robust(bm, log, lambda: boot.load_snapshot(bm, snapshot_container))
-            try:
-                bm.exit()  # resume the CPU after the restore leaves the monitor stopped
-            except Exception:
-                pass
-            time.sleep(1.0)
+            # No bare exit() here: resuming leaves the CPU free-running until the next
+            # command halts it, a host-timed number of frames later, so entry starts at
+            # a different phase under load. run_frames advances it deliberately instead.
+            bm.auto_resume = False
+            clock.run_frames(bm, 50)
             restored = True
         except Exception as e:
             log(f"  snapshot restore failed ({e}); falling back to full boot")
 
     if not restored:
         log("booting + loading (warp)...")
-        for _ in range(50):
-            time.sleep(1.0)
-            robust(bm, log, lambda: bm.mem_get(0x00, 0x00))
+        if not boot.wait_for_load(bm, log):
+            log("  tape-load signature never appeared; menu may not respond")
         for _ in range(3):
-            tap("SPACE", hold=30, settle=1.5)
+            tap("SPACE", hold=30, settle=250)  # title -> code-entry screen
         log("patching secret-code checks ($14DF/$2565/$2570)")
         for addr, data in CODE_PATCHES:
             robust(bm, log, lambda a=addr, d=data: bm.mem_set(a, d))
@@ -190,14 +199,57 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
                 robust(bm, log, lambda: boot.save_snapshot(bm, snapshot_container))
             except Exception as e:
                 log(f"  snapshot save failed ({e}); continuing without it")
+    # Tape/menu boot is over: from here every advance is an explicit run_frames, so
+    # stop resuming on each command -- a free-running key tap or poll advances the
+    # machine by a host-timed number of frames and entry lands at a different phase.
+    bm.auto_resume = False
     log(f"typing landscape digits {typed_digits!r}")
     tap_text(typed_digits)
-    tap("RETURN", hold=30, settle=3.0)
+    tap("RETURN", hold=30, settle=150)
     tap_text("00000000")
-    tap("RETURN", hold=30, settle=8.0)
-    time.sleep(3)
-    tap("SPACE", hold=25, settle=1.2)  # dismiss the isometric preview
-    time.sleep(4)
+    tap("RETURN", hold=30, settle=150)  # accepted code -> generate landscape + preview
+    _enter_play(bm, tap, log)
+
+
+def _generated(bm):
+    """Landscape generation has finished: the ROM has installed the player object with
+    its starting energy (both $0B and $0C0A read 0 from the code-entry screen on).
+
+    Read HALTED: the poll must not advance the machine, or entry lands a host-timed
+    number of frames in and every later step inherits that phase."""
+    with bm.halted():
+        return bool(bm.mem_get(A_ENERGY, A_ENERGY)[0] & 0x3F)
+
+
+def _in_play(bm):
+    """The interactive play loop is running: the busy-plotting gate ($0CE4 bit7), held
+    SET across the code-entry menu, generation and the isometric preview, is released
+    the first time the foreground loop opens for input.  Read HALTED (see _generated).
+    """
+    with bm.halted():
+        return not bm.mem_get(A_ACTION_LATCH, A_ACTION_LATCH)[0] & 0x80
+
+
+def _enter_play(bm, tap, log, chunk=25, gen_chunks=160, play_chunks=40, taps=6):
+    """Land in the play loop after the secret-code RETURN, one leg per REAL predicate:
+    generation installs the player object, then SPACE dismisses the isometric preview
+    and the busy-plotting gate opens. Both legs are polled in EMULATED frames, so their
+    length cannot depend on warp (measured: ~600 frames, then ~250 after SPACE)."""
+    for _ in range(gen_chunks):
+        if _generated(bm):
+            break
+        clock.run_frames(bm, chunk)
+    else:
+        raise RuntimeError("landscape entry: generation never installed a player")
+    log(f"  landscape generated (player slot {bm.mem_get(A_SLOT, A_SLOT)[0]})")
+    for _ in range(taps):
+        tap("SPACE", hold=25, settle=60)  # dismiss the isometric preview
+        for _ in range(play_chunks):
+            if _in_play(bm):
+                log("  in play loop ($0CE4 bit7 released)")
+                return
+            clock.run_frames(bm, chunk)
+    raise RuntimeError("landscape entry: play never started ($0CE4 bit7 held set)")
 
 
 # container / connection: the one home for the asid-vice plumbing the runners share.
@@ -205,10 +257,11 @@ bridge_ip = boot.bridge_ip  # single implementation lives in driver.boot
 
 
 def free_stale_containers(log=print):
-    """Remove any leftover asid-vice containers still holding port 6502."""
+    """Remove leftover asid-vice containers THIS process orphaned (see
+    ``boot.stale_filter``; a blanket sweep would kill a concurrent run's container)."""
     try:
         ids = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "ancestor=anarkiwi/asid-vice:latest"],
+            ["docker", "ps", "-aq", *boot.stale_filter()],
             capture_output=True,
             text=True,
             timeout=15,
@@ -217,7 +270,7 @@ def free_stale_containers(log=print):
             subprocess.run(
                 ["docker", "rm", "-f", *ids], capture_output=True, timeout=30
             )
-            time.sleep(2)
+            time.sleep(2)  # sleep-ok: docker rm teardown, outside the emulated machine
     except Exception as e:
         log(f"  container cleanup warning: {e}")
 
@@ -225,7 +278,7 @@ def free_stale_containers(log=print):
 def connect_binmon(container, log=print):
     """Connect a BinMon to a started container (env BINMON_HOST/PORT override; else
     the container's bridge IP, else host loopback)."""
-    time.sleep(2)
+    time.sleep(2)  # sleep-ok: docker bridge IP assignment, no PC exists
     host = os.environ.get("BINMON_HOST") or bridge_ip(container.container_id, log)
     if not host:
         host = "127.0.0.1"
@@ -286,13 +339,14 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
             ],
             warp=True,
             silent=True,
+            binmon_port=boot.HOST_BINMON_PORT,
         )
         t_start = time.time()
         try:
             with container:
                 # Host -p publishing is broken here (127.0.0.1:6502 unreachable); connect
                 # via the started container's docker bridge IP. BINMON_HOST env overrides.
-                time.sleep(2)
+                time.sleep(2)  # sleep-ok: docker bridge IP assignment, no PC exists
                 bm_host = os.environ.get("BINMON_HOST") or bridge_ip(
                     container.container_id, log
                 )
@@ -326,6 +380,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                     snapshot_container="/renders/" + CODE_ENTRY_SNAP,
                     snapshot_host=os.path.join(renders_host, CODE_ENTRY_SNAP),
                 )
+                bm.auto_resume = False  # in play: reads must not EXIT, or observing the machine advances it by host-timed frames; the world moves only in deliberate run windows
                 st = gs.read_game_state(gs.ViceSource(bm))
                 if st.player is None:
                     log(f"boot try {boot_try}: not in play (no player); restart")
@@ -339,7 +394,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                         bm.video_record(f"/renders/{video_name}")
                     except Exception as e:
                         log(f"  video_record failed: {e}")
-                    time.sleep(1.0)
+                    time.sleep(1.0)  # sleep-ok: VICE AVI encoder start, not the CPU
                 else:
                     log("-- NO_RECORD=1: skipping AVI (warp stays on) --")
 
@@ -353,13 +408,13 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                 # the AVI has no frame index (frames=0, "not RIFF/AVI").
                 try:
                     play_fn(session)
-                    time.sleep(1.5)
+                    time.sleep(1.5)  # sleep-ok: VICE AVI muxer drain, not the CPU
                 finally:
                     log("-- stopping AVI recording (finalize) --")
                     try:
                         if record:
                             bm.video_stop()
-                        time.sleep(1.5)
+                        time.sleep(1.5)  # sleep-ok: VICE AVI index flush, not the CPU
                     except Exception as e:
                         log(f"  video_stop failed: {e}")
                     result["wall_seconds"] = round(time.time() - t_start, 1)
@@ -374,7 +429,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
             if result.get("actions"):
                 result["divergence"] = result.get("divergence") or f"mid-run drop: {e}"
                 return result
-            time.sleep(2)
+            time.sleep(2)  # sleep-ok: container relaunch backoff, no machine to poll
     result["divergence"] = f"could not boot into play after {boot_tries} tries"
     return result
 
@@ -548,7 +603,9 @@ def probe_tile(bm):
     """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
     Hardened: only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
     identical across two consecutive reads (reject transient mid-pan / queued-wrap
-    state), else wait 50ms and retry. Returns (rx, ry, los, centre)."""
+    state), else advance the machine two frames and retry. Returns (rx, ry, los,
+    centre). Frame-stepping is load-bearing, not a nicety: the live player leaves the
+    CPU halted, so a host sleep would never let the plot finish and clear $0CE4."""
     res, prev = _probe_once(bm)
     for _ in range(8):
         if prev[0] == 0:
@@ -557,7 +614,7 @@ def probe_tile(bm):
                 return res2
             res, prev = res2, sig2
         else:
-            time.sleep(0.05)
+            clock.run_frames(bm, 2)
             res, prev = _probe_once(bm)
     return res
 

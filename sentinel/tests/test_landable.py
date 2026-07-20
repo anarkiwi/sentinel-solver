@@ -171,6 +171,20 @@ def test_generated_landscape_oracle_invariants():
     assert all(0 <= c <= 0xFF for c in centres.values())
 
 
+def test_targeted_view_matches_full_board_sweep():
+    """The heading-cone single-tile band march (:func:`los.landable_view_targeted`, the A*
+    planner's fallback) is bit-identical to ``landable_views(st).get(tile)`` for every tile,
+    and returns None off the landable set -- the g-invariance the node-cost win relies on.
+    """
+    st = landscape.generate(0)
+    full = los.landable_views(st, st.player)
+    for tile, view in full.items():
+        assert los.landable_view_targeted(st, tile) == view, tile
+    for tile in ((0, 0), (30, 30), (2, 2), (28, 5)):
+        if tile not in full:
+            assert los.landable_view_targeted(st, tile) is None, tile
+
+
 @pytest.mark.skipif(not os.path.exists(LS0), reason="ls0 human-win log absent")
 def test_ls0_start_landable_set_exact():
     st = _state_from_record(_records(LS0)[0])

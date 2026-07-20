@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""Live-execution constants and a thin Executor used by the plan runner.
-
-Provides the verified key mapping for CREATE/ABSORB/TRANSFER/HYPERSPACE actions
-and an Executor exposing raw memory reads (`rd`) and a decoded live GameState
-(`state`) over a BinMon connection.
-"""
-
-import time
+"""Live-execution constants and a thin Executor (key mapping, memory reads, live
+GameState over BinMon) used by the plan runner."""
 
 from driver import sentinel_state as gs
-from driver import core
+from driver import clock, core
 from sentinel import memmap as mm
 from sentinel import aim
 from sentinel.state import State
@@ -91,24 +85,38 @@ def verify(verb, otype, tile, before, after, objs0, objs1, slot0, slot1, e0, e1)
     return False, "?"
 
 
+def classify_outcome(verb, otype, ok, primary_ok):
+    """Map a fired step's verify() result to a caller outcome, priority-ordered.
+
+    ``primary_ok`` (the on-tile object created/absorbed, or the player moved) is
+    checked BEFORE the best-effort-absorb-miss shortcut: a tree/fuel absorb whose
+    object WAS removed but coincided with a Sentinel discharge (a fresh tree at a
+    random tile) nets the global object delta to 0, failing verify()'s dtot check.
+    That is a world-divergence to resync, not a miss to retry -- re-firing an absorb
+    would aim at a tile whose object is already gone. Only a genuine miss (object not
+    removed) reaches the ``best_effort_miss`` fuel-recovery path.
+    """
+    if ok:
+        return "ok"
+    if primary_ok:
+        return "diverge"
+    if verb == "absorb" and otype != 5:  # Sentinel is otype 5; its absorb is not fuel
+        return "best_effort_miss"
+    return "fail"
+
+
 class Executor:
     def __init__(self, bm, log):
         self.bm = bm
         self.log = log
-        self._frame_cp = None
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
 
     def frames(self):
-        """Exact, wrap-free elapsed-frame count from a silent $9630 (per-frame raster
-        marker) checkpoint's u32 hit_count -- unlike the $1335 delta ((d*5)&0xFF),
-        which aliases every 256 frames. Delta two calls to time a span exactly."""
-        if self._frame_cp is None:
-            self._frame_cp = self.bm.checkpoint_set(
-                0x9630, stop_when_hit=False, silent=True
-            )
-        return self.bm.checkpoint_get(self._frame_cp.checknum).hit_count
+        """Exact, wrap-free elapsed-frame count ($9630 checkpoint hit_count); delta two
+        calls to time a span exactly."""
+        return clock.frames(self.bm)
 
     def state(self):
         return gs.read_game_state(gs.ViceSource(self.bm))
@@ -146,6 +154,7 @@ def perform_step(ex, drv, label, stp, log, result):
     keystroke, verify the memory delta, and report the outcome. Used by the live
     replanning loop. Returns one of:
       "ok"               -- verified success
+      "diverge"          -- on-tile effect landed but the world moved (resync + replan)
       "best_effort_miss" -- a non-Sentinel absorb missed (fuel recovery; non-fatal)
       "drained"          -- energy already below a create's cost before firing (no keys sent)
       "aim_miss"         -- the aim never reached the requested view (nothing fired)
@@ -382,20 +391,6 @@ def perform_step(ex, drv, label, stp, log, result):
         }
     )
     log(f"[{label}] {verb:8} {tile} otype={otype}: {'OK ' if ok else 'FAIL'} {msg}")
-    if ok:
-        return "ok"
-    # BEST-EFFORT ABSORBS: trail/fuel absorbs (otype != 5, the Sentinel) are energy
-    # recovery -- a miss is NOT fatal.
-    if verb == "absorb" and otype != 5:
-        log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
-        return "best_effort_miss"
-    # A verify() failure whose PRIMARY on-tile effect DID happen -- the object landed on
-    # the target tile (create/absorb) or the player moved (transfer) -- but a SECONDARY
-    # invariant diverged (a concurrent meanie spawn / tree discharge changed the GLOBAL
-    # object count, or an in-window drain changed energy) is a LIVE WORLD-DIVERGENCE, not
-    # a wrong-tile aim: the aim was exact, the world moved under it. The caller resyncs +
-    # replans on "diverge"; only a genuine wrong-tile landing stays "fail" (the aim-exact
-    # crash the live contract raises on).
     primary_ok = (
         (verb == "create" and objs1 == objs0 + 1)
         or (verb == "absorb" and objs1 == objs0 - 1)
@@ -407,13 +402,15 @@ def perform_step(ex, drv, label, stp, log, result):
             )
         )
     )
-    if primary_ok:
+    outcome = classify_outcome(verb, otype, ok, primary_ok)
+    if outcome == "diverge":
         log(
             f"    (world-divergence at {label}: aim landed on {tile}, "
             f"state diverged [{msg}]; resync + replan)"
         )
-        return "diverge"
-    if verb == "create" and e0 <= otype_cost(otype):
+    elif outcome == "best_effort_miss":
+        log(f"    (best-effort absorb miss at {label}; continuing -- energy {e1})")
+    elif outcome == "fail" and verb == "create" and e0 <= otype_cost(otype):
         result["energy_block"] = {
             "step": label,
             "tile": list(tile),
@@ -423,7 +420,7 @@ def perform_step(ex, drv, label, stp, log, result):
         log(
             f"    >>> ENERGY BLOCK: build at {label} needs more energy than the {e0} available"
         )
-    return "fail"
+    return outcome
 
 
 def fire_hyperspace(ex, drv, plat, log, result):
@@ -438,11 +435,14 @@ def fire_hyperspace(ex, drv, plat, log, result):
     won = False
     for attempt in range(4):
         drv.tap_action(K_HYPERSPACE, settle=False)
-        for _ in range(120):  # poll the flag; the win path leaves the play loop
+        for _ in range(120):  # poll in FRAMES; a win can leave the $9630 marker behind
             if ex.landscape_done() & 0x40:
                 break
-            ex.bm.exit()
-            time.sleep(0.05)
+            try:
+                clock.run_frames(ex.bm, 3)
+            except Exception as e:
+                log(f"   H {attempt}: frame marker stopped ({type(e).__name__})")
+                break
         done1 = ex.landscape_done()
         log(
             f"   H attempt {attempt}: $0CDE=${done1:02x} "

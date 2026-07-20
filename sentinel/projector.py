@@ -10,9 +10,10 @@ import os
 
 from sentinel import relative, terrain, memmap as mm
 
-# initialise_buffer_variables ($2993) play buffer: $0007, $0012=($0007>>1)^$80.
-_BUF_LEFT = 0x14  # $0007
-_BUF_RIGHT = 0x8A  # $0012
+# initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).
+BUF_WINDOW = {0: (0x14, 0x8A), 1: (0x14, 0x8A), 2: (0x08, 0x84)}
+PLAY_MODE = 0
+_BUF_LEFT, _BUF_RIGHT = BUF_WINDOW[PLAY_MODE]
 
 
 def _neg16(hi, lo):
@@ -21,9 +22,9 @@ def _neg16(hi, lo):
     return ((-hi - borrow) & 0xFF, (-lo) & 0xFF)
 
 
-def _setup(state, h_angle, v_angle, observer):
+def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE):
     """plot_world setup ($2625-$26D6): the view-orientation case and screen-x
-    reference angle from the observer's h_angle."""
+    reference angle from the observer's h_angle, against ``mode``'s $2993 window."""
     view_angle = (h_angle + 0x20) & 0xFF  # $001C ($265A)
     quadrant = view_angle >> 6  # $2665: top two bits
     folded = ((view_angle & 0x3F) - 0x20) & 0xFF  # $0074 ($265E)
@@ -36,9 +37,12 @@ def _setup(state, h_angle, v_angle, observer):
         c3, c1d = (0x1E - ox) & 0xFF, (0x1E - oy) & 0xFF
     else:  # west ($26BC)
         c3, c1d = oy, (0x1E - ox) & 0xFF
+    left, right = BUF_WINDOW[mode]
     return {
         "observer": observer,
         "quadrant": quadrant,
+        "buf_left": left,  # $0007
+        "buf_right": right,  # $0012
         "c3": c3,  # $0003
         "c1d": c1d,  # $001D
         "ref_lo": 0x00,  # $001F (play)
@@ -95,9 +99,10 @@ def _project(state, setup, col, row):
     rel_z_hi = (height - state.obj_z_height[observer] - (1 if zf else 0)) & 0xFF
     sy_hi = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
     sy_lo = zp[0x50]
-    if sx_hi < _BUF_LEFT:  # on-screen test ($293C); $0028=0 waives the fraction check
+    # $293C on-screen test against the mode's $0007/$0012; $0028=0 waives the fraction check.
+    if sx_hi < setup["buf_left"]:
         onscreen = 0x00
-    elif sx_hi < _BUF_RIGHT:
+    elif sx_hi < setup["buf_right"]:
         onscreen = 0x80
     else:
         onscreen = 0x81
@@ -262,13 +267,14 @@ def _scan_visible(state, setup):
     return exam[0], rows, cache
 
 
-def _occlusion_visible(state):
+def _occlusion_visible(state, observer=None):
     """Byte-exact port of populate_tile_visibility_bit_table ($245B): the raytraced
     ``$3E80``/``$24DA`` bitmap $2845 consults at $2911-$2919. ``visible[ty][tx]`` is
     True iff tile (tx,ty) is unoccluded; object tiles ($28F0) bypass it (terrain-only gate).
+    Rays start at ``observer`` (the viewpoint object $0C63), defaulting to the player.
     """
     n = mm.N
-    p = state.player
+    p = state.player if observer is None else observer
     objx, objy = state.obj_x[p], state.obj_y[p]
     objz, zfrac = state.obj_z_height[p], state.obj_z_frac[p]
     tz = [[0] * n for _ in range(n)]  # $25C4: (z<<1)|not_flat per tile
@@ -356,15 +362,53 @@ def _occlusion_visible(state):
     return vis
 
 
-def project_scene(state, h_angle, v_angle, observer=None):
+# Every byte plot_world reads: tiles_table ($0400) + the object flags/v_angle ($0100) and x/z/y/h_angle/z_frac/type ($0900) arrays -- 1536 bytes, ~1us to digest.
+_SCENE_SPANS = ((0x0400, 0x0800), (0x0100, 0x0180), (0x0900, 0x0A80))
+_CACHE_MAX = int(os.environ.get("RENDER_CACHE_MAX", "20000"))
+_OCCLUSION_CACHE = {}
+_COST_CACHE = {}
+
+
+def scene_key(state):
+    """Digest of every byte :func:`project_scene` reads: a sound memo key over a
+    mutating ``State`` (creates, absorbs and transfers all land in these spans)."""
+    mem = state.mem
+    return hash(b"".join(bytes(mem[lo:hi]) for lo, hi in _SCENE_SPANS))
+
+
+def memo(cache, key, cap, make):
+    """Bounded memo: clear wholesale at ``cap`` rather than track an LRU, since a
+    search walks scene keys forward and stale entries rarely return."""
+    hit = cache.get(key)
+    if hit is None:
+        if len(cache) >= cap:
+            cache.clear()
+        hit = cache[key] = make()
+    return hit
+
+
+def occlusion_visible(state, observer=None):
+    """:func:`_occlusion_visible` memoized on (scene, observer): the $245B table is
+    view-independent, so one raytrace serves every bearing at an observer."""
+    obs = state.player if observer is None else observer
+    return memo(
+        _OCCLUSION_CACHE,
+        (scene_key(state), obs, state.obj_x[obs], state.obj_y[obs]),
+        _CACHE_MAX,
+        lambda: _occlusion_visible(state, obs),
+    )
+
+
+def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
     """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
-    $2845 examination count. Non-object tiles the occlusion table hides are examined
-    but dropped before fill; each kept tile carries its projection, H and W."""
+    $2845 examination count under ``mode``'s $2993 buffer window. Non-object tiles the
+    occlusion table hides are examined but dropped; each kept tile carries its H and W.
+    """
     if observer is None:
         observer = state.player
-    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer)
+    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode)
     n_examine, rows, cache = _scan_visible(state, setup)
-    visible = _occlusion_visible(state)
+    visible = occlusion_visible(state, observer)
 
     def proj(col, row):
         col &= 0xFF
@@ -414,9 +458,9 @@ def project_scene(state, h_angle, v_angle, observer=None):
     return tiles, n_examine
 
 
-def visible_tiles(state, h_angle, v_angle, observer=None):
+def visible_tiles(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
     """The plotted-tile list from :func:`project_scene` (drops n_examine)."""
-    return project_scene(state, h_angle, v_angle, observer)[0]
+    return project_scene(state, h_angle, v_angle, observer, mode)[0]
 
 
 FRAME_CYCLES = 19656.0  # PAL frame
@@ -464,6 +508,21 @@ def _inview_object_base(state, tiles):
     return total
 
 
+def _terrain_poly_base(tiles):
+    """prepare_polygon ($2D6C) floor over the plotted TERRAIN tiles: a flat tile is one
+    quad, a sloped one two triangles (plot_two_triangles $2A8A), each prepared once per
+    wide-buffer section ($0010 < 2 at $2AAB). Charged whether or not the polygon lands
+    in the fill band -- an off-band polygon still clips, which the area term prices 0.
+    A non-object tile byte carries its own slope nibble, so this needs no terrain read.
+    """
+    npoly = 0
+    for tile in tiles:
+        tb = tile["tile_byte"]
+        if tb < mm.OBJECT_TILE:
+            npoly += 2 if tb & 0x0F else 1
+    return npoly * SECTIONS * C_PREP_CALL
+
+
 _EXACT_WARNED = [False]
 
 
@@ -489,22 +548,29 @@ def _exact_render_cost(state, h, v, observer):
         return None
 
 
-def render_cost(state, view, observer=None):
-    """One plot_world pass in PAL frames (docs/render_cost.md):
-    ``(BASE + N_examine*C_EXAMINE + sum_tiles(60*H + 1.75*H*W) + object_base)/19656``.
-    ``view`` maps ``h_angle``/``v_angle``; 0.0 if none. With ``RENDER_COST_BACKEND=py65``
-    (ROM present) the exact emulated plot_world cost replaces this proxy."""
+def render_cost(state, view, observer=None, mode=PLAY_MODE):
+    """One plot_world pass in PAL frames (docs/render_cost.md): examine floor +
+    terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
+    buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
+    ``RENDER_COST_BACKEND=py65`` (ROM present) replaces the proxy for the play buffer.
+    """
     if not view or view.get("h_angle") is None:
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
-    exact = _exact_render_cost(state, h, v, observer)
-    if exact is not None:
-        return exact
-    tiles, n_examine = project_scene(state, h, v, observer)
-    area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
-    obj_base = _inview_object_base(state, tiles)
-    return (BASE_CYCLES + n_examine * C_EXAMINE + area + obj_base) / FRAME_CYCLES
+    if mode == PLAY_MODE:
+        exact = _exact_render_cost(state, h, v, observer)
+        if exact is not None:
+            return exact
+    obs = state.player if observer is None else observer
+
+    def make():
+        tiles, n_examine = project_scene(state, h, v, obs, mode)
+        area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
+        base = _terrain_poly_base(tiles) + _inview_object_base(state, tiles)
+        return (BASE_CYCLES + n_examine * C_EXAMINE + area + base) / FRAME_CYCLES
+
+    return memo(_COST_CACHE, (scene_key(state), obs, h, v, mode), _CACHE_MAX, make)
 
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/render_cost.md).
@@ -518,7 +584,9 @@ SETTLE_FIXED_FRAMES = float(os.environ.get("SETTLE_FIXED_FRAMES", "176"))
 def viewpoint_replot_frames(state, view, observer=None):
     """Transfer/viewpoint-change settle in frames (docs/render_cost.md): fixed tune
     wait + fixed $245B/$3700/fill/status foreground + ``REPLOT_PASSES`` plot_world
-    passes. Live $9630 settle 259-460f; lands within ~22% median."""
+    passes, all seen from ``observer`` (the POST-transfer eye $0C63; default player).
+    Live $9630 settle 259-460f; median abs error <15%
+    (``test_viewpoint_replot_lands_in_live_settle_band``)."""
     return (
         TUNE_TRANSFER_FRAMES
         + SETTLE_FIXED_FRAMES

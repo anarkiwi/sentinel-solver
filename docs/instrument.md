@@ -41,7 +41,7 @@ Each field has a **tier**:
 | Tier | Fields | Meaning |
 |------|--------|---------|
 | `CORE` | objects, enemy cooldowns, energy, tiles, discharge/meanie arrays, `$1335`, `$0C50` | the state the sim claims to reproduce frame-for-frame; a CORE divergence is a real model/ROM disagreement |
-| `SWEEP` | cursor `$0090`, PRNG `$0C7B-$0C7F` | the ROM advances these once per frame; the sim's `advance_frame` collapses a whole 8-slot cursor sweep into one frame, so they diverge by construction |
+| `SWEEP` | cursor `$0090`, PRNG `$0C7B-$0C7F` | PRNG drives unreadable hyperspace/meanie landing coords (a by-design non-goal, § gameplay); cursor `$0090` sets enemy processing order — its divergence is the cursor-phase defect below, not an accepted artifact |
 | `SCRATCH` | `$0014`, `$0C56-$0C58`, `$0C68`, `$0C76`, `$0CDD` | LOS/targeting bytes the ROM rewrites every scan; transient |
 
 The instrument records the first frame each tier first disagrees and stops on the
@@ -72,39 +72,30 @@ their fields.
 python -m driver.instrument 335 --frames 1200 --follow
 ```
 
-## The frame→tick cadence skew (fixed) and the residual
+## CORE divergence is a defect to drive to zero
 
-The first CORE divergence the instrument originally pinned was a **frame→tick
-cadence skew**: `advance_frame` ran the cooldown clock *before* the enemy sweep, so
-an enemy the cooldown tick made due was acted on in that *same* frame, whereas the
-ROM runs the foreground sweep (`$1289`) *before* that frame's raster-IRQ cooldown
-tick (`$9663`) and so defers the action to the next frame. The sim's enemy therefore
-rotated one frame early — on landscape 0, slot 0's facing `obj[0].h_angle $09C0` and
-`rotation_cd $0C28` led the ROM by one frame at frame 50; on 335, slot 4 (`$09C4` /
-`$0C2C`) at frame 20.
+The bar is **zero CORE divergence over the full race**. Fidelity is binary: a sim
+that reproduces enemy phase 97% of the time is 0% correct on the outcome it decides,
+because one rotation step of drift places a body into a gaze the planner modelled
+empty. A CORE divergence is a model bug to eliminate — never a "residual" or
+"readout artifact" to explain away.
 
-The fix reorders `advance_frame` to sweep-then-cooldown (`sentinel/enemies.py`),
-matching the ROM's within-frame order. The rotation now commits on the same frame the
-ROM commits it, and the first CORE divergence moves well past the old point (0: 50 →
-84; 335: 20 → 32).
+Two mechanisms are pinned:
 
-What remains at that later frame is a **readout artifact, not a model error**:
+- **Frame→tick order skew (fixed).** `advance_frame` once ran the cooldown clock
+  *before* the enemy sweep, committing a due enemy's rotation one frame early vs the
+  ROM order (foreground `$1289` before raster `$9663`). Reordered to match; on ls0
+  slot 0 `obj[0].h_angle`/`rotation_cd` led the ROM by one frame at frame 50, on 335
+  slot 4 at frame 20 before the fix.
+- **Cursor-phase sub-frame floor (ls42 first CORE, ~frame 50).** The live foreground
+  sweeps the enemy cursor `$0090` at **~3.43 `update_enemies` calls/frame** (measured
+  3-or-4, period-7 — not the model's 1 or full-8), so it matters *which* slot is
+  processed *when*. The 3-vs-4 split each frame rides a sub-frame CPU-cycle
+  accumulator that is **absent from the 64KB seed**, so a RAM-seeded sim drifts ±1
+  frame on when each enemy's slot is swept — the `enemy.update_cd $0C30+N` divergence
+  that cascades to `obj.h_angle`. This is a bounded ±1-frame floor, not a "residual":
+  zero needs a cycle-accurate loop model plus a canonical sub-frame seed.
 
-| Tier | First frame (ls 0 / 335) | Fields |
-|------|--------------------------|--------|
-| `SWEEP` | 1 | `cursor $0090`, `prng[0..4] $0C7B-$0C7F` |
-| `CORE` | 84 / 32 | `enemy[N].update_cd $0C30+N` (emu `$04`, sim `$01`) |
-| `SCRATCH` | 51 / 21 | `fov_relative_h $0C57` |
-
-- **SWEEP at frame 1** is by construction: the sim advances the PRNG/cursor a
-  whole cursor sweep per frame while the ROM advances them one slot per frame.
-- **The residual CORE is a mid-routine interrupt split.** The ROM's foreground
-  `consider_enemy_state` reloads the enemy's `update_cooldown` to `$04` *early* in the
-  routine and commits the rotation at its *end*. The per-frame raster marker `$9630`
-  the instrument locks to falls inside that routine on the frame it fires, so a live
-  read catches `update_cd` already reloaded (`$04`) while the sim — which applies the
-  whole routine atomically one frame later — still holds the pre-reload `$01`. Both
-  worlds reconverge on the very next frame. It is a one-byte, self-healing snapshot
-  phase of an internal cooldown, cycle-timing dependent (a different boot interrupts
-  at a different instruction), and carries none of the enemy's gameplay-visible facing
-  state — which now tracks the ROM frame-for-frame.
+`driver/test_enemy_sim_divergence.py` (frame-locked, strict) is the gate: it must
+reach zero CORE divergence. The PRNG `$0C7B-$0C7F` is the only by-design non-goal
+(unreadable landing coords); the cursor `$0090` is not — it must track the ROM.
