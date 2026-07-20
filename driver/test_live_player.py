@@ -1,6 +1,7 @@
 """Live-execution parity for the composed player: the stale-step gate must make
 progress, and the aim charge must agree with the executor's REUSE decision."""
 
+import math
 import os
 import sys
 import types
@@ -8,12 +9,22 @@ import types
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from driver import kbd_aim, live_player  # noqa: E402
-from sentinel.astar_player import AStarPlayer  # noqa: E402
+from sentinel.astar_player import (  # noqa: E402
+    AStarPlayer,
+    GATE_BODY,
+    GATE_TILE,
+    PlanStep,
+)
 from sentinel.game import Game  # noqa: E402
 from sentinel.playerbase import TAP_FRAMES  # noqa: E402
 
 _LANDSCAPE = 42
 _VIEW = {"h_angle": 0x60, "v_angle": 0x35, "cursor": [80, 95]}
+
+
+def _step(verb, tile, gate):
+    """A plan step carrying the gate rule the search would have recorded."""
+    return PlanStep(verb, tile, 310.0, gate, math.inf, math.inf)
 
 
 def _live(player, name):
@@ -69,7 +80,7 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
     must wait -- advancing the world -- and the step then proceeds on the raw budget."""
     game = Game.new(_LANDSCAPE)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
-    step = ("boulder", (9, 8))
+    step = _step("boulder", (9, 8), GATE_TILE)
     player.plan = [step]
     player._pi = 0
     player._search = lambda margin_k=None: [step]  # fixpoint: same head every time
@@ -92,7 +103,7 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
         if fired:
             break
     assert waits, "the repeated stale verdict never advanced the world"
-    assert fired == [step], "the stale step never progressed"
+    assert fired == [(step.verb, step.tile)], "the stale step never progressed"
 
 
 def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
@@ -100,7 +111,7 @@ def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
     however often it repeats, and each repeat advances the world."""
     game = Game.new(_LANDSCAPE)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
-    step = ("boulder", (9, 8))
+    step = _step("boulder", (9, 8), GATE_TILE)
     player.plan = [step]
     player._search = lambda margin_k=None: [step]
     player._view_for = lambda tile: _VIEW
@@ -137,10 +148,13 @@ def test_stale_gate_uses_the_window_the_plan_gated_the_step_with():
     wide, narrow = 100000.0, 1.0
     player._player_window = lambda exclude=None: narrow
     player._gaze_window = lambda tile, exposed=None: wide
-    assert not player._plan_step_stale("boulder", (9, 8), _VIEW)
-    assert not player._plan_step_stale("transfer", (9, 8), _VIEW)
-    assert player._plan_step_stale("absorb", (9, 8), _VIEW)
+    build = _step("boulder", (9, 8), GATE_TILE)
+    xfer = _step("transfer", (9, 8), GATE_TILE)
+    strike = _step("absorb", (9, 8), GATE_BODY)
+    assert not player._plan_step_stale(build, _VIEW)
+    assert not player._plan_step_stale(xfer, _VIEW)
+    assert player._plan_step_stale(strike, _VIEW)
     player._player_window = lambda exclude=None: wide
     player._gaze_window = lambda tile, exposed=None: narrow
-    assert player._plan_step_stale("boulder", (9, 8), _VIEW)
-    assert not player._plan_step_stale("absorb", (9, 8), _VIEW)
+    assert player._plan_step_stale(build, _VIEW)
+    assert not player._plan_step_stale(strike, _VIEW)

@@ -21,12 +21,21 @@ until a cone rotates onto it); the search carries the cheap enemy phase, gates e
 on `window >= aim + settle`, and defers the keyboard-aim cursor sweep to execution.
 PRNG-driven hyperspace/meanie landings are never read.
 
-- **Node** (`_Node`): state, cost-so-far `g`, the `(verb, tile)` path, committed bearing
+- **Node** (`_Node`): state, cost-so-far `g`, the `PlanStep` path, committed bearing
   and cursor. **Dedup key** (`_key`): player tile + eye, energy, remaining enemies
   (facing >> 3), built boulder/robot stacks.
-- **Frontier**: `f = g + weight * h`, `weight = 1.4`; `node_budget` 200000 expansions,
-  `time_budget` 60 s per search (each replan gets its own window; think time is free live,
-  `LiveMixin._advance` being a no-op).
+- **`PlanStep`** (a `NamedTuple`): `verb`, `tile`, `budget` (what `_charge` charged),
+  `gate` (`GATE_BODY` — the player's own window, via `_hot`; or `GATE_TILE` — the target
+  tile's, via `_drain_gate`), `window` (that gate's predicted value) and `pbody` (the
+  body window at plan time). Execution and the live audit read the premise off the step
+  instead of re-deriving it.
+- **Frontier**: `f = g + weight * h`, `weight = 1.4`; bounded by `node_budget` (200000
+  expansions) alone, so a plan is a pure function of the board. `time_budget` is a
+  wall-clock cut, **off by default**: setting it makes a loaded host truncate the search
+  and play a different, worse line. Think time is free live (`LiveMixin._advance` is a
+  no-op), so there is nothing to buy by cutting it short.
+- `audit_pred` (off) records each step's predicted body window: it costs a `_player_window`
+  per charged step, i.e. per speculative branch, and only `driver/plan_audit.py` reads it.
 - Landable tile sets, stance view dicts and below-eye band marches are memoized per
   (terrain map, observer) signature; the band march otherwise dominates search cost.
 
@@ -101,9 +110,10 @@ Sentinel-last lock honoured), else `_escape_transfer` — cheapest aim, widest w
 tiebreak, only bodies beating the current window whose aim+settle fits inside it.
 
 **Stale step.** `_plan_step_stale` (live override in `driver/live_player.py`) re-checks the
-next step against the live enemy phase **on the window the plan gated it with**: the body
-window for an absorb, the target tile's gaze window for a build or transfer, against
-`budget + _margin(0)`. First verdict runs `_restale`'s ladder: `_search()`, else
+next step against the live enemy phase **on the window the plan gated it with** —
+`step.gate`, carried by the search: the body window for an absorb, the target tile's gaze
+window for a build or transfer. The budget is priced from the LIVE view (the executor pays
+the live aim cost), against `budget + _margin(0)`. First verdict runs `_restale`'s ladder: `_search()`, else
 `_defend()`, else `_search(margin_k=0.0)`, else `_wait()`.
 
 **Progress guarantee.** `_search` does not advance the world (`_observe` leaves the CPU

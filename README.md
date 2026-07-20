@@ -7,8 +7,9 @@ Transition primitives are validated byte-for-byte against the real 6502 code (go
 fixtures, so CI proves them without the ROM); the enemy clock is gated frame-for-frame
 against the running game by the divergence instrument.
 
-The A\* player wins landscape 42 **live, on the real game** — 39 actions, final energy
-11, verified by the ROM's own landscape-complete flag (`$0CDE` bit 6):
+The A\* player wins landscape 42 **live, on the real game** — 36 actions, final energy
+10, verified by the ROM's own landscape-complete flag (`$0CDE` bit 6). The plan is a pure
+function of the board, so the run reproduces frame for frame:
 
 ![A* player winning landscape 42 live in VICE](docs/media/ls42_astar_win.png)
 
