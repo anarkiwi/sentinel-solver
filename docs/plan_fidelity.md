@@ -64,6 +64,35 @@ action's settle model being wrong. `n` is thin: the +27.3 f transfer mean rests 
 samples and must not be modelled on. The `+146` / `+137` outliers are the informative
 samples -- busy-scene pans priced at the flat `REDRAW_BASE = 34`, since replaced.
 
+## The live ls42 loss is a gate on the wrong window (measured, not inferred)
+
+Live ls42 fails identically every run: 11 steps, then `boulder (1,24)`, then a forced
+hyperspace off the climb to energy 0. `driver/plan_audit.py` isolates it, and **it is not
+timing**. Over the 11 executed steps charged is 3108 f vs measured 3047 (**-2%**),
+whole-step rms **24.1 f**, and the enemy clock is right (live rotations every ~700-900 f
+against `ROT_PERIOD_FRAMES` 749). The plan's predicted enemy phase tracks live throughout.
+
+The audit keeps two windows and only one is gated:
+
+| step | pred_win | live_win | pred_pbody | live_pbody |
+|---|---|---|---|---|
+| `boulder (1,24)` FIRE | 8148 | 7983 | 655 | 490 |
+| `robot (1,24)` STALE | 7751 | 7552 | 258 | **60** |
+
+`win` is the **destination tile's** window -- 7983 f, enormous, and the plan is right
+about it to within 2%. `pbody` is the **player's own body** window, and it collapses
+490 -> 60.
+
+`_pick_hop` drain-gates on `_gaze_window(tile) >= HOP_FRAMES + margin`, i.e. on the tile
+being built on. **Nothing gates the ~750 f the hop takes against the window the player's
+own body has left**, and the player stands on its old tile for all of it. Each individual
+step passes its own gate (boulder: budget 398 < pbody 655) while the 3-step macro does not
+(750 > 655), so the hop is committed and the body is drained mid-macro.
+
+The hop cost itself is sound: `HOP_FRAMES = 700` sits under two live-measured hops
+(745, 879 f) and within 25% (`test_hop_budget.py`). An earlier claim here that it
+under-budgets 2-3x was wrong and is retracted below.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled
@@ -117,5 +146,10 @@ samples -- busy-scene pans priced at the flat `REDRAW_BASE = 34`, since replaced
   a discriminator arm. Two nodes means the root's successors are pruned at generation --
   a gate rejecting everything, not a depth or budget limit (`--node-budget 200000` never
   mattered). Reproduce offline by feeding a live-read ls335 start state to `_search`.
+- "`HOP_FRAMES` under-budgets every hop 2-3x (700 vs a real 1400-2300)." Wrong: that
+  came from a broken offline replay (diverged state, `last_bearing` reset to None so
+  every action paid a full toggle+pan, transfer settle from the pre-transfer eye).
+  Live hops measure 745 and 879 f. Replacing the flat budget with the computed one
+  made the live player take ZERO actions, because it blocked every hop.
 - "Enemy freeze under `plotting=True` is the lever": it freezes enemies outright
   (`rcd=[0,0]`), it is not a fidelity knob.
