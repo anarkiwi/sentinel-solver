@@ -55,6 +55,5 @@ pytest -n auto
 - [docs/render_cost.md](docs/render_cost.md) — the `plot_world` render/settle frame-cost model that prices redraw and transfer settle.
 - [docs/driver.md](docs/driver.md) — the live driver: boot/enter/record, keyboard aim → fire → verify, container plumbing.
 - [docs/instrument.md](docs/instrument.md) — the shared frame-locked divergence instrument: schema, tiers, first-disagreement report.
-- [docs/plan_fidelity.md](docs/plan_fidelity.md) — A* plan-vs-live frame fidelity: the measured error budget and the open problems.
-- [docs/handoff.md](docs/handoff.md) — current state and ranked next steps.
+- [docs/plan_fidelity.md](docs/plan_fidelity.md) — current state: the clocks are exact, the players are broken; measured error budget and ranked open problems.
 </content>
