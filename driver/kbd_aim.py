@@ -22,6 +22,7 @@ the action key. No pixels, no angle pokes.
 import os
 
 from sentinel import aimcost as ac
+from sentinel import memmap as mm
 
 # run_until_pc hang guards. MEASURED: VICE services the binary monitor once per
 # emulated frame while the CPU runs (halted 0.04 ms/cmd, warp ~1.4 ms, real-time
@@ -45,13 +46,13 @@ _SCAN_WAIT_PASSES = int(
     os.environ.get("KBD_SCAN_WAIT_PASSES", "10")
 )  # hang guard only: a scan wait is bounded by the plot ($0CE4), never by a clock
 
-A_SLOT = 0x000B
-A_H = 0x09C0
-A_V = 0x0140
-A_CX = 0x0CC6
-A_CY = 0x0CC7
-A_SFLAG = 0x0C5F
-A_PLOT = 0x0CE4
+A_SLOT = mm.PLAYER_OBJECT  # 0x000B
+A_H = mm.OBJECTS_H_ANGLE  # 0x09C0 + slot
+A_V = mm.OBJECTS_V_ANGLE  # 0x0140 + slot
+A_CX = 0x0CC6  # sights cursor column (no memmap entry)
+A_CY = 0x0CC7  # sights cursor row (no memmap entry)
+A_SFLAG = 0x0C5F  # sights-on flag, bit7 (no memmap entry)
+A_PLOT = 0x0CE4  # busy-plotting gate, bit7 (no memmap entry)
 
 K_RIGHT, K_LEFT, K_DOWN, K_UP, K_UTURN = "D", "S", "L", "COMMA", "U"
 
@@ -306,6 +307,26 @@ class KbdDriver:
         )
         return self._pan_angle(addr, want, dir_fn)
 
+    def coarse_hv(self, view):
+        """SIGHTS OFF: pan bearing then pitch to `view`, with ONE retry when either did
+        not land (a pan can lose a notch to a redraw; the second pass is self-correcting).
+        Returns ``(okh, okv, status)``. A "hyperspace" result SHORT-CIRCUITS the retry:
+        the player teleported mid-aim, so the requested angles are for the wrong eye and
+        re-driving them would aim from the new tile. The single home of this ladder --
+        both :meth:`drive_to` and the plan runner's aim step drive it.
+        """
+        okh = self.coarse_h(view["h_angle"])
+        okv = self.coarse_v(view["v_angle"])
+        if "hyperspace" not in (okh, okv) and (okh != "ok" or okv != "ok"):
+            okh = self.coarse_h(view["h_angle"])
+            okv = self.coarse_v(view["v_angle"])
+        status = (
+            "hyperspace"
+            if "hyperspace" in (okh, okv)
+            else ("unreachable" if "unreachable" in (okh, okv) else "ok")
+        )
+        return okh, okv, status
+
     def fine_cursor(self, cx, cy):
         """SIGHTS ON: drive the sights cursor to (cx, cy) DIAGONALLY -- move_sights ($9958)
         steps cx ($9965) and cy ($9994) in ONE call, so a held horizontal+vertical pair moves
@@ -389,9 +410,8 @@ class KbdDriver:
         """
         if not self.sights_set(False):  # coarse: fast rotate
             return {"h": self.hang(), "v": self.vang(), "cur": self.cur(), "ok": False}
-        okh = self.coarse_h(view["h_angle"])
-        okv = self.coarse_v(view["v_angle"])
-        if "hyperspace" in (okh, okv):  # teleported mid-aim: abort, do not re-drive
+        okh, okv, status = self.coarse_hv(view)
+        if status == "hyperspace":  # teleported mid-aim: abort, do not re-drive
             return {
                 "h": self.hang(),
                 "v": self.vang(),
@@ -399,14 +419,6 @@ class KbdDriver:
                 "ok": False,
                 "status": "hyperspace",
             }
-        if okh != "ok" or okv != "ok":
-            okh = self.coarse_h(view["h_angle"])
-            okv = self.coarse_v(view["v_angle"])
-        status = (
-            "hyperspace"
-            if "hyperspace" in (okh, okv)
-            else ("unreachable" if "unreachable" in (okh, okv) else "ok")
-        )
         oks = self.sights_set(True)  # fine: cursor selection
         cx, cy = view["cursor"]
         okc = self.fine_cursor(cx, cy)

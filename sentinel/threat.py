@@ -1,16 +1,8 @@
 """Planner-facing enemy exposure and forecasting helpers.
 
-Built on the bit-exact object visibility of :mod:`sentinel.relative` and the
-round advance of :mod:`sentinel.enemies`, this module answers the geometric
-questions a strategy search asks about standing/building on a tile:
-
-  * :func:`is_exposed` / :func:`exposed_tiles` -- could ANY enemy at ANY rotation
-    ever see a robot on this tile (terrain LOS, facing gate dropped)?
-  * :func:`gaze_distance` -- how far off each enemy's CURRENT facing a tile sits.
-  * :func:`ticks_until_seen` -- rounds until some enemy first sees the tile within
-    its ACTUAL rotating field of view.
-  * :func:`meanie_safe` -- whether standing here arms no meanie-spawn.
-  * :func:`drain_over_window` -- energy the player loses while the world advances.
+Built on the bit-exact object visibility of :mod:`sentinel.relative`, this module
+answers the geometric question a strategy search asks about standing/building on a
+tile: can an observer see a robot standing there (terrain LOS, facing gate dropped)?
 
 A visibility query places a phantom robot on the queried tile -- mirroring the
 placement math of :func:`sentinel.actions.create` without spending energy or
@@ -19,12 +11,9 @@ Every query operates on a clone or places-then-restores, so the caller's state i
 never mutated.
 """
 
-import math
-
-from sentinel import memmap as mm, relative, enemies, terrain
+from sentinel import memmap as mm, relative, terrain
 
 FOV_FULL = 0x100  # fov_width that drops the facing gate (in_fov always True)
-ROBOT_EYE = 0.875  # a robot's top above its foot tile ($E0 fraction)
 
 
 def _free_slot(state):
@@ -68,52 +57,11 @@ def _restore_tile(state, tile, old_tile_byte, slot):
     state.obj_flags[slot] |= 0x80
 
 
-def is_exposed(state, x, y, object_top=ROBOT_EYE):
-    """Whether ANY enemy could ever see a robot on tile (x, y) with the facing gate
-    dropped (terrain LOS only). False if the tile can't host a phantom robot."""
-    clone = state.clone()
-    slot = _free_slot(clone)
-    if slot is None:
-        return False
-    old = terrain.tile_byte(clone, x, y)
-    if not _place_phantom(clone, (x, y), slot):
-        return False
-    seen = any(
-        relative.can_see_object(clone, e, slot, mm.T_ROBOT, FOV_FULL)["full"]
-        for e in enemies.enemy_slots(clone)
-    )
-    _restore_tile(clone, (x, y), old, slot)
-    return seen
-
-
-def exposed_tiles(state, tiles, object_top=ROBOT_EYE):
-    """The subset of `tiles` that are :func:`is_exposed`. Clones once and reuses a
-    single free slot across the whole batch (the batch hot path)."""
-    clone = state.clone()
-    ens = enemies.enemy_slots(clone)
-    result = set()
-    if not ens:
-        return result
-    slot = _free_slot(clone)
-    if slot is None:
-        return result
-    for x, y in tiles:
-        old = terrain.tile_byte(clone, x, y)
-        if not _place_phantom(clone, (x, y), slot):
-            continue
-        if any(
-            relative.can_see_object(clone, e, slot, mm.T_ROBOT, FOV_FULL)["full"]
-            for e in ens
-        ):
-            result.add((x, y))
-        _restore_tile(clone, (x, y), old, slot)
-    return result
-
-
 def player_sees_tile(state, tile, observer_slot, eye_z=None):
     """True iff the observer at `observer_slot` can see `tile` (x, y) -- the ROM's
     direct observer->object geometric line of sight (relative.can_see_object with the
-    facing gate dropped), the mirror of :func:`is_exposed`'s enemy->tile test. For an
+    facing gate dropped), the mirror of the planner's enemy->tile test
+    (:meth:`sentinel.playerbase.BasePlayer._exposing_enemies`). For an
     occupied tile (platform/Sentinel/boulder/...) the real object in its slot is tested;
     for bare terrain a phantom T_ROBOT is placed on the tile and tested. `eye_z`
     overrides the observer's standing height. Runs on a clone; the caller's state is
@@ -141,116 +89,3 @@ def player_sees_tile(state, tile, observer_slot, eye_z=None):
         ]
         > 0
     )
-
-
-def gaze_distance(state, tiles):
-    """For each tile, the minimum angular distance (0..128) from any enemy's
-    CURRENT facing to the bearing toward that tile. 128 when there is no enemy.
-    Larger == further out of an enemy's instantaneous line of sight right now."""
-    tiles = list(tiles)
-    best = {t: 128 for t in tiles}
-    for s in range(mm.NUM_SLOTS):
-        if state.obj_flags[s] & 0x80:
-            continue
-        if state.obj_type[s] not in mm.ENEMY_TYPES:
-            continue
-        ex, ey = state.obj_x[s], state.obj_y[s]
-        gaze = state.obj_h_angle[s]
-        for t in tiles:
-            dx, dy = t[0] - ex, t[1] - ey
-            if dx == 0 and dy == 0:
-                continue
-            bearing = int(round(math.atan2(dy, dx) * 128.0 / math.pi)) & 0xFF
-            diff = (bearing - gaze) & 0xFF
-            ang_diff = min(diff, 256 - diff)
-            if ang_diff < best[t]:
-                best[t] = ang_diff
-    return best
-
-
-def ticks_until_seen(state, x, y, horizon=256, object_top=ROBOT_EYE):
-    """Rounds until some enemy first sees (x, y) within its ACTUAL rotating field
-    of view; `horizon` if never within the horizon. 0 == seen now.
-
-    The phantom is kept OUT of the enemy-rotation state -- placed only for the
-    per-tick visibility test then restored -- so enemy targeting/rotation is not
-    perturbed by the query target."""
-    clone = state.clone()
-    clone.mem[mm.PLAYER_NOT_ACTED] = 0  # active-play cooldown clock (see gaze.py)
-    slot = _free_slot(clone)
-    if slot is None:
-        return horizon
-    for t in range(horizon):  # horizon is now in FRAMES
-        old = terrain.tile_byte(clone, x, y)
-        if _place_phantom(clone, (x, y), slot):
-            seen = any(
-                relative.can_see_object(clone, e, slot, mm.T_ROBOT, enemies.FOV_SCAN)[
-                    "full"
-                ]
-                for e in enemies.enemy_slots(clone)
-            )
-            _restore_tile(clone, (x, y), old, slot)
-            if seen:
-                return t
-        enemies.advance_frame(clone)
-    return horizon
-
-
-def meanie_safe(state, tile):
-    """True iff standing at `tile` carries NO meanie-spawn risk.
-
-    Ported from attempt_to_create_meanie $19A1: an enemy arms a meanie when it sees
-    the player PARTIALLY at `tile` (A -- head but not base, $0014 == $40) and there is
-    some tree within 10 tiles in BOTH axes ($19C3/$19D5 -> B) that the enemy can fully
-    see ($19DE $0014 bit7 -> C).  The ROM applies NO tree->player line-of-sight test,
-    so C is sufficient.  A conservative query may over-report danger but must never
-    under-report.  All tests run on a clone."""
-    clone = state.clone()
-    ens = enemies.enemy_slots(clone)
-    if not ens:
-        return True
-    trees = [
-        s
-        for s in range(mm.NUM_SLOTS)
-        if not clone.is_empty(s) and clone.obj_type[s] == mm.T_TREE
-    ]
-    if not trees:
-        return True
-    slot = _free_slot(clone)
-    if slot is None:
-        return True
-    x, y = tile
-    for e in ens:
-        # (A) the enemy sees the player partially at `tile`.
-        old = terrain.tile_byte(clone, x, y)
-        if not _place_phantom(clone, (x, y), slot):
-            return True
-        res = relative.can_see_object(clone, e, slot, mm.T_ROBOT, FOV_FULL)
-        partial = bool(
-            res["in_fov"]
-            and res["probes"]
-            and res["probes"][0]
-            and not res["probes"][1]
-        )
-        _restore_tile(clone, (x, y), old, slot)
-        if not partial:
-            continue
-        for tr in trees:
-            # (B) tree within 10 tiles of `tile` in both axes.
-            if abs(clone.obj_x[tr] - x) >= 10 or abs(clone.obj_y[tr] - y) >= 10:
-                continue
-            # (C) the enemy fully sees the tree -- sufficient to arm a meanie.
-            if relative.can_see_object(clone, e, tr, mm.T_TREE, FOV_FULL)["full"]:
-                return False
-    return True
-
-
-def drain_over_window(state, ticks):
-    """Energy the actual player loses while the world advances `ticks` FRAMES from
-    `state`. The player object is already at its position in `state`."""
-    clone = state.clone()
-    clone.mem[mm.PLAYER_NOT_ACTED] = 0  # active-play cooldown clock (see gaze.py)
-    e0 = clone.energy
-    for _ in range(ticks):
-        enemies.advance_frame(clone)
-    return max(0, e0 - clone.energy)

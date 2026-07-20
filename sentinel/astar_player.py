@@ -31,12 +31,12 @@ from sentinel.playerbase import (
     FOV_MARGIN,
     HOP_COST,
     HOP_FRAMES,
+    ROBOT_EYE,
     SAFE_FRAMES,
     SIGHTS_CENTRE,
     TAP_FRAMES,
 )
 
-_ROBOT_EYE = 0.875
 # Per-op h floors from charged primitives: min aim == tap_action latch + per-verb settle floor.
 _AIM_FLOOR = float(TAP_FRAMES)  # minimal aim (_aim_frames with nu=ns=nv=cur=0)
 _OP_FLOOR = {
@@ -122,7 +122,7 @@ class AStarPlayer(BasePlayer):
         """Whether standing exposed for ``budget`` frames breaches the pessimistic
         end of the step-cost interval (``budget + _margin()``)."""
         if window is None:
-            window = self._body_drain_window()
+            window = self._player_window()
         return window < budget + self._margin()
 
     # ---------------------------------------------------------------- execute
@@ -265,15 +265,9 @@ class AStarPlayer(BasePlayer):
         inside the window the current body has left. Ranking on window alone picks a
         wide-window body half a pan away and is drained mid-aim -- while escaping, the
         aim IS the exposure, which is why the counterattack above sorts the same way."""
-        st = self.st
         here = self._player_window()
         cands = []
-        for s in range(mm.NUM_SLOTS):
-            if st.is_empty(s) or s == st.player or st.obj_type[s] != mm.T_ROBOT:
-                continue
-            tile = st.tile_of(s)
-            if self._top(tile) != s:
-                continue
+        for s, tile in self._robot_bodies():
             view = self._view_for(tile)
             if view is None:
                 continue
@@ -318,10 +312,13 @@ class AStarPlayer(BasePlayer):
             self._view_memo[sig] = primary
         return primary
 
-    def _sig(self):
+    def _sig(self, st=None):
         """Stance signature: object/terrain map + observer -- what every landability
-        answer is a pure function of (enemy facings never enter it)."""
-        return bytes(self.st.mem[0x0400:0x0800]) + bytes([self.st.player])
+        answer is a pure function of (enemy facings never enter it).  ``st`` defaults
+        to the working stance, but the expansion prologue prices candidate sets on a
+        node's own state before rebinding it."""
+        st = self.st if st is None else st
+        return bytes(st.mem[0x0400:0x0800]) + bytes([st.player])
 
     def _view_for(self, tile):
         """Cheapest keyboard view landing ``tile`` (execution only): memoized
@@ -332,14 +329,15 @@ class AStarPlayer(BasePlayer):
         each cost one cone instead of a whole-board re-sweep.  The cone is memoized
         per (sig, tile) too: the same below-eye tile is re-priced by every trial hop,
         probe and re-search at a stance, and the march was the search's top cost."""
-        tile = tuple(tile)
-        view = self._views_for_sig().get(tile)
-        if view is None and self._sees_tile(tile):
-            key = (self._sig(), tile)
-            view = self._cone_memo.get(key, _NO_VIEW)
-            if view is _NO_VIEW:
-                view = los.landable_view_targeted(self.st, tile)
-                self._cone_memo[key] = view
+        return self._view_with_band(tile, self._views_for_sig(), self._band_march)
+
+    def _band_march(self, tile):
+        """Targeted single-tile band march for ``tile``, memoized per (sig, tile)."""
+        key = (self._sig(), tile)
+        view = self._cone_memo.get(key, _NO_VIEW)
+        if view is _NO_VIEW:
+            view = los.landable_view_targeted(self.st, tile)
+            self._cone_memo[key] = view
         return view
 
     # ----------------------------------------------------------------- search
@@ -507,7 +505,7 @@ class AStarPlayer(BasePlayer):
         terrain-map + observer.  A coarse-cursor batch gives the exact tile set
         ~16x faster than the full sweep (the fine cursor only refines the view,
         recovered at execution)."""
-        sig = bytes(st.mem[0x0400:0x0800]) + bytes([st.player])
+        sig = self._sig(st)
         tiles = self._land_memo.get(sig)
         if tiles is None:
             tiles = self._coarse_landable(st)
@@ -673,10 +671,10 @@ class AStarPlayer(BasePlayer):
         window against the same hop budget, so a live run shows whether gating on it is
         right-but-unaffordable or mis-specified. Enforcing it live took the player from
         12 actions to 0, and the pure sim cannot see the question at all -- a fresh board
-        is FROZEN, where _body_drain_window() is inf and the gate never fires."""
+        is FROZEN, where _player_window() is inf and the gate never fires."""
         budget = HOP_FRAMES + (k - 1) * actioncost.SETTLE["create"]
         margin = self._margin()
-        body = self._body_drain_window()
+        body = self._player_window()
         self._hop_audit.append(
             {
                 "depth": self._depth,
@@ -708,12 +706,12 @@ class AStarPlayer(BasePlayer):
             base = self._tile_base(st, tile)
             if base is None:
                 continue
-            k = max(1, math.ceil((my_eye + EYE_EPS - _ROBOT_EYE - base) / BOULDER_H))
+            k = max(1, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
             if k > _HOP_BOULDERS:
                 continue
             if st.energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
                 continue
-            robot_eye = base + BOULDER_H * k + _ROBOT_EYE
+            robot_eye = base + BOULDER_H * k + ROBOT_EYE
             if robot_eye <= my_eye + EYE_EPS:
                 continue
             exposed = self._exposing_enemies(tile)
@@ -793,19 +791,6 @@ class AStarPlayer(BasePlayer):
                 out.append((tile, e))
         return out
 
-    def _body_drain_window(self, exclude=None):
-        """Frames until the player's OWN body is drainable (inf if never), ignoring
-        `exclude` -- the enemy an absorb is about to remove, so absorbing an attacker
-        still counts safe.  Bounds how long the player may stand exposed in an action.
-        """
-        st = self.st
-        if self._frozen():
-            return math.inf
-        exposed = [x for x in self._exposures(st, st.player) if x[0] != exclude]
-        if not exposed:
-            return math.inf
-        return self._gaze_window(st.player_xy(), exposed=exposed)
-
     def _c_absorb(self, node, tile, e):
         st = self._begin(node)
         if not actions.can_absorb(st, e):
@@ -814,7 +799,7 @@ class AStarPlayer(BasePlayer):
         if view is None:
             return None
         budget = self._aim_frames(view) + self._settle("absorb", view)
-        if self._hot(budget, self._body_drain_window(exclude=e)):
+        if self._hot(budget, self._player_window(exclude=e)):
             return None  # the player's body would be drained before the absorb fires
         g = node.g + self._charge(st, "absorb", tile)
         if not actions.absorb(st, e):
@@ -826,20 +811,8 @@ class AStarPlayer(BasePlayer):
         short; the player stays put so its own window bounds the aim.  Returns
         ``(g_delta, step)`` or ``None``.  ``pedestal_only`` skips the tree sweep so
         the inchworm recycle grabs only the player's own spent boulders/shells."""
-        my_eye = st.eye_z()
         want_trees = (not pedestal_only) and st.energy < HOP_COST + 6
-        for s in range(mm.NUM_SLOTS):
-            if st.is_empty(s) or s == st.player:
-                continue
-            otype = st.obj_type[s]
-            tile = st.tile_of(s)
-            if terrain.top_object(st, *tile) != s or tile == st.player_xy():
-                continue
-            if otype in (mm.T_ROBOT, mm.T_BOULDER):
-                if self._base_z(s) > my_eye + EYE_EPS:
-                    continue
-            elif not (otype == mm.T_TREE and want_trees):
-                continue
+        for _value, tile in self._reclaim_targets(st, want_trees):
             if not threat.player_sees_tile(st, tile, st.player):
                 continue
             view = self._view_for(tile)
@@ -848,7 +821,7 @@ class AStarPlayer(BasePlayer):
             ):
                 continue  # would be drained mid-reclaim: try a safer object
             g = self._charge(st, "absorb", tile)
-            if not actions.absorb(st, s):
+            if not actions.absorb(st, terrain.top_object(st, *tile)):
                 return None
             return g, ("absorb", tile)
         return None

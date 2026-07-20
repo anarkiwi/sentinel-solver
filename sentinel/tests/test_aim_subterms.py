@@ -5,6 +5,7 @@ misses, a pan's per-notch replot is scene-dependent), so a fused per-verb epsilo
 ill-posed: these pin the SUB-TERM mechanisms instead.
 """
 
+import functools
 import json
 import os
 
@@ -19,10 +20,15 @@ _TOGGLE_BOUND = (
 )  # two gated scans ($9678) + the last pan notch's queued unbuffering steps ($10EE 16 h / $1135 8 v), which must drain before the next scan fires
 
 
+@functools.lru_cache(maxsize=1)
+def _by_landscape():
+    """``[(landscape, rows)]`` of the recorded fixture, landscape-sorted (loaded once)."""
+    with open(_FIXTURE, encoding="utf-8") as fh:
+        return sorted(json.load(fh).items())
+
+
 def _rows():
-    with open(_FIXTURE) as fh:
-        data = json.load(fh)
-    return [(ls, r) for ls, rows in sorted(data.items()) for r in rows]
+    return [(ls, r) for ls, rows in _by_landscape() for r in rows]
 
 
 def _fresh_cursor_drives():
@@ -30,7 +36,7 @@ def _fresh_cursor_drives():
     re-centre: a sights toggle ran (so the cursor was reset) and the reuse fast path did
     not re-drive it first (which it does when a same-bearing probe misses)."""
     out = []
-    for ls, rows in sorted(json.load(open(_FIXTURE)).items()):
+    for ls, rows in _by_landscape():
         prev = None
         for row in rows:
             ach = row["ach"]

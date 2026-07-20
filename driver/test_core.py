@@ -10,34 +10,14 @@ sys.path.insert(0, os.path.dirname(HERE))
 from driver import core  # noqa: E402
 
 
-class FakeBM:
-    """A monitor over an in-memory 64KB image."""
-
-    def __init__(self):
-        self.mem = bytearray(0x10000)
-
-    def mem_get(self, a, b):
-        return bytes(self.mem[a : b + 1])
-
-    def set_player(self, slot, x, y):
-        self.mem[core.A_SLOT] = slot
-        self.mem[core.A_X + slot] = x
-        self.mem[core.A_Y + slot] = y
-
-    def set_energy(self, e):
-        self.mem[core.A_ENERGY] = e
+def test_energy_is_six_bit(fake_bm):
+    fake_bm.set_energy(0x4A)  # 0x4A & 0x3F == 0x0A
+    assert core.energy(fake_bm) == 0x0A
 
 
-def test_energy_is_six_bit():
-    bm = FakeBM()
-    bm.set_energy(0x4A)  # 0x4A & 0x3F == 0x0A
-    assert core.energy(bm) == 0x0A
-
-
-def test_player_tile():
-    bm = FakeBM()
-    bm.set_player(62, 8, 17)
-    assert core.player_tile(bm) == (8, 17)
+def test_player_tile(fake_bm):
+    fake_bm.set_player(62, 8, 17)
+    assert core.player_tile(fake_bm) == (8, 17)
 
 
 def test_landscape_from_digits_keeps_the_high_bcd_byte():

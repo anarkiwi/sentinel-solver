@@ -217,8 +217,18 @@ def perform_step(ex, drv, label, stp, log, result):
         # fires only if the live ray still lands on `tile`, else it falls back to a full
         # re-aim -- so reuse can never fire on the wrong tile.
         reuse = drv.sights_live_on() and drv.committed_bearing() == want_bearing
+
+        def _aim_dropped(e):
+            nonlocal reuse
+            reuse = False  # a dropped pass may leave the bearing/cursor half-driven
+            drv.clear_bearing()
+            log(
+                f"[{label}] {verb} {tile}: aim monitor drop "
+                f"({type(e).__name__}); reconnecting + re-aiming"
+            )
+
         for _aim_try in range(3):
-            try:
+            with core.drop_guard(ex.bm, log, _aim_dropped):
                 if reuse:
                     okc = drv.fine_cursor(*view["cursor"])
                     rx, ry, los_hit, centre = core.probe_tile(ex.bm)
@@ -234,19 +244,10 @@ def perform_step(ex, drv, label, stp, log, result):
                 if not drv.sights_set(False):
                     log(f"[{label}] {verb} {tile}: sights would not turn OFF")
                     return "fail"
-                okh = drv.coarse_h(view["h_angle"])
-                okv = drv.coarse_v(view["v_angle"])
-                if "hyperspace" in (okh, okv):
+                okh, okv, status = drv.coarse_hv(view)
+                if status == "hyperspace":
                     log(f"[{label}] {verb} {tile}: HYPERSPACED mid-aim; aborting aim")
                     return "aim_hyperspace"
-                if okh != "ok" or okv != "ok":
-                    okh = drv.coarse_h(view["h_angle"])
-                    okv = drv.coarse_v(view["v_angle"])
-                    if "hyperspace" in (okh, okv):
-                        log(
-                            f"[{label}] {verb} {tile}: HYPERSPACED mid-aim; aborting aim"
-                        )
-                        return "aim_hyperspace"
                 # Read the h/v angles WHILE SIGHTS ARE STILL OFF. objects_h_angle
                 # ($09C0+slot) is only settled at the $365D pan checkpoint; once sights
                 # are ON the per-frame pan_viewpoint dance ($10B7: +$14 -> plot -> -$0C)
@@ -265,14 +266,6 @@ def perform_step(ex, drv, label, stp, log, result):
                 # cursor is stable sights-on; h/v come from the sights-OFF read above.
                 ach = {"h": ach_h, "v": ach_v, "cur": drv.cur()}
                 break
-            except (TimeoutError, OSError, ConnectionError) as e:
-                reuse = False  # a dropped pass may leave the bearing/cursor half-driven
-                drv.clear_bearing()
-                log(
-                    f"[{label}] {verb} {tile}: aim monitor drop "
-                    f"({type(e).__name__}); reconnecting + re-aiming"
-                )
-                core.reconnect(ex.bm, log)
         else:
             log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
             return "fail"
@@ -348,16 +341,17 @@ def perform_step(ex, drv, label, stp, log, result):
     # object-count/energy/slot delta in verify() is the real arbiter of success.
     settle_f0 = ex.frames()  # exact (wrap-free) settle bracket; aim excluded
     if verb in ("create", "absorb", "transfer"):
+
+        def _sights_dropped(e):
+            log(
+                f"[{label}] {verb} {tile}: sights-on monitor drop "
+                f"({type(e).__name__}); reconnecting"
+            )
+
         for _s_try in range(3):
-            try:
+            with core.drop_guard(ex.bm, log, _sights_dropped):
                 drv.sights_on()
                 break
-            except (TimeoutError, OSError, ConnectionError) as e:
-                log(
-                    f"[{label}] {verb} {tile}: sights-on monitor drop "
-                    f"({type(e).__name__}); reconnecting"
-                )
-                core.reconnect(ex.bm, log)
     latched = drv.tap_action(key)
     settle_frames = ex.frames() - settle_f0  # exact, no 256-alias
     result.setdefault("settle_audit", []).append([label, verb, settle_frames])

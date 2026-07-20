@@ -12,22 +12,12 @@ sys.path.insert(0, os.path.dirname(HERE))
 from driver import kbd_aim  # noqa: E402
 
 
-class FakeBM:
-    """A monitor over an in-memory 64KB image."""
-
-    def __init__(self):
-        self.mem = bytearray(0x10000)
-
-    def mem_get(self, a, b):
-        return bytes(self.mem[a : b + 1])
+def _drv(bm):
+    return kbd_aim.KbdDriver(bm, log=lambda *a: None)
 
 
-def _drv():
-    return kbd_aim.KbdDriver(FakeBM(), log=lambda *a: None)
-
-
-def test_sights_live_on_reads_flag_bit7():
-    d = _drv()
+def test_sights_live_on_reads_flag_bit7(fake_bm):
+    d = _drv(fake_bm)
     d.bm.mem[kbd_aim.A_SFLAG] = 0x80
     assert d.sights_live_on() is True
     d.bm.mem[kbd_aim.A_SFLAG] = 0x00
@@ -36,8 +26,8 @@ def test_sights_live_on_reads_flag_bit7():
     assert d.sights_live_on() is False
 
 
-def test_committed_bearing_lifecycle():
-    d = _drv()
+def test_committed_bearing_lifecycle(fake_bm):
+    d = _drv(fake_bm)
     assert d.committed_bearing() is None
     d.set_bearing(0x60, 0xF5)
     assert d.committed_bearing() == (0x60, 0xF5)
@@ -47,8 +37,8 @@ def test_committed_bearing_lifecycle():
     assert d.committed_bearing() is None
 
 
-def test_cur_reads_cursor_bytes():
-    d = _drv()
+def test_cur_reads_cursor_bytes(fake_bm):
+    d = _drv(fake_bm)
     d.bm.mem[kbd_aim.A_CX] = 99
     d.bm.mem[kbd_aim.A_CY] = 43
     assert d.cur() == (99, 43)

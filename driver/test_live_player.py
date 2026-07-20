@@ -78,7 +78,7 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
     player._settle = lambda verb, view=None, observer=None: 210.0
     # margin-only block: >= the 310 raw budget, < budget + margin, whatever sigma is
     budget = 310.0
-    player._player_window = lambda: budget + 0.5 * player._margin(0)
+    player._player_window = lambda exclude=None: budget + 0.5 * player._margin(0)
     # a build re-gates on the TILE window the plan gated it with, not the body's
     player._gaze_window = lambda tile, exposed=None: budget + 0.5 * player._margin(0)
     player.live_log = lambda msg: None
@@ -106,7 +106,7 @@ def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
     player._view_for = lambda tile: _VIEW
     player._step_aim_frames = lambda verb, view: 100.0
     player._settle = lambda verb, view=None, observer=None: 210.0
-    player._player_window = lambda: 10.0
+    player._player_window = lambda exclude=None: 10.0
     player._gaze_window = lambda tile, exposed=None: 10.0
     player.live_log = lambda msg: None
     _live(player, "_plan_step_stale")
@@ -135,12 +135,12 @@ def test_stale_gate_uses_the_window_the_plan_gated_the_step_with():
     player.live_log = lambda msg: None
     _live(player, "_plan_step_stale")
     wide, narrow = 100000.0, 1.0
-    player._player_window = lambda: narrow
+    player._player_window = lambda exclude=None: narrow
     player._gaze_window = lambda tile, exposed=None: wide
     assert not player._plan_step_stale("boulder", (9, 8), _VIEW)
     assert not player._plan_step_stale("transfer", (9, 8), _VIEW)
     assert player._plan_step_stale("absorb", (9, 8), _VIEW)
-    player._player_window = lambda: wide
+    player._player_window = lambda exclude=None: wide
     player._gaze_window = lambda tile, exposed=None: narrow
     assert player._plan_step_stale("boulder", (9, 8), _VIEW)
     assert not player._plan_step_stale("absorb", (9, 8), _VIEW)

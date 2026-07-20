@@ -6,6 +6,7 @@ the container/AVI lifecycle and hands a :class:`GameSession` to a play loop. Act
 fired and verified by :mod:`driver.sentinel_execute`, keys by :mod:`driver.kbd_aim`.
 """
 
+import contextlib
 import os
 import sys
 import time
@@ -17,20 +18,23 @@ from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from sentinel.state import State
 from sentinel import los
+from sentinel import memmap as mm
 from driver import boot, clock
 from driver import sentinel_state as gs
 
 # ---- live RAM addresses (the ROM's object-array + sights layout) -------------
-A_SLOT = 0x000B  # player_object
-A_X = 0x0900  # objects_x + slot
-A_Y = 0x0980  # objects_y + slot
-A_H = 0x09C0  # objects_h_angle + slot
-A_V = 0x0140  # objects_v_angle + slot
-A_ZH = 0x0940  # objects_z_height + slot
-A_ENERGY = 0x0C0A  # player_energy (6-bit)
-A_CURSOR_X = 0x0CC6  # sights cursor column
-A_CURSOR_Y = 0x0CC7  # sights cursor row
+A_SLOT = mm.PLAYER_OBJECT  # 0x000B
+A_X = mm.OBJECTS_X  # 0x0900 + slot
+A_Y = mm.OBJECTS_Y  # 0x0980 + slot
+A_H = mm.OBJECTS_H_ANGLE  # 0x09C0 + slot
+A_V = mm.OBJECTS_V_ANGLE  # 0x0140 + slot
+A_ZH = mm.OBJECTS_Z_HEIGHT  # 0x0940 + slot
+A_ENERGY = mm.PLAYER_ENERGY  # 0x0C0A, 6-bit
+A_CURSOR_X = 0x0CC6  # sights cursor column (no memmap entry)
+A_CURSOR_Y = 0x0CC7  # sights cursor row (no memmap entry)
 A_ACTION_LATCH = 0x0CE4  # bit7 set mid-pan / queued-wrap (reject transient probes)
+
+MONITOR_DROP = (TimeoutError, OSError, ConnectionError)  # dropped-socket signatures
 
 
 # ============================================================================
@@ -57,22 +61,30 @@ def robust(bm, log, fn, tries=4):
     for _ in range(tries):
         try:
             return fn()
-        except (
-            BinmonError,
-            BrokenPipeError,
-            ConnectionError,
-            OSError,
-            TimeoutError,
-        ) as e:
+        except (BinmonError,) + MONITOR_DROP as e:
             log(f"   monitor op dropped ({type(e).__name__}); reconnecting")
             reconnect(bm, log)
     return fn()
 
 
+@contextlib.contextmanager
+def drop_guard(bm, log, on_drop):
+    """ONE attempt of a live monitor op inside a caller's retry loop: a dropped socket
+    is swallowed, ``on_drop(exc)`` runs (the caller's logging + state invalidation) and
+    the socket is reconnected, so the loop simply iterates. The caller ``break``s out on
+    success and decides what an exhausted loop means (:func:`robust` re-raises instead).
+    """
+    try:
+        yield
+    except MONITOR_DROP as e:
+        on_drop(e)
+        reconnect(bm, log)
+
+
 def live_image(bm):
     """The full 64 KB live memory image the simulator (``State``/``Game``) is defined
     over. It reads ROM tables such as ROTATION_SPEED_TABLE ($9D37) during enemy stepping
-    (threat.ticks_until_seen -> enemies.step), so a 4 KB slice throws IndexError.
+    (enemies.step), so a 4 KB slice throws IndexError.
 
     Read in two 32 KB halves: mem_get's response length is a u16, so a single
     0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty.  Both

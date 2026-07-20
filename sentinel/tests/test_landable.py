@@ -13,18 +13,15 @@ must be aim-landable.
 Logs are gitignored fixtures; each test skips cleanly when they are absent.
 """
 
-import base64
-import json
 import os
 
 import pytest
 
-from sentinel import landscape, los, threat
-from sentinel.state import State
+from sentinel import los, threat
+from sentinel.tests.telemetry import log_path, records, state_from_record, tile_ladder
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LS0 = os.path.join(ROOT, "out", "play_20260707_193356.jsonl")
-LS335 = os.path.join(ROOT, "out", "play_20260707_203210.jsonl")
+LS0 = log_path("play_20260707_193356.jsonl")
+LS335 = log_path("play_20260707_203210.jsonl")
 
 # The exact aim-landable set from the real ls0 start (8,17,eye5) -- a regression lock on the
 # oracle. The v-swept set (body v_angle over PITCH_BAND x the 1px sights-cursor window): 50
@@ -87,47 +84,6 @@ LS0_START_LANDABLE = {
 }
 
 
-def _state_from_record(rec):
-    raw = base64.b64decode(rec["mem"])
-    mem = bytearray(0x10000)
-    mem[0 : len(raw)] = raw
-    return State(mem)
-
-
-def _records(path):
-    with open(path, encoding="utf-8") as fh:
-        lines = [ln for ln in fh if ln.strip()]
-    return [json.loads(ln) for ln in lines[1:]]  # line 0 is the header
-
-
-def _fire_ladder(path):
-    """Consecutive (from_tile, to_tile, pre_FIRE_record) triples up to the first win,
-    keeping the LAST record at each from-tile (the state right before the transfer --
-    the player builds while standing, so the first-arrival state is stale)."""
-    recs = _records(path)
-    cut = len(recs)
-    for i, r in enumerate(recs):
-        if r.get("done_flag"):
-            cut = i
-            break
-    recs = recs[:cut]
-    seq = []
-    for r in recs:
-        pl = r.get("player")
-        if not pl:
-            continue
-        xy = (pl["x"], pl["y"])
-        if seq and seq[-1][0] == xy:
-            seq[-1] = (xy, r)
-        else:
-            seq.append((xy, r))
-    return [
-        (seq[i][0], seq[i + 1][0], seq[i][1])
-        for i in range(len(seq) - 1)
-        if seq[i + 1][0] != seq[i][0]
-    ]
-
-
 def _tile_is_bare(state, tile):
     """A fresh build lands on a BARE tile; a move onto an already-occupied tile is a
     transfer to a standing synthoid (a backtrack), for which aim-landability from the
@@ -137,11 +93,11 @@ def _tile_is_bare(state, tile):
     return terrain.tile_byte(state, tile[0], tile[1]) < mm.OBJECT_TILE
 
 
-def test_generated_landscape_oracle_invariants():
+def test_generated_landscape_oracle_invariants(new_state):
     """CI-safe (no external fixture): on the deterministic landscape 0 board, the aim
     lattice sweep and the single-tile query agree, and every landable tile is also
     geometrically visible (aim-landability is a STRICT subset of the plotted scene)."""
-    st = landscape.generate(0)
+    st = new_state(0)
     views = los.landable_views(st, st.player)
     assert views, "expected some aim-landable tiles from the start"
     # every aim-landable tile is also geometrically visible: aim-landability is a
@@ -171,12 +127,12 @@ def test_generated_landscape_oracle_invariants():
     assert all(0 <= c <= 0xFF for c in centres.values())
 
 
-def test_targeted_view_matches_full_board_sweep():
+def test_targeted_view_matches_full_board_sweep(new_state):
     """The heading-cone single-tile band march (:func:`los.landable_view_targeted`, the A*
     planner's fallback) is bit-identical to ``landable_views(st).get(tile)`` for every tile,
     and returns None off the landable set -- the g-invariance the node-cost win relies on.
     """
-    st = landscape.generate(0)
+    st = new_state(0)
     full = los.landable_views(st, st.player)
     for tile, view in full.items():
         assert los.landable_view_targeted(st, tile) == view, tile
@@ -187,7 +143,7 @@ def test_targeted_view_matches_full_board_sweep():
 
 @pytest.mark.skipif(not os.path.exists(LS0), reason="ls0 human-win log absent")
 def test_ls0_start_landable_set_exact():
-    st = _state_from_record(_records(LS0)[0])
+    st = state_from_record(records(LS0)[0])
     got = set(los.landable_views(st, st.player))
     assert got == LS0_START_LANDABLE
 
@@ -196,8 +152,8 @@ def test_ls0_start_landable_set_exact():
 def test_ls0_forward_builds_all_aim_landable():
     """Every fresh forward build in the ls0 human win is aim-landable (v=$F5) from its
     exact pre-fire state -- 0 false-negatives, the property builds rely on."""
-    for frm, to, rec in _fire_ladder(LS0):
-        st = _state_from_record(rec)
+    for frm, to, rec in tile_ladder(LS0):
+        st = state_from_record(rec)
         if not _tile_is_bare(st, to):  # skip transfer-to-existing (backtrack)
             continue
         views = los.landable_views(st, st.player)
@@ -210,10 +166,10 @@ def test_ls335_adjacent_build_now_landable():
     the body pitched DOWN (v=225). It is NOT landable with v fixed at $F5, but IS once
     landable_views sweeps the body v_angle DOF -- so the v-complete oracle now returns it
     directly (it used to need the landable_view(..., v_band=True) fallback)."""
-    for frm, to, rec in _fire_ladder(LS335):
+    for frm, to, rec in tile_ladder(LS335):
         if (frm, to) != ((11, 17), (11, 18)):
             continue
-        st = _state_from_record(rec)
+        st = state_from_record(rec)
         views = los.landable_views(st, st.player)
         assert (
             to in views
@@ -250,14 +206,14 @@ def test_prep_vec_matches_python():
     assert bad == 0
 
 
-def test_batched_sweep_matches_per_probe_aim_target():
+def test_batched_sweep_matches_per_probe_aim_target(new_state):
     """CI-safe bit-exactness lock: the batched numba lattice march used by landable_views /
     landable_sweep_with_centres returns IDENTICAL (tx, ty, los) and tile-centre fraction to
     calling aim_target once per aim, over a representative slice of the v-complete lattice.
     """
     if not los._HAVE_JIT:
         pytest.skip("numba not available -- batched march path not exercised")
-    st = landscape.generate(0)
+    st = new_state(0)
     slot = st.player
     # A representative slice (a few h notches x the whole v band x the 1px cursor window) --
     # the full lattice is ~3.5M aims; this keeps the per-probe reference loop fast while still
@@ -281,7 +237,7 @@ def test_batched_sweep_matches_per_probe_aim_target():
     assert verdict_bad == 0 and centre_bad == 0, (verdict_bad, centre_bad)
 
 
-def test_window_equals_full_1px_cursor():
+def test_window_equals_full_1px_cursor(new_state):
     """The 64px step-1 cursor WINDOW (los.CURSOR_CX/CY) is BIT-EQUIVALENT to the full 1px ROM
     cursor range (cx[16,143] x cy[32,159], los.CURSOR_CX_FULL/CY_FULL): the full v-band sweep
     returns the EXACT same landable tile set AND per-tile min tile-centre fraction.  Body-h
@@ -291,7 +247,7 @@ def test_window_equals_full_1px_cursor():
     """
     if not los._HAVE_JIT:
         pytest.skip("numba not available")
-    st = landscape.generate(0)
+    st = new_state(0)
     slot = st.player
     hgrid = list(range(0, 256, los.AZIMUTH_STEP))
 

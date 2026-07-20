@@ -96,9 +96,7 @@ class Player(BasePlayer):
                 self.endgame_waits += 1
                 if self.endgame_waits * WAIT_FRAMES <= ROT_PERIOD_FRAMES:
                     return False  # let the cone rotate off the platform first
-            view = views.get(ptile)
-            if view is None and self._sees_tile(ptile):
-                view = views.get(ptile, band=True)
+            view = self._view_with_band(ptile, views.primary(), views.band_get)
             if view is not None:
                 return self._fire(verb, ptile, view)
         return self._climb(views, urgent=False, need_progress=True)
@@ -125,9 +123,7 @@ class Player(BasePlayer):
             if meanie & 0x80:
                 continue
             tile = st.tile_of(meanie)
-            view = views.get(tile)
-            if view is None and self._sees_tile(tile):
-                view = views.get(tile, band=True)
+            view = self._view_with_band(tile, views.primary(), views.band_get)
             if view is None:
                 continue
             if self._aim_frames(view) >= self._meanie_faces_window(meanie):
@@ -156,9 +152,7 @@ class Player(BasePlayer):
             if e == actions.SENTINEL_SLOT and (others or st.energy < 2):
                 continue
             tile = st.tile_of(e)
-            view = views.get(tile)
-            if view is None and self._sees_tile(tile):
-                view = views.get(tile, band=True)
+            view = self._view_with_band(tile, views.primary(), views.band_get)
             if view is None:
                 continue
             budget = st.mem[mm.ENEMIES_DRAINING_COOLDOWN + e] * UNIT_FRAMES
@@ -181,9 +175,7 @@ class Player(BasePlayer):
             tile = st.tile_of(e)
             if self._top(tile) != e:
                 continue
-            view = views.get(tile)
-            if view is None and self._sees_tile(tile):
-                view = views.get(tile, band=True)
+            view = self._view_with_band(tile, views.primary(), views.band_get)
             if view is None:
                 continue
             aimf = self._aim_frames(view)
@@ -221,17 +213,9 @@ class Player(BasePlayer):
     def _transfer_up(self, views, urgent=False):
         """Transfer into the highest landable robot that raises the eye --
         never into a gaze, and only with a safe window unless urgent."""
-        st = self.st
         my_eye = self._my_eye()
         best = None
-        for slot in range(mm.NUM_SLOTS):
-            if st.is_empty(slot) or slot == st.player:
-                continue
-            if st.obj_type[slot] != mm.T_ROBOT:
-                continue
-            tile = st.tile_of(slot)
-            if self._top(tile) != slot:
-                continue
+        for slot, tile in self._robot_bodies():
             eye = self._base_z(slot)
             if eye <= my_eye + EYE_EPS and not urgent:
                 continue
@@ -263,29 +247,10 @@ class Player(BasePlayer):
         the hop in progress), and trees while energy has headroom.  Urgent
         reclaims drop the follow-up-hop reservation: the energy IS the move."""
         st = self.st
-        my_eye = self._my_eye()
         want_trees = st.energy < HOP_COST + 6
-        cands = []
-        for slot in range(mm.NUM_SLOTS):
-            if st.is_empty(slot) or slot == st.player:
-                continue
-            otype = st.obj_type[slot]
-            tile = st.tile_of(slot)
-            if tile == self.hop_tile or tile == st.player_xy():
-                continue
-            if self._top(tile) != slot:
-                continue
-            if otype in (mm.T_ROBOT, mm.T_BOULDER):
-                if self._base_z(slot) > my_eye + EYE_EPS:
-                    continue  # a live pedestal above us, not a spent one
-            elif otype != mm.T_TREE or not want_trees:
-                continue
-            cands.append((mm.ENERGY_IN_OBJECTS[otype], tile))
         landable = []
-        for value, tile in cands:
-            view = views.get(tile)
-            if view is None and self._sees_tile(tile):
-                view = views.get(tile, band=True)  # near/below targets pitch down
+        for value, tile in self._reclaim_targets(st, want_trees, skip=self.hop_tile):
+            view = self._view_with_band(tile, views.primary(), views.band_get)
             if view is None:
                 continue
             aimf = self._aim_frames(view)
@@ -448,14 +413,7 @@ class Player(BasePlayer):
         else the truly last resort, an unsteerable hyperspace."""
         st = self.st
         best = None
-        for slot in range(mm.NUM_SLOTS):
-            if st.is_empty(slot) or slot == st.player:
-                continue
-            if st.obj_type[slot] != mm.T_ROBOT:
-                continue
-            tile = st.tile_of(slot)
-            if self._top(tile) != slot:
-                continue
+        for slot, tile in self._robot_bodies():
             view = views.get(tile, band=True)
             if view is None:
                 continue
