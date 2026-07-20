@@ -1,9 +1,10 @@
 # Plan-vs-live fidelity
 
-State: **the clocks are correct; the A\* player wins ls42 offline.** The enemy simulation
-tracks the real game exactly, and under it `sentinel.astar_player` now plans and executes
-a win on internal 66 (the board typed `0042`) — 41 actions, 11263 f, eye 11.875 on the
-plinth, the human line's height. The reactive greedy player still loses both boards.
+State: **the clocks are correct and the A\* player wins ls42 — live, on the real game.**
+`python -m driver.play_player 42 --player astar` wins in **39 actions, final energy 11**
+(`renders/player_ls42_astar_win.avi`, 13646 frames), and offline in 41 actions / 11263 f,
+eye 11.875 on the plinth — the human line's height. Landscapes 0 and internal 42 win
+offline (26 / 29 actions). The reactive greedy player still loses both boards.
 
 ## READ FIRST: "landscape 42" is two boards
 
@@ -109,6 +110,26 @@ Search cost fell out of the same work — a cold ls66 search is ~25 s, warm ~2.5
 the world runs only in deliberate run windows), and at 30 s the cold search was a coin
 flip on a loaded machine — the losing side executes a truncated line and dies at eye 7.375.
 
+Two more defects stood between that offline win and the live one, both in the execution
+ladder rather than the search:
+
+3. **The live stale-gate re-derived a stricter rule than the plan's.**
+   `live_player._plan_step_stale` re-checked EVERY verb against the player's own body
+   window, while the plan gates a build or transfer on the target TILE's window
+   (`_pick_hop`/`_hop_exec` via `_drain_gate`) and only an absorb on the body's
+   (`_c_absorb`/`_reclaim_one` via `_hot`). It therefore refused steps the plan never
+   promised and could not re-plan away — `_search` is a fixpoint on an unchanged board, so
+   ls42 live looped on `robot (2,24)`, then on `boulder (0,25)`, and conceded the escape
+   hyperspace that lost the run. The offline line fires the same step and survives (2 of
+   40 steps fire with window < budget; neither is drained). It now re-checks the window the
+   plan actually used.
+4. **`_react` conceded a hyperspace one keystroke short of the climb.** With (3) fixed the
+   player built its pedestal at (2,24) and was then hot with the plan's own `transfer` next
+   — the escape it had just paid for. `_escape_transfer` ranks bodies by window and rejects
+   a pedestal whose window is no wider than the one the player stands in, so the ladder
+   fell through to the hyperspace. `_plan_escape_transfer` now takes the plan's next step
+   when it is a transfer, before conceding.
+
 Still open on the ranker: **the human's line is pruned by the beam.** Replaying the human
 ls42 (internal 66) line matches its energy curve exactly for 16 steps. Its first FOUR hops,
 (9,30), (13,26), (2,24), (5,22), are landable and pass every filter yet never enter
@@ -142,20 +163,17 @@ bearing on every one is `previous ^ $80`, the new body inheriting `creator_angle
 
 ## Open, ranked
 
-1. **The live ls42 run: 14 actions, then an unrecoverable hyperspace.** The live A* now
-   plans the same 42-step win from live memory (`plan (7 nodes)`) and executes 13 steps of
-   it, through two transfers to eye 7.375 (`renders/player_ls42_astar_win.avi`, a LOSS).
-   It dies in two stages:
-   - **Drift makes a planned window stale.** Charged exceeds measured on nearly every
-     step (355/347, 316/270, 205/164, 331/289, ...), ~+250 f over 13 steps, so the live
-     enemy phase lags the plan. At p14 the `robot (2,24)` step reads a live gaze window of
-     30 f against a 179 f budget, re-plans, and concedes an escape hyperspace. The
-     `_margin` covers one step's sigma (24 f), not accumulated drift.
-   - **Post-hyperspace the root has no children at all.** Landed at eye 5.875 with E=6:
-     under `HOP_COST + reserve` so `_c_pursue` must reclaim first, nothing is reclaimable
-     from there, no enemy is landable — `plan (1 nodes): None` until it is drained. The
-     search has no hyperspace-as-relocation generator and cannot get one (the landing tile
-     is `$1224` PRNG, see Limits), so the only fix is not entering that state.
+1. **Per-step frame drift is still one-sided.** +86 f over the 40 steps of the winning
+   live run (mean +2.1), and +318 over 14 (mean +22.7) on the run before it, which
+   executed one long plan instead of re-planning. Charged exceeds measured on nearly
+   every step. Decomposed over 15 runs, the settle side is two constants the model
+   merges: **create measures 99 f (n=71, sd 7.8), absorb ~90 f (n=65)**, against a shared
+   charge of 93.75 (`DITHER_FRAMES + POST_ACTION_REPLOT_FRAMES`) — so every create is
+   under-charged ~5 f and every absorb over-charged ~4 f. The ROM counter behind it is
+   `$2099` (`$1FA4` loads #$19; `$2051` loads #$28 when `$0C4E`, the meanie-made flag,
+   is set), decremented at `$87A4` by the `$86A5` note loop — that is the meanie split,
+   not the create/absorb one, so the create/absorb difference is still unattributed.
+   The aim side is a separate +8.7 mean (rms 15) dominated by large pans.
 2. **`_pick_hop` rank order and beam width** — the human's line is generated and then
    discarded. Two cheap offline experiments: rank by minimum sufficient rise rather than
    maximum, and widen `_TOP_HOPS`.

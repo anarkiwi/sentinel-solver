@@ -40,6 +40,9 @@ about the number of enemies, not the number of hops.
   `_climb_continues` decides a landing is not stranded when the pursuit's own next
   iteration could reclaim its way to an affordable hop, simulating that chain (up to
   `_MAX_RECLAIM`) against the landing's frozen tile set.
+- `_react` ladder — counterattack a dangerous seer, flee to a safer body, then
+  `_plan_escape_transfer` (the plan's own next-step transfer, when the pedestal it just
+  built IS the escape), and only then concede a hyperspace.
 - `_c_reclaim` — absorb landable own boulders/shells (base <= eye) and, when short, trees;
   the player stays put so its own window bounds the aim.
 - `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace.

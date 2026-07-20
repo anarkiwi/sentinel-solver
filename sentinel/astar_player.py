@@ -109,6 +109,7 @@ class AStarPlayer(BasePlayer):
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
         self._hop_audit = None  # list => shadow-record the body-window hop gate
+        self._on_plan = False  # last _react deviation WAS the plan's next step
 
     def _margin(self, depth=None):
         """Frames of enemy-phase uncertainty a gate must hold back at plan depth
@@ -134,7 +135,9 @@ class AStarPlayer(BasePlayer):
             if self.verbose:
                 print(f"  plan ({self.expansions} nodes): {self.plan}")
         if not self._frozen() and self._react():
-            self.plan = None  # deviated for survival: re-plan from the new state
+            if not self._on_plan:  # deviated for survival: re-plan from the new state
+                self.plan = None
+            self._on_plan = False
             return
         if not self.plan or self._pi >= len(self.plan):
             self._wait()
@@ -225,6 +228,9 @@ class AStarPlayer(BasePlayer):
         if self._defend():
             self._hs_streak = 0
             return True
+        if self._plan_escape_transfer():
+            self._hs_streak = 0
+            return True
         drain_now = self._player_window() <= 0
         if (
             drain_now
@@ -235,6 +241,25 @@ class AStarPlayer(BasePlayer):
             self._hyperspace()  # last resort: flee an unabsorbable drainer
             return True
         return False
+
+    def _plan_escape_transfer(self):
+        """Take the plan's next step when it is the transfer OFF this tile: the body
+        the pursuit has just finished building IS the escape, drain-gated at plan time,
+        and it leaves the eye higher.  ``_escape_transfer`` ranks bodies by window and
+        rejects it whenever the pedestal's window is no wider than the one the player
+        is standing in, which on ls42 live conceded a hyperspace one keystroke short of
+        the climb it had already paid for."""
+        if not self.plan or self._pi >= len(self.plan):
+            return False
+        verb, tile = self.plan[self._pi]
+        if verb != "transfer":
+            return False
+        view = self._view_for(tile)
+        if view is None or not self._fire("transfer", tile, view):
+            return False
+        self._pi += 1
+        self._on_plan = True
+        return True
 
     def _escape_transfer(self):
         """Transfer to the safer landable robot the player can actually REACH: cheapest

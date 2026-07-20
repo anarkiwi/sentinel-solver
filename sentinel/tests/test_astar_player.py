@@ -243,3 +243,28 @@ def test_stale_step_prefers_a_survivable_replan_over_escape_hyperspace():
     player._restale()
     assert searches == [None, 0.0]  # relaxed last-chance line, not a hyperspace
     assert calls == ["wait"] and "hyperspace" not in calls
+
+
+def test_react_takes_the_plans_own_transfer_before_conceding_a_hyperspace():
+    """Hot, with the plan's next step being the transfer off this tile: the pedestal the
+    pursuit just built IS the escape, so ``_react`` takes it and KEEPS the plan.  Ranking
+    escapes by window alone rejects it (the pedestal's window is no wider than here) and
+    the ladder falls through to a hyperspace -- one keystroke short of the climb, the
+    ls42 live loss."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=0.01, node_budget=1)
+    player.plan = [("transfer", (9, 26)), ("absorb", (13, 29))]
+    player._pi = 0
+    player._player_window = lambda: 0.0  # hot: react must deviate
+    player._defend = lambda: False  # no counterattack, no window-ranked escape
+    player._view_for = lambda tile: {
+        "h_angle": 0x60,
+        "v_angle": 0x35,
+        "cursor": [80, 95],
+    }
+    fired, hs = [], []
+    player._fire = lambda verb, tile, view: fired.append((verb, tuple(tile))) or True
+    player._hyperspace = lambda: hs.append(1)
+    assert player._react() is True
+    assert fired == [("transfer", (9, 26))] and not hs
+    assert player.plan is not None and player._pi == 1
+    assert player._on_plan  # _tick must NOT throw the plan away
