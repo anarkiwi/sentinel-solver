@@ -259,26 +259,35 @@ That is the next thread -- and it matters beyond phase, since the PRNG drives me
 spawns and the discharge-tree scatter (the live human replay diverged with exactly a
 "create changed global object count by 2 (meanie/extra?)").
 
-### The PRNG cannot be tracked frame-by-frame (hard limit, not a bug to fix)
+### The PRNG rate is unmodellable -- but it touches far less than I claimed
 
-Measured live: recover k such that applying the model's `prnd` k times to the state at
-frame N gives the state at frame N+1, over 200 frames.
+Measured live: recover k such that k model `prnd` calls take the state at frame N to
+frame N+1, over 200 frames.
 
     prnd calls per frame: {19: 40, 11: 2, no-match-within-32: 158}
     cursor decrements per frame: {2: 17, 3: 128, 4: 53}
 
-The ROM advances the PRNG **~19+ times per frame -- often more than 32** while the cursor
-moves only 3. So `update_enemies` is NOT the main consumer: the stream is being drawn by
-callers the model does not have (renderer/sound/IRQ side). The model's LFSR itself is
-correct -- `prng._shuffle` matches `$31CA` instruction for instruction (8 shuffles, tap
-`bit3(s[2]) ^ bit0(s[4])`, ROL through five bytes) -- it is the *rate* that is
-unmodellable without porting every caller.
+The ROM draws the stream ~19+ times a frame, often >32, while the cursor moves 3, so
+`update_enemies` is not the main consumer and the rate cannot be reproduced without
+porting every caller. The LFSR itself is correct -- `prng._shuffle` matches `$31CA`
+instruction for instruction.
 
-Consequence: every PRNG-driven event -- meanie spawn target, the discharge-tree scatter
-($1A5D), the hyperspace landing -- is **not predictable by the model at frame
-granularity**, and no amount of cost-model work changes that. The live human replay
-diverging at h17 with "create changed global object count by 2 (meanie/extra?)" is this.
-Plans must be robust to those events, not predict them.
+**What that actually limits is only two things**, the model's only PRNG consumers:
+
+- the discharge tree's landing tile (`$1A5D` -> `put_object_in_random_tile_below_z $1224`)
+- the hyperspace landing tile (`$2156` -> the same `$1224`)
+
+**Meanie creation is NOT one of them.** `consider_creating_meanie $197D` never touches the
+PRNG: it walks the per-enemy search counter down, takes the FIRST tree slot within 10
+tiles of the TARGETED player in both axes that the enemy fully sees (`FOV_CREATE_MEANIE`
+$28), and converts it. Object table, positions, visibility -- all of which the model holds
+exactly. So **which tree becomes a meanie, and whether one does at all, is fully
+predictable**, as is the meanie's hunt (`$16F2`, a fixed $8/update turn toward the player)
+and the hyperspace TRIGGER. Only where the hyperspace drops you is random.
+
+That makes the meanie threat plannable rather than a hazard to be robust to: a plan can
+see the spawn coming from the trees it leaves within 10 tiles of a seer's full sight.
+An earlier revision of this file claimed the opposite; it was wrong.
 
 ### Rotation phase: still open
 
