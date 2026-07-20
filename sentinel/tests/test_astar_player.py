@@ -39,7 +39,8 @@ def _feasible_tiles(player, st, want=3):
 
 def test_charge_matches_executor_cost_and_advances_enemies():
     """Each search charge == executor ``_step_aim_frames + _settle`` over the same
-    view, advances enemies by ``int(cost)``, and mirrors the post-aim stance."""
+    view, advances enemies by ``int(cost)`` split at the u-turn unfreeze, and mirrors
+    the post-aim stance."""
     game = Game.new(_LANDSCAPE)
     player = AStarPlayer(game)
     st = game.state
@@ -48,10 +49,19 @@ def test_charge_matches_executor_cost_and_advances_enemies():
     for tile, view in tiles:
         for verb in ("boulder", "robot", "transfer", "absorb"):
             _reset_stance(player, st)
-            expected = player._step_aim_frames(verb, view) + player._settle(verb, view)
+            aim_f = player._step_aim_frames(verb, view)
+            expected = aim_f + player._settle(verb, view)
+            split = player._aim_unfreeze_split(view)
             clone = st.clone()
             reference = st.clone()
-            enemies.advance_frames(reference, int(expected))
+            if split is None:
+                enemies.advance_frames(reference, int(expected))
+            else:
+                # $12E1: keying the u-turn unfreezes the world part-way through the aim
+                pre = int(min(aim_f, split))
+                enemies.advance_frames(reference, pre)
+                reference.mem[mm.PLAYER_NOT_ACTED] = 0x00
+                enemies.advance_frames(reference, int(expected) - pre)
             _reset_stance(player, st)
             cost = player._charge(clone, verb, tile)
             assert cost == expected, f"{verb}@{tile}: {cost} != executor {expected}"

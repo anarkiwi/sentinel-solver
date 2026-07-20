@@ -302,6 +302,33 @@ fire BETWEEN foreground passes, whereas `advance_frame` runs all `UPDATES_PER_FR
 passes and only then calls `cooldown_frame`. That ordering would shift by one
 consideration when an enemy first sees `rotation_cd == 0`.
 
+### Root cause of the +243 f: a u-turn unfreezes the world, mid-aim
+
+`$12D5 CMP #$22 / BCS $12DE` lets action codes >= $22 skip the sights-on check and fall
+into `$12E1 LSR $0CE5`. A u-turn is code **$23**, so keying one **starts the enemy clock
+part-way through the aim**, before any real action fires. The model only cleared
+`PLAYER_NOT_ACTED` when the action applied (`actions.py`), so it held the world frozen for
+the WHOLE first aim -- and ls42's first aim keys a u-turn.
+
+Measured at the first action, model vs live:
+
+| | rotation_cd | facings |
+|---|---|---|
+| before the fix | [0, 0] | [128, 184] |
+| **after the fix** | [146, 138] | **[148, 204]** |
+| live | [130, 122] | **[148, 204]** |
+
+The facings now match live **exactly**; before, the model was one full 20-unit rotation
+step behind, which is the +243 f window optimism. Residual cooldown lag is 16 units
+(~60 f), down from ~243 f -- the split point (`toggles + UTURN_FRAMES`) is approximate,
+since the ROM may unfreeze at the first keypress rather than at the u-turn's own tap.
+
+**Consequence: the planner now takes 0 actions on live ls42.** Correcting the clock
+removed roughly one action's worth of free frozen time the search had been planning
+against, and its gates cannot find a line without it. That is a real result, not a
+regression to paper over: every line the planner has ever found on this board was priced
+against a world that did not start until later than it really does.
+
 ## Open problems, ranked
 
 1. **Terrain fill cost (now the dominant cost error).** Per-notch pan redraw is modelled

@@ -446,8 +446,16 @@ class AStarPlayer(BasePlayer):
             cost = self._settle(verb, None, eye)  # infeasible guard: gates reject these
             enemies.advance_frames(st, int(cost))
             return cost
-        cost = self._step_aim_frames(verb, view) + self._settle(verb, view, eye)
-        enemies.advance_frames(st, int(cost))
+        aim = self._step_aim_frames(verb, view)
+        cost = aim + self._settle(verb, view, eye)
+        split = self._aim_unfreeze_split(view)
+        if split is None:
+            enemies.advance_frames(st, int(cost))
+        else:  # $12E1: keying the u-turn started the enemy clock mid-aim
+            pre = int(min(aim, split))
+            enemies.advance_frames(st, pre)
+            st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+            enemies.advance_frames(st, int(cost) - pre)
         me = st.player
         st.obj_h_angle[me] = view["h_angle"]
         st.obj_v_angle[me] = view["v_angle"]

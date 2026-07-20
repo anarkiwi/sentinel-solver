@@ -383,6 +383,22 @@ class BasePlayer:
         )
         return toggles + nu * UTURN_FRAMES + pan + cur + TAP_FRAMES
 
+    def _aim_unfreeze_split(self, view):
+        """Frames of aim elapsing BEFORE a u-turn unfreezes the world, else None.
+
+        A u-turn is dispatched as an ACTION ($23) and $12D5 `CMP #$22 / BCS $12DE` lets
+        codes >= $22 skip the sights-on check and fall into $12E1 `LSR $0CE5`, so keying
+        one STARTS the enemy clock mid-aim, before any real action fires."""
+        if not self._frozen():
+            return None
+        nu = aimcost.h_press_count(
+            int(self.st.obj_h_angle[self.st.player]), view["h_angle"]
+        )[0]
+        if not nu:
+            return None
+        reuse = self.last_bearing == (view["h_angle"], view["v_angle"])
+        return (0.0 if reuse else TOGGLE_FRAMES) + nu * UTURN_FRAMES
+
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
         committed bearing sends no aim keys ($21 fires on the object under the cursor the
@@ -401,7 +417,14 @@ class BasePlayer:
         Returns False if the gate fails after the aim (the world changed under
         us) -- the caller just re-plans next tick."""
         st = self.st
-        self._advance(self._step_aim_frames(verb, view))
+        aim_f = self._step_aim_frames(verb, view)
+        split = self._aim_unfreeze_split(view)
+        if split is None:
+            self._advance(aim_f)
+        else:
+            self._advance(min(aim_f, split))
+            st.mem[mm.PLAYER_NOT_ACTED] = 0x00  # $12E1: the u-turn unfroze the world
+            self._advance(max(0.0, aim_f - split))
         if actions.player_dead(st):
             return False
         me = st.player
