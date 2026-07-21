@@ -55,6 +55,8 @@ _ENDGAME_EST = (
 _TAIL_FLOOR = _OP_FLOOR["create"] + _OP_FLOOR["transfer"]  # robot+xfer: drainable span
 _EYE_PER_HOP = 0.9
 _TARGET_EYE = 9.0
+_EYE_VALUE = _HOP_EST / _EYE_PER_HOP  # frames of climb one unit of eye saves (_h)
+_PEDESTAL_COST = _OP_FLOOR["create"] + _OP_FLOOR["absorb"]  # build + inchworm reclaim
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
@@ -881,7 +883,12 @@ class AStarPlayer(BasePlayer):
 
     def _pick_hop(self, target, landset=None):
         """Ranked pedestal builds directed at ``target``: prefer tiles that gain LOS
-        on it, then raise the eye, then the widest window.  The DESTINATION gate is
+        on it, then the best NET frame value -- the eye the landing buys priced by the
+        heuristic's own exchange rate (``_EYE_VALUE``) minus what its boulders cost
+        (``_PEDESTAL_COST``: each is created now and inchworm-reclaimed later) --
+        then the widest window.  Ranking on eye alone compares a k=3 stack against a
+        k=1 one as if they cost the same, and once the reserve floor stopped capping
+        k that lost ls42.  The DESTINATION gate is
         what that hop actually costs (``_hop_price``), not a flat constant -- hop cost
         swings 745 f (ls42) to 1294 f (ls335) with how expensive the aims are from the
         eye, so a constant is simultaneously too strict and too lax.  The tile must
@@ -933,7 +940,8 @@ class AStarPlayer(BasePlayer):
             sees = self._tile_sees_target(tile, target)
             for k in ks:
                 robot_eye = base + BOULDER_H * k + ROBOT_EYE
-                cands.append(((sees, robot_eye, window), tile, k, window, exposed))
+                value = (robot_eye - my_eye) * _EYE_VALUE - k * _PEDESTAL_COST
+                cands.append(((sees, value, window), tile, k, window, exposed))
         cands.sort(key=lambda c: c[0], reverse=True)
         out = []
         for _, tile, k, window, exposed in cands:
