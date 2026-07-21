@@ -19,9 +19,9 @@ python -m sentinel.astar_player 110               # offline
 
 | landscape | enemies | offline | live |
 |---|---|---|---|
-| 0 | 1 | 22 actions | — |
-| 42 | 2 | 34 | **36 actions** |
-| 110 | 3 | 41 | **41 actions** |
+| 0 | 1 | 23 actions | — |
+| 42 | 2 | 35 | **36 actions** |
+| 110 | 3 | 42 | **41 actions** |
 
 Landscape numbers are the ones you TYPE; the ROM seeds the PRNG from the digits read as
 hex, so `Game.typed(110)` is the board a player reaches by keying `0110`.
