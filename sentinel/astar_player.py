@@ -1174,7 +1174,13 @@ class AStarPlayer(BasePlayer):
 
     def _c_endgame(self, node):
         """Sentinel gone (no enemy remains): robot on the platform, transfer,
-        hyperspace -- the win."""
+        hyperspace -- the win.
+
+        A robot ALREADY on the platform is the body to transfer into, not a tile to
+        build on: ``create`` cannot stack on a robot ($1F38), so re-creating there
+        returns None and the endgame -- the only child ``_expand`` offers once the
+        Sentinel is gone -- yields no successor at all.  That is a plan of None and
+        a zero-action loss exactly two moves from a win."""
         st = self._begin(node)
         ptile = st.platform_xy
         g = node.g
@@ -1182,16 +1188,18 @@ class AStarPlayer(BasePlayer):
         if not actions.on_platform(st):
             if not self._landable(st, ptile):
                 return None
-            cost = self._charge(st, "robot", ptile)
-            g += cost
-            slot = actions.create(st, mm.T_ROBOT, ptile)
-            if slot is None:
-                return None
-            steps.append(
-                self._plan_step(
-                    "robot", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+            slot = terrain.top_object(st, *ptile)
+            if slot is None or st.obj_type[slot] != mm.T_ROBOT:
+                cost = self._charge(st, "robot", ptile)
+                g += cost
+                slot = actions.create(st, mm.T_ROBOT, ptile)
+                if slot is None:
+                    return None
+                steps.append(
+                    self._plan_step(
+                        "robot", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+                    )
                 )
-            )
             cost = self._charge(st, "transfer", ptile)
             g += cost
             if not actions.transfer(st, slot):
