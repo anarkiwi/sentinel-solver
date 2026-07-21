@@ -62,6 +62,7 @@ _PURSUE_BRANCH = int(
     os.environ.get("SENTINEL_PURSUE_BRANCH", "1")
 )  # first-hop alternatives per pursuit target. Default 1 (one greedy rollout): branching here buys nothing because the chain re-converges -- root 9 children collapse to 3 distinct keys -- so K>1 doubles search cost for no new reachable stance, and K=3 loses ls42 outright.
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
+_TOP_CLEARS = 4  # tree-blocked pedestal sites a node may branch a clearing child on
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
@@ -478,9 +479,9 @@ class AStarPlayer(BasePlayer):
     # -------------------------------------------------------------- expansion
     def _expand(self, node):
         """Macro-actions: endgame (Sentinel gone), the terminal absorb of any
-        already-landable enemy, a reclaim, and a DIRECTED pursuit of each
-        not-yet-landable enemy (a multi-hop climb + absorb as one child).  The
-        branching factor is "which enemy to pursue next", not "which tile"."""
+        already-landable enemy, a reclaim, a tree clearing, and a DIRECTED pursuit
+        of each not-yet-landable enemy (a multi-hop climb + absorb as one child).
+        The branching factor is "which enemy to pursue next", not "which tile"."""
         st = node.state
         if st.is_empty(actions.SENTINEL_SLOT):
             child = self._c_endgame(node)
@@ -493,6 +494,7 @@ class AStarPlayer(BasePlayer):
         child = self._c_reclaim(node)
         if child is not None:
             children.append(child)
+        children.extend(self._c_clear(node))
         for e in self._pursue_targets(st):
             for skip in range(_PURSUE_BRANCH):
                 child = self._c_pursue(node, e, skip=skip)
@@ -1053,6 +1055,60 @@ class AStarPlayer(BasePlayer):
         if not steps:
             return None
         return self._node(node, st, g, steps)
+
+    def _blocking_trees(self, st):
+        """Landable tiles whose ONLY disqualification as a pedestal site is the tree
+        on top: ``_tile_base`` is None there, but the surface the tree stands on
+        (``_base_z`` of the tree) would carry a stack that raises the eye, within the
+        energy left once the absorb has paid its own +1.  Tallest site first."""
+        my_eye = st.eye_z()
+        reserve = self._reserve()
+        energy = st.energy + mm.ENERGY_IN_OBJECTS[mm.T_TREE]
+        out = []
+        for tile in self._landset(st):
+            top = self._top(tile)
+            if top is None or st.obj_type[top] != mm.T_TREE:
+                continue
+            base = self._base_z(top)
+            k = max(0, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
+            if energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
+                continue
+            if base + BOULDER_H * k + ROBOT_EYE <= my_eye + EYE_EPS:
+                continue
+            out.append((base, tile))
+        out.sort(reverse=True)
+        return [tile for _base, tile in out]
+
+    def _c_clear(self, node):
+        """Absorb a tree BECAUSE it blocks a wanted pedestal site -- one child per
+        blocked site, the player staying put so its own window bounds the aim.
+
+        ``_reclaim_one``'s tree arm cannot do this: it is a FUEL heuristic gated on
+        ``st.energy < HOP_COST + 6``, so it takes one tree, the energy it returns
+        switches the gate off, and every further tree is permanently unreachable.
+        At the ls335 root that is the whole board -- 4 landable tiles, 2 of them
+        tree-topped at base 3.875 against an eye of 3.875, i.e. k=0 pedestals the
+        moment the tree is gone -- and the search never built on either."""
+        st0 = self._begin(node)
+        children = []
+        for tile in self._blocking_trees(st0)[:_TOP_CLEARS]:
+            st = self._begin(node)
+            slot = terrain.top_object(st, *tile)
+            if slot is None or not actions.can_absorb(st, slot):
+                continue
+            if not threat.player_sees_tile(st, tile, st.player):
+                continue
+            view = self._view_for(tile)
+            if view is None:
+                continue
+            if self._hot(self._aim_frames(view) + self._settle("absorb", view)):
+                continue  # the player would be drained mid-clear
+            cost = self._charge(st, "absorb", tile)
+            if not actions.absorb(st, slot):
+                continue
+            step = self._plan_step("absorb", tile, cost, GATE_BODY)
+            children.append(self._node(node, st, node.g + cost, [step]))
+        return children
 
     def _c_endgame(self, node):
         """Sentinel gone (no enemy remains): robot on the platform, transfer,
