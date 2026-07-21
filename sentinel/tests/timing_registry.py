@@ -229,6 +229,7 @@ _PB = "sentinel.playerbase"
 _PR = "sentinel.projector"
 _PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
+_ENJ = "sentinel.enemies_jit"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
@@ -305,6 +306,8 @@ REGISTRY = {
     "ROTATION_COOLDOWN_RELOAD": _u(_EN, _RELOAD),
     "DRAINING_COOLDOWN_RELOAD": _u(_EN, _RELOAD),
     "COOLDOWN_STICK": _u(_EN, "cooldown stick threshold; no derivation test"),
+    "_COOLDOWN_STICK": _d(_ENJ, "jit alias of enemies.COOLDOWN_STICK"),
+    "_ENERGY_MASK": _d(_ENJ, "jit alias of memmap.ENERGY_MASK; a bit mask"),
     "ENEMIES_DRAINING_COOLDOWN": _u(_MM, "ROM address, not a duration"),
     "ENEMIES_ROTATION_COOLDOWN": _u(_MM, "ROM address, not a duration"),
     "ENEMIES_UPDATE_COOLDOWN": _u(_MM, "ROM address, not a duration"),

@@ -42,6 +42,14 @@ from sentinel import memmap as mm, relative, actions, terrain
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
 
+try:
+    from sentinel import enemies_jit
+
+    _HAVE_JIT = True
+except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
+    enemies_jit = None
+    _HAVE_JIT = False
+
 FOV_SCAN = 0x14  # $16F2: enemy horizontal FOV width during a scan
 FOV_CREATE_MEANIE = 0x28  # $197F: two screen widths while hunting a tree to convert
 UPDATE_COOLDOWN_SCAN = 0x04  # $16ED
@@ -562,7 +570,7 @@ def cooldown_frame(state):
         tick_cooldowns(state)
 
 
-def advance_frame(state, plotting=False):
+def advance_frame_python(state, plotting=False):
     """Advance the world by ONE video frame, faithful to the ROM cadence.
 
     The raster-IRQ cooldown tick ($9663/$1317) runs BEFORE the frame's foreground passes,
@@ -575,11 +583,37 @@ def advance_frame(state, plotting=False):
             update_enemies(state)
 
 
+def advance_frames_python(state, n_frames, plotting=False):
+    """The reference frame loop -- pure Python, and the fallback when numba is absent."""
+    for _ in range(int(n_frames)):
+        advance_frame_python(state, plotting=plotting)
+
+
+def _jit_usable(state):
+    """The jit twin needs a writable buffer to view; a bytes-backed state has none."""
+    return _HAVE_JIT and not isinstance(state.mem, bytes)
+
+
 def advance_frames(state, n_frames, plotting=False):
     """Advance ``n_frames`` video frames.  ``plotting`` marks a scroll/replot span in which
-    update_enemies is suppressed (only the cooldown clock advances)."""
-    for _ in range(int(n_frames)):
-        advance_frame(state, plotting=plotting)
+    update_enemies is suppressed (only the cooldown clock advances).
+
+    Dispatches to the numba twin (:mod:`sentinel.enemies_jit`) when numba is present,
+    else to :func:`advance_frames_python`; the two are byte-identical."""
+    if _jit_usable(state):
+        enemies_jit.advance_frames(
+            state.mem, int(n_frames), plotting, UPDATES_PER_FRAME
+        )
+        return
+    advance_frames_python(state, n_frames, plotting=plotting)
+
+
+def advance_frame(state, plotting=False):
+    """Advance the world by ONE video frame (the jit twin when numba is present)."""
+    if _jit_usable(state):
+        enemies_jit.advance_frames(state.mem, 1, plotting, UPDATES_PER_FRAME)
+        return
+    advance_frame_python(state, plotting=plotting)
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ cites.  Each case names the primitive symbols, not the derived literal."""
 import pytest
 
 from driver import kbd_aim
-from sentinel import actioncost, aimcost, enemies, memmap as mm
+from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
 from sentinel import pancost, playerbase, projector
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -90,6 +90,9 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
             pancost.CLEAR_FRAMES[0],
             pancost._CLEAR_CYCLES_H / projector.FRAME_CYCLES,
         ),
+        # The jit twin inlines these as njit-visible globals; they cannot drift.
+        ("_COOLDOWN_STICK", enemies_jit._COOLDOWN_STICK, enemies.COOLDOWN_STICK),
+        ("_ENERGY_MASK", enemies_jit._ENERGY_MASK, mm.ENERGY_MASK),
     ],
 )
 def test_derived_constant_matches_primitive(name, derived, expected):
