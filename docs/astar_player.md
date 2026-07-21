@@ -42,24 +42,19 @@ PRNG-driven hyperspace/meanie landings are never read.
 
 ## Candidate generators (`_expand`)
 
-A child is **one hop**, not a chain to an enemy: depth counts hops, and the branching
-factor is *which tile to climb on*. A chain could not backtrack — the frontier deduped its
-re-converging rollouts down to 1-3 distinct keys and the search dead-ended with the
-frontier empty and the node budget untouched.
+A child is the next *strategic sub-goal*, not a primitive step: a multi-hop climb is solved
+by a directed inner routine and bundled into one child, so depth is about the number of
+enemies, not the number of hops.
 
 - `_c_absorb` — terminal strike on an already-landable enemy (Sentinel last, `$1B8E` lock).
-- `_c_hop` — ONE climb step per ranked pedestal candidate: build k boulders + a robot on
-  the tile, transfer up, inchworm-recycle the stack now below the new eye, then stop and
-  become a node. `_hop_candidates` ranks `_pick_hop` (`_TOP_HOPS` = 8, by LOS gain on the
-  target, eye height, window) toward each pursuit target in turn (`_TOP_TARGETS` = 4,
-  nearest first) and dedups on `(tile, k)`, capped at `_MAX_HOP_KIDS` = 12. The recycle
-  stays attached to the hop that creates it — it is defined only against the stack that hop
-  just left, and `_c_reclaim` already offers "reclaim from here" as a separate ply.
-- `_stranded` — pruner (`_STRAND_PRUNE`, on): a landing that can do nothing next (no
-  landable enemy, no blocking tree, no affordable hop toward any target, and no reclaim
-  chain — `_MAX_RECLAIM` = 8 against the landing's frozen tile set — that makes one
-  affordable) is dropped at generation time. With per-hop nodes A* would backtrack out of
-  such a landing by itself; the prune only saves the expansion that discovers it is dead.
+- `_c_pursue` — one child per not-yet-landable enemy (nearest first, `_TOP_TARGETS` = 4):
+  chain minimal pedestal hops (`_pick_hop` ranks `_TOP_HOPS` = 8 candidates by LOS gain,
+  eye height, window; `_hop_exec` builds k boulders + robot, then transfers), interleaving
+  `_reclaim_one` when short, until the enemy is landable, then absorb. A climb that stalls
+  short still returns the hops it made; `None` only when nothing was done.
+  `_climb_continues` calls a landing unstranded when the target is landable, another hop is
+  affordable, or a simulated reclaim chain (`_MAX_RECLAIM` = 8, against the landing's
+  frozen tile set) makes one affordable.
 - `_c_reclaim` — absorb landable own boulders/shells (base <= eye) and, when short, trees,
   up to `_MAX_RECLAIM` per macro; the player stays put so its own window bounds the aim.
 - `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace.
