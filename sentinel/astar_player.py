@@ -26,6 +26,7 @@ from sentinel.game import Game
 from sentinel.playerbase import (
     BasePlayer,
     BOULDER_H,
+    DRAIN_DELAY,
     EYE_EPS,
     FOV_HALF,
     FOV_MARGIN,
@@ -165,6 +166,21 @@ class AStarPlayer(BasePlayer):
         if window is None:
             window = self._player_window()
         return window < budget + self._margin()
+
+    def _absorb_toll(self, budget, window=None):
+        """Frames of ``g`` an absorb costs for standing exposed ``budget`` frames, or
+        ``None`` when the drains it owes would breach the survival floor.
+
+        Exposure is a RATE ($0C20: 1 energy per ``DRAIN_DELAY``), not death, so an
+        absorb whose window is short is PRICED at the ROM's own exchange rate rather
+        than vetoed -- vetoing it refused the refuelling reclaims that ls110 needs
+        (the cheapest missed by 56 f) and the human's own two boulder absorbs."""
+        if window is None:
+            window = self._player_window()
+        drains = self._drains_in(window, budget + self._margin())
+        if not self._affords_drains(drains):
+            return None
+        return drains * DRAIN_DELAY
 
     # ---------------------------------------------------------------- execute
     def _tick(self):
@@ -1011,10 +1027,11 @@ class AStarPlayer(BasePlayer):
             return None
         budget = self._aim_frames(view) + self._settle("absorb", view)
         window = self._player_window(exclude=e)
-        if self._hot(budget, window):
-            return None  # the player's body would be drained before the absorb fires
+        toll = self._absorb_toll(budget, window)
+        if toll is None:
+            return None  # the drains would take the body below the survival floor
         cost = self._charge(st, "absorb", tile)
-        g = node.g + cost
+        g = node.g + cost + toll
         if not actions.absorb(st, e):
             return None
         step = self._plan_step("absorb", tile, cost, GATE_BODY, window)
@@ -1027,17 +1044,27 @@ class AStarPlayer(BasePlayer):
         the inchworm recycle grabs only the player's own spent boulders/shells."""
         self.st = st
         want_trees = (not pedestal_only) and st.energy < HOP_COST + 6
+        best = None  # cheapest exposure toll among affordable targets, 0 wins outright
         for _value, tile in self._reclaim_targets(st, want_trees):
             view = self._view_for(tile)
-            if view is None or self._hot(
+            if view is None:
+                continue
+            toll = self._absorb_toll(
                 self._aim_frames(view) + self._settle("absorb", view)
-            ):
-                continue  # would be drained mid-reclaim: try a safer object
-            g = self._charge(st, "absorb", tile)
-            if not actions.absorb(st, terrain.top_object(st, *tile)):
-                return None
-            return g, self._plan_step("absorb", tile, g, GATE_BODY)
-        return None
+            )
+            if toll is None:
+                continue  # its drains would breach the floor: try a safer object
+            if best is None or toll < best[0]:
+                best = (toll, tile)
+            if not toll:
+                break
+        if best is None:
+            return None
+        toll, tile = best
+        cost = self._charge(st, "absorb", tile)
+        if not actions.absorb(st, terrain.top_object(st, *tile)):
+            return None
+        return cost + toll, self._plan_step("absorb", tile, cost, GATE_BODY)
 
     def _c_reclaim(self, node):
         """Absorb landable spent pedestals, shells and, when short, trees, up to
@@ -1098,13 +1125,16 @@ class AStarPlayer(BasePlayer):
             view = self._view_for(tile)
             if view is None:
                 continue
-            if self._hot(self._aim_frames(view) + self._settle("absorb", view)):
-                continue  # the player would be drained mid-clear
+            toll = self._absorb_toll(
+                self._aim_frames(view) + self._settle("absorb", view)
+            )
+            if toll is None:
+                continue  # its drains would breach the floor mid-clear
             cost = self._charge(st, "absorb", tile)
             if not actions.absorb(st, slot):
                 continue
             step = self._plan_step("absorb", tile, cost, GATE_BODY)
-            children.append(self._node(node, st, node.g + cost, [step]))
+            children.append(self._node(node, st, node.g + cost + toll, [step]))
         return children
 
     def _c_endgame(self, node):

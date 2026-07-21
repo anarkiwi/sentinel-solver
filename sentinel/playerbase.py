@@ -395,6 +395,25 @@ class BasePlayer:
                 best = min(best, self._drain_clock(e, angle_hi, half, target))
         return best
 
+    @staticmethod
+    def _drains_in(window, budget):
+        """Energy units an exposure lasting `budget` frames costs a body whose
+        time-to-first-drain is `window`.  Exposure is a RATE, not a deadline: $1825
+        arms the 120-round countdown and $1A31 re-zeroes it after every drain, so
+        drains recur every `DRAIN_DELAY` frames of continuous sight."""
+        if budget <= window or window == math.inf:
+            return 0
+        return int(math.ceil((budget - window) / DRAIN_DELAY))
+
+    def _affords_drains(self, n_drains, cost=0):
+        """Whether the player can hand `n_drains` energy to the enemies on top of an
+        action costing `cost` and stay alive above the survival floor: a forced
+        hyperspace spends 3 and $215F kills below it, a body drained at 0 is dead
+        ($1A00).  Unexposed steps (`n_drains` 0) are never gated here."""
+        if not n_drains:
+            return True
+        return self.st.energy - cost - n_drains >= max(self._reserve(), 1)
+
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
         """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
         must outlast `budget` (the aim+settle the body stands exposed).  A boulder is
