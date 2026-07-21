@@ -172,9 +172,11 @@ class AStarPlayer(BasePlayer):
             window = self._player_window()
         return window < budget + self._margin()
 
-    def _absorb_toll(self, budget, window=None):
+    def _absorb_toll(self, budget, window=None, gain=0):
         """Frames of ``g`` an absorb costs for standing exposed ``budget`` frames, or
-        ``None`` when the drains it owes would breach the survival floor.
+        ``None`` when the drains it owes would breach the survival floor.  ``gain`` is
+        the energy the absorbed object hands back ($1B9B), which the floor test counts:
+        the absorb is the refuel, so it is judged on the energy it LEAVES.
 
         Exposure is a RATE ($0C20: 1 energy per ``DRAIN_DELAY``), not death, so an
         absorb whose window is short is PRICED at the ROM's own exchange rate rather
@@ -183,7 +185,7 @@ class AStarPlayer(BasePlayer):
         if window is None:
             window = self._player_window()
         drains = self._drains_in(window, budget + self._margin())
-        if not self._affords_drains(drains):
+        if not self._affords_drains(drains, cost=-gain):
             return None
         return drains * DRAIN_DELAY
 
@@ -232,22 +234,35 @@ class AStarPlayer(BasePlayer):
         be re-planned away -- ``_search`` is a pure function of the board and does
         not advance it, so it re-derives the same head and the gate re-fires on an
         identical enemy phase -- so a repeat WAITS instead: the world moves, and
-        ``_plan_step_stale`` may then clear a step only the margin still blocks."""
+        ``_plan_step_stale`` may then clear a step only the margin still blocks.
+
+        A FAILED re-search keeps the standing plan.  Overwriting it with ``None``
+        threw away the only step that could still fire: with no plan,
+        ``_plan_step_stale`` is never consulted again, so its margin-only release
+        (raw budget clears after a wait) can never be reached and ``_tick`` waits on a
+        dead re-search for ever.  Waiting is not free -- $178C holds a still-visible
+        target so the cone never rotates off and $1A31 re-arms the countdown after
+        every drain -- so that loop is billed 1 energy per ``DRAIN_DELAY`` until it
+        dies: the ls110 live death, 26 waits at E=3 with a built body one keystroke
+        away."""
         repeat = key is not None and self._stale is not None and self._stale[0] == key
         self._stale = (key, self._stale[1] + 1 if repeat else 1) if key else None
-        self._pi = 0
         if repeat:
             self._wait()
             return
-        self.plan = self._search()
-        if self.plan:
+        plan = self._search()
+        if plan:
+            self.plan, self._pi = plan, 0
             return
         if self._defend():
             self._hs_streak = 0
+            self.plan, self._pi = None, 0  # deviated: re-plan from the new board
             return
-        self.plan = self._search(margin_k=0.0)
-        if not self.plan:
-            self._wait()  # let the enemy cone rotate (react acts once it is on us)
+        plan = self._search(margin_k=0.0)
+        if plan:
+            self.plan, self._pi = plan, 0
+            return
+        self._wait()  # let the enemy cone rotate (react acts once it is on us)
 
     def _plan_step_stale(self, step, view):
         """Whether the next planned ``PlanStep`` needs a fresh search before firing. The
@@ -1040,7 +1055,9 @@ class AStarPlayer(BasePlayer):
             return None
         budget = self._aim_frames(view) + self._settle("absorb", view)
         window = self._player_window(exclude=e)
-        toll = self._absorb_toll(budget, window)
+        toll = self._absorb_toll(
+            budget, window, gain=mm.ENERGY_IN_OBJECTS[st.obj_type[e]]
+        )
         if toll is None:
             return None  # the drains would take the body below the survival floor
         cost = self._charge(st, "absorb", tile)
@@ -1062,8 +1079,12 @@ class AStarPlayer(BasePlayer):
             view = self._view_for(tile)
             if view is None:
                 continue
+            top = terrain.top_object(st, *tile)
+            if top is None:
+                continue
             toll = self._absorb_toll(
-                self._aim_frames(view) + self._settle("absorb", view)
+                self._aim_frames(view) + self._settle("absorb", view),
+                gain=mm.ENERGY_IN_OBJECTS[st.obj_type[top]],
             )
             if toll is None:
                 continue  # its drains would breach the floor: try a safer object
@@ -1139,7 +1160,8 @@ class AStarPlayer(BasePlayer):
             if view is None:
                 continue
             toll = self._absorb_toll(
-                self._aim_frames(view) + self._settle("absorb", view)
+                self._aim_frames(view) + self._settle("absorb", view),
+                gain=mm.ENERGY_IN_OBJECTS[st.obj_type[slot]],
             )
             if toll is None:
                 continue  # its drains would breach the floor mid-clear
