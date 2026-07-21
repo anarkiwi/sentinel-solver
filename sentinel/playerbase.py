@@ -316,7 +316,8 @@ class BasePlayer:
     def _cone_onset(self, e, angle_hi, half):
         """Frames until enemy `e`'s rotating scan cone ($1805, fixed +-step /
         200-round reload) first covers `angle_hi`: 0 if it does now, inf if its
-        step never brings it round.  Deterministic -- no PRNG."""
+        step never brings it round.  The bare cone-arrival clock, which is NOT
+        when a drain lands (`_drain_clock`).  Deterministic -- no PRNG."""
         st = self.st
         facing = st.obj_h_angle[e]
         if self._in_cone(angle_hi, facing, half):
@@ -331,55 +332,79 @@ class BasePlayer:
                 return first + (k - 1) * ROT_PERIOD_FRAMES
         return math.inf
 
+    def _drain_clock(self, e, angle_hi, half, target):
+        """Frames until enemy `e` can take energy off (or arm a meanie against) a
+        body on bearing `angle_hi`: the cone onset PLUS the draining countdown still
+        owed.  Sight alone never drains -- $1825 ARMS $0C20 to 120 rounds on first
+        sight and only acts as it expires, and $1A31 re-zeroes it after every drain
+        -- so a cone pass costs its first `DRAIN_DELAY` frames nothing.  The owed
+        countdown is the live cooldown byte when `e` already holds `target` under
+        its live cone ($178C keeps a still-visible target counting down), else the
+        full $1835 reload a fresh sighting loads."""
+        onset = self._cone_onset(e, angle_hi, half)
+        if onset == math.inf:
+            return math.inf
+        cd = int(self.st.mem[mm.ENEMIES_DRAINING_COOLDOWN + e])
+        held = int(self.st.mem[mm.ENEMIES_TARGETED_OBJECT + e])
+        if onset == 0.0 and cd and target is not None and held == target:
+            return cd * UNIT_FRAMES
+        return onset + DRAIN_DELAY
+
     def _meanie_window(self, tile, exposed):
         """Frames until a meanie armed from PARTIAL sight of a body on `tile`
         could force a hyperspace ($1986): a partially-seeing enemy must rotate its
-        cone on, run the ~120-round drain countdown to the meanie branch
-        ($183D/$1852), spawn the meanie ($1869) and rotate it to face ($171B).
-        Needs a tree within 10 tiles ($19C3); inf otherwise.  Always far slower
-        than a drain -- this clock is NEVER 0."""
+        cone on, run the drain countdown to the meanie branch ($183D/$1852), spawn
+        the meanie ($1869) and rotate it to face ($171B).  Needs a tree within 10
+        tiles ($19C3); inf otherwise.  Always far slower than a drain -- this clock
+        is NEVER 0."""
         if not self._tree_near(tile):
             return math.inf
         half = FOV_HALF + FOV_MARGIN
-        onset = min(
-            (self._cone_onset(e, ah, half) for e, ah, full in exposed if not full),
+        target = self._top(tile)
+        armed = min(
+            (
+                self._drain_clock(e, ah, half, target)
+                for e, ah, full in exposed
+                if not full
+            ),
             default=math.inf,
         )
-        if onset == math.inf:
+        if armed == math.inf:
             return math.inf
-        return onset + DRAIN_DELAY + MEANIE_SPAWN_FRAMES + MEANIE_ARM_FRAMES
+        return armed + MEANIE_SPAWN_FRAMES + MEANIE_ARM_FRAMES
 
     def _gaze_window(self, tile, exposed=None):
-        """Frames until an enemy can DRAIN a robot body on `tile`.  Only FULL
-        sight drains ($1838; $16E6 step 3 skips a partially-seen robot), so the
-        drain clock keys on full-sight enemies rotating their cone on.  The
-        partial+tree path is the MEANIE arm ($19C3) -- a SEPARATE, far slower
-        clock (`_meanie_window`), never an immediate drain.  0 == drainable now;
-        inf == never.  Deterministic -- no PRNG."""
+        """Frames until an enemy can take ENERGY off a robot body on `tile` -- cone
+        onset plus the draining countdown ($0C20), NOT cone onset alone: arrival in
+        a cone is free, the drain is what costs.  Only FULL sight drains ($1838;
+        $16E6 step 3 skips a partially-seen robot), so the drain clock keys on
+        full-sight enemies.  The partial+tree path is the MEANIE arm ($19C3) -- a
+        SEPARATE, far slower clock (`_meanie_window`).  inf == never; `_cone_onset`
+        is the bare cone-arrival accessor for callers wanting that instead.
+        Deterministic -- no PRNG."""
         if exposed is None:
             exposed = self._exposing_enemies(tile)
         half = FOV_HALF + FOV_MARGIN
+        target = self._top(tile)
         best = self._meanie_window(tile, exposed)
         for e, angle_hi, full in exposed:
-            if not full:
-                continue
-            best = min(best, self._cone_onset(e, angle_hi, half))
-            if best == 0.0:
-                break
+            if full:
+                best = min(best, self._drain_clock(e, angle_hi, half, target))
         return best
 
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
-        """Whether placing `verb` on `tile` is drain-safe.  A boulder is exempt
-        ($16E6 drains robots only, never a boulder body); a robot/transfer must be
-        clear of every live FULL-sight cone now and keep its full-sight drain
-        window past `budget` (the aim+settle it stands exposed).  Partial sight is
-        not a drain -- its slower meanie arm is priced into `_gaze_window`."""
+        """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
+        must outlast `budget` (the aim+settle the body stands exposed).  A boulder is
+        exempt ($16E6 drains robots only, never a boulder body); partial sight is not
+        a drain either -- its slower meanie arm is priced into `_gaze_window`.
+
+        A live FULL-sight cone is not a separate refusal.  Sight only ARMS the
+        draining countdown ($1825), so a body under a cone still has its residual
+        before it costs anything, and `_gaze_window` prices exactly that: refusing
+        cone presence outright was the onset premise's degenerate case (window 0),
+        not a rule of its own."""
         if verb == "boulder":
             return True
-        if exposed is None:
-            exposed = self._exposing_enemies(tile)
-        if self._seen_now(exposed, full_only=True):
-            return False
         return self._gaze_window(tile, exposed=exposed) >= budget
 
     def _frozen(self):

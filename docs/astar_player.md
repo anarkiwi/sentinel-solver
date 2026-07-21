@@ -17,8 +17,9 @@ also covers why typed `0042` is internal 66 and `Game.new(42)` is a different bo
 ## What the search plans over
 
 The game `State`. Enemies only rotate, so each tile has a closed-form gaze window (frames
-until a cone rotates onto it); the search carries the cheap enemy phase, gates every move
-on `window >= aim + settle`, and defers the keyboard-aim cursor sweep to execution.
+until a cone rotates on **and** its `$0C20` drain countdown expires); the search carries the
+cheap enemy phase and the exact cooldown bytes, gates every move on `window >= aim + settle`,
+and defers the keyboard-aim cursor sweep to execution.
 PRNG-driven hyperspace/meanie landings are never read.
 
 - **Node** (`_Node`): state, cost-so-far `g`, the `PlanStep` path, committed bearing

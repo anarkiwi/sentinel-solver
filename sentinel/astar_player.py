@@ -962,14 +962,11 @@ class AStarPlayer(BasePlayer):
         g += cost
         if not actions.transfer(st, top) or actions.player_dead(st):
             return None
-        # a body landed in a live full-sight cone is a trap unless a seer is absorbable from here
-        # (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
+        # a landing with no time before its first drain is a trap unless a seer is absorbable from here (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
         exposed = self._exposing_enemies(tile)
         landed = self._gaze_window(tile, exposed=exposed)
         steps.append(self._plan_step("transfer", tile, cost, GATE_TILE, landed))
-        gate_ok = (
-            not self._seen_now(exposed, full_only=True) and landed >= self._margin()
-        )
+        gate_ok = landed >= self._margin()
         if not gate_ok and not self._absorbable_here(st):
             return None
         return g, steps

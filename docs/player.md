@@ -56,9 +56,10 @@ least-exposed no-other-choice (urgent or frozen only).
 ## Placement invariant
 
 `_drain_gate` (`playerbase`): a boulder is exempt (`$16E6` drains robots only); a robot or
-transfer destination must be outside every live **full**-sight cone now and keep its
-full-sight drain window past the budget it will stand exposed — the aim **plus** the
-post-action settle, since the object is on the board and exposable for the whole settle.
+transfer destination must keep its time-to-first-drain past the budget it will stand
+exposed — the aim **plus** the post-action settle, since the object is on the board and
+exposable for the whole settle. Standing in a live cone is not itself a refusal: sight only
+ARMS the `$0C20` countdown (`$1825`), so `_gaze_window` already prices that body's residual.
 Partial sight is not a drain; its slower meanie arm (a tree within 10 tiles, `$19C3`) is
 priced into `_gaze_window` instead. Exposure is judged at ARRIVAL, on the ROM's own `$8401`
 bearing and `$18B8` cone gate.
@@ -72,10 +73,13 @@ below the 3 a forced hyperspace costs (`$215F` kills below it).
 
 ## Enemy model (deterministic only)
 
-- **Gaze window** per tile (`_gaze_window`): frames until some enemy's rotating ±10-unit
-  scan cone (`$0C68`, ±4 margin) covers a robot there with full line of sight — from
-  current facing, the fixed rotation step and the `$130C`/`$1317` cooldown cadence
-  (`_cone_onset`). `0` = drainable now, `inf` = never.
+- **Gaze window** per tile (`_gaze_window`): frames until some enemy can take ENERGY off a
+  robot there — the cone onset (`_cone_onset`: rotating ±10-unit `$0C68` cone, ±4 margin,
+  from current facing, the fixed rotation step and the `$130C`/`$1317` cadence) **plus**
+  the `$0C20` draining countdown that arrival only ARMS (`_drain_clock`; `$1825` loads 120
+  rounds = 449.6 f, `$1A31` re-zeroes it after each drain), so a cone pass costs nothing
+  for its first 449.6 f. The residual is the live cooldown byte when the enemy already
+  holds that body. `inf` = never; `_cone_onset` remains the bare cone-arrival accessor.
 - **Meanie window** (`_meanie_window`): a partially-seeing enemy must rotate on, run the
   ~120-round drain countdown to the meanie branch (`$183D`/`$1852`), spawn (`$1869`) and
   rotate the meanie to face (`$171B`) — always far slower than a drain, never 0.
