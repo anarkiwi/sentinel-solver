@@ -41,6 +41,7 @@ MEANIE_ARM_FRAMES = (
     * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE
     * UNIT_FRAMES
 )  # $171B worst-case meanie rotate-to-face the player
+MEANIE_HORIZON = 3 * HOP_FRAMES  # forced-hyperspace lookahead the reserve floor covers
 
 
 def _signed(b):
@@ -434,16 +435,22 @@ class BasePlayer:
         return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
 
     def _reserve(self):
-        """Survival floor under any live threat: a forced (meanie) hyperspace
-        spends the 3-energy robot cost and KILLS below it ($215F), so while any
-        enemy or meanie exists a create must never leave energy under 3."""
+        """Survival floor against a FORCED hyperspace: it spends the 3-energy robot
+        cost and $215F kills below it -- but only a MEANIE forces one, so the floor is
+        owed only while a meanie is alive or armable against this body inside
+        `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles, then
+        `_meanie_window`'s drain + spawn + arm clock).  Owing it under any live enemy
+        instead demands E>=8 for the k=1 hop the ROM does at 5, and E>=6 for the k=0
+        the ROM does at 3; the human ls110 line plays through E=1 and refuels by
+        absorbing the pedestal behind it."""
         st = self.st
-        if enemies.enemy_slots(st):
-            return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         for s in range(mm.NUM_SLOTS):
             if not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE:
                 return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        return 0
+        if self._frozen() or not enemies.enemy_slots(st):
+            return 0
+        armed = self._meanie_window(st.player_xy(), self._exposures(st, st.player))
+        return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] if armed <= MEANIE_HORIZON else 0
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no
