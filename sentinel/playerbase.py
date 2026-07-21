@@ -449,8 +449,10 @@ class BasePlayer:
                 return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         if self._frozen() or not enemies.enemy_slots(st):
             return 0
-        armed = self._meanie_window(st.player_xy(), self._exposures(st, st.player))
-        return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] if armed <= MEANIE_HORIZON else 0
+        exposed = self._exposures(st, st.player)
+        if self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON:
+            return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        return 1 if exposed else 0  # a body drained at 0 is dead ($1A00)
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no

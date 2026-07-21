@@ -2,19 +2,22 @@
 
 import pytest
 
-from sentinel import actions, memmap as mm
+from sentinel import actions
 from sentinel.game import Game
 from sentinel.player import Player
 
 
 def test_player_wins_landscape_0():
-    """The player wins ls0: hyperspace from the platform tile, alive, solvent."""
+    """The player wins ls0: hyperspace from the platform tile, alive.
+
+    No post-win solvency floor: the winning hyperspace is voluntary and off the
+    platform, so it only has to be paid for ($215F kills below 3 on a FORCED one),
+    and the survival floor is owed only under a real meanie threat (`_reserve`)."""
     game = Game.new(0)
     player = Player(game)
     assert player.run(max_actions=100)
     assert actions.won(game.state)
     assert not actions.player_dead(game.state)
-    assert game.energy >= mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
     verbs = [verb for _, verb, *_ in player.trace]
     assert verbs[-1] == "hyperspace"
     assert game.state.is_empty(actions.SENTINEL_SLOT)
