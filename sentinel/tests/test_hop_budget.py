@@ -1,8 +1,10 @@
 """HOP_FRAMES against live-measured ls42 hops, and the whole-step books.
 
-``HOP_FRAMES`` is the exposure budget every pedestal build is drain-gated on
-(``astar_player._pick_hop``), so if it is wrong the gate clears hops the body cannot
-survive. It had no fixture; ``live_ls42_hops.json`` is the first.
+``HOP_FRAMES`` is the exposure budget the REACTIVE player (``sentinel/player.py``) gates a
+pedestal build on, so if it is wrong the gate clears hops the body cannot survive. It had
+no fixture; ``live_ls42_hops.json`` is the first.  The A* planner no longer uses it: it
+prices each hop from its own actions (``astar_player._hop_price``), because the constant
+was measured on ls42's 745-879 f hops and ls335's cost ~1294 f.
 """
 
 import json

@@ -409,6 +409,16 @@ def _rnd_0_22_prng(prng):
     return ((r & 0x07) + (((r >> 2) & 0x1E) >> 1)) & 0xFF
 
 
+def seed_for(landscape_number):
+    """The PRNG seed for the landscape number a PLAYER TYPES -- the canonical id.
+
+    Decimal digits are numerically identical to hex nibbles, so the packed-BCD seed is
+    the typed code read as hex: 42 -> 0x0042 = 66, 335 -> 0x0335 = 821, 0 -> 0. Pass
+    typed numbers through here; only :func:`generate` takes the raw seed.
+    """
+    return int(f"{int(landscape_number):04d}", 16)
+
+
 def generate(landscape):
     """Build landscape `landscape` from scratch -- terrain + Sentinel/platform +
     sentries + player + trees -- and return a :class:`sentinel.state.State`.

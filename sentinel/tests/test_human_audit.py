@@ -8,8 +8,10 @@ from sentinel.tests import human_audit
 
 # Pinned CURRENT disagreements (regenerable via ``python -m sentinel.tests.human_audit``); a model fix that clears any changes the set -> update here.
 _BREACH335 = [
+    21,
     22,
     29,
+    37,
     38,
     62,
     68,
@@ -24,40 +26,32 @@ _BREACH335 = [
     134,
     135,
 ]
+# Time-to-DRAIN windows (cone onset + the $0C20 countdown, not onset alone) clear steps 15, 16, 29, 61, 70, 75, 76, 104, 135, 143: human moves the gate used to refuse on a cone that had not yet armed a drain.
 _GATE335 = [
-    15,
-    16,
     21,
     22,
     23,
     28,
-    29,
     37,
     38,
     40,
     55,
     59,
-    61,
     62,
     68,
     69,
-    70,
     73,
-    75,
-    76,
     83,
     84,
     85,
     103,
-    104,
     106,
     121,
     127,
     134,
-    135,
-    143,
 ]
-_FIRE335 = [6, 15, 21, 23, 28, 35, 37, 40, 85, 124, 127, 130]
+# Owing the floor only under a real meanie threat (3) or any exposure (1), not under every live enemy, lets the human's own creates at 6, 21, 35, 37, 40, 127 fire; 21 and 37 then land a body under a cone, so they move to _BREACH335. Step 14 still breaches the 1-energy floor.
+_FIRE335 = [14, 15, 23, 28, 85, 124, 130]
 _DRAIN335 = [
     26,
     33,

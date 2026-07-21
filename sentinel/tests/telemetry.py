@@ -9,6 +9,7 @@ import base64
 import json
 import os
 
+from sentinel import memmap as mm
 from sentinel.state import State
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,3 +55,25 @@ def tile_ladder(path):
         else:
             runs.append((tile, rec))
     return [(runs[i][0], runs[i + 1][0], runs[i][1]) for i in range(len(runs) - 1)]
+
+
+def human_events(fixture_path):
+    """Real player actions from a ``human_wins/*.json`` fixture.
+
+    Drops the recorder's two artifact classes: a DRAIN TICK ($1838) moves energy with no
+    object change and no player move, which ``_extract._classify`` mints as a transfer
+    onto the player's own tile; and an enemy DISCHARGE TREE ($1A5D) appears as a create,
+    though a player can only create boulders and robots. ls335: 168 rows, 130 actions.
+    """
+    with open(fixture_path, encoding="utf-8") as fh:
+        rec = json.load(fh)
+    out = []
+    for ev in rec["events"]:
+        pl = ev.get("player") or {}
+        own_tile = tuple(ev.get("target") or ()) == (pl.get("x"), pl.get("y"))
+        if ev.get("verb") == "transfer" and own_tile:
+            continue
+        if ev.get("verb") == "create" and ev.get("otype") == mm.T_TREE:
+            continue
+        out.append(ev)
+    return out

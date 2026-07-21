@@ -17,8 +17,9 @@ also covers why typed `0042` is internal 66 and `Game.new(42)` is a different bo
 ## What the search plans over
 
 The game `State`. Enemies only rotate, so each tile has a closed-form gaze window (frames
-until a cone rotates onto it); the search carries the cheap enemy phase, gates every move
-on `window >= aim + settle`, and defers the keyboard-aim cursor sweep to execution.
+until a cone rotates on **and** its `$0C20` drain countdown expires); the search carries the
+cheap enemy phase and the exact cooldown bytes, gates every move on `window >= aim + settle`,
+and defers the keyboard-aim cursor sweep to execution.
 PRNG-driven hyperspace/meanie landings are never read.
 
 - **Node** (`_Node`): state, cost-so-far `g`, the `PlanStep` path, committed bearing
@@ -59,9 +60,38 @@ enemies, not the number of hops.
 - `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace.
 
 The climb **inchworms** (the measured human pattern,
-[gameplay §7](gameplay.md#7-how-a-human-wins-quick-strategy)): a hop stacks at most
-`_HOP_BOULDERS` (2) boulders, and each transfer-up reclaims the pedestal now below the new
-eye, so energy rides the reserve floor instead of being locked in a tower.
+[gameplay §7](gameplay.md#7-how-a-human-wins-quick-strategy)): each transfer-up reclaims
+the pedestal now below the new eye, so energy rides the reserve floor instead of being
+locked in a tower. Stack height `k` is whatever clears the current eye, bounded by the
+energy test (`2k + 3` over the reserve) — ls335's human win builds a `k=3` stack, and a
+high plinth is unreachable without one.
+
+### Hop gates
+
+A hop is gated on **what that hop costs** (`_hop_price`: the same `_price` expression
+`_charge` uses, run over a clone that carries the creates so each sub-action is priced
+against the stack and bearing the ones before it left), never a flat constant — a hop
+costs ~745 f on ls42 and 1294 f on ls335, where the aims from a low eye are far more
+expensive, so one constant is simultaneously too strict and too lax.
+
+- **Destination** (enforced): the tile's `_gaze_window` must cover `tail` = robot-create
+  + transfer, the only span a *drainable* body stands there (`$16E6` drains robots, not
+  boulders). Charging the whole hop here rejected tiles that were clear for every frame
+  the robot existed.
+- **Source** (shadow-recorded in `_record_hop_gate`, decides nothing): the player stands
+  on its *current* tile for the whole build, so its `_player_window()` would have to
+  cover `total`. This is the half the destination gate cannot see, and it is the check
+  that refuses ls335's fatal `(8,21)` hop — 1294 f against a 120 f body window. Enforcing
+  it is measured **unaffordable**: on ls42/internal 66 hops cost 891–1572 f from body
+  windows of 120–892 f, so the search falls to 6 expansions and no plan on a board it
+  otherwise wins — the same collapse enforcing it live produced
+  ([plan_fidelity.md](plan_fidelity.md)). Exposure onset is not death: a drain costs
+  energy over frames and the transfer moves the body off. The condition needs a cost
+  model, not a deadline.
+
+Ranking is cheap and pricing is not, so candidates are pre-filtered on the per-verb cost
+*floors* (`_TAIL_FLOOR`, a lower bound on the drainable span) and priced exactly only in
+rank order, until `_TOP_HOPS` survive.
 
 ## Cost model
 
@@ -93,8 +123,8 @@ excursion permanently shifts *when* a rotation committed), so it accumulates as 
 walk in depth `d` (`_begin` seeds it from `len(node.path)`, `_charge` increments it, a
 rejected hop trial restores it). `sigma` is a measured rms, test-pinned below.
 
-Margin-gated: `_c_absorb`, `_reclaim_one` (via `_hot`), `_pick_hop`/`_hop_exec` (via
-`_drain_gate`'s budget), and the live `_plan_step_stale` at depth 0.
+Margin-gated: `_c_absorb`, `_reclaim_one` (via `_hot`), both `_pick_hop` hop gates and
+`_hop_exec` (via `_drain_gate`'s budget), and the live `_plan_step_stale` at depth 0.
 `_search(margin_k=0.0)` restores the raw gate.
 
 ## Execution and re-planning

@@ -569,6 +569,25 @@ def march(
     )
 
 
+@njit(cache=True, inline="always")
+def _balance_stride(n):
+    """A step coprime to ``n``, so ``k -> (k * stride) % n`` permutes the lattice and every
+    prange chunk draws a spread of headings instead of one contiguous bundle.  Near n/phi,
+    the classic low-discrepancy choice; walks up until gcd is 1, which is always reachable
+    (a stride of 1 is the degenerate fallback for tiny n)."""
+    if n < 3:
+        return 1
+    stride = int(n * 0.6180339887498949) | 1
+    while stride > 1:
+        a, b = stride, n
+        while b != 0:
+            a, b = b, a % b
+        if a == 1:
+            return stride
+        stride -= 2
+    return 1
+
+
 @njit(cache=True, parallel=True)
 def march_batch(
     mem,
@@ -613,9 +632,9 @@ def march_batch(
     tx = np.empty(n, dtype=np.int64)
     ty = np.empty(n, dtype=np.int64)
     centre = np.empty(n, dtype=np.int64)
-    # rays are independent (read-only on `mem`, each writes only its own index), so the
-    # lattice marches in parallel across cores -- the v-COMPLETE sweep stays fast.
-    for i in prange(n):  # pylint: disable=not-an-iterable
+    stride = _balance_stride(n)  # interleave: contiguous chunks stall the join
+    for k in prange(n):  # pylint: disable=not-an-iterable
+        i = (k * stride) % n
         (
             st,
             txi,

@@ -21,17 +21,16 @@ from sentinel import (
     los,
     memmap as mm,
     terrain,
-    threat,
 )
 from sentinel.game import Game
 from sentinel.playerbase import (
     BasePlayer,
     BOULDER_H,
+    DRAIN_DELAY,
     EYE_EPS,
     FOV_HALF,
     FOV_MARGIN,
     HOP_COST,
-    HOP_FRAMES,
     ROBOT_EYE,
     SAFE_FRAMES,
     SIGHTS_CENTRE,
@@ -53,18 +52,29 @@ _HOP_EST = (
 _ENDGAME_EST = (
     _OP_FLOOR["create"] + _OP_FLOOR["transfer"] + _HYPERSPACE_FLOOR
 )  # robot+xfer+hs
+_TAIL_FLOOR = _OP_FLOOR["create"] + _OP_FLOOR["transfer"]  # robot+xfer: drainable span
 _EYE_PER_HOP = 0.9
 _TARGET_EYE = 9.0
-_HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): never >2
+_EYE_VALUE = _HOP_EST / _EYE_PER_HOP  # frames of climb one unit of eye saves (_h)
+_PEDESTAL_COST = _OP_FLOOR["create"] + _OP_FLOOR["absorb"]  # build + inchworm reclaim
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
+_PURSUE_BRANCH = int(
+    os.environ.get("SENTINEL_PURSUE_BRANCH", "3")
+)  # first-hop alternatives per pursuit target. K=1 (one greedy rollout) re-converged and lost ls42 once the gates stopped truncating chains: with the ROM action gate, priced absorbs and the meanie-conditional floor, the rollouts stay distinct and K=3 wins ls0/ls42/ls110 (K=2 does not).
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
+_STRAND_PRUNE = int(
+    os.environ.get("SENTINEL_STRAND_PRUNE", "0")
+)  # discard landings _climb_continues calls stranded; measured a no-op, see _advance_hop
+_TOP_CLEARS = 4  # tree-blocked pedestal sites a node may branch a clearing child on
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
+_COARSE_CX = list(range(48, 112, 2))  # landset sights-cursor grid: the 1px window 2:1
+_COARSE_CY = list(range(63, 127, 2))  # subsampled; _landable queries the SAME lattice
 
 GATE_BODY = "body"  # gated on the PLAYER'S body window (_hot): absorbs
 GATE_TILE = "tile"  # gated on the TARGET TILE's window (_drain_gate): builds/transfers
@@ -127,8 +137,10 @@ class AStarPlayer(BasePlayer):
         self.expansions = 0
         self._deadline = None  # per-search wall-clock deadline (set at each _search)
         self._land_memo = {}  # search: coarse landable tile-sets
+        self._tile_memo = {}  # per-(sig, tile) single-tile landability (targeted cone)
         self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
         self._cone_memo = {}  # per-(sig, tile) targeted band march results
+        self._hop_price_memo = {}  # per-(stance, tile, k) exact hop cost
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
@@ -159,6 +171,23 @@ class AStarPlayer(BasePlayer):
         if window is None:
             window = self._player_window()
         return window < budget + self._margin()
+
+    def _absorb_toll(self, budget, window=None, gain=0):
+        """Frames of ``g`` an absorb costs for standing exposed ``budget`` frames, or
+        ``None`` when the drains it owes would breach the survival floor.  ``gain`` is
+        the energy the absorbed object hands back ($1B9B), which the floor test counts:
+        the absorb is the refuel, so it is judged on the energy it LEAVES.
+
+        Exposure is a RATE ($0C20: 1 energy per ``DRAIN_DELAY``), not death, so an
+        absorb whose window is short is PRICED at the ROM's own exchange rate rather
+        than vetoed -- vetoing it refused the refuelling reclaims that ls110 needs
+        (the cheapest missed by 56 f) and the human's own two boulder absorbs."""
+        if window is None:
+            window = self._player_window()
+        drains = self._drains_in(window, budget + self._margin())
+        if not self._affords_drains(drains, cost=-gain):
+            return None
+        return drains * DRAIN_DELAY
 
     # ---------------------------------------------------------------- execute
     def _tick(self):
@@ -205,22 +234,35 @@ class AStarPlayer(BasePlayer):
         be re-planned away -- ``_search`` is a pure function of the board and does
         not advance it, so it re-derives the same head and the gate re-fires on an
         identical enemy phase -- so a repeat WAITS instead: the world moves, and
-        ``_plan_step_stale`` may then clear a step only the margin still blocks."""
+        ``_plan_step_stale`` may then clear a step only the margin still blocks.
+
+        A FAILED re-search keeps the standing plan.  Overwriting it with ``None``
+        threw away the only step that could still fire: with no plan,
+        ``_plan_step_stale`` is never consulted again, so its margin-only release
+        (raw budget clears after a wait) can never be reached and ``_tick`` waits on a
+        dead re-search for ever.  Waiting is not free -- $178C holds a still-visible
+        target so the cone never rotates off and $1A31 re-arms the countdown after
+        every drain -- so that loop is billed 1 energy per ``DRAIN_DELAY`` until it
+        dies: the ls110 live death, 26 waits at E=3 with a built body one keystroke
+        away."""
         repeat = key is not None and self._stale is not None and self._stale[0] == key
         self._stale = (key, self._stale[1] + 1 if repeat else 1) if key else None
-        self._pi = 0
         if repeat:
             self._wait()
             return
-        self.plan = self._search()
-        if self.plan:
+        plan = self._search()
+        if plan:
+            self.plan, self._pi = plan, 0
             return
         if self._defend():
             self._hs_streak = 0
+            self.plan, self._pi = None, 0  # deviated: re-plan from the new board
             return
-        self.plan = self._search(margin_k=0.0)
-        if not self.plan:
-            self._wait()  # let the enemy cone rotate (react acts once it is on us)
+        plan = self._search(margin_k=0.0)
+        if plan:
+            self.plan, self._pi = plan, 0
+            return
+        self._wait()  # let the enemy cone rotate (react acts once it is on us)
 
     def _plan_step_stale(self, step, view):
         """Whether the next planned ``PlanStep`` needs a fresh search before firing. The
@@ -472,9 +514,9 @@ class AStarPlayer(BasePlayer):
     # -------------------------------------------------------------- expansion
     def _expand(self, node):
         """Macro-actions: endgame (Sentinel gone), the terminal absorb of any
-        already-landable enemy, a reclaim, and a DIRECTED pursuit of each
-        not-yet-landable enemy (a multi-hop climb + absorb as one child).  The
-        branching factor is "which enemy to pursue next", not "which tile"."""
+        already-landable enemy, a reclaim, a tree clearing, and a DIRECTED pursuit
+        of each not-yet-landable enemy (a multi-hop climb + absorb as one child).
+        The branching factor is "which enemy to pursue next", not "which tile"."""
         st = node.state
         if st.is_empty(actions.SENTINEL_SLOT):
             child = self._c_endgame(node)
@@ -487,9 +529,12 @@ class AStarPlayer(BasePlayer):
         child = self._c_reclaim(node)
         if child is not None:
             children.append(child)
+        children.extend(self._c_clear(node))
         for e in self._pursue_targets(st):
-            child = self._c_pursue(node, e)
-            if child is not None:
+            for skip in range(_PURSUE_BRANCH):
+                child = self._c_pursue(node, e, skip=skip)
+                if child is None:
+                    break  # branch index past the viable first hops: so is every later one
                 children.append(child)
         return children
 
@@ -512,24 +557,45 @@ class AStarPlayer(BasePlayer):
             self.cursor,
         )
 
+    def _price(self, st, verb, tile):
+        """``(cost, aim, view)`` for ``verb`` on ``tile`` from stance ``st``, WITHOUT
+        advancing the enemies: the ONE cost expression, shared by ``_charge`` (which
+        advances the world by it) and by the hop gates (which must know what a hop
+        costs before committing to it).  ``view is None`` is the infeasible guard --
+        settle only, which the gates then reject."""
+        self.st = st
+        eye = self._settle_eye(verb, tile)
+        view = self._view_for(tile)
+        if view is None:
+            return self._settle(verb, None, eye), 0.0, None
+        aim = self._step_aim_frames(verb, view)
+        return aim + self._settle(verb, view, eye), aim, view
+
+    def _commit_view(self, view, verb):
+        """Mirror the post-aim stance update so an intra-hop follow-up on the same
+        tile reuses the bearing."""
+        st = self.st
+        me = st.player
+        st.obj_h_angle[me] = view["h_angle"]
+        st.obj_v_angle[me] = view["v_angle"]
+        self.cursor = list(view["cursor"])
+        # a transfer makes a new body: the committed bearing is stale
+        self.last_bearing = (
+            None if verb == "transfer" else (view["h_angle"], view["v_angle"])
+        )
+
     def _charge(self, st, verb, tile):
-        """Advance the enemies by this action's REAL aim+settle cost (the same
-        faithful ``_aim_frames``/``_settle`` the executor prices with, over the
-        same ``_view_for`` selector), then mirror the post-aim stance update so
-        an intra-hop follow-up on the same tile reuses the bearing.  Returns the
-        frames spent, and stashes the PRE-step body window ``_plan_step`` records."""
+        """Advance the enemies by this action's REAL ``_price``, then commit the
+        stance the aim left.  Returns the frames spent, and stashes the PRE-step
+        body window ``_plan_step`` records."""
         self.st = st
         self._depth += 1
         if self.audit_pred:
             self._last_pbody = self._player_window()
-        eye = self._settle_eye(verb, tile)
-        view = self._view_for(tile)
+        cost, aim, view = self._price(st, verb, tile)
         if view is None:
-            cost = self._settle(verb, None, eye)  # infeasible guard: gates reject these
             enemies.advance_frames(st, int(cost))
             return cost
-        aim = self._step_aim_frames(verb, view)
-        cost = aim + self._settle(verb, view, eye)
         split = self._aim_unfreeze_split(view)
         if split is None:
             enemies.advance_frames(st, int(cost))
@@ -538,13 +604,7 @@ class AStarPlayer(BasePlayer):
             enemies.advance_frames(st, pre)
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00
             enemies.advance_frames(st, int(cost) - pre)
-        me = st.player
-        st.obj_h_angle[me] = view["h_angle"]
-        st.obj_v_angle[me] = view["v_angle"]
-        self.cursor = list(view["cursor"])
-        self.last_bearing = (view["h_angle"], view["v_angle"])
-        if verb == "transfer":
-            self.last_bearing = None  # new body: committed bearing is stale
+        self._commit_view(view, verb)
         return cost
 
     def _landset(self, st):
@@ -559,15 +619,34 @@ class AStarPlayer(BasePlayer):
             self._land_memo[sig] = tiles
         return tiles
 
+    def _landable(self, st, tile):
+        """Whether ``tile`` alone is in :meth:`_landset` -- answered, when the whole set is
+        not already memoized, by a targeted cone march over the SAME coarse lattice
+        (:func:`los.landable_view_targeted`), which is bit-identical to the full sweep but
+        marches only the rays whose heading points at the cell."""
+        sig = self._sig(st)
+        tiles = self._land_memo.get(sig)
+        if tiles is not None:
+            return tile in tiles
+        if not los._HAVE_JIT:
+            return tile in self._landset(st)
+        key = (sig, tile)
+        hit = self._tile_memo.get(key)
+        if hit is None:
+            hit = (
+                los.landable_view_targeted(st, tile, cxs=_COARSE_CX, cys=_COARSE_CY)
+                is not None
+            )
+            self._tile_memo[key] = hit
+        return hit
+
     @staticmethod
-    def _coarse_landable(st, cstep=2):
+    def _coarse_landable(st):
         if not los._HAVE_JIT:
             return set(los.landable_views(st))
         hgrid = list(range(0, 256, los.AZIMUTH_STEP))
-        cxs = list(range(48, 112, cstep))
-        cys = list(range(63, 127, cstep))
         status, tx, ty, _, _ = los._landable_batch(
-            st, st.player, None, 6000, hgrid, los._V_PRIORITY, cxs, cys
+            st, st.player, None, 6000, hgrid, los._V_PRIORITY, _COARSE_CX, _COARSE_CY
         )
         clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
         return set(zip(tx[clear].tolist(), ty[clear].tolist()))
@@ -588,23 +667,29 @@ class AStarPlayer(BasePlayer):
         """Living enemies not landable from the current stance, nearest first
         (small branching); the Sentinel only once it stands alone ($1B8E lock)."""
         foes = enemies.enemy_slots(st)
-        land = self._landset(st)
         px, py = st.player_xy()
         out = []
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in land:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 continue  # already landable: _c_absorb handles the terminal strike
             out.append(((st.obj_x[e] - px) ** 2 + (st.obj_y[e] - py) ** 2, e))
         out.sort()
         return [e for _, e in out[:_TOP_TARGETS]]
 
-    def _c_pursue(self, node, e):
+    def _c_pursue(self, node, e, skip=0):
         """Directed climb to enemy ``e``: chain minimal pedestal hops (reclaiming
         spent ones for energy) until ``e`` is landable, then absorb it.  Each
         sub-action is charged the real aim+settle via ``_charge``.
+
+        ``skip`` selects the FIRST hop: the chain starts on the ``skip``-th viable
+        candidate ``_pick_hop`` ranked (0 == the greedy top pick), then continues
+        greedily.  It is the search's only real branch point -- one greedy rollout per
+        target expands ~7 nodes on ls335 before the frontier drains, because the
+        alternatives ``_pick_hop`` already priced were thrown away.  ``None`` when
+        fewer than ``skip+1`` first hops are viable.
 
         PARTIAL PROGRESS: a chain that stalls short of ``e`` still returns the hops
         it did make.  Returning ``None`` there discarded every good step before the
@@ -616,7 +701,7 @@ class AStarPlayer(BasePlayer):
         target = st.tile_of(e)
         for _ in range(_MAX_PURSUE):
             self.st = st
-            if target in self._landset(st) and terrain.top_object(st, *target) == e:
+            if terrain.top_object(st, *target) == e and self._landable(st, target):
                 if not actions.can_absorb(st, e):
                     break
                 bearing, cursor, depth = (
@@ -637,36 +722,55 @@ class AStarPlayer(BasePlayer):
                     g += got[0]
                     steps.append(got[1])
                     continue
-            bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
-            advanced = False
-            for tile, k, window in self._pick_hop(target):
-                trial = st.clone()
-                self.st = trial
-                self.last_bearing = bearing
-                self.cursor = list(cursor)
-                self._depth = depth  # a rejected trial must not widen later margins
-                res = self._hop_exec(tile, k, window)
-                if res is None:
-                    continue
-                # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
-                self.st = trial
-                recycled = []
-                for _ in range(_HOP_BOULDERS + 1):
-                    got = self._reclaim_one(trial, pedestal_only=True)
-                    if got is None:
-                        break
-                    recycled.append(got)
-                if not self._climb_continues(trial, target, e):
-                    continue  # stranded landing: try the next-ranked one
-                st, advanced = trial, True
-                g += res[0] + sum(r[0] for r in recycled)
-                steps.extend(res[1])
-                steps.extend(r[1] for r in recycled)
+            adv = self._advance_hop(st, target, e, skip)
+            if adv is None:
+                if skip:
+                    return None  # this branch index does not exist
                 break
-            if not advanced:
-                self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
-                break
+            skip = 0  # only the FIRST hop branches; the rest of the chain is greedy
+            st, cost, hop_steps = adv
+            g += cost
+            steps.extend(hop_steps)
         return self._node(node, st, g, steps) if steps else None
+
+    def _advance_hop(self, st, target, e, skip=0):
+        """One climb step toward ``target``: the ``skip``-th viable ranked hop from
+        ``st`` plus its inchworm reclaims, as ``(landed_state, g_delta, steps)``, or
+        ``None`` if fewer than ``skip+1`` candidates survive execution (and, under
+        ``_STRAND_PRUNE``, the strand check -- default off: with the ROM action gate
+        and the priced absorbs in place it discards nothing the search needs, and it
+        costs a simulated reclaim chain per candidate).  ``st`` is left untouched."""
+        self.st = st  # _pick_hop ranks from the stance we are leaving
+        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
+        for tile, k, window in self._pick_hop(target):
+            trial = st.clone()
+            self.st = trial
+            self.last_bearing = bearing
+            self.cursor = list(cursor)
+            self._depth = depth  # a rejected trial must not widen later margins
+            res = self._hop_exec(tile, k, window)
+            if res is None:
+                continue
+            # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
+            self.st = trial
+            recycled = []
+            for _ in range(k + 1):
+                got = self._reclaim_one(trial, pedestal_only=True)
+                if got is None:
+                    break
+                recycled.append(got)
+            if _STRAND_PRUNE and not self._climb_continues(trial, target, e):
+                continue  # stranded landing: try the next-ranked one
+            if skip:
+                skip -= 1
+                continue  # a viable hop another child of this node takes
+            return (
+                trial,
+                res[0] + sum(r[0] for r in recycled),
+                res[1] + [r[1] for r in recycled],
+            )
+        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+        return None
 
     def _climb_continues(self, st, target, e):
         """Whether the pursuit can still act after landing on ``st``: the target is
@@ -688,7 +792,7 @@ class AStarPlayer(BasePlayer):
         expansion profile).  Absorbing a spent pedestal below the eye only uncovers
         tiles, so the frozen set is the conservative side."""
         self.st = st
-        if target in self._landset(st) and terrain.top_object(st, *target) == e:
+        if terrain.top_object(st, *target) == e and self._landable(st, target):
             return True
         if self._pick_hop(target):
             return True
@@ -711,15 +815,22 @@ class AStarPlayer(BasePlayer):
         self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
         return ok
 
-    def _record_hop_gate(self, tile, k, exposed, tile_ok):
-        """SHADOW record of the body-window gate: what it WOULD decide, deciding nothing.
+    def _record_hop_gate(self, tile, k, exposed, tile_ok, priced):
+        """Record both hop gates for a candidate: the ENFORCED destination gate (the
+        tile's window against the drainable ``tail``) and the SHADOW source gate (the
+        player's own body window against the whole-hop ``total`` it stands there for),
+        which decides nothing.
 
-        The tile gate above clears the tile built on; this records the player's own body
-        window against the same hop budget, so a live run shows whether gating on it is
-        right-but-unaffordable or mis-specified. Enforcing it live took the player from
-        12 actions to 0, and the pure sim cannot see the question at all -- a fresh board
-        is FROZEN, where _player_window() is inf and the gate never fires."""
-        budget = HOP_FRAMES + (k - 1) * actioncost.SETTLE["create"]
+        The source gate is the half the destination gate cannot see -- the player
+        stands on its current tile for every frame of the build -- and it is the one
+        that would have refused ls335's fatal (8,21) hop (total 1294 f against a 120 f
+        body window).  Enforcing it is measured UNAFFORDABLE: ls42/internal 66 hops
+        cost 891-1572 f from body windows of 120-892 f, so the search drops to 6
+        expansions and no plan on a board it wins, the same collapse enforcing it live
+        produced (docs/plan_fidelity.md).  Exposure onset is not death -- a drain
+        costs energy over frames and the transfer moves the body off -- so the
+        condition needs a cost, not a deadline.  Recorded until it has one."""
+        total, tail = (math.inf, math.inf) if priced is None else priced
         margin = self._margin()
         body = self._player_window()
         self._hop_audit.append(
@@ -729,51 +840,140 @@ class AStarPlayer(BasePlayer):
                 "k": k,
                 "tile_window": self._gaze_window(tile, exposed=exposed),
                 "body_window": body,
-                "budget": budget,
+                "budget": total,
+                "tail": tail,
                 "margin": margin,
                 "tile_ok": bool(tile_ok),
-                "body_ok": bool(body >= budget + margin),
-                "body_ok_raw": bool(body >= budget),
+                "body_ok": bool(body >= total + margin),
+                "body_ok_raw": bool(body >= total),
                 "frozen": bool(self._frozen()),
             }
         )
 
+    def _hop_price(self, st, tile, k):
+        """``(total, tail)`` frames for ``k`` boulders + a robot + the transfer up on
+        ``tile`` -- exactly what ``_hop_exec`` will charge -- priced on a clone, or
+        ``None`` if the stack cannot be built or aimed.  ``tail`` is the robot-create
+        plus transfer: the only interval a DRAINABLE body stands on the tile (a
+        boulder body is not drainable, $16E6).
+
+        The clone carries the creates, so each sub-action is priced against the stack
+        the ones before it left, with the bearing reuse they commit; it does NOT carry
+        the enemy phase forward (``_price`` never advances), which prices intra-hop
+        render cost off the pre-hop facings -- second order against the aim terms."""
+        key = (
+            self._sig(st),
+            tuple(tile),
+            k,
+            self.last_bearing,
+            tuple(self.cursor),
+            int(st.obj_h_angle[st.player]),
+            int(st.obj_v_angle[st.player]),
+        )
+        hit = self._hop_price_memo.get(key, _NO_VIEW)
+        if hit is not _NO_VIEW:
+            return hit
+        real, bearing, cursor = self.st, self.last_bearing, list(self.cursor)
+        trial = st.clone()
+        out = None
+        total = 0.0
+        try:
+            for verb in ["boulder"] * k + ["robot"]:
+                otype = mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
+                if not self._can_build(trial, tile, otype):
+                    break
+                cost, _, view = self._price(trial, verb, tile)
+                if view is None:
+                    break
+                total += cost
+                self._commit_view(view, verb)
+                if actions.create(trial, otype, tile) is None:
+                    break
+                if verb == "robot":
+                    tail = cost
+                    # the transfer's ROM gate is the `view is None` break below
+                    cost, _, view = self._price(trial, "transfer", tile)
+                    if view is None:
+                        break
+                    out = (total + cost, tail + cost)
+        finally:
+            self.st, self.last_bearing, self.cursor = real, bearing, cursor
+        self._hop_price_memo[key] = out
+        return out
+
     def _pick_hop(self, target, landset=None):
-        """Ranked pedestal builds directed at ``target``: prefer tiles that gain
-        LOS on it, then raise the eye, then the widest window -- gated on the
-        rotation window (>= a full hop) and never under a live cone (the search's
-        placement safety).  The pursuit tries them in order until one hop lands.
+        """Ranked pedestal builds directed at ``target``: prefer tiles that gain LOS
+        on it, then the best NET frame value -- the eye the landing buys priced by the
+        heuristic's own exchange rate (``_EYE_VALUE``) minus what its boulders cost
+        (``_PEDESTAL_COST``: each is created now and inchworm-reclaimed later) --
+        then the widest window.  Ranking on eye alone compares a k=3 stack against a
+        k=1 one as if they cost the same, and once the reserve floor stopped capping
+        k that lost ls42.  The DESTINATION gate is
+        what that hop actually costs (``_hop_price``), not a flat constant -- hop cost
+        swings 745 f (ls42) to 1294 f (ls335) with how expensive the aims are from the
+        eye, so a constant is simultaneously too strict and too lax.  The tile must
+        stay drain-clear for ``tail``: the robot create plus the transfer, the only
+        span a drainable body stands there (the boulders under it are not drainable,
+        $16E6).  Charging the whole hop here over-gated -- it rejected tiles clear for
+        every frame the robot existed.  The SOURCE half (the player stands on its
+        current tile for the WHOLE build) is shadow-recorded only, see
+        ``_record_hop_gate``.
+
+        Ranking is cheap and pricing is not, so candidates are pre-filtered on
+        ``_TAIL_FLOOR`` (a lower bound on the drainable span) and priced exactly only
+        in rank order, until ``_TOP_HOPS`` survive -- the ones the pursuit would try.
         ``landset`` overrides the tile set (the frozen one ``_climb_continues``
-        probes a refuelled stance against)."""
+        probes a refuelled stance against).
+
+        A tile whose bare base already clears the eye (``base + ROBOT_EYE >
+        my_eye``) is offered at k=0 AS WELL AS at k=1: the boulder is 2 energy, one
+        create and a wider window the gate must find, none of which that tile needs,
+        but it is also half a unit of eye.  Both forms are candidates and the eye
+        ranking decides.  Neither shortcut works: REPLACING k=1 with k=0 costs ls0
+        11 actions / 8283 f and pushes ls42 past a 900 s cut, and ranking k=0 behind
+        every k>=1 candidate loses ls42 outright -- ``_climb_continues`` reads this
+        list as a boolean, so a tail entry still clears a landing it used to call
+        stranded, and the pursuit commits to one it cannot leave."""
         st = self.st
         my_eye = st.eye_z()
         reserve = self._reserve()
+        margin = self._margin()
         cands = []
         for tile in self._landset(st) if landset is None else landset:
             base = self._tile_base(st, tile)
             if base is None:
                 continue
-            k = max(1, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
-            if k > _HOP_BOULDERS:
-                continue
-            if st.energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
-                continue
-            robot_eye = base + BOULDER_H * k + ROBOT_EYE
-            if robot_eye <= my_eye + EYE_EPS:
+            need = math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H)
+            ks = [
+                k
+                for k in ((0, 1) if need <= 0 else (need,))
+                # k is bounded here: a taller stack costs energy it lacks
+                if st.energy - reserve >= 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+                and base + BOULDER_H * k + ROBOT_EYE > my_eye + EYE_EPS
+            ]
+            if not ks:
                 continue
             exposed = self._exposing_enemies(tile)
-            tile_ok = self._drain_gate(
-                "robot", tile, exposed, HOP_FRAMES + self._margin()
-            )
-            if self._hop_audit is not None:
-                self._record_hop_gate(tile, k, exposed, tile_ok)
-            if not tile_ok:
+            if not self._drain_gate("robot", tile, exposed, _TAIL_FLOOR + margin):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)
-            cands.append(((sees, robot_eye, window), tile, k, window))
+            for k in ks:
+                robot_eye = base + BOULDER_H * k + ROBOT_EYE
+                value = (robot_eye - my_eye) * _EYE_VALUE - k * _PEDESTAL_COST
+                cands.append(((sees, value, window), tile, k, window, exposed))
         cands.sort(key=lambda c: c[0], reverse=True)
-        return [(t, k, w) for _, t, k, w in cands[:_TOP_HOPS]]
+        out = []
+        for _, tile, k, window, exposed in cands:
+            priced = self._hop_price(st, tile, k)
+            tile_ok = priced is not None and window >= priced[1] + margin
+            if self._hop_audit is not None:
+                self._record_hop_gate(tile, k, exposed, tile_ok, priced)
+            if tile_ok:
+                out.append((tile, k, window))
+                if len(out) == _TOP_HOPS:
+                    break
+        return out
 
     def _hop_exec(self, tile, k, window):
         """Build ``k`` boulders + a robot on ``tile`` and transfer up (``self.st``
@@ -798,20 +998,17 @@ class AStarPlayer(BasePlayer):
             return None
         steps.append(self._plan_step("robot", tile, cost, GATE_TILE, window))
         top = terrain.top_object(st, *tile)
-        if not threat.player_sees_tile(st, tile, st.player):
-            return None
+        if self._view_for(tile) is None:
+            return None  # $1B46: no keyboard aim reaches the tile to transfer into
         cost = self._charge(st, "transfer", tile)
         g += cost
         if not actions.transfer(st, top) or actions.player_dead(st):
             return None
-        # a body landed in a live full-sight cone is a trap unless a seer is absorbable from here
-        # (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
+        # a landing with no time before its first drain is a trap unless a seer is absorbable from here (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
         exposed = self._exposing_enemies(tile)
         landed = self._gaze_window(tile, exposed=exposed)
         steps.append(self._plan_step("transfer", tile, cost, GATE_TILE, landed))
-        gate_ok = (
-            not self._seen_now(exposed, full_only=True) and landed >= self._margin()
-        )
+        gate_ok = landed >= self._margin()
         if not gate_ok and not self._absorbable_here(st):
             return None
         return g, steps
@@ -820,29 +1017,32 @@ class AStarPlayer(BasePlayer):
         """Whether a living enemy is landable from the current stance (the
         counterattack is available)."""
         foes = enemies.enemy_slots(st)
-        land = self._landset(st)
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in land:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 return True
         return False
 
     def _can_build(self, st, tile, otype):
-        return threat.player_sees_tile(st, tile, st.player) and actions.can_create(
-            st, otype, tile
-        )
+        """Whether the ROM permits creating ``otype`` on ``tile`` from this stance:
+        the placement rules (``actions.can_create``) plus the ROM's own action gate
+        ($1B46) -- a keyboard view that reaches the tile with clear LOS at the true
+        eye, i.e. ``aim.propose`` == ``_view_for``.  NOT ``player_sees_tile``, which
+        asks whether an observer could see a BODY standing there: a stricter,
+        different test that vetoes builds the ROM allows (ls110's opening boulder)."""
+        self.st = st
+        return actions.can_create(st, otype, tile) and self._view_for(tile) is not None
 
     def _absorb_enemy_targets(self, st):
         foes = enemies.enemy_slots(st)
-        landset = self._landset(st)
         out = []
         for e in foes:
             if e == actions.SENTINEL_SLOT and len(foes) > 1:
                 continue  # Sentinel dead last ($1B8E lock)
             tile = st.tile_of(e)
-            if terrain.top_object(st, *tile) == e and tile in landset:
+            if terrain.top_object(st, *tile) == e and self._landable(st, tile):
                 out.append((tile, e))
         return out
 
@@ -855,10 +1055,13 @@ class AStarPlayer(BasePlayer):
             return None
         budget = self._aim_frames(view) + self._settle("absorb", view)
         window = self._player_window(exclude=e)
-        if self._hot(budget, window):
-            return None  # the player's body would be drained before the absorb fires
+        toll = self._absorb_toll(
+            budget, window, gain=mm.ENERGY_IN_OBJECTS[st.obj_type[e]]
+        )
+        if toll is None:
+            return None  # the drains would take the body below the survival floor
         cost = self._charge(st, "absorb", tile)
-        g = node.g + cost
+        g = node.g + cost + toll
         if not actions.absorb(st, e):
             return None
         step = self._plan_step("absorb", tile, cost, GATE_BODY, window)
@@ -869,20 +1072,33 @@ class AStarPlayer(BasePlayer):
         short; the player stays put so its own window bounds the aim.  Returns
         ``(g_delta, step)`` or ``None``.  ``pedestal_only`` skips the tree sweep so
         the inchworm recycle grabs only the player's own spent boulders/shells."""
+        self.st = st
         want_trees = (not pedestal_only) and st.energy < HOP_COST + 6
+        best = None  # cheapest exposure toll among affordable targets, 0 wins outright
         for _value, tile in self._reclaim_targets(st, want_trees):
-            if not threat.player_sees_tile(st, tile, st.player):
-                continue
             view = self._view_for(tile)
-            if view is None or self._hot(
-                self._aim_frames(view) + self._settle("absorb", view)
-            ):
-                continue  # would be drained mid-reclaim: try a safer object
-            g = self._charge(st, "absorb", tile)
-            if not actions.absorb(st, terrain.top_object(st, *tile)):
-                return None
-            return g, self._plan_step("absorb", tile, g, GATE_BODY)
-        return None
+            if view is None:
+                continue
+            top = terrain.top_object(st, *tile)
+            if top is None:
+                continue
+            toll = self._absorb_toll(
+                self._aim_frames(view) + self._settle("absorb", view),
+                gain=mm.ENERGY_IN_OBJECTS[st.obj_type[top]],
+            )
+            if toll is None:
+                continue  # its drains would breach the floor: try a safer object
+            if best is None or toll < best[0]:
+                best = (toll, tile)
+            if not toll:
+                break
+        if best is None:
+            return None
+        toll, tile = best
+        cost = self._charge(st, "absorb", tile)
+        if not actions.absorb(st, terrain.top_object(st, *tile)):
+            return None
+        return cost + toll, self._plan_step("absorb", tile, cost, GATE_BODY)
 
     def _c_reclaim(self, node):
         """Absorb landable spent pedestals, shells and, when short, trees, up to
@@ -900,26 +1116,90 @@ class AStarPlayer(BasePlayer):
             return None
         return self._node(node, st, g, steps)
 
+    def _blocking_trees(self, st):
+        """Landable tiles whose ONLY disqualification as a pedestal site is the tree
+        on top: ``_tile_base`` is None there, but the surface the tree stands on
+        (``_base_z`` of the tree) would carry a stack that raises the eye, within the
+        energy left once the absorb has paid its own +1.  Tallest site first."""
+        my_eye = st.eye_z()
+        reserve = self._reserve()
+        energy = st.energy + mm.ENERGY_IN_OBJECTS[mm.T_TREE]
+        out = []
+        for tile in self._landset(st):
+            top = self._top(tile)
+            if top is None or st.obj_type[top] != mm.T_TREE:
+                continue
+            base = self._base_z(top)
+            k = max(0, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
+            if energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
+                continue
+            if base + BOULDER_H * k + ROBOT_EYE <= my_eye + EYE_EPS:
+                continue
+            out.append((base, tile))
+        out.sort(reverse=True)
+        return [tile for _base, tile in out]
+
+    def _c_clear(self, node):
+        """Absorb a tree BECAUSE it blocks a wanted pedestal site -- one child per
+        blocked site, the player staying put so its own window bounds the aim.
+
+        ``_reclaim_one``'s tree arm cannot do this: it is a FUEL heuristic gated on
+        ``st.energy < HOP_COST + 6``, so it takes one tree, the energy it returns
+        switches the gate off, and every further tree is permanently unreachable.
+        At the ls335 root that is the whole board -- 4 landable tiles, 2 of them
+        tree-topped at base 3.875 against an eye of 3.875, i.e. k=0 pedestals the
+        moment the tree is gone -- and the search never built on either."""
+        st0 = self._begin(node)
+        children = []
+        for tile in self._blocking_trees(st0)[:_TOP_CLEARS]:
+            st = self._begin(node)
+            slot = terrain.top_object(st, *tile)
+            if slot is None or not actions.can_absorb(st, slot):
+                continue
+            view = self._view_for(tile)
+            if view is None:
+                continue
+            toll = self._absorb_toll(
+                self._aim_frames(view) + self._settle("absorb", view),
+                gain=mm.ENERGY_IN_OBJECTS[st.obj_type[slot]],
+            )
+            if toll is None:
+                continue  # its drains would breach the floor mid-clear
+            cost = self._charge(st, "absorb", tile)
+            if not actions.absorb(st, slot):
+                continue
+            step = self._plan_step("absorb", tile, cost, GATE_BODY)
+            children.append(self._node(node, st, node.g + cost + toll, [step]))
+        return children
+
     def _c_endgame(self, node):
         """Sentinel gone (no enemy remains): robot on the platform, transfer,
-        hyperspace -- the win."""
+        hyperspace -- the win.
+
+        A robot ALREADY on the platform is the body to transfer into, not a tile to
+        build on: ``create`` cannot stack on a robot ($1F38), so re-creating there
+        returns None and the endgame -- the only child ``_expand`` offers once the
+        Sentinel is gone -- yields no successor at all.  That is a plan of None and
+        a zero-action loss exactly two moves from a win."""
         st = self._begin(node)
         ptile = st.platform_xy
         g = node.g
         steps = []
         if not actions.on_platform(st):
-            if ptile not in self._landset(st):
+            if not self._landable(st, ptile):
                 return None
-            cost = self._charge(st, "robot", ptile)
-            g += cost
-            slot = actions.create(st, mm.T_ROBOT, ptile)
-            if slot is None:
-                return None
-            steps.append(
-                self._plan_step(
-                    "robot", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+            slot = terrain.top_object(st, *ptile)
+            if slot is None or st.obj_type[slot] != mm.T_ROBOT:
+                cost = self._charge(st, "robot", ptile)
+                g += cost
+                slot = actions.create(st, mm.T_ROBOT, ptile)
+                if slot is None:
+                    return None
+                steps.append(
+                    self._plan_step(
+                        "robot", ptile, cost, GATE_TILE, self._gaze_window(ptile)
+                    )
                 )
-            )
             cost = self._charge(st, "transfer", ptile)
             g += cost
             if not actions.transfer(st, slot):

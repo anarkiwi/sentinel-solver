@@ -1,12 +1,22 @@
 # Plan-vs-live fidelity
 
-State: **the clocks are exact, the A\* player wins ls42 live on the real game, and the
-run reproduces frame for frame.** `python -m driver.play_player 42 --player astar` wins in
-**36 actions, final energy 10** (10962 recorded frames,
-[media/ls42_astar_win.png](media/ls42_astar_win.png)), and offline
-(`python -m sentinel.astar_player 66`) in 41 actions / 11263 f, eye 11.875 on the plinth —
-the human line's height. Landscape 0 wins offline (26 actions). The reactive greedy player
-loses both ls42 boards.
+State: **the clocks are exact and the A\* player wins landscapes 0, 42 and 110 — 42 and
+110 live on the real game**, verified by `$0CDE` bit 6:
+
+| typed | enemies | offline | live |
+|---|---|---|---|
+| 0 | 1 | 23 actions / 6240 f / E6 | — |
+| 42 | 2 | 35 / 9810 / E6 | **36 actions** |
+| 110 | 3 | 42 / 13365 / E11 | **41 actions**, [media/ls110_astar_win.png](media/ls110_astar_win.png) |
+
+**335 does not win.** Its search reaches eye 6.375 at depth 17 (was 5.375 at depth 11
+before this work) and still returns no plan, so the run loop takes no action at all. The
+gates are no longer what refuses it: the *ungated* search finds a verified 33-action
+ROM-legal win on ls110 in 21 expansions, and 4 of the 47 steps of the human ls110 line
+remain refused (3 binding). What is missing is strategy — a forward exposure forecast over
+a stance's whole occupancy, an `h` that credits the position a climb buys rather than
+charging for every living enemy, and the ascend-then-hunt phase structure a human plays.
+The reactive greedy player is untouched and still loses ls42.
 
 **The plan is a pure function of the board.** Two live ls42 runs produce identical action
 sequences and identical per-step measured frame counts. `_search` is bounded by
@@ -15,19 +25,31 @@ loaded host truncates the search sooner and plays a different — not cheaper �
 wall-clock cut was worth 3 actions and 2684 frames on this board: it was ending the search
 early enough to miss the better plan.
 
-## READ FIRST: "landscape 42" is two boards
+## READ FIRST: a landscape number is what you TYPE
 
-`driver.core.landscape_from_digits` parses the typed code as **hex**, so typing `0042`
-seeds internal landscape **0x42 = 66**.
+**Use the typed number. Never pass a raw seed around.** `Game.typed(n)` and
+`landscape.seed_for(n)` do the conversion; `Game.new`/`landscape.generate` take the raw
+seed and exist only for the layer that must.
 
-- `driver/play_player.py 42` and the human logs (`ls42.json`: `entered_code 42, landscape
-  66`) play **internal 66** — player starts at (13,29).
-- `Game.new(42)` and `test_astar_player._LANDSCAPE = 42` build **internal 42** — player at
-  (14,27), 17 objects against 66's 16, zero slot overlap.
+The ROM stores the typed code packed-BCD and seeds the PRNG from those bytes, so the seed
+is the digits read as **hex**: typing `0042` seeds **0x42 = 66**, typing `0335` seeds
+**0x335 = 821**. Every board therefore has two names, and mixing them silently selects a
+different landscape — it has cost real debugging time twice.
+
+| you type | `Game.typed(n)` — the board you get | `Game.new(n)` — raw seed, a DIFFERENT board |
+|---|---|---|
+| `42` | seed 66 — player (13,29), 2 enemies, 16 objects | seed 42 — player (14,27), 17 objects, zero slot overlap |
+| `335` | seed 821 — player (11,17), **7 enemies** (Sentinel h12 + 6 sentries) | seed 335 — another board again |
+
+`ls42.json` records `entered_code 42, landscape 66` and `ls335.json` records
+`entered_code 335, landscape 821`; `Game.typed(42)`/`Game.typed(335)` reproduce their
+first frames object for object. Older docs described ls335 as seed `$35` = 53 (4 enemies)
+— that is a board nobody can type.
 
 `Game.new(66)` matches the human ls42 fixture exactly (16/16 objects, same slots) and the
-live replay agrees. Sim tests and the live driver therefore do **not** exercise the same
-board; any sim-vs-live comparison keyed on "42" is void.
+live replay agrees, but `test_astar_player._LANDSCAPE = 42` builds internal 42. Sim tests
+and the live driver therefore do **not** always exercise the same board; any sim-vs-live
+comparison keyed on the typed digits is void unless it converts them as hex first.
 
 ## Clocks: exact
 
@@ -62,7 +84,21 @@ bounding it by wall clock buys nothing and costs reproducibility.
 
 ## Open, ranked
 
-1. **Per-step frame drift.** −208 f over the 36 steps of the winning live run (mean −5.8,
+1. **The gaze forecast assumes rotation never stalls.** `_cone_onset` projects the fixed
+   rotation step and cooldown cadence, but `_consider_enemy_state` returns *before* the
+   `$17F9` rotate whenever the enemy is discharging (`$177A`), has found a drainable
+   boulder/tree (`$1773`), or still sees its target (`$178C`) — so a DRAINING enemy stops
+   sweeping and its cone holds. Measured on the live ls42 line: `robot (6,20)` predicted
+   a 127 f body window against a live 49 f, on a 106 f budget
+   (`test_plan_dwell_prediction_matches_live_ls42`, xfail). Two consequences, opposite in
+   sign: a body already under a busy cone is exposed *longer* than forecast, and tiles
+   ahead of that enemy's arc become safe *later* than forecast. It also makes waiting
+   under a cone non-terminating, which killed the first live ls110 run (26 waits, 1560 f,
+   3 drains). Modelling it shortens every window — the one attempt lost ls42 — so it needs
+   its own change with the three live gates re-run. A side consequence worth pricing at
+   the same time: **abandoned objects pin an enemy's gaze**, since a sentry with something
+   to drain stops rotating, so the inchworm recycle un-pins it.
+2. **Per-step frame drift.** −208 f over the 36 steps of the winning live run (mean −5.8,
    rms 58.1), reproducible run to run. Decomposed over 15
    runs, the settle side is two constants the model merges: **create measures 99 f (n=71,
    sd 7.8), absorb ~90 f (n=65)** against a shared charge of 93.75 (`DITHER_FRAMES +
@@ -70,7 +106,7 @@ bounding it by wall clock buys nothing and costs reproducibility.
    `$2051` loads #$28 when `$0C4E`, the meanie-made flag, is set) — that is the meanie
    split, not the create/absorb one, so the difference is unattributed. The aim side is a
    separate +8.7 mean (rms 15), dominated by large pans.
-2. **`_pick_hop` rank order and beam width.** Replaying the human ls42 line matches its
+3. **`_pick_hop` rank order and beam width.** Replaying the human ls42 line matches its
    energy curve exactly for 16 steps, yet its first four hops — (9,30), (13,26), (2,24),
    (5,22) — are landable, pass every filter, and never enter `_pick_hop`'s top 8: the key
    `(sees, robot_eye, window)` maximises eye gained per hop while the human raises the eye
@@ -79,13 +115,13 @@ bounding it by wall clock buys nothing and costs reproducibility.
    `corr(aim, manhattan)` is **−0.54** against +0.60 for pitch notches; the rank key sees
    none of it. Two cheap experiments: rank by minimum sufficient rise rather than maximum,
    and widen `_TOP_HOPS`.
-3. **Point the sim tests at internal 66** so they are a valid control at all.
-4. **Terrain fill cost** — the residual under the pan model, systematic in scene
+4. **Point the sim tests at internal 66** so they are a valid control at all.
+5. **Terrain fill cost** — the residual under the pan model, systematic in scene
    busy-ness: mean error +1.8, −1.4, −4.5, −9.0 f across measured-cost quartiles. Lever:
    `projector.PER_SCANLINE`/`PER_PIXEL` and the cross-polygon span coupling.
-5. **py65 exact backend skips transfer settles** — `_exact_render_cost` returns `None` for
+6. **py65 exact backend skips transfer settles** — `_exact_render_cost` returns `None` for
    any non-player observer, and a transfer settle is always priced from one.
-6. **The DRIVER's wall-clock timeouts are the residual load sensitivity** — `_RU_PAN`
+7. **The DRIVER's wall-clock timeouts are the residual load sensitivity** — `_RU_PAN`
    (20 s), `_RU_STA` (8 s), `_RU_COMMIT` (4 s) in `kbd_aim`. The planner is now
    reproducible, so these are what is left: on an idle host
    `driver/test_live_determinism.py` passes (2/2 serial, and two full ls42 runs are

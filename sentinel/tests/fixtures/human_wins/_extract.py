@@ -74,6 +74,7 @@ SOURCES = {
     "ls0.json": ("play_20260707_193356.jsonl", 0, 0),
     "ls42.json": ("play_20260707_194413.jsonl", 42, 66),
     "ls335.json": ("play_20260707_203210.jsonl", 335, 821),
+    "ls110.json": ("play_20260721_170900.jsonl", 110, 272),
 }
 
 _BUILDABLE = (mm.T_ROBOT, mm.T_TREE, mm.T_BOULDER)

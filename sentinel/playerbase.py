@@ -41,6 +41,7 @@ MEANIE_ARM_FRAMES = (
     * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE
     * UNIT_FRAMES
 )  # $171B worst-case meanie rotate-to-face the player
+MEANIE_HORIZON = 3 * HOP_FRAMES  # forced-hyperspace lookahead the reserve floor covers
 
 
 def _signed(b):
@@ -192,11 +193,14 @@ class BasePlayer:
 
     def _view_with_band(self, tile, primary, band):
         """The `primary`-plane view for `tile`, else `band(tile)` -- the wider
-        down-look lookup, consulted only when the eye can see `tile` at all, so
-        the one ray march gates the costlier band sweep/march."""
+        down-look lookup.  This IS `aim.propose`: the ROM's own action gate ($1B46)
+        asks only whether SOME keyboard view reaches `tile` with clear line of sight
+        at the true eye.  A `_sees_tile` pre-filter here is a DIFFERENT and stricter
+        question (can an observer see a body standing on the tile) and vetoed views
+        the ROM grants, so the band lookup is consulted unconditionally."""
         tile = tuple(tile)
         view = primary.get(tile)
-        if view is not None or not self._sees_tile(tile):
+        if view is not None:
             return view
         return band(tile)
 
@@ -316,7 +320,8 @@ class BasePlayer:
     def _cone_onset(self, e, angle_hi, half):
         """Frames until enemy `e`'s rotating scan cone ($1805, fixed +-step /
         200-round reload) first covers `angle_hi`: 0 if it does now, inf if its
-        step never brings it round.  Deterministic -- no PRNG."""
+        step never brings it round.  The bare cone-arrival clock, which is NOT
+        when a drain lands (`_drain_clock`).  Deterministic -- no PRNG."""
         st = self.st
         facing = st.obj_h_angle[e]
         if self._in_cone(angle_hi, facing, half):
@@ -331,72 +336,155 @@ class BasePlayer:
                 return first + (k - 1) * ROT_PERIOD_FRAMES
         return math.inf
 
+    def _drain_clock(self, e, angle_hi, half, target):
+        """Frames until enemy `e` can take energy off (or arm a meanie against) a
+        body on bearing `angle_hi`: the cone onset PLUS the draining countdown still
+        owed.  Sight alone never drains -- $1825 ARMS $0C20 to 120 rounds on first
+        sight and only acts as it expires, and $1A31 re-zeroes it after every drain
+        -- so a cone pass costs its first `DRAIN_DELAY` frames nothing.  The owed
+        countdown is the live cooldown byte when `e` already holds `target` under
+        its live cone ($178C keeps a still-visible target counting down), else the
+        full $1835 reload a fresh sighting loads."""
+        onset = self._cone_onset(e, angle_hi, half)
+        if onset == math.inf:
+            return math.inf
+        cd = int(self.st.mem[mm.ENEMIES_DRAINING_COOLDOWN + e])
+        held = int(self.st.mem[mm.ENEMIES_TARGETED_OBJECT + e])
+        if onset == 0.0 and cd and target is not None and held == target:
+            return cd * UNIT_FRAMES
+        return onset + DRAIN_DELAY
+
     def _meanie_window(self, tile, exposed):
         """Frames until a meanie armed from PARTIAL sight of a body on `tile`
         could force a hyperspace ($1986): a partially-seeing enemy must rotate its
-        cone on, run the ~120-round drain countdown to the meanie branch
-        ($183D/$1852), spawn the meanie ($1869) and rotate it to face ($171B).
-        Needs a tree within 10 tiles ($19C3); inf otherwise.  Always far slower
-        than a drain -- this clock is NEVER 0."""
+        cone on, run the drain countdown to the meanie branch ($183D/$1852), spawn
+        the meanie ($1869) and rotate it to face ($171B).  Needs a tree within 10
+        tiles ($19C3); inf otherwise.  Always far slower than a drain -- this clock
+        is NEVER 0."""
         if not self._tree_near(tile):
             return math.inf
         half = FOV_HALF + FOV_MARGIN
-        onset = min(
-            (self._cone_onset(e, ah, half) for e, ah, full in exposed if not full),
+        target = self._top(tile)
+        armed = min(
+            (
+                self._drain_clock(e, ah, half, target)
+                for e, ah, full in exposed
+                if not full
+            ),
             default=math.inf,
         )
-        if onset == math.inf:
+        if armed == math.inf:
             return math.inf
-        return onset + DRAIN_DELAY + MEANIE_SPAWN_FRAMES + MEANIE_ARM_FRAMES
+        return armed + MEANIE_SPAWN_FRAMES + MEANIE_ARM_FRAMES
 
     def _gaze_window(self, tile, exposed=None):
-        """Frames until an enemy can DRAIN a robot body on `tile`.  Only FULL
-        sight drains ($1838; $16E6 step 3 skips a partially-seen robot), so the
-        drain clock keys on full-sight enemies rotating their cone on.  The
-        partial+tree path is the MEANIE arm ($19C3) -- a SEPARATE, far slower
-        clock (`_meanie_window`), never an immediate drain.  0 == drainable now;
-        inf == never.  Deterministic -- no PRNG."""
+        """Frames until an enemy can take ENERGY off a robot body on `tile` -- cone
+        onset plus the draining countdown ($0C20), NOT cone onset alone: arrival in
+        a cone is free, the drain is what costs.  Only FULL sight drains ($1838;
+        $16E6 step 3 skips a partially-seen robot), so the drain clock keys on
+        full-sight enemies.  The partial+tree path is the MEANIE arm ($19C3) -- a
+        SEPARATE, far slower clock (`_meanie_window`).  inf == never; `_cone_onset`
+        is the bare cone-arrival accessor for callers wanting that instead.
+        Deterministic -- no PRNG."""
         if exposed is None:
             exposed = self._exposing_enemies(tile)
         half = FOV_HALF + FOV_MARGIN
+        target = self._top(tile)
         best = self._meanie_window(tile, exposed)
         for e, angle_hi, full in exposed:
-            if not full:
-                continue
-            best = min(best, self._cone_onset(e, angle_hi, half))
-            if best == 0.0:
-                break
+            if full:
+                best = min(best, self._drain_clock(e, angle_hi, half, target))
         return best
 
+    @staticmethod
+    def _drains_in(window, budget):
+        """Energy units an exposure lasting `budget` frames costs a body whose
+        time-to-first-drain is `window`.  Exposure is a RATE, not a deadline: $1825
+        arms the 120-round countdown and $1A31 re-zeroes it after every drain, so
+        drains recur every `DRAIN_DELAY` frames of continuous sight."""
+        if budget <= window or window == math.inf:
+            return 0
+        return int(math.ceil((budget - window) / DRAIN_DELAY))
+
+    def _affords_drains(self, n_drains, cost=0):
+        """Whether the player can hand `n_drains` energy to the enemies on top of an
+        action costing `cost` and stay alive above the survival floor (`_reserve`).
+        `cost` is signed: an absorb RETURNS the object's energy ($1B9B), so it is
+        priced as a negative cost -- the refuelling reclaim is exactly the move a
+        drained body needs, and judging it on the energy it has not banked yet
+        refuses it at the moment it matters.  Unexposed steps (`n_drains` 0) are
+        never gated here."""
+        if not n_drains:
+            return True
+        return self.st.energy - cost - n_drains >= max(self._reserve(), 1)
+
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
-        """Whether placing `verb` on `tile` is drain-safe.  A boulder is exempt
-        ($16E6 drains robots only, never a boulder body); a robot/transfer must be
-        clear of every live FULL-sight cone now and keep its full-sight drain
-        window past `budget` (the aim+settle it stands exposed).  Partial sight is
-        not a drain -- its slower meanie arm is priced into `_gaze_window`."""
+        """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
+        must outlast `budget` (the aim+settle the body stands exposed).  A boulder is
+        exempt ($16E6 drains robots only, never a boulder body); partial sight is not
+        a drain either -- its slower meanie arm is priced into `_gaze_window`.
+
+        A live FULL-sight cone is not a separate refusal.  Sight only ARMS the
+        draining countdown ($1825), so a body under a cone still has its residual
+        before it costs anything, and `_gaze_window` prices exactly that: refusing
+        cone presence outright was the onset premise's degenerate case (window 0),
+        not a rule of its own."""
         if verb == "boulder":
             return True
-        if exposed is None:
-            exposed = self._exposing_enemies(tile)
-        if self._seen_now(exposed, full_only=True):
-            return False
         return self._gaze_window(tile, exposed=exposed) >= budget
 
     def _frozen(self):
         """World frozen until the player's first action ($0CE5 bit7, $3682)."""
         return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
 
+    def _margin(self, depth=None):  # pylint: disable=unused-argument
+        """Frames of enemy-phase uncertainty a gate holds back.  Zero for a player
+        that acts on the board in front of it; the planner overrides it with the
+        accumulated per-step error at plan depth (`astar_player._margin`)."""
+        return 0.0
+
+    def _stall_drains(self):
+        """Energy an UNFORESEEN stall hands the enemies while the body stands
+        exposed: `_margin()` frames of accumulated phase error at the ROM's own
+        exchange rate of 1 energy per `DRAIN_DELAY` of continuous sight ($0C20)."""
+        return int(math.ceil(self._margin() / DRAIN_DELAY))
+
     def _reserve(self):
-        """Survival floor under any live threat: a forced (meanie) hyperspace
-        spends the 3-energy robot cost and KILLS below it ($215F), so while any
-        enemy or meanie exists a create must never leave energy under 3."""
+        """Survival floor: the SUM of what the stance actually owes, not a constant.
+
+        * A forced hyperspace spends the 3-energy robot cost and $215F kills below
+          it -- owed while a meanie is alive or armable against this body inside
+          `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles,
+          then `_meanie_window`'s drain + spawn + arm clock).
+        * An EXPOSED body owes its ESCAPE plus the drains a stall costs.  Sight is
+          not a passing weather front: $178C keeps a still-visible target held, and
+          that path returns before the `no_drain` rotate at $17F9, so a seeing enemy
+          STOPS rotating -- the cone does not sweep off, and $1A31 re-arms the
+          countdown after every drain, billing 1 energy per `DRAIN_DELAY` for as long
+          as the player cannot act.  The exit is an action, and the last-resort one is
+          the conceded hyperspace: it spends the 3-energy robot cost and $215F kills
+          below it, so `_react` concedes it only while E > 3.  A body that reaches 3
+          under a cone has NO exit left and is simply billed to death -- the ls110
+          live death, 26 waits at E=3.  `_stall_drains` adds the drains the plan's own
+          accumulated phase uncertainty can bill before the escape fires.
+
+        An UNEXPOSED stance (`_player_window` inf) owes neither term and may be spent
+        to the bone: that is where the human ls110 line runs to E=1 and refuels by
+        absorbing the pedestal behind it."""
         st = self.st
-        if enemies.enemy_slots(st):
-            return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        for s in range(mm.NUM_SLOTS):
-            if not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE:
-                return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        return 0
+        floor = 0
+        armed = any(
+            not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE
+            for s in range(mm.NUM_SLOTS)
+        )
+        if not armed and not self._frozen() and enemies.enemy_slots(st):
+            exposed = self._exposures(st, st.player)
+            armed = self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON
+        if armed:
+            floor += mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        if self._player_window() != math.inf:
+            floor += 1 + self._stall_drains()
+        return floor
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no

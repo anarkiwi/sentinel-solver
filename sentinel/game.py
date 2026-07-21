@@ -27,6 +27,15 @@ class Game:
 
     # -- construction --------------------------------------------------------
     @classmethod
+    def typed(cls, landscape_number):
+        """The board a player gets by TYPING ``landscape_number`` -- the canonical id.
+
+        ``Game.typed(335)`` is the ls335 everyone means; ``Game.new(335)`` is the raw
+        seed 335, a different board (:func:`sentinel.landscape.seed_for`).
+        """
+        return cls.new(landscape.seed_for(landscape_number))
+
+    @classmethod
     def new(cls, landscape_number):
         """Generate the board for ``landscape_number`` from scratch, in the ROM's
         at-entry state: enemies frozen until the player's first action ($0CE5
