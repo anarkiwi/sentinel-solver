@@ -108,8 +108,12 @@ plausible.
   landscape 0 (still a win) and on seed 66 (loss, but breach-free): the planner correctly
   refuses the unsafe transfers rather than taking them.
 
-Landscape 0335 (typed; internal `$35` = `Game.new(53)`: Sentinel at (26,18) plus sentries
-at (0,9), (5,22) and (18,3)) is the stress board
-for this path — four interleaved cones, short out-of-phase windows, constant meanie arm
-pressure. Run it with `--audit` to exercise the graded relaxation tiers. The mechanics
-that make it hard are game rules, documented in [gameplay.md](gameplay.md).
+Landscape 0335 is the stress board for this path — interleaved cones, short out-of-phase
+windows, constant meanie arm pressure. Run it with `--audit` to exercise the graded
+relaxation tiers. The mechanics that make it hard are game rules, documented in
+[gameplay.md](gameplay.md).
+
+Build it as `Game.typed(335)` — **7 enemies** (Sentinel at (28,17) height 12 plus six
+sentries), player at (11,17), eye 3.875, matching the `ls335.json` human win. A landscape
+number is always the number you type; `Game.new` takes the raw seed and gives a different
+board. See [plan_fidelity.md](plan_fidelity.md).

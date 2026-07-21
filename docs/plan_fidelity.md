@@ -15,19 +15,31 @@ loaded host truncates the search sooner and plays a different — not cheaper �
 wall-clock cut was worth 3 actions and 2684 frames on this board: it was ending the search
 early enough to miss the better plan.
 
-## READ FIRST: "landscape 42" is two boards
+## READ FIRST: a landscape number is what you TYPE
 
-`driver.core.landscape_from_digits` parses the typed code as **hex**, so typing `0042`
-seeds internal landscape **0x42 = 66**.
+**Use the typed number. Never pass a raw seed around.** `Game.typed(n)` and
+`landscape.seed_for(n)` do the conversion; `Game.new`/`landscape.generate` take the raw
+seed and exist only for the layer that must.
 
-- `driver/play_player.py 42` and the human logs (`ls42.json`: `entered_code 42, landscape
-  66`) play **internal 66** — player starts at (13,29).
-- `Game.new(42)` and `test_astar_player._LANDSCAPE = 42` build **internal 42** — player at
-  (14,27), 17 objects against 66's 16, zero slot overlap.
+The ROM stores the typed code packed-BCD and seeds the PRNG from those bytes, so the seed
+is the digits read as **hex**: typing `0042` seeds **0x42 = 66**, typing `0335` seeds
+**0x335 = 821**. Every board therefore has two names, and mixing them silently selects a
+different landscape — it has cost real debugging time twice.
+
+| you type | `Game.typed(n)` — the board you get | `Game.new(n)` — raw seed, a DIFFERENT board |
+|---|---|---|
+| `42` | seed 66 — player (13,29), 2 enemies, 16 objects | seed 42 — player (14,27), 17 objects, zero slot overlap |
+| `335` | seed 821 — player (11,17), **7 enemies** (Sentinel h12 + 6 sentries) | seed 335 — another board again |
+
+`ls42.json` records `entered_code 42, landscape 66` and `ls335.json` records
+`entered_code 335, landscape 821`; `Game.typed(42)`/`Game.typed(335)` reproduce their
+first frames object for object. Older docs described ls335 as seed `$35` = 53 (4 enemies)
+— that is a board nobody can type.
 
 `Game.new(66)` matches the human ls42 fixture exactly (16/16 objects, same slots) and the
-live replay agrees. Sim tests and the live driver therefore do **not** exercise the same
-board; any sim-vs-live comparison keyed on "42" is void.
+live replay agrees, but `test_astar_player._LANDSCAPE = 42` builds internal 42. Sim tests
+and the live driver therefore do **not** always exercise the same board; any sim-vs-live
+comparison keyed on the typed digits is void unless it converts them as hex first.
 
 ## Clocks: exact
 

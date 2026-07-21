@@ -33,12 +33,29 @@ ROM image.
 | `sentinel/player.py` | reactive priority-driven player |
 | `sentinel/astar_player.py` | A* / best-first planning player ([astar_player.md](astar_player.md)) |
 
+## Landscape numbers are what you TYPE
+
+A landscape's canonical id is the number a player keys into the game. The ROM stores it
+packed-BCD and seeds the PRNG from those bytes, so the seed is the typed digits read as
+**hex**: typed `42` seeds 66, typed `335` seeds 821. Use the typed number everywhere and
+let the shim convert:
+
+```python
+Game.typed(335)          # the ls335 everyone means (7 enemies, player (11,17))
+landscape.seed_for(335)  # -> 821, the raw seed
+Game.new(821)            # raw seed: the same board, the long way round
+Game.new(335)            # a DIFFERENT board -- 335 is a seed here, not a typed code
+```
+
+`Game.typed(42)` and `Game.typed(335)` reproduce the human-win fixtures object for
+object; anything keyed on a raw seed is testing a board nobody can type.
+
 ## Usage
 
 ```python
 from sentinel import Game
-g = Game.new(42)                     # build the board (no emulator)
-print(g.player_xy(), g.energy)       # (14, 27) 10
+g = Game.typed(42)                   # build the board (no emulator)
+print(g.player_xy(), g.energy)       # (13, 29) 10
 g.create(g.state.obj_type, (x, y))   # player actions
 g.step_enemies()                     # advance the world one round
 if g.won(): ...
