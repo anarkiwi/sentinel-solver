@@ -108,9 +108,55 @@ def stale_filter():
     return own_filter()
 
 
+def _owner_dead(pid):
+    """Whether the pid embedded in a container name is gone. A ZOMBIE counts as dead:
+    the observed orphans all had ``<defunct>`` owners still holding their pid slot."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            return fh.read().rpartition(b")")[2].split()[0] in (b"Z", b"X")
+    except (OSError, IndexError):
+        return True
+
+
+def orphan_ids(log=print):
+    """Containers whose owning process is gone -- nobody's to reap under
+    :func:`stale_filter`, so they outlive their run at 100% CPU until a human notices
+    (observed: three at once, one an hour old, x64sc spinning under -warp)."""
+    out = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-q",
+            "--no-trunc",
+            "--filter",
+            f"ancestor={IMAGE}",
+            "--format",
+            "{{.ID}} {{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.splitlines()
+    ids = []
+    for line in out:
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        cid, name = parts
+        bits = name.split("-")
+        if len(bits) < 4 or bits[0] != "asid" or not bits[2].isdigit():
+            continue  # not our naming scheme: leave it alone
+        pid = int(bits[2])
+        if pid != os.getpid() and _owner_dead(pid):
+            ids.append(cid)
+            log(f"  orphan {name}: owner pid {pid} is gone")
+    return ids
+
+
 def kill_stale(log=print):
-    """Remove leftover asid-vice containers in scope (see :func:`stale_filter`) that a
-    SIGKILLed driver process may have orphaned."""
+    """Remove leftover asid-vice containers: this process's own (see
+    :func:`stale_filter`) plus any whose owning process is dead, which is always safe
+    and needs no VICE_REAP_ORPHANS opt-in."""
     try:
         ids = subprocess.run(
             ["docker", "ps", "-aq", *stale_filter()],
@@ -118,6 +164,7 @@ def kill_stale(log=print):
             text=True,
             timeout=15,
         ).stdout.split()
+        ids += [i for i in orphan_ids(log) if i not in ids]
         if ids:
             subprocess.run(
                 ["docker", "rm", "-f", *ids], capture_output=True, timeout=30
