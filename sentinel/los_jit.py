@@ -632,7 +632,7 @@ def march_batch(
     tx = np.empty(n, dtype=np.int64)
     ty = np.empty(n, dtype=np.int64)
     centre = np.empty(n, dtype=np.int64)
-    stride = _balance_stride(n)  # see _balance_stride: contiguous prange chunks are one bundle of near-identical headings, so the thread drawing the long marches stalls the join
+    stride = _balance_stride(n)  # interleave: contiguous chunks stall the join
     for k in prange(n):  # pylint: disable=not-an-iterable
         i = (k * stride) % n
         (
