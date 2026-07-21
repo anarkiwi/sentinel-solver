@@ -184,6 +184,30 @@ def test_pursuit_yields_partial_progress():
     assert not any(actions.won(c.state) for c in climbs)  # partial, not a solve
 
 
+def test_pursuit_branches_its_first_hop():
+    """``skip`` picks the first hop among ``_pick_hop``'s ranked candidates, so one
+    pursuit target yields several children (the alternatives the greedy chain used to
+    discard), and ``skip=0`` is still the greedy pick."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
+    root.key = player._key(root.state)
+    player._deadline = math.inf
+    e = player._pursue_targets(root.state)[0]
+    kids = []
+    for skip in range(4):
+        kid = player._c_pursue(root, e, skip=skip)
+        if kid is None:
+            break  # past the viable first hops
+        kids.append(kid)
+    assert len(kids) > 1, "the pursuit still emits one greedy rollout per target"
+
+    def _first_hop(kid):
+        return next(s.tile for s in kid.path if s.verb in ("boulder", "robot"))
+
+    assert len({_first_hop(k) for k in kids}) == len(kids)  # distinct first hops
+    assert player._c_pursue(root, e).path == kids[0].path  # default == greedy
+
+
 def test_macro_search_wins_ls42_internal_66():
     """The board the live driver plays when `0042` is typed (hex -> internal 66).  It is
     NOT ``_LANDSCAPE`` (42), which is a different board with no slot overlap."""

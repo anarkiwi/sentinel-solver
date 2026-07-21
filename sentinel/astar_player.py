@@ -58,6 +58,9 @@ _TARGET_EYE = 9.0
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
+_PURSUE_BRANCH = int(
+    os.environ.get("SENTINEL_PURSUE_BRANCH", "2")
+)  # first-hop alternatives per pursuit target (1 == a single greedy rollout, as before)
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
@@ -491,8 +494,10 @@ class AStarPlayer(BasePlayer):
         if child is not None:
             children.append(child)
         for e in self._pursue_targets(st):
-            child = self._c_pursue(node, e)
-            if child is not None:
+            for skip in range(_PURSUE_BRANCH):
+                child = self._c_pursue(node, e, skip=skip)
+                if child is None:
+                    break  # branch index past the viable first hops: so is every later one
                 children.append(child)
         return children
 
@@ -637,10 +642,17 @@ class AStarPlayer(BasePlayer):
         out.sort()
         return [e for _, e in out[:_TOP_TARGETS]]
 
-    def _c_pursue(self, node, e):
+    def _c_pursue(self, node, e, skip=0):
         """Directed climb to enemy ``e``: chain minimal pedestal hops (reclaiming
         spent ones for energy) until ``e`` is landable, then absorb it.  Each
         sub-action is charged the real aim+settle via ``_charge``.
+
+        ``skip`` selects the FIRST hop: the chain starts on the ``skip``-th viable
+        candidate ``_pick_hop`` ranked (0 == the greedy top pick), then continues
+        greedily.  It is the search's only real branch point -- one greedy rollout per
+        target expands ~7 nodes on ls335 before the frontier drains, because the
+        alternatives ``_pick_hop`` already priced were thrown away.  ``None`` when
+        fewer than ``skip+1`` first hops are viable.
 
         PARTIAL PROGRESS: a chain that stalls short of ``e`` still returns the hops
         it did make.  Returning ``None`` there discarded every good step before the
@@ -673,36 +685,53 @@ class AStarPlayer(BasePlayer):
                     g += got[0]
                     steps.append(got[1])
                     continue
-            bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
-            advanced = False
-            for tile, k, window in self._pick_hop(target):
-                trial = st.clone()
-                self.st = trial
-                self.last_bearing = bearing
-                self.cursor = list(cursor)
-                self._depth = depth  # a rejected trial must not widen later margins
-                res = self._hop_exec(tile, k, window)
-                if res is None:
-                    continue
-                # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
-                self.st = trial
-                recycled = []
-                for _ in range(k + 1):
-                    got = self._reclaim_one(trial, pedestal_only=True)
-                    if got is None:
-                        break
-                    recycled.append(got)
-                if not self._climb_continues(trial, target, e):
-                    continue  # stranded landing: try the next-ranked one
-                st, advanced = trial, True
-                g += res[0] + sum(r[0] for r in recycled)
-                steps.extend(res[1])
-                steps.extend(r[1] for r in recycled)
+            adv = self._advance_hop(st, target, e, skip)
+            if adv is None:
+                if skip:
+                    return None  # this branch index does not exist
                 break
-            if not advanced:
-                self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
-                break
+            skip = 0  # only the FIRST hop branches; the rest of the chain is greedy
+            st, cost, hop_steps = adv
+            g += cost
+            steps.extend(hop_steps)
         return self._node(node, st, g, steps) if steps else None
+
+    def _advance_hop(self, st, target, e, skip=0):
+        """One climb step toward ``target``: the ``skip``-th viable ranked hop from
+        ``st`` plus its inchworm reclaims, as ``(landed_state, g_delta, steps)``, or
+        ``None`` if fewer than ``skip+1`` candidates survive execution and the strand
+        check.  ``st`` is left untouched (each candidate runs on its own clone)."""
+        self.st = st  # _pick_hop ranks from the stance we are leaving
+        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
+        for tile, k, window in self._pick_hop(target):
+            trial = st.clone()
+            self.st = trial
+            self.last_bearing = bearing
+            self.cursor = list(cursor)
+            self._depth = depth  # a rejected trial must not widen later margins
+            res = self._hop_exec(tile, k, window)
+            if res is None:
+                continue
+            # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
+            self.st = trial
+            recycled = []
+            for _ in range(k + 1):
+                got = self._reclaim_one(trial, pedestal_only=True)
+                if got is None:
+                    break
+                recycled.append(got)
+            if not self._climb_continues(trial, target, e):
+                continue  # stranded landing: try the next-ranked one
+            if skip:
+                skip -= 1
+                continue  # a viable hop another child of this node takes
+            return (
+                trial,
+                res[0] + sum(r[0] for r in recycled),
+                res[1] + [r[1] for r in recycled],
+            )
+        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+        return None
 
     def _climb_continues(self, st, target, e):
         """Whether the pursuit can still act after landing on ``st``: the target is
