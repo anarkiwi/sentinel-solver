@@ -59,8 +59,8 @@ _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
 _PURSUE_BRANCH = int(
-    os.environ.get("SENTINEL_PURSUE_BRANCH", "2")
-)  # first-hop alternatives per pursuit target (1 == a single greedy rollout, as before)
+    os.environ.get("SENTINEL_PURSUE_BRANCH", "1")
+)  # first-hop alternatives per pursuit target. Default 1 (one greedy rollout): branching here buys nothing because the chain re-converges -- root 9 children collapse to 3 distinct keys -- so K>1 doubles search cost for no new reachable stance, and K=3 loses ls42 outright.
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
