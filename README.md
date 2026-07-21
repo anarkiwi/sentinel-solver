@@ -7,16 +7,24 @@ Transition primitives are validated byte-for-byte against the real 6502 code (go
 fixtures, so CI proves them without the ROM); the enemy clock is gated frame-for-frame
 against the running game by the divergence instrument.
 
-The A\* player wins landscape 42 **live, on the real game** — 36 actions, final energy
-10, verified by the ROM's own landscape-complete flag (`$0CDE` bit 6). The plan is a pure
-function of the board, so the run reproduces frame for frame:
+The A\* player wins **live, on the real game**, verified by the ROM's own
+landscape-complete flag (`$0CDE` bit 6) — landscape 110 in 41 actions, final energy 13:
 
-![A* player winning landscape 42 live in VICE](docs/media/ls42_astar_win.png)
+![A* player winning landscape 110 live in VICE](docs/media/ls110_astar_win.png)
 
 ```bash
-python -m driver.play_player 42 --player astar   # live in VICE, records an AVI
-python -m sentinel.astar_player 66               # offline (typed "0042" = seed 66)
+python -m driver.play_player 110 --player astar   # live in VICE, records an AVI
+python -m sentinel.astar_player 110               # offline
 ```
+
+| landscape | enemies | offline | live |
+|---|---|---|---|
+| 0 | 1 | 22 actions | — |
+| 42 | 2 | 34 | **36 actions** |
+| 110 | 3 | 41 | **41 actions** |
+
+Landscape numbers are the ones you TYPE; the ROM seeds the PRNG from the digits read as
+hex, so `Game.typed(110)` is the board a player reaches by keying `0110`.
 
 ## Layout
 
