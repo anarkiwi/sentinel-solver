@@ -50,8 +50,8 @@ _GATE335 = [
     127,
     134,
 ]
-# Owing the 3-energy floor only under a real meanie threat (not under any live enemy) lets the human's own creates at 6, 21, 35, 37, 40, 127 fire; 21 and 37 then land a body under a cone, so they move to _BREACH335.
-_FIRE335 = [15, 23, 28, 85, 124, 130]
+# Owing the floor only under a real meanie threat (3) or any exposure (1), not under every live enemy, lets the human's own creates at 6, 21, 35, 37, 40, 127 fire; 21 and 37 then land a body under a cone, so they move to _BREACH335. Step 14 still breaches the 1-energy floor.
+_FIRE335 = [14, 15, 23, 28, 85, 124, 130]
 _DRAIN335 = [
     26,
     33,
