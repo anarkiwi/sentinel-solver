@@ -165,47 +165,45 @@ def test_macro_search_wins_landscape0_without_breaches():
     assert "absorb" in verbs and "hyperspace" in verbs
 
 
-def test_pursuit_yields_partial_progress():
-    """A pursuit that cannot reach its enemy returns the climb it DID make.  Returning
-    ``None`` there discards every step before the first unsurvivable one; on ls42
-    (internal 66) it left the root with no child that raises the eye at all --
-    `plan (2 nodes): None`, 0 actions."""
-    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+def _root(player):
     root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
     root.key = player._key(root.state)
     player._deadline = math.inf
+    return root
+
+
+def test_climb_child_is_one_hop():
+    """A climb child is ONE hop -- k boulders, a robot, the transfer up, plus the
+    inchworm recycle of the stack it just left -- not a chain to an enemy.  Depth
+    therefore counts hops, and a climb child never absorbs an enemy (``_c_absorb``
+    owns the terminal strike)."""
+    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    root = _root(player)
     start_eye = root.state.eye_z()
     climbs = [c for c in player._expand(root) if c.state.eye_z() > start_eye]
-    assert climbs, "no child raises the eye: the pursuit discarded its whole climb"
+    assert climbs, "no child raises the eye"
     for c in climbs:
         verbs = [s.verb for s in c.path]
-        assert "transfer" in verbs  # it is a climb, not a strike
-        assert verbs[-1] != "absorb" or len(verbs) > 1
+        assert verbs.count("transfer") == 1  # exactly one hop, not a chain
+        assert verbs.index("transfer") == len(
+            [v for v in verbs if v in ("boulder", "robot")]
+        )  # builds, then the transfer; anything after is the recycle
+        assert all(v == "absorb" for v in verbs[verbs.index("transfer") + 1 :])
     assert not any(actions.won(c.state) for c in climbs)  # partial, not a solve
 
 
-def test_pursuit_branches_its_first_hop():
-    """``skip`` picks the first hop among ``_pick_hop``'s ranked candidates, so one
-    pursuit target yields several children (the alternatives the greedy chain used to
-    discard), and ``skip=0`` is still the greedy pick."""
+def test_expansion_branches_over_hop_tiles():
+    """Each ranked ``_pick_hop`` candidate becomes its own child, so a node offers
+    several DISTINCT stances the search can arbitrate between with ``g`` -- the greedy
+    chain collapsed them to one rollout per enemy."""
     player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
-    root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
-    root.key = player._key(root.state)
-    player._deadline = math.inf
-    e = player._pursue_targets(root.state)[0]
-    kids = []
-    for skip in range(4):
-        kid = player._c_pursue(root, e, skip=skip)
-        if kid is None:
-            break  # past the viable first hops
-        kids.append(kid)
-    assert len(kids) > 1, "the pursuit still emits one greedy rollout per target"
-
-    def _first_hop(kid):
-        return next(s.tile for s in kid.path if s.verb in ("boulder", "robot"))
-
-    assert len({_first_hop(k) for k in kids}) == len(kids)  # distinct first hops
-    assert player._c_pursue(root, e).path == kids[0].path  # default == greedy
+    root = _root(player)
+    cands = player._hop_candidates(root)
+    assert len(cands) > 1, "one hop candidate: the expansion cannot compare stances"
+    assert len({(t, k) for t, k, _w in cands}) == len(cands)  # deduped across targets
+    kids = [player._c_hop(root, t, k, w) for t, k, w in cands]
+    kids = [c for c in kids if c is not None]
+    assert len({c.key for c in kids}) > 1, "children collapse to one frontier key"
 
 
 def test_macro_search_wins_ls42_internal_66():

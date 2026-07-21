@@ -55,12 +55,14 @@ _ENDGAME_EST = (
 _TAIL_FLOOR = _OP_FLOOR["create"] + _OP_FLOOR["transfer"]  # robot+xfer: drainable span
 _EYE_PER_HOP = 0.9
 _TARGET_EYE = 9.0
-_TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
-_TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
-_MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
-_PURSUE_BRANCH = int(
-    os.environ.get("SENTINEL_PURSUE_BRANCH", "1")
-)  # first-hop alternatives per pursuit target. Default 1 (one greedy rollout): branching here buys nothing because the chain re-converges -- root 9 children collapse to 3 distinct keys -- so K>1 doubles search cost for no new reachable stance, and K=3 loses ls42 outright.
+_TOP_TARGETS = 4  # enemies a node may rank pedestal candidates toward
+_TOP_HOPS = 8  # ranked pedestal candidates _pick_hop returns per target
+_MAX_HOP_KIDS = int(
+    os.environ.get("SENTINEL_MAX_HOP_KIDS", "12")
+)  # distinct (tile, k) hop children one node may emit, over all targets
+_STRAND_PRUNE = (
+    os.environ.get("SENTINEL_STRAND_PRUNE", "0") != "0"
+)  # OFF: measured on ls335/2000, the probe costs a 1-ply lookahead per child (2.56 s/expansion vs 1.40) and reaches the SAME best node (eye 6.38, 0 of 7 killed) in 184 expansions instead of 343 -- with per-hop children A* backtracks out of a stranded landing for the price of one expansion, which is cheaper than proving it stranded
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
 _TOP_CLEARS = 4  # tree-blocked pedestal sites a node may branch a clearing child on
 _STEP_SIGMA = float(
@@ -142,6 +144,7 @@ class AStarPlayer(BasePlayer):
         self._hop_audit = None  # list => shadow-record the body-window hop gate
         self._on_plan = False  # last _react deviation WAS the plan's next step
         self._last_pbody = math.inf  # body window at the last _charge's pre-step state
+        self._hop_obs = None  # cheapest whole hop charged this search (scales _h)
 
     def _plan_step(self, verb, tile, budget, gate, window=None):
         """Record the step just charged: ``window`` defaults to the body window
@@ -412,6 +415,7 @@ class AStarPlayer(BasePlayer):
                 time.time() + self.time_budget if self.time_budget else None
             )
             self.expansions = 0
+            self._hop_obs = None
             while heap:
                 if self.expansions >= self.node_budget:
                     break
@@ -470,18 +474,34 @@ class AStarPlayer(BasePlayer):
         )
 
     def _h(self, st):
+        """Frames to go: one absorb per living enemy, one hop per ``_EYE_PER_HOP`` of
+        eye still owed, plus the endgame.  ``hops`` counts CLIMB STEPS, which is what a
+        child now is, so the term reads directly as plies * cost-per-ply.
+
+        The per-hop cost is the CHEAPEST WHOLE HOP this search has actually charged,
+        floored at the op-floor bound ``_HOP_EST``.  A real hop costs 745 f (ls42) to
+        1294 f (ls335) against a 468 f floor, so the floor alone under-rewards climbing
+        by 2-3x per ply: a hop raises g by its real cost while dropping h by the floor,
+        so f RISES on every climb and the frontier prefers to dither among reclaims.
+        The chain generator hid this by folding a whole climb into one child.  The
+        observed minimum is still a lower bound over the hops this board offers, and it
+        self-calibrates to the board instead of being a constant that is simultaneously
+        too strict and too lax."""
         if actions.won(st):
             return 0.0
         remaining = len(enemies.enemy_slots(st))
         hops = max(0.0, (_TARGET_EYE - st.eye_z()) / _EYE_PER_HOP)
-        return remaining * _ABSORB_EST + hops * _HOP_EST + _ENDGAME_EST
+        est = _HOP_EST if self._hop_obs is None else max(_HOP_EST, self._hop_obs)
+        return remaining * _ABSORB_EST + hops * est + _ENDGAME_EST
 
     # -------------------------------------------------------------- expansion
     def _expand(self, node):
         """Macro-actions: endgame (Sentinel gone), the terminal absorb of any
-        already-landable enemy, a reclaim, a tree clearing, and a DIRECTED pursuit
-        of each not-yet-landable enemy (a multi-hop climb + absorb as one child).
-        The branching factor is "which enemy to pursue next", not "which tile"."""
+        already-landable enemy, a reclaim, a tree clearing, and ONE CLIMB STEP per
+        ranked pedestal candidate.  The branching factor is "which tile to climb
+        on", and depth counts hops rather than enemies, so two stances that differ
+        only in where the climb went are both on the frontier and A* can back out
+        of a dead end instead of dead-ending with the frontier empty."""
         st = node.state
         if st.is_empty(actions.SENTINEL_SLOT):
             child = self._c_endgame(node)
@@ -495,13 +515,93 @@ class AStarPlayer(BasePlayer):
         if child is not None:
             children.append(child)
         children.extend(self._c_clear(node))
-        for e in self._pursue_targets(st):
-            for skip in range(_PURSUE_BRANCH):
-                child = self._c_pursue(node, e, skip=skip)
-                if child is None:
-                    break  # branch index past the viable first hops: so is every later one
+        for tile, k, window in self._hop_candidates(node):
+            child = self._c_hop(node, tile, k, window)
+            if child is not None:
                 children.append(child)
         return children
+
+    def _hop_candidates(self, node):
+        """``(tile, k, window)`` climb steps this node may take, ranked by
+        ``_pick_hop`` toward each pursuit target in turn and deduped on ``(tile, k)``
+        -- the same pedestal serves whichever enemy it gains LOS on, so the nearest
+        target's ranking leads and the others only append tiles it did not offer.
+        Capped at ``_MAX_HOP_KIDS``."""
+        st = self._begin(node)  # ranking is read-only: one clone serves every target
+        out = {}
+        for e in self._pursue_targets(st):
+            for tile, k, window in self._pick_hop(st.tile_of(e)):
+                out.setdefault((tuple(tile), k), window)
+                if len(out) == _MAX_HOP_KIDS:
+                    return [(t, k, w) for (t, k), w in out.items()]
+        return [(t, k, w) for (t, k), w in out.items()]
+
+    def _c_hop(self, node, tile, k, window):
+        """ONE climb step as a child: build ``k`` boulders + a robot on ``tile``,
+        transfer up, then inchworm-recycle the stack the transfer left below the new
+        eye.  ``None`` if the build/transfer is infeasible or unsurvivable, or -- under
+        ``_STRAND_PRUNE`` -- if the landing has no move at all.
+
+        The recycle stays ATTACHED rather than becoming its own child because it is
+        only defined against the stack this very hop just left: as a separate ply it
+        would duplicate ``_c_reclaim``, which already offers "reclaim from here" as an
+        alternative to any node.  Attached, one child == one hop and the ``hops`` term
+        of ``_h`` counts plies."""
+        self._begin(node)
+        st = self.st
+        res = self._hop_exec(tile, k, window)
+        if res is None:
+            return None
+        g, steps = res
+        self._hop_obs = g if self._hop_obs is None else min(self._hop_obs, g)
+        for _ in range(k + 1):
+            got = self._reclaim_one(st, pedestal_only=True)
+            if got is None:
+                break
+            g += got[0]
+            steps.append(got[1])
+        if _STRAND_PRUNE and self._stranded(st):
+            return None
+        return self._node(node, st, node.g + g, steps)
+
+    def _stranded(self, st):
+        """Whether a landing on ``st`` can do NOTHING next: no enemy landable, no
+        blocking tree worth clearing, no affordable hop toward any pursuit target,
+        and -- energy short -- no reclaim chain that makes one affordable.
+
+        With per-hop children a stranded landing is just a node whose expansion
+        returns no children, and A* backtracks by itself; this is purely a PRUNER,
+        keeping the frontier from filling with stances that cost an expansion to
+        discover are dead.  The reclaim arm re-ranks against the landing's own frozen
+        tile set rather than re-sweeping per absorbed object (that sweep dominates the
+        expansion profile); absorbing a spent pedestal below the eye only uncovers
+        tiles, so the frozen set is the conservative side."""
+        self.st = st
+        if self._absorbable_here(st) or self._blocking_trees(st):
+            return False
+        targets = [st.tile_of(e) for e in self._pursue_targets(st)]
+        if not targets:
+            return False
+        if any(self._pick_hop(t) for t in targets):
+            return False
+        if st.energy >= HOP_COST + self._reserve():
+            return True  # affordable already: no reclaim can add a hop
+        landset = self._landset(st)
+        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
+        probe = st.clone()
+        self.st = probe
+        ok = False
+        for _ in range(_MAX_RECLAIM):
+            if self._reclaim_one(probe) is None:
+                break  # nothing left to recycle from here
+            if any(self._pick_hop(t, landset=landset) for t in targets):
+                ok = True
+                break
+            if probe.energy >= HOP_COST + self._reserve():
+                break  # energy is the only budget filter: more of it adds nothing
+        self.st = st
+        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
+        return not ok
 
     def _begin(self, node):
         """Rebind the working stance (a clone of ``node``'s state) and the plan
@@ -644,140 +744,6 @@ class AStarPlayer(BasePlayer):
         out.sort()
         return [e for _, e in out[:_TOP_TARGETS]]
 
-    def _c_pursue(self, node, e, skip=0):
-        """Directed climb to enemy ``e``: chain minimal pedestal hops (reclaiming
-        spent ones for energy) until ``e`` is landable, then absorb it.  Each
-        sub-action is charged the real aim+settle via ``_charge``.
-
-        ``skip`` selects the FIRST hop: the chain starts on the ``skip``-th viable
-        candidate ``_pick_hop`` ranked (0 == the greedy top pick), then continues
-        greedily.  It is the search's only real branch point -- one greedy rollout per
-        target expands ~7 nodes on ls335 before the frontier drains, because the
-        alternatives ``_pick_hop`` already priced were thrown away.  ``None`` when
-        fewer than ``skip+1`` first hops are viable.
-
-        PARTIAL PROGRESS: a chain that stalls short of ``e`` still returns the hops
-        it did make.  Returning ``None`` there discarded every good step before the
-        first unsurvivable one and left the root with no child generator at all --
-        the search then reports 0 actions.  ``None`` only when nothing was done."""
-        st = self._begin(node)
-        g = node.g
-        steps = []
-        target = st.tile_of(e)
-        for _ in range(_MAX_PURSUE):
-            self.st = st
-            if terrain.top_object(st, *target) == e and self._landable(st, target):
-                if not actions.can_absorb(st, e):
-                    break
-                bearing, cursor, depth = (
-                    self.last_bearing,
-                    list(self.cursor),
-                    self._depth,
-                )
-                strike = st.clone()
-                cost = self._charge(strike, "absorb", target)
-                if actions.absorb(strike, e):
-                    steps.append(self._plan_step("absorb", target, cost, GATE_BODY))
-                    return self._node(node, strike, g + cost, steps)
-                self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
-                break  # keep the climb; the strike itself is what failed
-            if st.energy < HOP_COST + self._reserve():
-                got = self._reclaim_one(st)
-                if got is not None:
-                    g += got[0]
-                    steps.append(got[1])
-                    continue
-            adv = self._advance_hop(st, target, e, skip)
-            if adv is None:
-                if skip:
-                    return None  # this branch index does not exist
-                break
-            skip = 0  # only the FIRST hop branches; the rest of the chain is greedy
-            st, cost, hop_steps = adv
-            g += cost
-            steps.extend(hop_steps)
-        return self._node(node, st, g, steps) if steps else None
-
-    def _advance_hop(self, st, target, e, skip=0):
-        """One climb step toward ``target``: the ``skip``-th viable ranked hop from
-        ``st`` plus its inchworm reclaims, as ``(landed_state, g_delta, steps)``, or
-        ``None`` if fewer than ``skip+1`` candidates survive execution and the strand
-        check.  ``st`` is left untouched (each candidate runs on its own clone)."""
-        self.st = st  # _pick_hop ranks from the stance we are leaving
-        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
-        for tile, k, window in self._pick_hop(target):
-            trial = st.clone()
-            self.st = trial
-            self.last_bearing = bearing
-            self.cursor = list(cursor)
-            self._depth = depth  # a rejected trial must not widen later margins
-            res = self._hop_exec(tile, k, window)
-            if res is None:
-                continue
-            # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
-            self.st = trial
-            recycled = []
-            for _ in range(k + 1):
-                got = self._reclaim_one(trial, pedestal_only=True)
-                if got is None:
-                    break
-                recycled.append(got)
-            if not self._climb_continues(trial, target, e):
-                continue  # stranded landing: try the next-ranked one
-            if skip:
-                skip -= 1
-                continue  # a viable hop another child of this node takes
-            return (
-                trial,
-                res[0] + sum(r[0] for r in recycled),
-                res[1] + [r[1] for r in recycled],
-            )
-        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
-        return None
-
-    def _climb_continues(self, st, target, e):
-        """Whether the pursuit can still act after landing on ``st``: the target is
-        landable now, another hop is affordable, or -- energy short -- reclaims
-        make one affordable.  Reclaim needs the abandoned stack keyboard-AIMABLE
-        from the landing (``_reclaim_one`` -> ``_view_for``), stronger than the sight
-        ``_pick_hop`` ranks on, so a landing can recycle nothing and -- a k=1 hop
-        costing HOP_COST over the reserve, a tree returning 1 -- strand.
-
-        The reclaim arm mirrors the pursuit loop's OWN next iteration: without it a
-        landing that lands one hop short of affordable is called stranded, which is
-        every landing on ls42's climb above eye 7.375 (a k=1 hop leaves E=6 against
-        the 8 the next hop needs) and is why the whole pursuit returned nothing.
-
-        The arm SIMULATES the reclaims -- a bound on recoverable energy accepts
-        landings whose stack is not aimable from them, and the pursuit then commits
-        to one and dies there -- but re-ranks against the landing's own tile set
-        rather than re-sweeping it per absorbed object (that sweep dominates the
-        expansion profile).  Absorbing a spent pedestal below the eye only uncovers
-        tiles, so the frozen set is the conservative side."""
-        self.st = st
-        if terrain.top_object(st, *target) == e and self._landable(st, target):
-            return True
-        if self._pick_hop(target):
-            return True
-        if st.energy >= HOP_COST + self._reserve():
-            return False  # affordable already: no reclaim can add a hop
-        landset = self._landset(st)
-        bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
-        probe = st.clone()
-        self.st = probe
-        ok = False
-        for _ in range(_MAX_RECLAIM):
-            if self._reclaim_one(probe) is None:
-                break  # nothing left to recycle from here
-            if self._pick_hop(target, landset=landset):
-                ok = True
-                break
-            if probe.energy >= HOP_COST + self._reserve():
-                break  # energy is the only budget filter: more of it adds nothing
-        self.st = st
-        self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
-        return ok
-
     def _record_hop_gate(self, tile, k, exposed, tile_ok, priced):
         """Record both hop gates for a candidate: the ENFORCED destination gate (the
         tile's window against the drainable ``tail``) and the SHADOW source gate (the
@@ -881,7 +847,7 @@ class AStarPlayer(BasePlayer):
         Ranking is cheap and pricing is not, so candidates are pre-filtered on
         ``_TAIL_FLOOR`` (a lower bound on the drainable span) and priced exactly only
         in rank order, until ``_TOP_HOPS`` survive -- the ones the pursuit would try.
-        ``landset`` overrides the tile set (the frozen one ``_climb_continues``
+        ``landset`` overrides the tile set (the frozen one ``_stranded``
         probes a refuelled stance against).
 
         A tile whose bare base already clears the eye (``base + ROBOT_EYE >
@@ -890,9 +856,7 @@ class AStarPlayer(BasePlayer):
         but it is also half a unit of eye.  Both forms are candidates and the eye
         ranking decides.  Neither shortcut works: REPLACING k=1 with k=0 costs ls0
         11 actions / 8283 f and pushes ls42 past a 900 s cut, and ranking k=0 behind
-        every k>=1 candidate loses ls42 outright -- ``_climb_continues`` reads this
-        list as a boolean, so a tail entry still clears a landing it used to call
-        stranded, and the pursuit commits to one it cannot leave."""
+        every k>=1 candidate loses ls42 outright."""
         st = self.st
         my_eye = st.eye_z()
         reserve = self._reserve()
