@@ -126,13 +126,12 @@ def orphan_ids(log=print):
         [
             "docker",
             "ps",
-            "-q",
             "--no-trunc",
             "--filter",
             f"ancestor={IMAGE}",
             "--format",
             "{{.ID}} {{.Names}}",
-        ],
+        ],  # NOT -q: docker silently ignores --format when --quiet is set
         capture_output=True,
         text=True,
         timeout=15,
