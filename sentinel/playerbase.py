@@ -192,11 +192,14 @@ class BasePlayer:
 
     def _view_with_band(self, tile, primary, band):
         """The `primary`-plane view for `tile`, else `band(tile)` -- the wider
-        down-look lookup, consulted only when the eye can see `tile` at all, so
-        the one ray march gates the costlier band sweep/march."""
+        down-look lookup.  This IS `aim.propose`: the ROM's own action gate ($1B46)
+        asks only whether SOME keyboard view reaches `tile` with clear line of sight
+        at the true eye.  A `_sees_tile` pre-filter here is a DIFFERENT and stricter
+        question (can an observer see a body standing on the tile) and vetoed views
+        the ROM grants, so the band lookup is consulted unconditionally."""
         tile = tuple(tile)
         view = primary.get(tile)
-        if view is not None or not self._sees_tile(tile):
+        if view is not None:
             return view
         return band(tile)
 

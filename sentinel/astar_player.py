@@ -21,7 +21,6 @@ from sentinel import (
     los,
     memmap as mm,
     terrain,
-    threat,
 )
 from sentinel.game import Game
 from sentinel.playerbase import (
@@ -854,8 +853,7 @@ class AStarPlayer(BasePlayer):
                     break
                 if verb == "robot":
                     tail = cost
-                    if not threat.player_sees_tile(trial, tile, trial.player):
-                        break
+                    # the transfer's ROM gate is the `view is None` break below
                     cost, _, view = self._price(trial, "transfer", tile)
                     if view is None:
                         break
@@ -956,8 +954,8 @@ class AStarPlayer(BasePlayer):
             return None
         steps.append(self._plan_step("robot", tile, cost, GATE_TILE, window))
         top = terrain.top_object(st, *tile)
-        if not threat.player_sees_tile(st, tile, st.player):
-            return None
+        if self._view_for(tile) is None:
+            return None  # $1B46: no keyboard aim reaches the tile to transfer into
         cost = self._charge(st, "transfer", tile)
         g += cost
         if not actions.transfer(st, top) or actions.player_dead(st):
@@ -984,9 +982,14 @@ class AStarPlayer(BasePlayer):
         return False
 
     def _can_build(self, st, tile, otype):
-        return threat.player_sees_tile(st, tile, st.player) and actions.can_create(
-            st, otype, tile
-        )
+        """Whether the ROM permits creating ``otype`` on ``tile`` from this stance:
+        the placement rules (``actions.can_create``) plus the ROM's own action gate
+        ($1B46) -- a keyboard view that reaches the tile with clear LOS at the true
+        eye, i.e. ``aim.propose`` == ``_view_for``.  NOT ``player_sees_tile``, which
+        asks whether an observer could see a BODY standing there: a stricter,
+        different test that vetoes builds the ROM allows (ls110's opening boulder)."""
+        self.st = st
+        return actions.can_create(st, otype, tile) and self._view_for(tile) is not None
 
     def _absorb_enemy_targets(self, st):
         foes = enemies.enemy_slots(st)
@@ -1022,10 +1025,9 @@ class AStarPlayer(BasePlayer):
         short; the player stays put so its own window bounds the aim.  Returns
         ``(g_delta, step)`` or ``None``.  ``pedestal_only`` skips the tree sweep so
         the inchworm recycle grabs only the player's own spent boulders/shells."""
+        self.st = st
         want_trees = (not pedestal_only) and st.energy < HOP_COST + 6
         for _value, tile in self._reclaim_targets(st, want_trees):
-            if not threat.player_sees_tile(st, tile, st.player):
-                continue
             view = self._view_for(tile)
             if view is None or self._hot(
                 self._aim_frames(view) + self._settle("absorb", view)
@@ -1092,8 +1094,6 @@ class AStarPlayer(BasePlayer):
             st = self._begin(node)
             slot = terrain.top_object(st, *tile)
             if slot is None or not actions.can_absorb(st, slot):
-                continue
-            if not threat.player_sees_tile(st, tile, st.player):
                 continue
             view = self._view_for(tile)
             if view is None:
