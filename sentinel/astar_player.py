@@ -880,7 +880,17 @@ class AStarPlayer(BasePlayer):
         ``_TAIL_FLOOR`` (a lower bound on the drainable span) and priced exactly only
         in rank order, until ``_TOP_HOPS`` survive -- the ones the pursuit would try.
         ``landset`` overrides the tile set (the frozen one ``_climb_continues``
-        probes a refuelled stance against)."""
+        probes a refuelled stance against).
+
+        A tile whose bare base already clears the eye (``base + ROBOT_EYE >
+        my_eye``) is offered at k=0 AS WELL AS at k=1: the boulder is 2 energy, one
+        create and a wider window the gate must find, none of which that tile needs,
+        but it is also half a unit of eye.  Both forms are candidates and the eye
+        ranking decides.  Neither shortcut works: REPLACING k=1 with k=0 costs ls0
+        11 actions / 8283 f and pushes ls42 past a 900 s cut, and ranking k=0 behind
+        every k>=1 candidate loses ls42 outright -- ``_climb_continues`` reads this
+        list as a boolean, so a tail entry still clears a landing it used to call
+        stranded, and the pursuit commits to one it cannot leave."""
         st = self.st
         my_eye = st.eye_z()
         reserve = self._reserve()
@@ -890,18 +900,24 @@ class AStarPlayer(BasePlayer):
             base = self._tile_base(st, tile)
             if base is None:
                 continue
-            k = max(1, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
-            if st.energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
-                continue  # k is bounded here: a taller stack costs energy it lacks
-            robot_eye = base + BOULDER_H * k + ROBOT_EYE
-            if robot_eye <= my_eye + EYE_EPS:
+            need = math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H)
+            ks = [
+                k
+                for k in ((0, 1) if need <= 0 else (need,))
+                # k is bounded here: a taller stack costs energy it lacks
+                if st.energy - reserve >= 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+                and base + BOULDER_H * k + ROBOT_EYE > my_eye + EYE_EPS
+            ]
+            if not ks:
                 continue
             exposed = self._exposing_enemies(tile)
             if not self._drain_gate("robot", tile, exposed, _TAIL_FLOOR + margin):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)
-            cands.append(((sees, robot_eye, window), tile, k, window, exposed))
+            for k in ks:
+                robot_eye = base + BOULDER_H * k + ROBOT_EYE
+                cands.append(((sees, robot_eye, window), tile, k, window, exposed))
         cands.sort(key=lambda c: c[0], reverse=True)
         out = []
         for _, tile, k, window, exposed in cands:
