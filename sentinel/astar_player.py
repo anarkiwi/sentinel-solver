@@ -31,7 +31,6 @@ from sentinel.playerbase import (
     FOV_HALF,
     FOV_MARGIN,
     HOP_COST,
-    HOP_FRAMES,
     ROBOT_EYE,
     SAFE_FRAMES,
     SIGHTS_CENTRE,
@@ -53,9 +52,9 @@ _HOP_EST = (
 _ENDGAME_EST = (
     _OP_FLOOR["create"] + _OP_FLOOR["transfer"] + _HYPERSPACE_FLOOR
 )  # robot+xfer+hs
+_TAIL_FLOOR = _OP_FLOOR["create"] + _OP_FLOOR["transfer"]  # robot+xfer: drainable span
 _EYE_PER_HOP = 0.9
 _TARGET_EYE = 9.0
-_HOP_BOULDERS = 2  # human-win k distribution is {1:27,2:3} (ls42.json et al): never >2
 _TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
 _TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
 _MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
@@ -132,6 +131,7 @@ class AStarPlayer(BasePlayer):
         self._tile_memo = {}  # per-(sig, tile) single-tile landability (targeted cone)
         self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
         self._cone_memo = {}  # per-(sig, tile) targeted band march results
+        self._hop_price_memo = {}  # per-(stance, tile, k) exact hop cost
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
@@ -515,24 +515,45 @@ class AStarPlayer(BasePlayer):
             self.cursor,
         )
 
+    def _price(self, st, verb, tile):
+        """``(cost, aim, view)`` for ``verb`` on ``tile`` from stance ``st``, WITHOUT
+        advancing the enemies: the ONE cost expression, shared by ``_charge`` (which
+        advances the world by it) and by the hop gates (which must know what a hop
+        costs before committing to it).  ``view is None`` is the infeasible guard --
+        settle only, which the gates then reject."""
+        self.st = st
+        eye = self._settle_eye(verb, tile)
+        view = self._view_for(tile)
+        if view is None:
+            return self._settle(verb, None, eye), 0.0, None
+        aim = self._step_aim_frames(verb, view)
+        return aim + self._settle(verb, view, eye), aim, view
+
+    def _commit_view(self, view, verb):
+        """Mirror the post-aim stance update so an intra-hop follow-up on the same
+        tile reuses the bearing."""
+        st = self.st
+        me = st.player
+        st.obj_h_angle[me] = view["h_angle"]
+        st.obj_v_angle[me] = view["v_angle"]
+        self.cursor = list(view["cursor"])
+        # a transfer makes a new body: the committed bearing is stale
+        self.last_bearing = (
+            None if verb == "transfer" else (view["h_angle"], view["v_angle"])
+        )
+
     def _charge(self, st, verb, tile):
-        """Advance the enemies by this action's REAL aim+settle cost (the same
-        faithful ``_aim_frames``/``_settle`` the executor prices with, over the
-        same ``_view_for`` selector), then mirror the post-aim stance update so
-        an intra-hop follow-up on the same tile reuses the bearing.  Returns the
-        frames spent, and stashes the PRE-step body window ``_plan_step`` records."""
+        """Advance the enemies by this action's REAL ``_price``, then commit the
+        stance the aim left.  Returns the frames spent, and stashes the PRE-step
+        body window ``_plan_step`` records."""
         self.st = st
         self._depth += 1
         if self.audit_pred:
             self._last_pbody = self._player_window()
-        eye = self._settle_eye(verb, tile)
-        view = self._view_for(tile)
+        cost, aim, view = self._price(st, verb, tile)
         if view is None:
-            cost = self._settle(verb, None, eye)  # infeasible guard: gates reject these
             enemies.advance_frames(st, int(cost))
             return cost
-        aim = self._step_aim_frames(verb, view)
-        cost = aim + self._settle(verb, view, eye)
         split = self._aim_unfreeze_split(view)
         if split is None:
             enemies.advance_frames(st, int(cost))
@@ -541,13 +562,7 @@ class AStarPlayer(BasePlayer):
             enemies.advance_frames(st, pre)
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00
             enemies.advance_frames(st, int(cost) - pre)
-        me = st.player
-        st.obj_h_angle[me] = view["h_angle"]
-        st.obj_v_angle[me] = view["v_angle"]
-        self.cursor = list(view["cursor"])
-        self.last_bearing = (view["h_angle"], view["v_angle"])
-        if verb == "transfer":
-            self.last_bearing = None  # new body: committed bearing is stale
+        self._commit_view(view, verb)
         return cost
 
     def _landset(self, st):
@@ -672,7 +687,7 @@ class AStarPlayer(BasePlayer):
                 # inchworm: recycle the now-below shells/pedestals (base_z <= new eye, not the current support tile) the transfer up left behind, keeping the climb near the reserve floor -- the human's ls42 line.
                 self.st = trial
                 recycled = []
-                for _ in range(_HOP_BOULDERS + 1):
+                for _ in range(k + 1):
                     got = self._reclaim_one(trial, pedestal_only=True)
                     if got is None:
                         break
@@ -732,15 +747,22 @@ class AStarPlayer(BasePlayer):
         self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
         return ok
 
-    def _record_hop_gate(self, tile, k, exposed, tile_ok):
-        """SHADOW record of the body-window gate: what it WOULD decide, deciding nothing.
+    def _record_hop_gate(self, tile, k, exposed, tile_ok, priced):
+        """Record both hop gates for a candidate: the ENFORCED destination gate (the
+        tile's window against the drainable ``tail``) and the SHADOW source gate (the
+        player's own body window against the whole-hop ``total`` it stands there for),
+        which decides nothing.
 
-        The tile gate above clears the tile built on; this records the player's own body
-        window against the same hop budget, so a live run shows whether gating on it is
-        right-but-unaffordable or mis-specified. Enforcing it live took the player from
-        12 actions to 0, and the pure sim cannot see the question at all -- a fresh board
-        is FROZEN, where _player_window() is inf and the gate never fires."""
-        budget = HOP_FRAMES + (k - 1) * actioncost.SETTLE["create"]
+        The source gate is the half the destination gate cannot see -- the player
+        stands on its current tile for every frame of the build -- and it is the one
+        that would have refused ls335's fatal (8,21) hop (total 1294 f against a 120 f
+        body window).  Enforcing it is measured UNAFFORDABLE: ls42/internal 66 hops
+        cost 891-1572 f from body windows of 120-892 f, so the search drops to 6
+        expansions and no plan on a board it wins, the same collapse enforcing it live
+        produced (docs/plan_fidelity.md).  Exposure onset is not death -- a drain
+        costs energy over frames and the transfer moves the body off -- so the
+        condition needs a cost, not a deadline.  Recorded until it has one."""
+        total, tail = (math.inf, math.inf) if priced is None else priced
         margin = self._margin()
         body = self._player_window()
         self._hop_audit.append(
@@ -750,51 +772,119 @@ class AStarPlayer(BasePlayer):
                 "k": k,
                 "tile_window": self._gaze_window(tile, exposed=exposed),
                 "body_window": body,
-                "budget": budget,
+                "budget": total,
+                "tail": tail,
                 "margin": margin,
                 "tile_ok": bool(tile_ok),
-                "body_ok": bool(body >= budget + margin),
-                "body_ok_raw": bool(body >= budget),
+                "body_ok": bool(body >= total + margin),
+                "body_ok_raw": bool(body >= total),
                 "frozen": bool(self._frozen()),
             }
         )
 
+    def _hop_price(self, st, tile, k):
+        """``(total, tail)`` frames for ``k`` boulders + a robot + the transfer up on
+        ``tile`` -- exactly what ``_hop_exec`` will charge -- priced on a clone, or
+        ``None`` if the stack cannot be built or aimed.  ``tail`` is the robot-create
+        plus transfer: the only interval a DRAINABLE body stands on the tile (a
+        boulder body is not drainable, $16E6).
+
+        The clone carries the creates, so each sub-action is priced against the stack
+        the ones before it left, with the bearing reuse they commit; it does NOT carry
+        the enemy phase forward (``_price`` never advances), which prices intra-hop
+        render cost off the pre-hop facings -- second order against the aim terms."""
+        key = (
+            self._sig(st),
+            tuple(tile),
+            k,
+            self.last_bearing,
+            tuple(self.cursor),
+            int(st.obj_h_angle[st.player]),
+            int(st.obj_v_angle[st.player]),
+        )
+        hit = self._hop_price_memo.get(key, _NO_VIEW)
+        if hit is not _NO_VIEW:
+            return hit
+        real, bearing, cursor = self.st, self.last_bearing, list(self.cursor)
+        trial = st.clone()
+        out = None
+        total = 0.0
+        try:
+            for verb in ["boulder"] * k + ["robot"]:
+                otype = mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
+                if not self._can_build(trial, tile, otype):
+                    break
+                cost, _, view = self._price(trial, verb, tile)
+                if view is None:
+                    break
+                total += cost
+                self._commit_view(view, verb)
+                if actions.create(trial, otype, tile) is None:
+                    break
+                if verb == "robot":
+                    tail = cost
+                    if not threat.player_sees_tile(trial, tile, trial.player):
+                        break
+                    cost, _, view = self._price(trial, "transfer", tile)
+                    if view is None:
+                        break
+                    out = (total + cost, tail + cost)
+        finally:
+            self.st, self.last_bearing, self.cursor = real, bearing, cursor
+        self._hop_price_memo[key] = out
+        return out
+
     def _pick_hop(self, target, landset=None):
-        """Ranked pedestal builds directed at ``target``: prefer tiles that gain
-        LOS on it, then raise the eye, then the widest window -- gated on the
-        rotation window (>= a full hop) and never under a live cone (the search's
-        placement safety).  The pursuit tries them in order until one hop lands.
+        """Ranked pedestal builds directed at ``target``: prefer tiles that gain LOS
+        on it, then raise the eye, then the widest window.  The DESTINATION gate is
+        what that hop actually costs (``_hop_price``), not a flat constant -- hop cost
+        swings 745 f (ls42) to 1294 f (ls335) with how expensive the aims are from the
+        eye, so a constant is simultaneously too strict and too lax.  The tile must
+        stay drain-clear for ``tail``: the robot create plus the transfer, the only
+        span a drainable body stands there (the boulders under it are not drainable,
+        $16E6).  Charging the whole hop here over-gated -- it rejected tiles clear for
+        every frame the robot existed.  The SOURCE half (the player stands on its
+        current tile for the WHOLE build) is shadow-recorded only, see
+        ``_record_hop_gate``.
+
+        Ranking is cheap and pricing is not, so candidates are pre-filtered on
+        ``_TAIL_FLOOR`` (a lower bound on the drainable span) and priced exactly only
+        in rank order, until ``_TOP_HOPS`` survive -- the ones the pursuit would try.
         ``landset`` overrides the tile set (the frozen one ``_climb_continues``
         probes a refuelled stance against)."""
         st = self.st
         my_eye = st.eye_z()
         reserve = self._reserve()
+        margin = self._margin()
         cands = []
         for tile in self._landset(st) if landset is None else landset:
             base = self._tile_base(st, tile)
             if base is None:
                 continue
             k = max(1, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
-            if k > _HOP_BOULDERS:
-                continue
             if st.energy - reserve < 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
-                continue
+                continue  # k is bounded here: a taller stack costs energy it lacks
             robot_eye = base + BOULDER_H * k + ROBOT_EYE
             if robot_eye <= my_eye + EYE_EPS:
                 continue
             exposed = self._exposing_enemies(tile)
-            tile_ok = self._drain_gate(
-                "robot", tile, exposed, HOP_FRAMES + self._margin()
-            )
-            if self._hop_audit is not None:
-                self._record_hop_gate(tile, k, exposed, tile_ok)
-            if not tile_ok:
+            if not self._drain_gate("robot", tile, exposed, _TAIL_FLOOR + margin):
                 continue
             window = self._gaze_window(tile, exposed=exposed)
             sees = self._tile_sees_target(tile, target)
-            cands.append(((sees, robot_eye, window), tile, k, window))
+            cands.append(((sees, robot_eye, window), tile, k, window, exposed))
         cands.sort(key=lambda c: c[0], reverse=True)
-        return [(t, k, w) for _, t, k, w in cands[:_TOP_HOPS]]
+        out = []
+        for _, tile, k, window, exposed in cands:
+            priced = self._hop_price(st, tile, k)
+            tile_ok = priced is not None and window >= priced[1] + margin
+            if self._hop_audit is not None:
+                self._record_hop_gate(tile, k, exposed, tile_ok, priced)
+            if tile_ok:
+                out.append((tile, k, window))
+                if len(out) == _TOP_HOPS:
+                    break
+        return out
 
     def _hop_exec(self, tile, k, window):
         """Build ``k`` boulders + a robot on ``tile`` and transfer up (``self.st``
