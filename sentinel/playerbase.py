@@ -408,12 +408,9 @@ class BasePlayer:
 
     def _affords_drains(self, n_drains, cost=0):
         """Whether the player can hand `n_drains` energy to the enemies on top of an
-        action costing `cost` and stay alive above the survival floor (`_reserve`).
-        `cost` is signed: an absorb RETURNS the object's energy ($1B9B), so it is
-        priced as a negative cost -- the refuelling reclaim is exactly the move a
-        drained body needs, and judging it on the energy it has not banked yet
-        refuses it at the moment it matters.  Unexposed steps (`n_drains` 0) are
-        never gated here."""
+        action costing `cost` and stay alive above the survival floor: a forced
+        hyperspace spends 3 and $215F kills below it, a body drained at 0 is dead
+        ($1A00).  Unexposed steps (`n_drains` 0) are never gated here."""
         if not n_drains:
             return True
         return self.st.energy - cost - n_drains >= max(self._reserve(), 1)
@@ -437,54 +434,25 @@ class BasePlayer:
         """World frozen until the player's first action ($0CE5 bit7, $3682)."""
         return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
 
-    def _margin(self, depth=None):  # pylint: disable=unused-argument
-        """Frames of enemy-phase uncertainty a gate holds back.  Zero for a player
-        that acts on the board in front of it; the planner overrides it with the
-        accumulated per-step error at plan depth (`astar_player._margin`)."""
-        return 0.0
-
-    def _stall_drains(self):
-        """Energy an UNFORESEEN stall hands the enemies while the body stands
-        exposed: `_margin()` frames of accumulated phase error at the ROM's own
-        exchange rate of 1 energy per `DRAIN_DELAY` of continuous sight ($0C20)."""
-        return int(math.ceil(self._margin() / DRAIN_DELAY))
-
     def _reserve(self):
-        """Survival floor: the SUM of what the stance actually owes, not a constant.
-
-        * A forced hyperspace spends the 3-energy robot cost and $215F kills below
-          it -- owed while a meanie is alive or armable against this body inside
-          `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles,
-          then `_meanie_window`'s drain + spawn + arm clock).
-        * An EXPOSED body owes its ESCAPE plus the drains a stall costs.  Sight is
-          not a passing weather front: $178C keeps a still-visible target held, and
-          that path returns before the `no_drain` rotate at $17F9, so a seeing enemy
-          STOPS rotating -- the cone does not sweep off, and $1A31 re-arms the
-          countdown after every drain, billing 1 energy per `DRAIN_DELAY` for as long
-          as the player cannot act.  The exit is an action, and the last-resort one is
-          the conceded hyperspace: it spends the 3-energy robot cost and $215F kills
-          below it, so `_react` concedes it only while E > 3.  A body that reaches 3
-          under a cone has NO exit left and is simply billed to death -- the ls110
-          live death, 26 waits at E=3.  `_stall_drains` adds the drains the plan's own
-          accumulated phase uncertainty can bill before the escape fires.
-
-        An UNEXPOSED stance (`_player_window` inf) owes neither term and may be spent
-        to the bone: that is where the human ls110 line runs to E=1 and refuels by
+        """Survival floor against a FORCED hyperspace: it spends the 3-energy robot
+        cost and $215F kills below it -- but only a MEANIE forces one, so the floor is
+        owed only while a meanie is alive or armable against this body inside
+        `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles, then
+        `_meanie_window`'s drain + spawn + arm clock).  Owing it under any live enemy
+        instead demands E>=8 for the k=1 hop the ROM does at 5, and E>=6 for the k=0
+        the ROM does at 3; the human ls110 line plays through E=1 and refuels by
         absorbing the pedestal behind it."""
         st = self.st
-        floor = 0
-        armed = any(
-            not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE
-            for s in range(mm.NUM_SLOTS)
-        )
-        if not armed and not self._frozen() and enemies.enemy_slots(st):
-            exposed = self._exposures(st, st.player)
-            armed = self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON
-        if armed:
-            floor += mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        if self._player_window() != math.inf:
-            floor += 1 + self._stall_drains()
-        return floor
+        for s in range(mm.NUM_SLOTS):
+            if not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE:
+                return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        if self._frozen() or not enemies.enemy_slots(st):
+            return 0
+        exposed = self._exposures(st, st.player)
+        if self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON:
+            return mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        return 1 if exposed else 0  # a body drained at 0 is dead ($1A00)
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no
