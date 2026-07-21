@@ -8,8 +8,10 @@ from sentinel.tests import human_audit
 
 # Pinned CURRENT disagreements (regenerable via ``python -m sentinel.tests.human_audit``); a model fix that clears any changes the set -> update here.
 _BREACH335 = [
+    21,
     22,
     29,
+    37,
     38,
     62,
     68,
@@ -48,7 +50,8 @@ _GATE335 = [
     127,
     134,
 ]
-_FIRE335 = [6, 15, 21, 23, 28, 35, 37, 40, 85, 124, 127, 130]
+# Owing the 3-energy floor only under a real meanie threat (not under any live enemy) lets the human's own creates at 6, 21, 35, 37, 40, 127 fire; 21 and 37 then land a body under a cone, so they move to _BREACH335.
+_FIRE335 = [15, 23, 28, 85, 124, 130]
 _DRAIN335 = [
     26,
     33,
