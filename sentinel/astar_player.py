@@ -64,6 +64,9 @@ _PURSUE_BRANCH = int(
     os.environ.get("SENTINEL_PURSUE_BRANCH", "1")
 )  # first-hop alternatives per pursuit target. Default 1 (one greedy rollout): branching here buys nothing because the chain re-converges -- root 9 children collapse to 3 distinct keys -- so K>1 doubles search cost for no new reachable stance, and K=3 loses ls42 outright.
 _MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
+_STRAND_PRUNE = int(
+    os.environ.get("SENTINEL_STRAND_PRUNE", "0")
+)  # discard landings _climb_continues calls stranded; measured a no-op, see _advance_hop
 _TOP_CLEARS = 4  # tree-blocked pedestal sites a node may branch a clearing child on
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
@@ -718,8 +721,10 @@ class AStarPlayer(BasePlayer):
     def _advance_hop(self, st, target, e, skip=0):
         """One climb step toward ``target``: the ``skip``-th viable ranked hop from
         ``st`` plus its inchworm reclaims, as ``(landed_state, g_delta, steps)``, or
-        ``None`` if fewer than ``skip+1`` candidates survive execution and the strand
-        check.  ``st`` is left untouched (each candidate runs on its own clone)."""
+        ``None`` if fewer than ``skip+1`` candidates survive execution (and, under
+        ``_STRAND_PRUNE``, the strand check -- default off: with the ROM action gate
+        and the priced absorbs in place it discards nothing the search needs, and it
+        costs a simulated reclaim chain per candidate).  ``st`` is left untouched."""
         self.st = st  # _pick_hop ranks from the stance we are leaving
         bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
         for tile, k, window in self._pick_hop(target):
@@ -739,7 +744,7 @@ class AStarPlayer(BasePlayer):
                 if got is None:
                     break
                 recycled.append(got)
-            if not self._climb_continues(trial, target, e):
+            if _STRAND_PRUNE and not self._climb_continues(trial, target, e):
                 continue  # stranded landing: try the next-ranked one
             if skip:
                 skip -= 1
