@@ -10,6 +10,21 @@ def pytest_configure(config):
         "markers",
         "oracle: test drives the real 6502 code (needs out/sentinel_stage2.bin)",
     )
+    _cap_numba_threads()
+
+
+def _cap_numba_threads():
+    """One numba thread per xdist worker: ``los_jit.march_batch`` is ``parallel=True``
+    and defaults to one thread per core, so ``-n auto`` puts cores^2 threads on cores
+    and the suite thrashes (measured: 32 workers, load 163). Honours an explicit
+    NUMBA_NUM_THREADS."""
+    if os.environ.get("NUMBA_NUM_THREADS") or not os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    try:
+        import numba
+    except ImportError:
+        return
+    numba.set_num_threads(1)
 
 
 def pytest_collection_modifyitems(config, items):
