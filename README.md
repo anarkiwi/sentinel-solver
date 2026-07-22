@@ -1,3 +1,6 @@
+* Claude - including Fable - was unable to solve this simple game from 1986 without my help. Is what it is. *
+
+
 # The Sentinel — bit-exact model + live driver
 
 A ROM-faithful model of **The Sentinel** (Geoff Crammond, Firebird, 1986) on the
