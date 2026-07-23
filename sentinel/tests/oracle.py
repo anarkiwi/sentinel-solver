@@ -9,8 +9,8 @@ used to generate the golden fixtures.
 
 import os
 
-from py65.devices.mpu6502 import MPU
-from py65.memory import ObservableMemory
+from jennings.devices.mpu6502 import MPU
+from jennings.memory import ObservableMemory
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 IMG = os.path.join(_ROOT, "out", "sentinel_stage2.bin")
