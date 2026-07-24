@@ -19,21 +19,28 @@ _HALF = FOV_HALF + FOV_MARGIN
 
 
 def _load_truth(name):
-    """The replayed enemy-phase ground truth for ``name`` (``<name>_truth.json``,
-    written by ``driver.replay_human``), as ``{step_i: {slot: enemy_dict}}`` over
-    reproduced steps only, or ``None`` when the fixture is absent."""
+    """True enemy phase for ``name`` as ``{step_i: {slot: enemy_dict}}``, or ``None``.
+
+    Prefers the live replay ``<name>_truth.json`` (``driver.replay_human``); falls
+    back to the clock ``watch_play/3`` recorded straight into the fixture events
+    (``enemy_clock``), so an offline sim replay needs no live VICE run."""
     path = os.path.join(_FIX_DIR, name[:-5] + "_truth.json")
-    if not os.path.exists(path):
-        return None
-    with open(path, encoding="utf-8") as fh:
-        truth = json.load(fh)
-    out = {}
-    for s in truth.get("steps", []):
-        rep = s.get("replay", {})
-        if rep.get("diverged_since") or not rep.get("matched_recording", True):
-            continue  # only the clean pre-divergence prefix is on the human's line
-        out[s["i"]] = {e["slot"]: e for e in s["enemies"]}
-    return out
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            truth = json.load(fh)
+        out = {}
+        for s in truth.get("steps", []):
+            rep = s.get("replay", {})
+            if rep.get("diverged_since") or not rep.get("matched_recording", True):
+                continue  # only the clean pre-divergence prefix is on the human's line
+            out[s["i"]] = {e["slot"]: e for e in s["enemies"]}
+        return out
+    fixture = {
+        i: {e["slot"]: e for e in ev["enemy_clock"]}
+        for i, ev in enumerate(_load(name)["events"])
+        if ev.get("enemy_clock")
+    }
+    return fixture or None
 
 
 def _apply_truth(st, phase):

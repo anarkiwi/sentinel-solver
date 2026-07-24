@@ -24,16 +24,16 @@ def _events(name):
 
 @pytest.mark.parametrize(
     "name,absorbs,creates,transfers",
-    [("ls335.json", 73, 38, 18), ("ls42.json", 19, 15, 8), ("ls0.json", 11, 9, 5)],
+    [("ls335.json", 70, 35, 18), ("ls42.json", 19, 15, 8), ("ls0.json", 11, 9, 5)],
 )
 def test_real_action_counts(name, absorbs, creates, transfers):
     counts = collections.Counter(ev["verb"] for ev in _events(name))
     assert counts == {"absorb": absorbs, "create": creates, "transfer": transfers}
 
 
-def test_ls335_has_129_real_actions_of_168_rows():
-    """19 drain ticks + 20 discharge trees are recorder artifacts, not moves."""
-    assert len(_events("ls335.json")) == 129
+def test_ls335_has_123_real_actions_of_156_rows():
+    """14 drain ticks + 19 discharge trees are recorder artifacts, not moves."""
+    assert len(_events("ls335.json")) == 123
 
 
 def test_a_player_never_creates_a_tree():

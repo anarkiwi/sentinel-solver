@@ -32,21 +32,44 @@ from vice_driver.binmon import BinmonError
 from driver import sentinel_state as gs
 from sentinel import memmap as mm
 
-# Every address of mutable game state -- tiles_table ($0400), all object arrays
-# (flags $0100 .. type $0A40), the sights cursor ($0CC6/$0CC7), the LOS scratch
-# flag do_line_of_sight_checks ($0C6E), the PRNG LFSR ($0C7B), player energy and
-# scalars, and our done-flag ($0CDE) -- falls at or below $0CDE. The py65 ROM
-# oracle loads code/static data only from $0D00 up, so [0, 0x0CFF] is the WHOLE
-# reconstructable game state: one mem_get captures it, and the base64 of that
-# exact span can be injected verbatim into a fresh sim State OR the ROM oracle to
-# replay any moment's line-of-sight bit-for-bit. Rounded up past $0CDE for margin.
-_SNAPSHOT_END = 0x0CFF  # inclusive
-
-# Byte offsets we decode into convenience fields (everything is also in "mem").
+_STATE_END = 0x0CFF  # inclusive: base64 "mem" span, replays LOS bit-for-bit
+_READ_END = mm.COOLDOWN_BRESENHAM  # 0x1335 enemy-clock accumulator (above play page)
 _CURSOR_X = 0x0CC6  # sights cursor cx (prepare_vector_from_player_sights $1C13)
 _CURSOR_Y = 0x0CC7  # sights cursor cy ($1C2D)
 _DO_LOS = 0x0C6E  # do_line_of_sight_checks; bit7 waives the looking-up rejection
 _PRNG = mm.PRND_STATE  # 40-bit LFSR, 5 bytes -- makes each capture deterministic
+_ROT_TABLE_LEN = 8  # $9D37 rotation-speed table: one static entry per enemy slot
+
+
+def _signed(b):
+    return b - 256 if b >= 128 else b
+
+
+def _enemy_clock(state, buf, rot_speed):
+    """The complete per-enemy CLOCK the distilled fixtures otherwise omit: facing +
+    rotation step + the three phase cooldowns, per living sentry/Sentinel. Field
+    names match ``driver.replay_human._enemy_truth`` so a log-carried clock is a
+    drop-in for the live-replay ``_truth.json`` the offline audit depends on."""
+    out = []
+    for o in state.objects:
+        if o.type not in mm.ENEMY_TYPES:
+            continue
+        s = o.slot
+        rot = rot_speed[s] if rot_speed is not None and s < len(rot_speed) else None
+        out.append(
+            {
+                "slot": s,
+                "type": o.type_name,
+                "tile": [o.x, o.y],
+                "h_angle": o.h_angle,
+                "v_angle": o.v_angle,
+                "rot_step": None if rot is None else _signed(rot),
+                "rot_cooldown": buf[mm.ENEMIES_ROTATION_COOLDOWN + s],
+                "drain_cooldown": buf[mm.ENEMIES_DRAINING_COOLDOWN + s],
+                "update_cooldown": buf[mm.ENEMIES_UPDATE_COOLDOWN + s],
+            }
+        )
+    return out
 
 
 def main():
@@ -86,6 +109,15 @@ def main():
     bm.exit()
     print("connected.")
 
+    try:  # static per landscape (only read during play), so fetched once here
+        rot_speed = bytes(
+            bm.mem_get(
+                mm.ROTATION_SPEED_TABLE, mm.ROTATION_SPEED_TABLE + _ROT_TABLE_LEN - 1
+            )
+        )
+    except (BinmonError, ConnectionError, OSError, TimeoutError):
+        rot_speed = None
+
     if not args.no_video:
         try:
             bm.video_record(video_path)
@@ -100,9 +132,10 @@ def main():
     print("play now. Ctrl+C here to stop.")
 
     def snapshot(buf, t0, bracket=None):
-        """Decode a captured [0,_SNAPSHOT_END] buffer into one log record. The full
-        buffer is stored base64 under "mem" so the exact state can be reloaded into a
-        sim State or the ROM oracle later; the decoded fields are conveniences."""
+        """Decode a captured [0,_READ_END] buffer into one log record. The [0,$0CFF]
+        play state is stored base64 under "mem" (verbatim sim/oracle replay); the
+        enemy clock (cooldown_bresenham $1335 above that span + the per-enemy facing/
+        cooldowns) is decoded so the log alone is sim-replayable with exact timing."""
         st = gs.read_game_state(
             gs.Py65Source(buf)
         )  # one fetched buffer, no extra reads
@@ -129,11 +162,15 @@ def main():
             "cursor": [buf[_CURSOR_X], buf[_CURSOR_Y]],
             "do_los": buf[_DO_LOS],
             "prng": list(buf[_PRNG : _PRNG + 5]),
+            # enemy clock: the timing the distilled fixtures otherwise omit.
+            "cooldown_gate": buf[mm.COOLDOWN_GATE],
+            "cooldown_bresenham": buf[_READ_END],
+            "enemies": _enemy_clock(st, buf, rot_speed),
         }
         if bracket is not None:
             rec["bracket"] = bracket
         if not args.no_full_mem:
-            rec["mem"] = base64.b64encode(bytes(buf)).decode("ascii")
+            rec["mem"] = base64.b64encode(bytes(buf[: _STATE_END + 1])).decode("ascii")
         return rec
 
     def key_of(rec):
@@ -158,10 +195,12 @@ def main():
                 {
                     "landscape": args.landscape,
                     "t_start": t_start,
-                    "snapshot_span": [0, _SNAPSHOT_END],
+                    "snapshot_span": [0, _STATE_END],
+                    "read_span": [0, _READ_END],
                     "full_mem": not args.no_full_mem,
-                    "schema": "watch_play/2 -- per-record base64 mem of [0,span] "
-                    "for exact LOS replay; change records bracketed post-action",
+                    "schema": "watch_play/3 -- base64 mem of [0,$0CFF] for LOS replay "
+                    "+ decoded enemy clock (cooldown_bresenham $1335 + per-enemy "
+                    "facing/cooldowns) for exact enemy-timing sim replay",
                 }
             )
             + "\n"
@@ -170,7 +209,7 @@ def main():
             while True:
                 t0 = time.time()
                 try:
-                    buf = bm.mem_get(0, _SNAPSHOT_END)
+                    buf = bm.mem_get(0, _READ_END)
                     rec = snapshot(buf, t0)
                     logf.write(json.dumps(rec) + "\n")
                     # A player action (build/absorb/transfer/win) changed the state:
@@ -179,7 +218,7 @@ def main():
                     k = key_of(rec)
                     if prev_key is not None and k != prev_key and "error" not in rec:
                         try:
-                            buf2 = bm.mem_get(0, _SNAPSHOT_END)
+                            buf2 = bm.mem_get(0, _READ_END)
                             post = snapshot(buf2, time.time(), bracket="post")
                             logf.write(json.dumps(post) + "\n")
                         except (BinmonError, ConnectionError, OSError, TimeoutError):

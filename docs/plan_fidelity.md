@@ -139,9 +139,15 @@ bounding it by wall clock buys nothing and costs reproducibility.
   through `put_object_in_random_tile_below_z $1224`: the discharge tree's landing tile and
   the hyperspace landing tile. **Meanie creation is not one of them** — `$197D` is a
   deterministic slot scan, as are the hunt and the hyperspace trigger.
-- **The human line does not replay to a win** through the live executor: 21/42 steps
-  (committed `ls42_truth.json` records 26/42, `won_at_step: None`). It has never replayed
-  to a win in this repo.
+- **The ls335 human line now replays to a win in the SIM.** With the enemy clock recorded
+  straight into the fixture (`watch_play/3`: per-action facing/cooldowns + the `$1335`
+  accumulator), all 123 genuine player actions of the recorded ls335 win are feasible and
+  aim-landable against the true clock, and `sentinel.actions.win` drives the recorded
+  endgame (absorb Sentinel → build on platform (28,17) → transfer → hyperspace) to
+  `$0CDE = $C0`. This is the first human line to replay to a win in this repo.
+- **The human line still does not replay to a win through the LIVE executor** (ls42:
+  21/42 steps; committed `ls42_truth.json` records 26/42, `won_at_step: None`) — an
+  executor/driver-timing limit, distinct from the sim forward model above.
 
 ## Disproved (do not resurrect)
 

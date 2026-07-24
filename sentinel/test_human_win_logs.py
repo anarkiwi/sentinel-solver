@@ -22,11 +22,12 @@ and a buildability validation:
   move +/-1px; each 1px step a distinct ray via prepare_vector_from_player_sights
   $1C10) over a 64px window bit-equivalent to the full cursor range, so every GENUINE
   player build/absorb is landable (the old 9px notch grid false-negatived far/
-  adjacent tiles).  The extractor (``_extract.py``) now drops Sentinel-SPAWNED trees
-  (an enemy discharging absorbed energy plants a TREE at a RANDOM tile, ROM
-  ``consider_discharging_enemy_energy $1A5D``, NOT gated by the player's sights), so
-  every event in the fixtures is a real player action and this oracle covers them all
-  with NO gap.
+  adjacent tiles).  ``_extract.py`` drops Sentinel-SPAWNED trees whose tile no aim can
+  reach (an enemy discharging absorbed energy plants a TREE at a RANDOM tile, ROM
+  ``consider_discharging_enemy_energy $1A5D``, NOT gated by the player's sights); a
+  discharge tree that happens to land on a REACHABLE tile still survives as a create
+  artifact, so these tests filter to genuine player actions (:func:`_is_player_action`,
+  mirroring ``telemetry.human_events``) before asserting buildability.
 """
 
 import json
@@ -96,23 +97,37 @@ def state_from_event(ev, seed):
     return st
 
 
+def _is_player_action(ev):
+    """False for the recorder's two artifact classes (mirrors ``telemetry.human_events``):
+    an enemy DISCHARGE TREE mis-kept as a create (a player builds only robots/boulders),
+    and a DRAIN TICK minted as a transfer onto the player's own tile. ``_is_enemy_spawn``
+    drops only the UNREACHABLE discharge trees; one landing on a reachable tile survives.
+    """
+    pl = ev.get("player") or {}
+    if ev["verb"] == "create" and ev["otype"] == mm.T_TREE:
+        return False
+    if ev["verb"] == "transfer" and tuple(ev["target"]) == (pl.get("x"), pl.get("y")):
+        return False
+    return True
+
+
 def _verb_params(verbs):
-    """(name, idx) params for every event whose verb is in `verbs`."""
+    """(name, idx) params for every genuine player action whose verb is in `verbs`."""
     out = []
     for name in FIXTURES:
         for i, ev in enumerate(_load(name)["events"]):
-            if ev["verb"] in verbs:
+            if ev["verb"] in verbs and _is_player_action(ev):
                 out.append(pytest.param(name, i, id=f"{name[:-5]}-ev{i}-{ev['verb']}"))
     return out
 
 
 def _landable_params():
-    """(name, idx) for every create/absorb event (all are real player actions now
-    that _extract.py drops Sentinel-spawned trees, so every one must be landable)."""
+    """(name, idx) for every genuine create/absorb player action -- each must be aim-
+    landable (enemy discharge trees, which a player can't build, are excluded)."""
     out = []
     for name in FIXTURES:
         for i, ev in enumerate(_load(name)["events"]):
-            if ev["verb"] == "transfer":
+            if ev["verb"] == "transfer" or not _is_player_action(ev):
                 continue
             out.append(pytest.param(name, i, id=f"{name[:-5]}-ev{i}-{ev['verb']}"))
     return out
