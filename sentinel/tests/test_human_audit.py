@@ -6,101 +6,62 @@ import pytest
 
 from sentinel.tests import human_audit
 
-# Pinned CURRENT disagreements (regenerable via ``python -m sentinel.tests.human_audit``); a model fix that clears any changes the set -> update here.
-_BREACH335 = [
-    21,
+# Pinned CURRENT ls335 disagreements: recording play_20260725_105258, a live WIN whose enemy clock is recorded into the fixture, so the audit runs on TRUE facings (no live _truth.json). Regenerable via ``python -m sentinel.tests.human_audit``; a model fix that clears any -> update here.
+_BREACH335 = [23, 24, 28, 44, 45, 52, 137]
+_GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
+_FIRE335 = [30, 32, 34, 50, 51, 77, 84, 92, 94, 95]
+_DRAIN335 = [
+    19,
     22,
+    25,
+    27,
     29,
-    37,
-    38,
-    62,
-    68,
+    33,
+    41,
+    46,
+    49,
+    53,
+    58,
+    67,
     69,
     73,
     75,
-    84,
-    103,
-    104,
-    106,
-    121,
-    134,
-    135,
-]
-# Time-to-DRAIN windows (cone onset + the $0C20 countdown, not onset alone) clear steps 15, 16, 29, 61, 70, 75, 76, 104, 135, 143: human moves the gate used to refuse on a cone that had not yet armed a drain.
-_GATE335 = [
-    21,
-    22,
-    23,
-    28,
-    37,
-    38,
-    40,
-    55,
-    59,
-    62,
-    68,
-    69,
-    73,
+    79,
     83,
-    84,
-    85,
+    86,
+    93,
     103,
-    106,
-    121,
-    127,
+    107,
+    110,
+    111,
     134,
-]
-# Owing the floor only under a real meanie threat (3) or any exposure (1), not under every live enemy, lets the human's own creates at 6, 21, 35, 37, 40, 127 fire; 21 and 37 then land a body under a cone, so they move to _BREACH335. Step 14 still breaches the 1-energy floor.
-_FIRE335 = [14, 15, 23, 28, 85, 124, 130]
-_DRAIN335 = [
-    26,
-    33,
-    36,
+    136,
+    138,
+    141,
+    145,
+    147,
+]  # noqa: E501
+_TREE335 = [
+    28,
+    32,
+    34,
+    42,
     50,
-    54,
-    58,
-    60,
-    64,
-    66,
+    55,
     71,
     74,
     77,
-    78,
-    80,
-    82,
-    86,
-    100,
-    102,
-    105,
-    107,
-    114,
-    115,
-    117,
-    120,
-    122,
-    128,
-]
-_TREE335 = [
-    23,
-    35,
-    40,
-    52,
-    55,
-    57,
-    59,
-    62,
-    68,
-    69,
-    76,
-    79,
-    81,
-    85,
+    92,
+    94,
+    95,
+    97,
     106,
-    119,
-    121,
-    124,
-    127,
-]
+    135,
+    137,
+    139,
+    143,
+    146,
+]  # noqa: E501
 _ENERGY335 = sorted(set(_DRAIN335) | set(_TREE335))
 
 # ls42: with TRUE replayed facings the corrected drain model AGREES on the winning tiles (2,24)/(5,22); only the real drain at step 15 remains.
@@ -177,10 +138,11 @@ def test_ls42_truth_over_classifies():
 
 
 def test_truth_provenance():
-    """ls42 (24 steps) and ls335 (25) have committed replay-truth fixtures; ls0 has
-    none and falls back to baseline facings for every step."""
+    """ls42 sources true facings from its live replay (24 steps); ls335 from the enemy
+    clock recorded straight into the fixture (154 steps); ls0 has neither and falls
+    back to baseline facings for every step."""
     assert human_audit.audit_fixture("ls42.json")["enemy_truth_steps"] == 24
-    assert human_audit.audit_fixture("ls335.json")["enemy_truth_steps"] == 25
+    assert human_audit.audit_fixture("ls335.json")["enemy_truth_steps"] == 154
     assert human_audit.audit_fixture("ls0.json")["enemy_truth_steps"] == 0
     for s in human_audit.audit_fixture("ls0.json")["steps"]:
         assert s["enemy_facings_source"] == "generate_baseline"

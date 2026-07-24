@@ -63,7 +63,7 @@ def human_events(fixture_path):
     Drops the recorder's two artifact classes: a DRAIN TICK ($1838) moves energy with no
     object change and no player move, which ``_extract._classify`` mints as a transfer
     onto the player's own tile; and an enemy DISCHARGE TREE ($1A5D) appears as a create,
-    though a player can only create boulders and robots. ls335: 168 rows, 130 actions.
+    though a player can only create boulders and robots. ls335: 156 rows, 123 actions.
     """
     with open(fixture_path, encoding="utf-8") as fh:
         rec = json.load(fh)

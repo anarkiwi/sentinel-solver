@@ -26,7 +26,7 @@ Accuracy and ranked open problems: [plan_fidelity.md](plan_fidelity.md). Game ru
 | `frozen_run.py` | RTS-stubs `update_enemies` ($16B5) live: isolates frame-cost fidelity from search/energy. |
 | `plan_audit.py` | per-step audit of each `PlanStep`'s recorded budget/windows vs live. |
 | `replay_human.py` | replays a recorded human line, capturing per-step enemy phase into `<fixture>_truth.json`. |
-| `watch_play.py` | passive logger of a **human** playing; sends no keys. |
+| `watch_play.py` | passive logger of a **human** playing; sends no keys. Logs the `[0,$0CFF]` play state **and** the enemy clock (per-enemy facing/cooldowns + the `$1335` accumulator above that span), so a recorded line replays in the sim with exact enemy timing without a live `replay_human` pass. |
 
 ## No wall-clock waits
 

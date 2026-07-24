@@ -15,10 +15,12 @@ logged terrain).  Only landscape 0 has code == seed.  The seed is what regenerat
 the board, so it is what the fixture stores.
 
 This distiller keeps ONLY reproducible game STATE -- object coordinates / types /
-heights / flags, player position, aim angles, cursor, energy -- never any raw
-``mem`` bytes and never the terrain (the terrain is regenerated at test time with
-the audited byte-exact :func:`sentinel.landscape.generate`).  That is the
-"cache for fixtures" the repo permits.
+heights / flags, player position, aim angles, cursor, energy, and (from
+``watch_play/3`` logs) the pre-action enemy clock (per-enemy facing/cooldowns +
+the ``cooldown_bresenham`` accumulator) -- never any raw ``mem`` bytes and never
+the terrain (regenerated at test time with the audited byte-exact
+:func:`sentinel.landscape.generate`).  That is the "cache for fixtures" the repo
+permits.
 
 One fixture EVENT per player ACTION.  Actions are recovered by walking the
 change-bracketed records (schema ``watch_play/2``: the recorder brackets on ANY
@@ -73,7 +75,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES = {
     "ls0.json": ("play_20260707_193356.jsonl", 0, 0),
     "ls42.json": ("play_20260707_194413.jsonl", 42, 66),
-    "ls335.json": ("play_20260707_203210.jsonl", 335, 821),
+    "ls335.json": ("play_20260725_105258.jsonl", 335, 821),
     "ls110.json": ("play_20260721_170900.jsonl", 110, 272),
 }
 
@@ -229,6 +231,12 @@ def extract(path, entered_code, seed):
             "do_los": prev_rec["do_los"],
             "objects": [[s] + prev_objs[s] for s in sorted(prev_objs)],
         }
+        # watch_play/3 logs carry the pre-action enemy clock; thread it through so
+        # the fixture replays in the sim with exact enemy timing (no live _truth.json).
+        if "enemies" in prev_rec:
+            candidate["enemy_clock"] = prev_rec["enemies"]
+            candidate["cooldown_bresenham"] = prev_rec.get("cooldown_bresenham")
+            candidate["cooldown_gate"] = prev_rec.get("cooldown_gate")
         # Fold the change into the world baseline regardless (it really happened);
         # emit it as a player event only if it is not an enemy-spawned object.
         if not _is_enemy_spawn(candidate, seed):
