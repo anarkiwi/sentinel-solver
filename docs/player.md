@@ -2,7 +2,7 @@
 
 A tick-by-tick greedy player over the `sentinel/` model. No search tree, no lookahead
 branching, and **no PRNG reads**: each decision tick observes the live `State` and commits
-one action. It wins landscape 0; it does not win seed 66 (typed `0042`) under the
+one action. It wins landscape 0; it does not win landscape 42 under the
 ROM-faithful aim/settle clock — see the tests below and
 [plan_fidelity.md](plan_fidelity.md). The planning alternative is
 [astar_player.md](astar_player.md); both share `BasePlayer` (`sentinel/playerbase.py`).
@@ -106,10 +106,10 @@ plausible.
 - `test_player_wins_landscape_0` — wins landscape 0 alive and solvent, last verb
   `hyperspace`, Sentinel slot empty.
 - `test_player_wins_landscape_0042` — **xfail** (non-strict): under the accurate
-  view-aware transfer settle the greedy heuristics have no safe winning line on seed 66
+  view-aware transfer settle the greedy heuristics have no safe winning line on landscape 42
   and the player dies escaping.
 - `test_player_placement_invariant` — the built-in audit records zero breaches on
-  landscape 0 (still a win) and on seed 66 (loss, but breach-free): the planner correctly
+  landscape 0 (still a win) and on landscape 42 (loss, but breach-free): the planner correctly
   refuses the unsafe transfers rather than taking them.
 
 Landscape 0335 is the stress board for this path — interleaved cones, short out-of-phase
@@ -119,5 +119,4 @@ relaxation tiers. The mechanics that make it hard are game rules, documented in
 
 Build it as `Game.typed(335)` — **7 enemies** (Sentinel at (28,17) height 12 plus six
 sentries), player at (11,17), eye 3.875, matching the `ls335.json` human win. A landscape
-number is always the number you type; `Game.new` takes the raw seed and gives a different
-board. See [plan_fidelity.md](plan_fidelity.md).
+is only ever named by the number you type. See [plan_fidelity.md](plan_fidelity.md).

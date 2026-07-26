@@ -32,7 +32,13 @@ def _make_player(args, session, log, result):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("landscape", nargs="?", type=int, default=0)
+    parser.add_argument(
+        "landscape",
+        nargs="?",
+        type=int,
+        default=0,
+        help="the landscape number you TYPE",
+    )
     parser.add_argument("--player", choices=("greedy", "astar"), default="greedy")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--node-budget", type=int, default=200000)

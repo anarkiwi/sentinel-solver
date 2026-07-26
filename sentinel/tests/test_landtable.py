@@ -68,14 +68,14 @@ def _variants(new_state):
     """(name, state, slot, eye_z) observers: fresh boards, a stacked/transferred eye and
     an eye_z override (the search's speculative stance)."""
     out = []
-    for ls in (0, 66):
+    for ls in (0, 42):
         st = new_state(ls)
         out.append(("ls%d" % ls, st, st.player, None))
     st = new_state(0)
     _stack_and_transfer(st)
     out.append(("ls0-stacked", st, st.player, None))
-    st = new_state(66)
-    out.append(("ls66-eyez", st, st.player, (st.obj_z_height[st.player] + 3) & 0xFF))
+    st = new_state(42)
+    out.append(("ls42-eyez", st, st.player, (st.obj_z_height[st.player] + 3) & 0xFF))
     return out
 
 
@@ -96,7 +96,7 @@ def _assert_superset(st, slot, eye_z, grids):
     return land, ring
 
 
-@pytest.mark.parametrize("name", ["ls0", "ls66", "ls0-stacked", "ls66-eyez"])
+@pytest.mark.parametrize("name", ["ls0", "ls42", "ls0-stacked", "ls42-eyez"])
 def test_candidates_superset_plane(new_state, name):
     """$F5 plane: the candidate set contains every landing ray, over bare boards, an
     object-tile/raised-eye stance and an eye_z override."""
@@ -104,7 +104,7 @@ def test_candidates_superset_plane(new_state, name):
     _assert_superset(st, slot, eye_z, lt.lattice(True))
 
 
-@pytest.mark.parametrize("name", ["ls0", "ls0-stacked", "ls66-eyez"])
+@pytest.mark.parametrize("name", ["ls0", "ls0-stacked", "ls42-eyez"])
 def test_candidates_superset_band(new_state, name):
     """Full pitch band (3.5M rays, the completeness-critical lattice): below-eye and
     object tiles included, outer-ring tiles asserted like any other."""
@@ -161,7 +161,7 @@ def test_coarse_lattice_is_the_landset_lattice():
         assert (cvecs[:, i] == bvecs[:, j]).all()
 
 
-@pytest.mark.parametrize("name", ["ls0", "ls66", "ls0-stacked", "ls66-eyez"])
+@pytest.mark.parametrize("name", ["ls0", "ls42", "ls0-stacked", "ls42-eyez"])
 def test_landable_set_matches_coarse_sweep(new_state, name):
     """The whole-board set is EXACTLY ``_coarse_landable``'s -- every tile including the
     outer ring, over bare boards, an object-tile stance and an eye_z override."""

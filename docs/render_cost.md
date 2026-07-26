@@ -2,8 +2,9 @@
 
 Reverse-engineered spec for the ROM's terrain rasteriser (`sentinel/projector.py`,
 `sentinel/pancost.py`). Addresses are ROM ($ hex); PAL frame = 19656 cycles. Validated
-against `golden_render_cost.json` (py65 cycle counts, 15 views over landscapes
-0/42/66/335/777/2024) with the raytraced occlusion table active. Measured accuracy and the
+against `golden_render_cost.json` (py65 cycle counts, 15 views over the six
+generated boards 0/42/66/335/777/2024 -- a `landscape.generate` corpus, not landscape
+numbers) with the raytraced occlusion table active. Measured accuracy and the
 ranked open problems: [plan_fidelity.md](plan_fidelity.md).
 
 ## What plot_world does

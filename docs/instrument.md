@@ -25,7 +25,8 @@ schema is directly meaningful on both.
 Both are seeded from the **emulator's own 64 KB image** at entry, so frame 0 is
 byte-identical and every later difference is purely the sim's dynamics vs the ROM's.
 Seeding from the full image also gives the sim the real in-RAM tables (e.g. the
-rotation-speed data at `$9D37`) and sidesteps the landscape-number/seed ambiguity.
+rotation-speed data at `$9D37`) and skips board generation entirely — the instrument
+never regenerates the landscape, it copies the one VICE is already playing.
 
 ## The schema and its tiers
 

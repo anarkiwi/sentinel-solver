@@ -836,7 +836,7 @@ class AStarPlayer(BasePlayer):
         The source gate is the half the destination gate cannot see -- the player
         stands on its current tile for every frame of the build -- and it is the one
         that would have refused ls335's fatal (8,21) hop (total 1294 f against a 120 f
-        body window).  Enforcing it is measured UNAFFORDABLE: ls42/internal 66 hops
+        body window).  Enforcing it is measured UNAFFORDABLE: ls42 hops
         cost 891-1572 f from body windows of 120-892 f, so the search drops to 6
         expansions and no plan on a board it wins, the same collapse enforcing it live
         produced (docs/plan_fidelity.md).  Exposure onset is not death -- a drain
@@ -1232,7 +1232,13 @@ class AStarPlayer(BasePlayer):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("landscape", nargs="?", type=int, default=66)
+    parser.add_argument(
+        "landscape",
+        nargs="?",
+        type=int,
+        default=42,
+        help="the landscape number you TYPE",
+    )
     parser.add_argument("--max-actions", type=int, default=400)
     parser.add_argument(
         "--time-budget",
@@ -1248,7 +1254,7 @@ def main():
         "that ended in a live enemy cone",
     )
     args = parser.parse_args()
-    game = Game.new(args.landscape)
+    game = Game.typed(args.landscape)
     player = AStarPlayer(
         game,
         verbose=not args.quiet,

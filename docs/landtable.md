@@ -88,7 +88,7 @@ Track census (`python -m sentinel.landtable`), 24 threads, 6.7 s for both lattic
 | candidates per cell, `T <= 0` | mean 3035, p50 2138, p90 4861 | mean 20103, p50 12982, p90 29780 |
 | candidates per cell, `T <= -4` | mean 282 | mean 13084 |
 
-Query thresholds in real solves (landscapes 0, 66, 335 — 3775 targeted queries):
+Query thresholds in real solves (landscapes 0, 42, 335 — 3775 targeted queries):
 `T = surface16 - eye_z*256 - obj_z_frac` spans **-1120 to +1568**, i.e. whole-unit buckets
 -5..+6; eye heights 5..11; `|dx|`, `|dy|` up to 30.
 
@@ -131,14 +131,14 @@ queries:
 | `landable_view` (what `landable_view_targeted` runs) | **3.20 ms** | **0.92 ms** |
 
 Whole-solve, with the filter in front of the targeted cone (identical plans: 23 actions /
-6240 frames on ls0, 35 actions / 9810 frames on internal 66):
+6240 frames on ls0, 35 actions / 9810 frames on ls42):
 
 | landscape | plan time before | after |
 |---|---|---|
 | 0 | 2.7 s | 2.2 s |
-| 66 | 27.0 s | 10.9 s |
+| 42 | 27.0 s | 10.9 s |
 
-Mean marched rays per query over the internal-66 solve: **6131** (vs ~77 k), with 1638 of
+Mean marched rays per query over the ls42 solve: **6131** (vs ~77 k), with 1638 of
 2817 queries answered as a *proven* "no view" — the case that costs a full cone today.
 
 The remaining expensive case is an **adjacent** cell: its heading arc is huge and a ray
@@ -167,7 +167,7 @@ lattice, mostly climbing rays) are never marched at all.
 | stance | tiles | full sweep | `landable_set` | rays marched |
 |---|---|---|---|---|
 | ls0 | 49 | 83.8 ms / 884,736 | 25.6 ms | 152,025 |
-| ls66 | 23 | 72.7 ms / 884,736 | 23.5 ms | 135,979 |
+| ls42 | 23 | 72.7 ms / 884,736 | 23.5 ms | 135,979 |
 | ls335 | 7 | 77.2 ms / 884,736 | 23.6 ms | 120,588 |
 | ls0 stacked+transferred | 194 | 90.5 ms / 884,736 | 28.7 ms | 160,224 |
 | 3 recorded solve states | 49–98 | 56.7–97.7 ms | 17.8–29.7 ms | 95,984–152,025 |
@@ -179,13 +179,13 @@ Per-tile queries on the same lattice (what `_landable` calls) go from 21,660 to 
 (p50 14,698 -> 776) and 2.67 -> 0.55 ms.
 
 Whole solves with **both** paths wired in, plans byte-identical (ls0: 23 actions / 6240
-frames, energy 6; internal 66: 35 actions / 9810 frames), warm runs of
+frames, energy 6; ls42: 35 actions / 9810 frames), warm runs of
 `python -m sentinel.astar_player N --quiet`:
 
 | landscape | wall before | after | rays marched before | after |
 |---|---|---|---|---|
 | 0 | 2.8 s | 1.4 s | 19.9 M | 3.8 M |
-| 66 | 23.1 s | 5.0 s | 144.3 M | 25.8 M |
+| 42 | 23.1 s | 5.0 s | 144.3 M | 25.8 M |
 
 The partition's soundness rests on one extra step beyond the per-tile condition: the walk
 may only stop at a cell the ray **provably** stops in (`zmin <= surface_lo`, so it reaches

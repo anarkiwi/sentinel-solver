@@ -35,20 +35,21 @@ ROM image.
 
 ## Landscape numbers are what you TYPE
 
-A landscape's canonical id is the number a player keys into the game. The ROM stores it
-packed-BCD and seeds the PRNG from those bytes, so the seed is the typed digits read as
-**hex**: typed `42` seeds 66, typed `335` seeds 821. Use the typed number everywhere and
-let the shim convert:
+A landscape has exactly one id: the number a player keys into the game. Every tool and
+every test names a board that way, and `Game.typed(n)` builds it:
 
 ```python
-Game.typed(335)          # the ls335 everyone means (7 enemies, player (11,17))
-landscape.seed_for(335)  # -> 821, the raw seed
-Game.new(821)            # raw seed: the same board, the long way round
-Game.new(335)            # a DIFFERENT board -- 335 is a seed here, not a typed code
+Game.typed(335)   # ls335: 7 enemies, player (11,17)
+Game.typed(42)    # ls42:  2 enemies, player (13,29)
 ```
 
 `Game.typed(42)` and `Game.typed(335)` reproduce the human-win fixtures object for
-object; anything keyed on a raw seed is testing a board nobody can type.
+object.
+
+Under the hood the ROM stores the typed code packed-BCD and seeds `prnd` from those two
+bytes (`seed_prnd_from_landscape_number $33ED`), so `landscape.seed_for` converts the
+typed digits by reading them as hex; `landscape.generate` is the only entry point that
+takes that PRNG value, and nothing above it should.
 
 ## Usage
 

@@ -166,7 +166,7 @@ def _sweeps(st):
     return primary, los.landable_views(st, st.player)
 
 
-@pytest.mark.parametrize("ls,stack", [(0, False), (66, False), (0, True), (66, True)])
+@pytest.mark.parametrize("ls,stack", [(0, False), (42, False), (0, True), (42, True)])
 def test_view_for_matches_whole_board_sweeps(new_game, ls, stack):
     """``AStarPlayer._view_for`` is bit-identical on EVERY tile to the composition it answers
     with targeted cones: the $F5-plane sweep's entry for the tile, else the full-band sweep's.

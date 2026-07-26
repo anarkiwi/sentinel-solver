@@ -13,7 +13,7 @@ def test_new_builds_a_board():
 
 
 def test_landscape_0_is_fixed():
-    g = Game.new(0)
+    g = Game.typed(0)
     assert g.player_xy() == (8, 17)
 
 
