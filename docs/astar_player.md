@@ -7,12 +7,12 @@ executes it. Shares `BasePlayer` (`sentinel/playerbase.py`) with the
 keystrokes under either player.
 
 ```bash
-python -m sentinel.astar_player 66              # offline: internal seed 66 == typed 0042
-python -m driver.play_player 42 --player astar  # live in VICE (digits parsed as hex)
+python -m sentinel.astar_player 42              # offline: landscape 42
+python -m driver.play_player 42 --player astar  # live in VICE, the same board
 ```
 
-Which boards win, and measured cost accuracy: [plan_fidelity.md](plan_fidelity.md) (which
-also covers why typed `0042` is internal 66 and `Game.new(42)` is a different board).
+Both take the landscape number a player types; nothing here is named any other way.
+Which boards win, and measured cost accuracy: [plan_fidelity.md](plan_fidelity.md).
 
 ## What the search plans over
 
@@ -37,8 +37,13 @@ PRNG-driven hyperspace/meanie landings are never read.
   no-op), so there is nothing to buy by cutting it short.
 - `audit_pred` (off) records each step's predicted body window: it costs a `_player_window`
   per charged step, i.e. per speculative branch, and only `driver/plan_audit.py` reads it.
-- Landable tile sets, stance view dicts and below-eye band marches are memoized per
-  (terrain map, observer) signature; the band march otherwise dominates search cost.
+- Landable tile sets are memoized per (terrain map, observer) signature and come from
+  `landtable.landable_set` ([landtable.md](landtable.md)). `_view_for` answers both halves of
+  its lookup — the $F5 plane and the below-eye pitch band — with a targeted heading cone,
+  narrowed by the same landability filter and memoized per (signature, tile), each
+  bit-identical to its lattice's full sweep.
+  A speculative sub-action makes a fresh signature that is asked about one tile, so a
+  whole-board sweep at that stance never amortises; one is read only if already memoized.
 
 ## Candidate generators (`_expand`)
 
@@ -82,7 +87,7 @@ expensive, so one constant is simultaneously too strict and too lax.
   on its *current* tile for the whole build, so its `_player_window()` would have to
   cover `total`. This is the half the destination gate cannot see, and it is the check
   that refuses ls335's fatal `(8,21)` hop — 1294 f against a 120 f body window. Enforcing
-  it is measured **unaffordable**: on ls42/internal 66 hops cost 891–1572 f from body
+  it is measured **unaffordable**: on ls42 hops cost 891–1572 f from body
   windows of 120–892 f, so the search falls to 6 expansions and no plan on a board it
   otherwise wins — the same collapse enforcing it live produced
   ([plan_fidelity.md](plan_fidelity.md)). Exposure onset is not death: a drain costs
@@ -160,7 +165,7 @@ verdict cannot recur a third time without the world advancing or the step firing
 `sentinel/tests/test_astar_player.py` pins: charge == executor `_step_aim_frames +
 _settle`, advancing the enemies by it; 0-aim transfer only on a committed bearing;
 below-eye builds charged at the real pitched view; transfer settle from the post-transfer
-eye; no audited body left in a live cone; wins on landscape 0 and internal 66; a stalled
+eye; no audited body left in a live cone; wins on landscapes 0 and 42; a stalled
 pursuit still returns its climb; `_margin` rejects a step inside the cost interval and
 widens as `sqrt(depth+1)`; `_restale` and `_react` never concede a hyperspace early.
 

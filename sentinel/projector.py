@@ -8,7 +8,17 @@ a horizontal angle (screen x) and vertical angle (screen y). Trig cores reused f
 import collections
 import os
 
+import numpy as np
+
 from sentinel import relative, terrain, memmap as mm
+
+try:
+    from sentinel import projector_jit
+
+    _HAVE_JIT = True
+except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
+    projector_jit = None
+    _HAVE_JIT = False
 
 # initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).
 BUF_WINDOW = {0: (0x14, 0x8A), 1: (0x14, 0x8A), 2: (0x08, 0x84)}
@@ -267,7 +277,7 @@ def _scan_visible(state, setup):
     return exam[0], rows, cache
 
 
-def _occlusion_visible(state, observer=None):
+def _occlusion_visible_py(state, observer=None):
     """Byte-exact port of populate_tile_visibility_bit_table ($245B): the raytraced
     ``$3E80``/``$24DA`` bitmap $2845 consults at $2911-$2919. ``visible[ty][tx]`` is
     True iff tile (tx,ty) is unoccluded; object tiles ($28F0) bypass it (terrain-only gate).
@@ -362,6 +372,25 @@ def _occlusion_visible(state, observer=None):
     return vis
 
 
+def _occlusion_tables(state, observer):
+    """One $245B raytrace as both shapes: (list-of-lists of bool, uint8[32,32])."""
+    if not _HAVE_JIT:
+        ref = _occlusion_visible_py(state, observer)
+        return ref, np.array(ref, dtype=np.uint8)
+    arr = projector_jit.occlusion_table(
+        np.frombuffer(state.mem, dtype=np.uint8), observer
+    )
+    return [[bool(v) for v in row] for row in arr], arr
+
+
+def _occlusion_visible(state, observer=None):
+    """:func:`_occlusion_visible_py` via the numba twin (:mod:`sentinel.projector_jit`)
+    when numba is present; the two are element-for-element identical
+    (``tests/test_projector_jit.py``).  Returns a list-of-lists of bools either way."""
+    obs = state.player if observer is None else observer
+    return _occlusion_tables(state, obs)[0]
+
+
 # Every byte plot_world reads: tiles_table ($0400) + the object flags/v_angle ($0100) and x/z/y/h_angle/z_frac/type ($0900) arrays -- 1536 bytes, ~1us to digest.
 _SCENE_SPANS = ((0x0400, 0x0800), (0x0100, 0x0180), (0x0900, 0x0A80))
 _CACHE_MAX = int(os.environ.get("RENDER_CACHE_MAX", "20000"))
@@ -387,26 +416,24 @@ def memo(cache, key, cap, make):
     return hit
 
 
-def occlusion_visible(state, observer=None):
-    """:func:`_occlusion_visible` memoized on (scene, observer): the $245B table is
+def _occlusion_memo(state, obs):
+    """:func:`_occlusion_tables` memoized on (scene, observer): the $245B table is
     view-independent, so one raytrace serves every bearing at an observer."""
-    obs = state.player if observer is None else observer
     return memo(
         _OCCLUSION_CACHE,
         (scene_key(state), obs, state.obj_x[obs], state.obj_y[obs]),
         _CACHE_MAX,
-        lambda: _occlusion_visible(state, obs),
+        lambda: _occlusion_tables(state, obs),
     )
 
 
-def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
-    """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
-    $2845 examination count under ``mode``'s $2993 buffer window. Non-object tiles the
-    occlusion table hides are examined but dropped; each kept tile carries its H and W.
-    """
-    if observer is None:
-        observer = state.player
-    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode)
+def occlusion_visible(state, observer=None):
+    """The memoized $245B table as a list-of-lists of bools."""
+    return _occlusion_memo(state, state.player if observer is None else observer)[0]
+
+
+def _project_scene_py(state, setup, observer):
+    """The pure-Python tile-selection body of :func:`project_scene`."""
     n_examine, rows, cache = _scan_visible(state, setup)
     visible = occlusion_visible(state, observer)
 
@@ -456,6 +483,61 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
                 }
             )
     return tiles, n_examine
+
+
+def _project_scene_jit(state, setup, observer):
+    """:func:`_project_scene_py` via :func:`sentinel.projector_jit.project_scene`; the
+    env-tunable geometry constants are passed in so they stay monkeypatchable."""
+    su = np.zeros(projector_jit.S_N, dtype=np.int64)
+    su[projector_jit.S_QUAD] = setup["quadrant"]
+    su[projector_jit.S_C3] = setup["c3"]
+    su[projector_jit.S_C1D] = setup["c1d"]
+    su[projector_jit.S_REF_LO] = setup["ref_lo"]
+    su[projector_jit.S_REF_HI] = setup["ref_hi"]
+    su[projector_jit.S_VANGLE] = setup["v_angle"]
+    su[projector_jit.S_OBS_ZH] = state.obj_z_height[observer]
+    su[projector_jit.S_OBS_ZF] = state.obj_z_frac[observer]
+    su[projector_jit.S_LEFT] = setup["buf_left"]
+    su[projector_jit.S_RIGHT] = setup["buf_right"]
+    out, spans, n, n_examine = projector_jit.project_scene(
+        np.frombuffer(state.mem, dtype=np.uint8),
+        su,
+        _occlusion_memo(state, observer)[1],
+        _ROW_HINT,
+        _SCREEN_H,
+        _W_SCALE,
+    )
+    # .tolist() once: the columns come back as Python ints/floats, as the reference has;
+    # the width clamp stays here, applied by the same expression the reference uses.
+    return [
+        {
+            "col": r[0],
+            "row": r[1],
+            "tile": (r[2], r[3]),
+            "sx_lo": r[4],
+            "sx_hi": r[5],
+            "sy_lo": r[6],
+            "sy_hi": r[7],
+            "tile_byte": r[8],
+            "onscreen": r[9],
+            "h": r[10],
+            "w": max(min(span, _W_SCREEN), 0),
+        }
+        for r, span in zip(out[:n].tolist(), spans[:n].tolist())
+    ], int(n_examine)
+
+
+def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
+    """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
+    $2845 examination count under ``mode``'s $2993 buffer window. Non-object tiles the
+    occlusion table hides are examined but dropped; each kept tile carries its H and W.
+    """
+    if observer is None:
+        observer = state.player
+    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode)
+    if _HAVE_JIT:
+        return _project_scene_jit(state, setup, observer)
+    return _project_scene_py(state, setup, observer)
 
 
 FRAME_CYCLES = 19656.0  # PAL frame

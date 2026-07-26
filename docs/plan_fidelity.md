@@ -3,7 +3,7 @@
 State: **the clocks are exact and the A\* player wins landscapes 0, 42 and 110 — 42 and
 110 live on the real game**, verified by `$0CDE` bit 6:
 
-| typed | enemies | offline | live |
+| landscape | enemies | offline | live |
 |---|---|---|---|
 | 0 | 1 | 23 actions / 6240 f / E6 | — |
 | 42 | 2 | 35 / 9810 / E6 | **36 actions** |
@@ -27,33 +27,24 @@ early enough to miss the better plan.
 
 ## READ FIRST: a landscape number is what you TYPE
 
-**Use the typed number. Never pass a raw seed around.** `Game.typed(n)` and
-`landscape.seed_for(n)` do the conversion; `Game.new`/`landscape.generate` take the raw
-seed and exist only for the layer that must.
+**A landscape has one name: the number a player keys in.** Every CLI here takes that
+number, and `Game.typed(n)` is the only constructor the model, the planner and the tests
+should use. `landscape.generate` takes the ROM's `prnd` value and is the one layer that
+must; `landscape.seed_for` is the conversion between the two.
 
-The ROM stores the typed code packed-BCD and seeds the PRNG from those bytes, so the seed
-is the digits read as **hex**: typing `0042` seeds **0x42 = 66**, typing `0335` seeds
-**0x335 = 821**. Every board therefore has two names, and mixing them silently selects a
-different landscape — it has cost real debugging time twice.
+| landscape | `Game.typed(n)` — the board |
+|---|---|
+| `42` | player (13,29), 2 enemies, 16 objects |
+| `335` | player (11,17), **7 enemies** (Sentinel h12 + 6 sentries) |
 
-| you type | `Game.typed(n)` — the board you get | `Game.new(n)` — raw seed, a DIFFERENT board |
-|---|---|---|
-| `42` | seed 66 — player (13,29), 2 enemies, 16 objects | seed 42 — player (14,27), 17 objects, zero slot overlap |
-| `335` | seed 821 — player (11,17), **7 enemies** (Sentinel h12 + 6 sentries) | seed 335 — another board again |
-
-`ls42.json` records `entered_code 42, landscape 66` and `ls335.json` records
-`entered_code 335, landscape 821`; `Game.typed(42)`/`Game.typed(335)` reproduce their
-first frames object for object. Older docs described ls335 as seed `$35` = 53 (4 enemies)
-— that is a board nobody can type.
-
-`Game.new(66)` matches the human ls42 fixture exactly (16/16 objects, same slots) and the
-live replay agrees, but `test_astar_player._LANDSCAPE = 42` builds internal 42. Sim tests
-and the live driver therefore do **not** always exercise the same board; any sim-vs-live
-comparison keyed on the typed digits is void unless it converts them as hex first.
+`Game.typed(42)`/`Game.typed(335)` reproduce the `ls42.json`/`ls335.json` human-win
+fixtures object for object, matching the live replay. Older docs described ls335 as a
+4-enemy board — that was a `prnd` value mistaken for a landscape number, and the mixup
+cost real debugging time more than once.
 
 ## Clocks: exact
 
-Frame-locked against the running game from a byte-identical seed
+Frame-locked against the running game from a byte-identical start image
 (`python -m driver.instrument 42`): **no divergence within 1200 frames** — every enemy
 facing, rotation/update/draining cooldown and the Bresenham clock. Gated by
 `driver/test_enemy_sim_divergence.py` (600 frames, strict). Mechanisms:
@@ -78,7 +69,7 @@ Live ls42 whole-step charged-vs-measured: **rms 24.1 f, mean −12.0, max |e| 46
 redraw is derived (`sentinel/pancost.py`, [render_cost.md](render_cost.md)): tile
 selection byte-exact on all 288 golden notches, rms 18.3 → 6.4 f.
 
-A cold ls66 search runs ~32 s, a warm one ~2.5 s. Think time is free live
+A cold ls42 search runs ~32 s, a warm one ~2.5 s. Think time is free live
 (`bm.auto_resume = False`: the world runs only in deliberate run windows), which is why
 bounding it by wall clock buys nothing and costs reproducibility.
 
@@ -115,13 +106,12 @@ bounding it by wall clock buys nothing and costs reproducibility.
    `corr(aim, manhattan)` is **−0.54** against +0.60 for pitch notches; the rank key sees
    none of it. Two cheap experiments: rank by minimum sufficient rise rather than maximum,
    and widen `_TOP_HOPS`.
-4. **Point the sim tests at internal 66** so they are a valid control at all.
-5. **Terrain fill cost** — the residual under the pan model, systematic in scene
+4. **Terrain fill cost** — the residual under the pan model, systematic in scene
    busy-ness: mean error +1.8, −1.4, −4.5, −9.0 f across measured-cost quartiles. Lever:
    `projector.PER_SCANLINE`/`PER_PIXEL` and the cross-polygon span coupling.
-6. **py65 exact backend skips transfer settles** — `_exact_render_cost` returns `None` for
+5. **py65 exact backend skips transfer settles** — `_exact_render_cost` returns `None` for
    any non-player observer, and a transfer settle is always priced from one.
-7. **The DRIVER's wall-clock timeouts are the residual load sensitivity** — `_RU_PAN`
+6. **The DRIVER's wall-clock timeouts are the residual load sensitivity** — `_RU_PAN`
    (20 s), `_RU_STA` (8 s), `_RU_COMMIT` (4 s) in `kbd_aim`. The planner is now
    reproducible, so these are what is left: on an idle host
    `driver/test_live_determinism.py` passes (2/2 serial, and two full ls42 runs are

@@ -14,8 +14,8 @@ from sentinel.game import Game
 from sentinel.astar_player import AStarPlayer, GATE_BODY, GATE_TILE, PlanStep, _Node
 from sentinel.playerbase import SIGHTS_CENTRE
 
-_LANDSCAPE = 42  # player starts at (14,27), a down-look hollow adjacent to (13,27)
-_LS42 = 66  # what typing "0042" seeds: landscape_from_digits reads the code as HEX
+_LS42 = 42  # landscape 42: the board the live driver plays when "0042" is keyed
+_COST_BOARD = 42  # cost-parity fixture only, no landscape behind it: player (14,27)
 
 
 def _reset_stance(player, st):
@@ -42,7 +42,7 @@ def test_charge_matches_executor_cost_and_advances_enemies():
     """Each search charge == executor ``_step_aim_frames + _settle`` over the same
     view, advances enemies by ``int(cost)`` split at the u-turn unfreeze, and mirrors
     the post-aim stance."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game)
     st = game.state
     tiles = _feasible_tiles(player, st)
@@ -83,7 +83,7 @@ def test_transfer_charges_zero_aim_only_on_a_reused_bearing():
     the object under the parked cursor (no aim keys), so its charge is 0; on a STALE
     bearing ``live_player._drive_transfer_aim`` drives the full view, which must cost the
     same as any other verb's aim -- charging 0 there is a silent free pan."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game)
     st = game.state
     tiles = _feasible_tiles(player, st)
@@ -99,7 +99,7 @@ def test_transfer_charges_zero_aim_only_on_a_reused_bearing():
 def test_downlook_charge_is_faithful_not_flat():
     """A below-eye build charges the real pitched view, far above the level floor --
     the under-charge that killed (13,27)."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game)
     st = game.state
     tile = (13, 27)
@@ -117,7 +117,7 @@ def test_transfer_settle_is_priced_from_the_post_transfer_eye():
     the settle is the NEW body's scene at its OWN bearing (creator ^ $80, $1BE0) --
     not the aim view, which belongs to the abandoned eye and prices a different scene.
     """
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game)
     st = game.state
     differed = 0
@@ -144,7 +144,7 @@ def test_transfer_settle_is_priced_from_the_post_transfer_eye():
 
 def test_bounded_run_leaves_no_body_in_a_live_cone():
     """The audited executor never leaves a create/transfer in a live enemy cone."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game, audit=True, time_budget=1.0, node_budget=400)
     player.run(max_actions=6)
     assert not player.breaches, f"body left in a live cone: {player.breaches}"
@@ -156,7 +156,7 @@ def test_macro_search_wins_landscape0_without_breaches():
     win: every enemy absorbed, hyperspaced off the platform, no body ever left
     in a live cone.  Guards the depth collapse -- primitive-hop search never got
     here in budget."""
-    game = Game.new(0)
+    game = Game.typed(0)
     player = AStarPlayer(game, audit=True, time_budget=90.0)
     won = player.run(max_actions=80)
     assert won, "macro search failed to win landscape 0"
@@ -167,10 +167,10 @@ def test_macro_search_wins_landscape0_without_breaches():
 
 def test_pursuit_yields_partial_progress():
     """A pursuit that cannot reach its enemy returns the climb it DID make.  Returning
-    ``None`` there discards every step before the first unsurvivable one; on ls42
-    (internal 66) it left the root with no child that raises the eye at all --
+    ``None`` there discards every step before the first unsurvivable one; on ls42 it
+    left the root with no child that raises the eye at all --
     `plan (2 nodes): None`, 0 actions."""
-    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    player = AStarPlayer(Game.typed(_LS42), time_budget=30.0)
     root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
     root.key = player._key(root.state)
     player._deadline = math.inf
@@ -188,7 +188,7 @@ def test_pursuit_branches_its_first_hop():
     """``skip`` picks the first hop among ``_pick_hop``'s ranked candidates, so one
     pursuit target yields several children (the alternatives the greedy chain used to
     discard), and ``skip=0`` is still the greedy pick."""
-    player = AStarPlayer(Game.new(_LS42), time_budget=30.0)
+    player = AStarPlayer(Game.typed(_LS42), time_budget=30.0)
     root = _Node(player.st.clone(), 0.0, (), None, player.last_bearing, player.cursor)
     root.key = player._key(root.state)
     player._deadline = math.inf
@@ -208,15 +208,14 @@ def test_pursuit_branches_its_first_hop():
     assert player._c_pursue(root, e).path == kids[0].path  # default == greedy
 
 
-def test_macro_search_wins_ls42_internal_66():
-    """The board the live driver plays when `0042` is typed (hex -> internal 66).  It is
-    NOT ``_LANDSCAPE`` (42), which is a different board with no slot overlap.
+def test_macro_search_wins_ls42():
+    """Landscape 42 -- the board the live driver plays when `0042` is keyed.
 
     One transfer lands in a live FULL cone and survives: $1825 only ARMS the $0C20
     countdown, so the body has DRAIN_DELAY of grace (the human ls335 win does this 17
     times -- test_human_audit's account_breach pin).  The count is pinned so a line
     that starts LIVING in cones still trips."""
-    game = Game.new(_LS42)
+    game = Game.typed(_LS42)
     # generous budget on purpose: the search's ONLY nondeterminism is its wall-clock
     # deadline, and this is a "does the planner find the line" assertion, not a
     # "in N seconds" one -- it wins in ~25 s idle, several times that under -n auto.
@@ -231,7 +230,7 @@ def test_margin_rejects_a_step_inside_the_cost_interval():
     """A step whose predicted window clears the raw budget but not the step-cost
     interval's pessimistic end is rejected; the margin widens with plan depth
     (random walk over the measured zero-mean per-step frame error)."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game)
     budget = 100.0
     player._margin_k = 1.0
@@ -251,7 +250,7 @@ def test_margin_rejects_a_step_inside_the_cost_interval():
 def test_stale_step_prefers_a_survivable_replan_over_escape_hyperspace():
     """When the next step's premise is stale, ``_restale`` re-plans, then defends,
     and never concedes an escape hyperspace itself."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.new(_COST_BOARD)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
     calls = []
     player._hyperspace = lambda: calls.append("hyperspace")
@@ -282,7 +281,7 @@ def test_react_takes_the_plans_own_transfer_before_conceding_a_hyperspace():
     escapes by window alone rejects it (the pedestal's window is no wider than here) and
     the ladder falls through to a hyperspace -- one keystroke short of the climb, the
     ls42 live loss."""
-    player = AStarPlayer(Game.new(_LS42), time_budget=0.01, node_budget=1)
+    player = AStarPlayer(Game.typed(_LS42), time_budget=0.01, node_budget=1)
     player.plan = [
         PlanStep("transfer", (9, 26), 300.0, GATE_TILE, math.inf, math.inf),
         PlanStep("absorb", (13, 29), 300.0, GATE_BODY, math.inf, math.inf),

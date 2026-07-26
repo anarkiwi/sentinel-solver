@@ -6,9 +6,9 @@ from sentinel import memmap as mm, threat
 from sentinel.game import Game
 
 
-@pytest.fixture(params=[0, 42])
+@pytest.fixture(params=[0, 42])  # landscape numbers
 def game(request):
-    return Game.new(request.param)
+    return Game.typed(request.param)
 
 
 def test_player_sees_tile_returns_bool_and_does_not_mutate(game):

@@ -18,7 +18,7 @@ from sentinel.astar_player import (  # noqa: E402
 from sentinel.game import Game  # noqa: E402
 from sentinel.playerbase import TAP_FRAMES  # noqa: E402
 
-_LANDSCAPE = 42
+_LS42 = 42  # landscape 42, a substrate board for these aim/exec unit tests
 _VIEW = {"h_angle": 0x60, "v_angle": 0x35, "cursor": [80, 95]}
 
 
@@ -43,7 +43,7 @@ class _FakeKbd:
 
 
 def _aim_player(bearing, sights_on=True, cursor=(80, 95)):
-    game = Game.new(_LANDSCAPE)
+    game = Game.typed(_LS42)
     player = AStarPlayer(game)
     player.kbd = _FakeKbd(bearing)
     st = player.st
@@ -78,7 +78,7 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
     """A step blocked ONLY by the margin re-gates identically forever if the stale
     path just re-plans (the search is a fixpoint on an unchanged board).  The repeat
     must wait -- advancing the world -- and the step then proceeds on the raw budget."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.typed(_LS42)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
     step = _step("boulder", (9, 8), GATE_TILE)
     player.plan = [step]
@@ -109,7 +109,7 @@ def test_repeated_stale_verdict_terminates_instead_of_livelocking():
 def test_stale_step_still_blocked_on_the_raw_budget_keeps_waiting():
     """The release is margin-only: a step the raw budget does not cover stays stale
     however often it repeats, and each repeat advances the world."""
-    game = Game.new(_LANDSCAPE)
+    game = Game.typed(_LS42)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
     step = _step("boulder", (9, 8), GATE_TILE)
     player.plan = [step]
@@ -138,7 +138,7 @@ def test_stale_gate_uses_the_window_the_plan_gated_the_step_with():
     verb refuses steps the plan never promised, and ``_search`` re-derives the same head,
     so the refusal repeats until the ladder concedes a hyperspace -- the ls42 live loss.
     """
-    game = Game.new(_LANDSCAPE)
+    game = Game.typed(_LS42)
     player = AStarPlayer(game, time_budget=0.01, node_budget=1)
     player._view_for = lambda tile: _VIEW
     player._step_aim_frames = lambda verb, view: 100.0

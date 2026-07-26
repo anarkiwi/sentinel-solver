@@ -437,7 +437,13 @@ class Player(BasePlayer):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("landscape", nargs="?", type=int, default=0)
+    parser.add_argument(
+        "landscape",
+        nargs="?",
+        type=int,
+        default=0,
+        help="the landscape number you TYPE",
+    )
     parser.add_argument("--max-actions", type=int, default=300)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument(
@@ -447,7 +453,7 @@ def main():
         "that ended in a live enemy cone",
     )
     args = parser.parse_args()
-    game = Game.new(args.landscape)
+    game = Game.typed(args.landscape)
     player = Player(game, verbose=not args.quiet, audit=args.audit)
     won = player.run(max_actions=args.max_actions)
     print(

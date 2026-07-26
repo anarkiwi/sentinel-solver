@@ -3,9 +3,9 @@ player actions and advance the enemies -- all on one bit-exact state, with no
 emulator.  Line-of-sight questions go to :mod:`sentinel.threat`/:mod:`sentinel.los`.
 
     >>> from sentinel.game import Game
-    >>> g = Game.new(42)
+    >>> g = Game.typed(42)        # the landscape number a player keys in
     >>> g.player_xy(), g.energy
-    ((14, 27), 10)
+    ((13, 29), 10)
     >>> g.step_enemies()          # advance the world one round
     >>> won = g.won()
 
@@ -28,19 +28,18 @@ class Game:
     # -- construction --------------------------------------------------------
     @classmethod
     def typed(cls, landscape_number):
-        """The board a player gets by TYPING ``landscape_number`` -- the canonical id.
-
-        ``Game.typed(335)`` is the ls335 everyone means; ``Game.new(335)`` is the raw
-        seed 335, a different board (:func:`sentinel.landscape.seed_for`).
+        """Landscape ``landscape_number`` -- the number a player KEYS IN, the only id
+        a landscape has.  Every tool and test names a board this way.
         """
         return cls.new(landscape.seed_for(landscape_number))
 
     @classmethod
-    def new(cls, landscape_number):
-        """Generate the board for ``landscape_number`` from scratch, in the ROM's
-        at-entry state: enemies frozen until the player's first action ($0CE5
-        bit7, skipped at $3682; cleared by the action dispatch $12E1)."""
-        game = cls(landscape.generate(landscape_number))
+    def new(cls, prnd_seed):
+        """Generate a board from the ROM's raw PRNG seed value (see
+        :func:`sentinel.landscape.seed_for`) in the at-entry state: enemies frozen
+        until the player's first action ($0CE5 bit7, skipped at $3682; cleared by the
+        action dispatch $12E1).  Callers naming a landscape want :meth:`typed`."""
+        game = cls(landscape.generate(prnd_seed))
         game.state.mem[mm.CURSOR] = 7
         game.state.mem[mm.COOLDOWN_GATE] = 0
         game.state.mem[mm.PLAYER_NOT_ACTED] = 0x80
