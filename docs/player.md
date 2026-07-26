@@ -68,8 +68,12 @@ bearing and `$18B8` cone gate.
 settle, via `relative.can_see_object`: only a robot body left in a live full-sight cone is
 recorded as a breach.
 
-Creates also respect `_reserve`: while any enemy or meanie lives, energy must never drop
-below the 3 a forced hyperspace costs (`$215F` kills below it).
+Creates are gated by `_affords`, which prices exposure as the RATE it is: an action may
+spend down to 0 (`$1BBF`; `$1A00` kills only on a drain arriving at an already-empty
+meter), so the test is `energy - cost - drains_over_this_span >= _reserve`. `_reserve`
+itself is 0 unless a meanie is ALIVE, when it holds the 3 a forced hyperspace costs
+(`$215F` kills below it). A flat floor for merely being SEEN refused 6 of the 35 creates
+in the recorded ls335 human win — see [human_regress.md](human_regress.md).
 
 ## Enemy model (deterministic only)
 
