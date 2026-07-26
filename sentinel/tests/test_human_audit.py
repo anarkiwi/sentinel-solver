@@ -7,9 +7,14 @@ import pytest
 from sentinel.tests import human_audit
 
 # Pinned CURRENT ls335 disagreements: recording play_20260725_105258, a live WIN whose enemy clock is recorded into the fixture, so the audit runs on TRUE facings (no live _truth.json). Regenerable via ``python -m sentinel.tests.human_audit``; a model fix that clears any -> update here.
-_BREACH335 = [23, 24, 28, 44, 45, 52, 137]
+# 94 joined the breaches when the RATE reserve stopped refusing its create: a step
+# the floor never let happen cannot leave a body in a cone.  On a WIN every placement
+# survived, so a breach here is a model false positive, same as the rejects.
+_BREACH335 = [23, 24, 28, 44, 45, 52, 94, 137]
 _GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
-_FIRE335 = [30, 32, 34, 50, 51, 77, 84, 92, 94, 95]
+# was [30, 32, 34, 50, 51, 77, 84, 92, 94, 95] against the flat survival floor; pricing
+# exposure as the $0C20 RATE accepts seven of those human creates (docs/human_regress.md)
+_FIRE335 = [32, 34, 77]
 _DRAIN335 = [
     19,
     22,

@@ -41,7 +41,6 @@ MEANIE_ARM_FRAMES = (
     * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE
     * UNIT_FRAMES
 )  # $171B worst-case meanie rotate-to-face the player
-MEANIE_HORIZON = 3 * HOP_FRAMES  # forced-hyperspace lookahead the reserve floor covers
 
 
 def _signed(b):
@@ -416,7 +415,7 @@ class BasePlayer:
         never gated here."""
         if not n_drains:
             return True
-        return self.st.energy - cost - n_drains >= max(self._reserve(), 1)
+        return self.st.energy - cost - n_drains >= self._reserve()
 
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
         """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
@@ -443,48 +442,35 @@ class BasePlayer:
         accumulated per-step error at plan depth (`astar_player._margin`)."""
         return 0.0
 
-    def _stall_drains(self):
-        """Energy an UNFORESEEN stall hands the enemies while the body stands
-        exposed: `_margin()` frames of accumulated phase error at the ROM's own
-        exchange rate of 1 energy per `DRAIN_DELAY` of continuous sight ($0C20)."""
-        return int(math.ceil(self._margin() / DRAIN_DELAY))
-
     def _reserve(self):
-        """Survival floor: the SUM of what the stance actually owes, not a constant.
+        """Energy the stance owes unconditionally -- 0 unless a meanie is ALIVE.
 
-        * A forced hyperspace spends the 3-energy robot cost and $215F kills below
-          it -- owed while a meanie is alive or armable against this body inside
-          `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles,
-          then `_meanie_window`'s drain + spawn + arm clock).
-        * An EXPOSED body owes its ESCAPE plus the drains a stall costs.  Sight is
-          not a passing weather front: $178C keeps a still-visible target held, and
-          that path returns before the `no_drain` rotate at $17F9, so a seeing enemy
-          STOPS rotating -- the cone does not sweep off, and $1A31 re-arms the
-          countdown after every drain, billing 1 energy per `DRAIN_DELAY` for as long
-          as the player cannot act.  The exit is an action, and the last-resort one is
-          the conceded hyperspace: it spends the 3-energy robot cost and $215F kills
-          below it, so `_react` concedes it only while E > 3.  A body that reaches 3
-          under a cone has NO exit left and is simply billed to death -- the ls110
-          live death, 26 waits at E=3.  `_stall_drains` adds the drains the plan's own
-          accumulated phase uncertainty can bill before the escape fires.
-
-        An UNEXPOSED stance (`_player_window` inf) owes neither term and may be spent
-        to the bone: that is where the human ls110 line runs to E=1 and refuels by
-        absorbing the pedestal behind it."""
+        Reaching 0 is not death ($1A08 debits; $1A00 kills only on a drain arriving at
+        0) and $1BBF lets a create spend to empty, so survival is
+        `energy - cost - drains >= reserve` -- `_affords`, exposure billed as the
+        $0C20 RATE it is.  A live meanie owes its forced hyperspace's robot cost
+        ($2156 spends 3, $2170 kills on underflow); an ARMABLE one owes nothing here,
+        `_gaze_window` already folds `_meanie_window` into every gate's window."""
         st = self.st
         floor = 0
-        armed = any(
+        if any(
             not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE
             for s in range(mm.NUM_SLOTS)
-        )
-        if not armed and not self._frozen() and enemies.enemy_slots(st):
-            exposed = self._exposures(st, st.player)
-            armed = self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON
-        if armed:
+        ):
             floor += mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        if self._player_window() != math.inf:
-            floor += 1 + self._stall_drains()
         return floor
+
+    def _affords(self, cost, budget, window=None):
+        """Whether spending `cost` energy survives the drains `budget` frames of
+        exposure bill at the $0C20/$1A31 rate, over `_reserve`.
+
+        `budget` is the span the body stands exposed for -- a create's settle, a hop's
+        whole build.  Executor and search both gate on this, at the same instant, so a
+        plan cannot carry a step the executor then refuses."""
+        if window is None:
+            window = self._player_window()
+        drains = self._drains_in(window, budget + self._margin())
+        return self.st.energy - cost - drains >= self._reserve()
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no
@@ -584,8 +570,8 @@ class BasePlayer:
             cost = mm.ENERGY_IN_OBJECTS[
                 mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
             ]
-            if st.energy - cost < self._reserve():
-                return False  # drained during the aim: creating now breaches the floor
+            if not self._affords(cost, self._settle(verb, view)):
+                return False  # the drains this create's own settle bills take the body
         ok = False
         if verb == "boulder":
             ok = actions.create(st, mm.T_BOULDER, tile) is not None
