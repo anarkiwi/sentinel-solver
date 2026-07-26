@@ -22,6 +22,7 @@ from sentinel import (
     terrain,
 )
 from sentinel.game import Game
+from sentinel.policy import POLICY
 from sentinel.playerbase import (
     BasePlayer,
     BOULDER_H,
@@ -30,6 +31,7 @@ from sentinel.playerbase import (
     FOV_HALF,
     FOV_MARGIN,
     HOP_COST,
+    HOP_FRAMES,
     ROBOT_EYE,
     SAFE_FRAMES,
     SIGHTS_CENTRE,
@@ -52,25 +54,28 @@ _ENDGAME_EST = (
     _OP_FLOOR["create"] + _OP_FLOOR["transfer"] + _HYPERSPACE_FLOOR
 )  # robot+xfer+hs
 _TAIL_FLOOR = _OP_FLOOR["create"] + _OP_FLOOR["transfer"]  # robot+xfer: drainable span
-_EYE_PER_HOP = 0.9
-_TARGET_EYE = 9.0
+# every value below is POLICY (sentinel.policy), except _STEP_SIGMA, which is a
+# measurement.  K=1 pursue_branch re-converged and lost ls42 once the gates stopped
+# truncating chains; K=3 wins ls0/ls42/ls110 and K=2 does not.
+_EYE_PER_HOP = POLICY.eye_per_hop
+_TARGET_EYE = POLICY.target_eye
 _EYE_VALUE = _HOP_EST / _EYE_PER_HOP  # frames of climb one unit of eye saves (_h)
 _PEDESTAL_COST = _OP_FLOOR["create"] + _OP_FLOOR["absorb"]  # build + inchworm reclaim
-_TOP_TARGETS = 4  # enemies a node may branch a directed pursuit toward
-_TOP_HOPS = 8  # ranked pedestal candidates a pursuit tries per climb step
-_MAX_PURSUE = 40  # inner hop/reclaim steps one pursuit macro may chain
-_PURSUE_BRANCH = int(
-    os.environ.get("SENTINEL_PURSUE_BRANCH", "3")
-)  # first-hop alternatives per pursuit target. K=1 (one greedy rollout) re-converged and lost ls42 once the gates stopped truncating chains: with the ROM action gate, priced absorbs and the meanie-conditional floor, the rollouts stay distinct and K=3 wins ls0/ls42/ls110 (K=2 does not).
-_MAX_RECLAIM = 8  # reclaims one macro (or one strand probe) may chain
-_STRAND_PRUNE = int(
-    os.environ.get("SENTINEL_STRAND_PRUNE", "0")
-)  # discard landings _climb_continues calls stranded; measured a no-op, see _advance_hop
-_TOP_CLEARS = 4  # tree-blocked pedestal sites a node may branch a clearing child on
+_TOP_TARGETS = POLICY.top_targets
+_TOP_HOPS = POLICY.top_hops
+_MAX_PURSUE = POLICY.max_pursue
+_PURSUE_BRANCH = POLICY.pursue_branch
+_MAX_RECLAIM = POLICY.max_reclaim
+_STRAND_PRUNE = POLICY.strand_prune
+_TOP_CLEARS = POLICY.top_clears
+_TOP_RELOCS = POLICY.top_relocs
 _STEP_SIGMA = float(
     os.environ.get("SENTINEL_STEP_SIGMA", "24.1")
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
-_MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
+_MARGIN_K = POLICY.margin_k
+_SOURCE_GATE = POLICY.source_gate
+_BUILD_TOLL = POLICY.build_toll
+_LIQUIDITY_GATE = POLICY.liquidity_gate
 _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
 _COARSE_CX = landtable.COARSE_CX  # landset sights-cursor grid: the 1px window 2:1
 _COARSE_CY = landtable.COARSE_CY  # subsampled; _landable queries the SAME lattice
@@ -125,12 +130,12 @@ class AStarPlayer(BasePlayer):
         audit=False,
         node_budget=200000,
         time_budget=None,  # wall-clock cut: OFF by default, see _search
-        weight=1.4,
+        weight=None,
     ):
         super().__init__(game, verbose=verbose, audit=audit)
         self.node_budget = node_budget
         self.time_budget = time_budget
-        self.weight = weight
+        self.weight = POLICY.weight if weight is None else weight
         self.plan = None
         self._pi = 0
         self.expansions = 0
@@ -172,6 +177,13 @@ class AStarPlayer(BasePlayer):
             window = self._player_window()
         return window < budget + self._margin()
 
+    def _can_hop(self, st):
+        """Whether the stance can fund the next hop: at the $0C20 RATE (the drains a
+        hop's span bills) or, under ``liquidity_gate=0``, on the bare energy floor."""
+        if _LIQUIDITY_GATE:
+            return self._affords(HOP_COST, HOP_FRAMES)
+        return st.energy >= HOP_COST + self._reserve()
+
     def _absorb_toll(self, budget, window=None, gain=0):
         """Frames of ``g`` an absorb costs for standing exposed ``budget`` frames, or
         ``None`` when the drains it owes would breach the survival floor.  ``gain`` is
@@ -188,6 +200,17 @@ class AStarPlayer(BasePlayer):
         if not self._affords_drains(drains, cost=-gain):
             return None
         return drains * DRAIN_DELAY
+
+    def _exposure_toll(self, budget, window=None):
+        """``_absorb_toll``'s price without its floor test: the ``g`` the drains
+        ``budget`` frames of exposure bill, at 1 energy per ``DRAIN_DELAY``.
+
+        A BUILD under a cone is the same trade as an absorb under one, and pricing
+        only the absorb made an exposed climb look as cheap as a hidden one -- so the
+        search took the exposed one and was billed to death on it."""
+        if window is None:
+            window = self._player_window()
+        return self._drains_in(window, budget + self._margin()) * DRAIN_DELAY
 
     # ---------------------------------------------------------------- execute
     def _tick(self):
@@ -534,7 +557,16 @@ class AStarPlayer(BasePlayer):
         st = node.state
         if st.is_empty(actions.SENTINEL_SLOT):
             child = self._c_endgame(node)
-            return [child] if child is not None else []
+            # a platform out of sight is reached by MOVING: into a body that sees it,
+            # or by climbing to one -- _c_endgame can only build on what it can see.
+            out = ([child] if child is not None else []) + self._c_relocate(node)
+            if not self._landable(st, st.platform_xy):
+                for skip in range(_PURSUE_BRANCH):
+                    reach = self._c_reach(node, st.platform_xy, skip=skip)
+                    if reach is None:
+                        break
+                    out.append(reach)
+            return out
         children = []
         for tile, e in self._absorb_enemy_targets(st):
             child = self._c_absorb(node, tile, e)
@@ -544,6 +576,7 @@ class AStarPlayer(BasePlayer):
         if child is not None:
             children.append(child)
         children.extend(self._c_clear(node))
+        children.extend(self._c_relocate(node))
         for e in self._pursue_targets(st):
             for skip in range(_PURSUE_BRANCH):
                 child = self._c_pursue(node, e, skip=skip)
@@ -603,16 +636,11 @@ class AStarPlayer(BasePlayer):
         stance the aim left.  Returns the frames spent, and stashes the PRE-step
         body window ``_plan_step`` records.
 
-        ``create_cost`` is the energy a CREATE spends, and applies the executor's
-        own survival floor (``_fire``: ``energy - cost < _reserve()``) at the frame
-        the executor applies it -- the END OF THE AIM, before the settle.  ``None``
-        then, and the caller must abandon the step.  The floor moves WITHIN a hop:
-        a cone rotating onto the player mid-build arms the meanie term ($19C3) and
-        lifts the reserve by the forced hyperspace's robot cost, so the pre-hop test
-        in ``_pick_hop`` is stale by one action and plans a create ``_fire`` refuses.
-        The refusal is not recoverable in flight -- the re-search from the refused
-        stance has the same raised floor and returns no plan -- so the gate has to be
-        the same test, at the same instant, on both sides."""
+        ``create_cost`` is the energy a CREATE spends: the executor's own ``_affords``
+        gate then runs where ``_fire`` runs it, at the END OF THE AIM, and ``None``
+        means the caller must abandon the step.  What a create affords moves within a
+        hop as the cones rotate, so ``_pick_hop``'s pre-hop test is stale by one
+        action, and a create the plan carries but ``_fire`` refuses is terminal."""
         self.st = st
         self._depth += 1
         if self.audit_pred:
@@ -632,8 +660,11 @@ class AStarPlayer(BasePlayer):
         if create_cost is not None:
             enemies.advance_frames(st, max(0, int(aim) - spent))
             spent = max(spent, int(aim))
-            if st.energy - create_cost < self._reserve():
+            self._commit_view(view, verb)  # _fire gates from the stance the aim left
+            if not self._affords(create_cost, self._settle(verb, view)):
                 return None
+            enemies.advance_frames(st, int(cost) - spent)
+            return cost
         enemies.advance_frames(st, int(cost) - spent)
         self._commit_view(view, verb)
         return cost
@@ -745,7 +776,7 @@ class AStarPlayer(BasePlayer):
                     return self._node(node, strike, g + cost, steps)
                 self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
                 break  # keep the climb; the strike itself is what failed
-            if st.energy < HOP_COST + self._reserve():
+            if not self._can_hop(st):  # refuel BEFORE the hop
                 got = self._reclaim_one(st)
                 if got is not None:
                     g += got[0]
@@ -825,7 +856,7 @@ class AStarPlayer(BasePlayer):
             return True
         if self._pick_hop(target):
             return True
-        if st.energy >= HOP_COST + self._reserve():
+        if self._can_hop(st):
             return False  # affordable already: no reclaim can add a hop
         landset = self._landset(st)
         bearing, cursor, depth = self.last_bearing, list(self.cursor), self._depth
@@ -838,8 +869,8 @@ class AStarPlayer(BasePlayer):
             if self._pick_hop(target, landset=landset):
                 ok = True
                 break
-            if probe.energy >= HOP_COST + self._reserve():
-                break  # energy is the only budget filter: more of it adds nothing
+            if self._can_hop(probe):
+                break  # affordable now: more energy adds no hop the gate refuses
         self.st = st
         self.last_bearing, self.cursor, self._depth = bearing, cursor, depth
         return ok
@@ -992,12 +1023,17 @@ class AStarPlayer(BasePlayer):
                 value = (robot_eye - my_eye) * _EYE_VALUE - k * _PEDESTAL_COST
                 cands.append(((sees, value, window), tile, k, window, exposed))
         cands.sort(key=lambda c: c[0], reverse=True)
+        body = self._player_window()  # the stance is fixed: price the source side once
         out = []
         for _, tile, k, window, exposed in cands:
             priced = self._hop_price(st, tile, k)
             tile_ok = priced is not None and window >= priced[1] + margin
             if self._hop_audit is not None:
                 self._record_hop_gate(tile, k, exposed, tile_ok, priced)
+            if tile_ok and _SOURCE_GATE:  # the body stands HERE for the whole build
+                tile_ok = self._affords(
+                    2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], priced[0], window=body
+                )
             if tile_ok:
                 out.append((tile, k, window))
                 if len(out) == _TOP_HOPS:
@@ -1015,26 +1051,29 @@ class AStarPlayer(BasePlayer):
         for _ in range(k):
             if not self._can_build(st, tile, mm.T_BOULDER):
                 return None
+            body = self._player_window()
             cost = self._charge(st, "boulder", tile, mm.ENERGY_IN_OBJECTS[mm.T_BOULDER])
             if cost is None:
-                return None  # the floor rose mid-hop: _fire would refuse this create
-            g += cost
+                return None  # _fire would refuse this create: the drains take the body
+            g += cost + (self._exposure_toll(cost, body) if _BUILD_TOLL else 0.0)
             actions.create(st, mm.T_BOULDER, tile)
             steps.append(self._plan_step("boulder", tile, cost, GATE_TILE, window))
         if not self._can_build(st, tile, mm.T_ROBOT):
             return None
+        body = self._player_window()
         cost = self._charge(st, "robot", tile, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT])
         if cost is None:
             return None
-        g += cost
+        g += cost + (self._exposure_toll(cost, body) if _BUILD_TOLL else 0.0)
         if actions.create(st, mm.T_ROBOT, tile) is None:
             return None
         steps.append(self._plan_step("robot", tile, cost, GATE_TILE, window))
         top = terrain.top_object(st, *tile)
         if self._view_for(tile) is None:
             return None  # $1B46: no keyboard aim reaches the tile to transfer into
+        body = self._player_window()
         cost = self._charge(st, "transfer", tile)
-        g += cost
+        g += cost + (self._exposure_toll(cost, body) if _BUILD_TOLL else 0.0)
         if not actions.transfer(st, top) or actions.player_dead(st):
             return None
         # a landing with no time before its first drain is a trap unless a seer is absorbable from here (_drain_gate("transfer", ...) inlined so the step records the window it gated on)
@@ -1204,6 +1243,73 @@ class AStarPlayer(BasePlayer):
             step = self._plan_step("absorb", tile, cost, GATE_BODY)
             children.append(self._node(node, st, node.g + cost + toll, [step]))
         return children
+
+    def _c_relocate(self, node):
+        """Transfer into an EXISTING remote robot: the body moves to what THAT body
+        can see.
+
+        Without it the search reaches only viewpoints it builds itself, so a board
+        whose winning move is "step into the robot you already left over there" has no
+        child at all -- ls335 handover 144, where the only two children both ABSORB
+        the robot the human transfers into."""
+        st0 = node.state
+        me = st0.player
+        cands = []
+        for slot in range(mm.NUM_SLOTS):
+            if st0.is_empty(slot) or slot == me or st0.obj_type[slot] != mm.T_ROBOT:
+                continue
+            tile = st0.tile_of(slot)
+            if terrain.top_object(st0, *tile) != slot:
+                continue
+            self.st = st0
+            view = self._view_for(tile)
+            if view is None:
+                continue  # $1B46: no keyboard aim reaches it
+            cands.append((self._aim_frames(view), tuple(tile), slot))
+        cands.sort()
+        children = []
+        for _aim, tile, slot in cands[:_TOP_RELOCS]:
+            st = self._begin(node)
+            window = self._player_window()
+            cost = self._charge(st, "transfer", tile)
+            toll = self._exposure_toll(cost, window) if _BUILD_TOLL else 0.0
+            if not actions.transfer(st, slot) or actions.player_dead(st):
+                continue
+            step = self._plan_step("transfer", tile, cost, GATE_TILE, window)
+            children.append(self._node(node, st, node.g + cost + toll, [step]))
+        return children
+
+    def _c_reach(self, node, target, skip=0):
+        """Climb toward ``target`` until it is LANDABLE: the pursuit's climb with no
+        strike on the end.
+
+        The endgame needs it.  Absorb the Sentinel from range and the platform can be
+        out of sight, and ``_c_endgame`` only knows how to build ON a platform it can
+        already see -- so the frontier empties one move from a win (ls335 handover
+        140, where the body sits at (4,18) and the platform is at (28,17))."""
+        st = self._begin(node)
+        g = node.g
+        steps = []
+        for _ in range(_MAX_PURSUE):
+            self.st = st
+            if self._landable(st, target):
+                break  # _c_endgame can finish from here
+            if not self._can_hop(st):
+                got = self._reclaim_one(st)
+                if got is not None:
+                    g += got[0]
+                    steps.append(got[1])
+                    continue
+            adv = self._advance_hop(st, target, -1, skip)
+            if adv is None:
+                if skip:
+                    return None  # this branch index does not exist
+                break
+            skip = 0
+            st, cost, hop_steps = adv
+            g += cost
+            steps.extend(hop_steps)
+        return self._node(node, st, g, steps) if steps else None
 
     def _c_endgame(self, node):
         """Sentinel gone (no enemy remains): robot on the platform, transfer,
