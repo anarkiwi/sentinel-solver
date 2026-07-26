@@ -598,10 +598,21 @@ class AStarPlayer(BasePlayer):
             None if verb == "transfer" else (view["h_angle"], view["v_angle"])
         )
 
-    def _charge(self, st, verb, tile):
+    def _charge(self, st, verb, tile, create_cost=None):
         """Advance the enemies by this action's REAL ``_price``, then commit the
         stance the aim left.  Returns the frames spent, and stashes the PRE-step
-        body window ``_plan_step`` records."""
+        body window ``_plan_step`` records.
+
+        ``create_cost`` is the energy a CREATE spends, and applies the executor's
+        own survival floor (``_fire``: ``energy - cost < _reserve()``) at the frame
+        the executor applies it -- the END OF THE AIM, before the settle.  ``None``
+        then, and the caller must abandon the step.  The floor moves WITHIN a hop:
+        a cone rotating onto the player mid-build arms the meanie term ($19C3) and
+        lifts the reserve by the forced hyperspace's robot cost, so the pre-hop test
+        in ``_pick_hop`` is stale by one action and plans a create ``_fire`` refuses.
+        The refusal is not recoverable in flight -- the re-search from the refused
+        stance has the same raised floor and returns no plan -- so the gate has to be
+        the same test, at the same instant, on both sides."""
         self.st = st
         self._depth += 1
         if self.audit_pred:
@@ -611,13 +622,19 @@ class AStarPlayer(BasePlayer):
             enemies.advance_frames(st, int(cost))
             return cost
         split = self._aim_unfreeze_split(view)
-        if split is None:
-            enemies.advance_frames(st, int(cost))
-        else:  # $12E1: keying the u-turn started the enemy clock mid-aim
-            pre = int(min(aim, split))
-            enemies.advance_frames(st, pre)
+        spent = 0
+        if (
+            split is not None
+        ):  # $12E1: keying the u-turn started the enemy clock mid-aim
+            spent = int(min(aim, split))
+            enemies.advance_frames(st, spent)
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00
-            enemies.advance_frames(st, int(cost) - pre)
+        if create_cost is not None:
+            enemies.advance_frames(st, max(0, int(aim) - spent))
+            spent = max(spent, int(aim))
+            if st.energy - create_cost < self._reserve():
+                return None
+        enemies.advance_frames(st, int(cost) - spent)
         self._commit_view(view, verb)
         return cost
 
@@ -998,13 +1015,17 @@ class AStarPlayer(BasePlayer):
         for _ in range(k):
             if not self._can_build(st, tile, mm.T_BOULDER):
                 return None
-            cost = self._charge(st, "boulder", tile)
+            cost = self._charge(st, "boulder", tile, mm.ENERGY_IN_OBJECTS[mm.T_BOULDER])
+            if cost is None:
+                return None  # the floor rose mid-hop: _fire would refuse this create
             g += cost
             actions.create(st, mm.T_BOULDER, tile)
             steps.append(self._plan_step("boulder", tile, cost, GATE_TILE, window))
         if not self._can_build(st, tile, mm.T_ROBOT):
             return None
-        cost = self._charge(st, "robot", tile)
+        cost = self._charge(st, "robot", tile, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT])
+        if cost is None:
+            return None
         g += cost
         if actions.create(st, mm.T_ROBOT, tile) is None:
             return None
@@ -1202,7 +1223,11 @@ class AStarPlayer(BasePlayer):
                 return None
             slot = terrain.top_object(st, *ptile)
             if slot is None or st.obj_type[slot] != mm.T_ROBOT:
-                cost = self._charge(st, "robot", ptile)
+                cost = self._charge(
+                    st, "robot", ptile, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+                )
+                if cost is None:
+                    return None
                 g += cost
                 slot = actions.create(st, mm.T_ROBOT, ptile)
                 if slot is None:
