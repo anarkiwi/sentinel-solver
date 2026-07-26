@@ -1,5 +1,9 @@
-"""A self-contained py65 harness that runs the real 6502 game code as a parity
+"""A self-contained jennings harness that runs the real 6502 game code as a parity
 oracle for the simulator's tests.
+
+jennings executes the NMOS 6510 illegal opcodes, so every entry point must be a real
+instruction boundary: py65 skipped 2 bytes on an unimplemented opcode and masked a
+misaligned one.
 
 It needs the game memory image at ``out/sentinel_stage2.bin`` (copyrighted, not
 distributed, gitignored); oracle-marked tests auto-skip when it is absent
@@ -9,14 +13,14 @@ used to generate the golden fixtures.
 
 import os
 
-from py65.devices.mpu6502 import MPU
-from py65.memory import ObservableMemory
+from jennings.devices.mpu6502 import MPU
+from jennings.memory import ObservableMemory
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 IMG = os.path.join(_ROOT, "out", "sentinel_stage2.bin")
 
 SEED = 0x33ED  # seed_prnd_from_landscape_number (X=lo, Y=hi)
-RESET = 0x1149  # reset_game_state
+RESET = 0x114D  # reset_game_state (the JSR target at $101F/$1034/$1074/$35F4)
 GENERATE = 0x2ACC  # generate_landscape (terrain + provisional objects)
 GENERATE_END = 0x2B21  # terrain-build end, before the preview render tail
 INIT_ENEMIES = 0x1420  # place Sentinel + sentries

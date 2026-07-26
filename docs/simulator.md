@@ -78,9 +78,9 @@ for the measurements.
 
 ## Validation
 
-Every mechanic is differentially validated against the real 6502 code via a py65
-harness, then the ROM captures are frozen as JSON goldens replayed by CI
-(`sentinel/tests/`):
+Every mechanic is differentially validated against the real 6502 code via the
+jennings harness (`sentinel/tests/oracle.py`), then the ROM captures are frozen as
+JSON goldens replayed by CI (`sentinel/tests/`):
 
 | Fixture | What it pins |
 |---------|--------------|
