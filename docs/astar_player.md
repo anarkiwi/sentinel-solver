@@ -37,8 +37,13 @@ PRNG-driven hyperspace/meanie landings are never read.
   no-op), so there is nothing to buy by cutting it short.
 - `audit_pred` (off) records each step's predicted body window: it costs a `_player_window`
   per charged step, i.e. per speculative branch, and only `driver/plan_audit.py` reads it.
-- Landable tile sets, stance view dicts and below-eye band marches are memoized per
-  (terrain map, observer) signature; the band march otherwise dominates search cost.
+- Landable tile sets are memoized per (terrain map, observer) signature and come from
+  `landtable.landable_set` ([landtable.md](landtable.md)). `_view_for` answers both halves of
+  its lookup — the $F5 plane and the below-eye pitch band — with a targeted heading cone,
+  narrowed by the same landability filter and memoized per (signature, tile), each
+  bit-identical to its lattice's full sweep.
+  A speculative sub-action makes a fresh signature that is asked about one tile, so a
+  whole-board sweep at that stance never amortises; one is read only if already memoized.
 
 ## Candidate generators (`_expand`)
 

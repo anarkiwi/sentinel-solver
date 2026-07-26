@@ -1095,6 +1095,20 @@ _V_PRIORITY = [KBD_V_ANGLE] + [v for v in PITCH_BAND if v != KBD_V_ANGLE]
 _VEC_CACHE = {}
 
 
+def kbd_grids(cxs=None, cys=None, v_primary=False):
+    """The ``(hgrid, vgrid, cxs, cys)`` keyboard-aim lattice every sweep and query runs on.
+
+    ``v_primary`` = the $F5 plane alone, whose sole pitch control is the cursor cy, so it
+    must span :data:`CURSOR_CY_FULL` (see :func:`_landable_sweep`); ``cxs``/``cys`` override
+    the cursor grid (:mod:`sentinel.astar_player`'s 2:1 landset subsample)."""
+    return (
+        list(range(0, 256, AZIMUTH_STEP)),
+        [KBD_V_ANGLE] if v_primary else _V_PRIORITY,
+        CURSOR_CX if cxs is None else cxs,
+        (CURSOR_CY_FULL if v_primary else CURSOR_CY) if cys is None else cys,
+    )
+
+
 def _lattice_vectors(hgrid, vgrid, cxs, cys):
     """Build (or fetch cached) the per-aim ray-vector arrays for the keyboard lattice, nested
     ``for v in vgrid: for h in hgrid: for cx: for cy`` (one uniform 1px cursor window at every
@@ -1255,15 +1269,11 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
     span its full ROM range (:data:`CURSOR_CY_FULL`) or the $F5 plane under-reports.  The cx
     window stays faithful either way (body-h step 8 fills the h-integer gaps).
     """
-    hgrid = list(range(0, 256, AZIMUTH_STEP))
-    vgrid = [KBD_V_ANGLE] if v_primary else _V_PRIORITY
-    cys = CURSOR_CY_FULL if v_primary else CURSOR_CY
+    grids = kbd_grids(v_primary=v_primary)
     if not _HAVE_JIT:
-        return _landable_sweep_py(
-            state, slot, eye_z, max_steps, hgrid, vgrid, CURSOR_CX, cys, want_centres
-        )
+        return _landable_sweep_py(state, slot, eye_z, max_steps, *grids, want_centres)
     status, tx, ty, centre, grids = _landable_batch(
-        state, slot, eye_z, max_steps, hgrid, vgrid, CURSOR_CX, cys
+        state, slot, eye_z, max_steps, *grids
     )
     views = {}
     centres = {}
@@ -1430,55 +1440,32 @@ def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
 
 
 def landable_view_targeted(
-    state, tile, slot=None, eye_z=None, max_steps=6000, cxs=None, cys=None
+    state,
+    tile,
+    slot=None,
+    eye_z=None,
+    max_steps=6000,
+    cxs=None,
+    cys=None,
+    v_primary=False,
 ):
-    """Full-pitch-band build view for a SINGLE ``tile`` -- bit-identical to
-    ``landable_views(state).get(tile)`` but marching only the lattice rays whose heading
-    points at the cell (:func:`_tile_arc_indices`), so a per-tile query costs a narrow cone
-    instead of a whole-board sweep.  Falls back to the pure-Python probe when numba is absent.
-    ``cxs``/``cys`` override the sights-cursor grid (default the 1px window) so a caller that
-    sweeps a SUBSAMPLED cursor can query one tile against its own lattice, bit-identically to
-    that lattice's full sweep; the Python fallback ignores them (1px only).
+    """Build view for ONE ``tile``, bit-identical to its entry in that lattice's full sweep.
+
+    Marches only the rays that can land there: the heading arc (:func:`_tile_arc_indices`)
+    narrowed by the landability filter (:func:`sentinel.landtable.landable_view`, ~4x fewer
+    rays); pure-Python probe when numba is absent.  ``cxs``/``cys`` override the cursor grid
+    (1px window); ``v_primary`` = :func:`_landable_sweep`'s $F5 plane, cys CURSOR_CY_FULL.
     """
     if slot is None:
         slot = state.player
     key = (tile[0], tile[1])
     if not _HAVE_JIT:
-        return _landable_view_py(state, key, slot, eye_z, max_steps, True)
-    hgrid = list(range(0, 256, AZIMUTH_STEP))
-    vgrid = _V_PRIORITY
-    cxs = CURSOR_CX if cxs is None else cxs
-    cys = CURSOR_CY if cys is None else cys
-    head_sorted, order = _lattice_headings(hgrid, vgrid, cxs, cys)
-    ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
-    idx = _tile_arc_indices(head_sorted, order, ex, ey, key[0], key[1])
-    vecs = _lattice_vectors(hgrid, vgrid, cxs, cys)
-    if idx is None:
-        idx = np.arange(vecs[0].shape[0])
-    sub = [np.ascontiguousarray(a[idx]) for a in vecs]
-    seed = _seed_position(state, slot, eye_z)
-    mem_np = np.frombuffer(state.mem, dtype=np.uint8)
-    c56 = (state.mem[0x0C56] >> 1) & 0xFF
-    cdd = (state.mem[0x0CDD] >> 1) & 0xFF
-    status, tx, ty, _ = los_jit.march_batch(
-        mem_np,
-        *sub,
-        *seed,
-        state.obj_x[slot] & 0xFF,
-        state.obj_y[slot] & 0xFF,
-        state.mem[0x0C6E] & 0x7F,
-        state.mem[0x0C58] & 0xFF,
-        c56,
-        cdd,
-        max_steps,
+        return _landable_view_py(state, key, slot, eye_z, max_steps, not v_primary)
+    from sentinel import landtable  # deferred: landtable imports los
+
+    return landtable.landable_view(
+        state, key, slot, eye_z, kbd_grids(cxs, cys, v_primary), max_steps
     )
-    hit = np.flatnonzero(
-        (status == los_jit.LOS_CLEAR) & (tx == key[0]) & (ty == key[1])
-    )
-    if hit.size == 0:
-        return None
-    h, v, cx, cy = _meta_at(int(idx[hit[0]]), hgrid, vgrid, cxs, cys)
-    return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
 
 
 def _landable_view_py(state, key, slot, eye_z, max_steps, v_band):

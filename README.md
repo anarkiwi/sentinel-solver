@@ -17,7 +17,7 @@ landscape-complete flag (`$0CDE` bit 6) — landscape 110 in 41 actions, final e
 
 ```bash
 python -m driver.play_player 110 --player astar   # live in VICE, records an AVI
-python -m sentinel.astar_player 110               # offline
+python -m sentinel.astar_player 272               # offline (272 == typed 0110)
 ```
 
 | landscape | enemies | offline | live |
@@ -27,7 +27,9 @@ python -m sentinel.astar_player 110               # offline
 | 110 | 3 | 42 | **41 actions** |
 
 Landscape numbers are the ones you TYPE; the ROM seeds the PRNG from the digits read as
-hex, so `Game.typed(110)` is the board a player reaches by keying `0110`.
+hex, so `Game.typed(110)` is the board a player reaches by keying `0110`. `play_player`
+takes that typed number; `sentinel.astar_player` takes the RAW seed, so the same digits
+mean different boards — typed 42/110 are raw 66/272.
 
 ## Layout
 

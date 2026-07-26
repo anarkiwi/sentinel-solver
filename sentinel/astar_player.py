@@ -12,12 +12,11 @@ import os
 import time
 import typing
 
-import numpy as np
-
 from sentinel import (
     actioncost,
     actions,
     enemies,
+    landtable,
     los,
     memmap as mm,
     terrain,
@@ -73,8 +72,8 @@ _STEP_SIGMA = float(
 )  # measured whole-step rms, live ls42 (live_ls42_hops.json); see _margin
 _MARGIN_K = float(os.environ.get("SENTINEL_MARGIN_K", "1.0"))  # sigmas of headroom
 _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately be None)
-_COARSE_CX = list(range(48, 112, 2))  # landset sights-cursor grid: the 1px window 2:1
-_COARSE_CY = list(range(63, 127, 2))  # subsampled; _landable queries the SAME lattice
+_COARSE_CX = landtable.COARSE_CX  # landset sights-cursor grid: the 1px window 2:1
+_COARSE_CY = landtable.COARSE_CY  # subsampled; _landable queries the SAME lattice
 
 GATE_BODY = "body"  # gated on the PLAYER'S body window (_hot): absorbs
 GATE_TILE = "tile"  # gated on the TARGET TILE's window (_drain_gate): builds/transfers
@@ -138,7 +137,8 @@ class AStarPlayer(BasePlayer):
         self._deadline = None  # per-search wall-clock deadline (set at each _search)
         self._land_memo = {}  # search: coarse landable tile-sets
         self._tile_memo = {}  # per-(sig, tile) single-tile landability (targeted cone)
-        self._view_memo = {}  # per-sig $F5-plane view dicts (band via targeted march)
+        self._view_memo = {}  # per-sig whole-$F5-plane sweeps (_views_for_sig)
+        self._plane_memo = {}  # per-(sig, tile) targeted $F5-plane march results
         self._cone_memo = {}  # per-(sig, tile) targeted band march results
         self._hop_price_memo = {}  # per-(stance, tile, k) exact hop cost
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
@@ -379,10 +379,12 @@ class AStarPlayer(BasePlayer):
         return out
 
     def _views_for_sig(self):
-        """Memoized $F5-plane view dict for the current stance, keyed like
-        ``_land_memo``.  ``los.landable_view(st, tile, v_band=False)`` IS a lookup
-        into exactly this dict, so one sweep per distinct sig serves every tile at
-        that stance; below-eye tiles miss it and take the targeted band fallback."""
+        """Whole $F5 plane for the current stance, memoized and keyed like ``_land_memo``.
+
+        ``los.landable_view(st, tile, v_band=False)`` IS a lookup into exactly this dict, and
+        :meth:`_view_for` reads it when present.  One board-wide sweep is only worth it for a
+        caller wanting most of the plane; a per-tile question takes the targeted cone.
+        """
         sig = self._sig()
         primary = self._view_memo.get(sig)
         if primary is None:
@@ -401,19 +403,31 @@ class AStarPlayer(BasePlayer):
         return bytes(st.mem[0x0400:0x0800]) + bytes([st.player])
 
     def _view_for(self, tile):
-        """Cheapest keyboard view landing ``tile`` (execution only): memoized
-        F5-plane lookup, targeted single-tile band march as fallback.  The band
-        fallback marches only the narrow cone of rays that can land on ``tile``
-        (:func:`los.landable_view_targeted`) -- bit-identical to the full-board
-        ``landable_views`` sweep, so ``_c_reclaim``'s per-iteration terrain sigs
-        each cost one cone instead of a whole-board re-sweep.  The cone is memoized
-        per (sig, tile) too: the same below-eye tile is re-priced by every trial hop,
-        probe and re-search at a stance, and the march was the search's top cost."""
-        return self._view_with_band(tile, self._views_for_sig(), self._band_march)
+        """Cheapest keyboard view landing ``tile``: :meth:`_view_with_band`'s $F5-plane-else-band
+        composition, each half a targeted cone (:func:`los.landable_view_targeted`) memoized per
+        (sig, tile).  A cone is bit-identical to its lattice's full sweep, and a speculative
+        sub-action's fresh sig is asked about one tile, so sweeping the board never pays off; a
+        sig whose whole $F5 plane is already in ``_view_memo`` is read from there instead.
+        """
+        tile = tuple(tile)
+        sig = self._sig()
+        primary = self._view_memo.get(sig)
+        # Numba absent: the probe fallback picks its own order; only the sweep is lattice-exact.
+        if primary is None and not los._HAVE_JIT:
+            primary = self._views_for_sig()
+        if primary is not None:
+            view = primary.get(tile)
+        else:
+            key = (sig, tile)
+            view = self._plane_memo.get(key, _NO_VIEW)
+            if view is _NO_VIEW:
+                view = los.landable_view_targeted(self.st, tile, v_primary=True)
+                self._plane_memo[key] = view
+        return view if view is not None else self._band_march(tile, sig)
 
-    def _band_march(self, tile):
+    def _band_march(self, tile, sig=None):
         """Targeted single-tile band march for ``tile``, memoized per (sig, tile)."""
-        key = (self._sig(), tile)
+        key = (self._sig() if sig is None else sig, tuple(tile))
         view = self._cone_memo.get(key, _NO_VIEW)
         if view is _NO_VIEW:
             view = los.landable_view_targeted(self.st, tile)
@@ -642,14 +656,12 @@ class AStarPlayer(BasePlayer):
 
     @staticmethod
     def _coarse_landable(st):
-        if not los._HAVE_JIT:
-            return set(los.landable_views(st))
-        hgrid = list(range(0, 256, los.AZIMUTH_STEP))
-        status, tx, ty, _, _ = los._landable_batch(
-            st, st.player, None, 6000, hgrid, los._V_PRIORITY, _COARSE_CX, _COARSE_CY
+        """The whole landset lattice's tile set, from :func:`landtable.landable_set`: the
+        rays are partitioned by candidate landing tile, so each is marched at most once
+        (~6x fewer than the sweep) and the set is exact."""
+        return landtable.landable_set(
+            st, st.player, grids=landtable.lattice(coarse=True)
         )
-        clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
-        return set(zip(tx[clear].tolist(), ty[clear].tolist()))
 
     def _tile_base(self, st, tile):
         """Foot height a stack on ``tile`` builds from, or ``None`` if the top is
