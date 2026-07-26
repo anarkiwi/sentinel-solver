@@ -14,10 +14,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 from driver import boot  # noqa: E402
-from driver.core import SentinelDriver, live_image  # noqa: E402
+from driver.core import live_image  # noqa: E402
 
 IMG = os.path.join(boot.ROOT, "out", "sentinel_stage2.bin")
-ENTER_LANDSCAPE = 0  # any board: the sim regenerates one, only code/tables are kept
 
 
 VERIFY_LANDSCAPE = 0
@@ -37,19 +36,16 @@ def verify(path, landscape_number=VERIFY_LANDSCAPE):
     return sum(1 for a, b in zip(rom, ref) if a == b)
 
 
-def dump(path=IMG, log=print, at_title=False):
-    """Boot the tape and write the loaded 64 KB image to ``path``; returns ``path``.
-
-    Captured after entering a landscape: at the title screen ``reset_game_state`` ($1149)
-    is not yet callable and runs away, so an image taken there generates a blank board.
-    The play board lives outside ``oracle.LOADED``, so only code/tables are carried."""
-    driver = SentinelDriver.boot(log=log)
+def dump(path=IMG, log=print):
+    """Boot the tape to the title screen and write the loaded 64 KB image to ``path``."""
+    container, bm = boot.boot_loaded(log=log)
     try:
-        if not at_title:
-            driver.enter_landscape(ENTER_LANDSCAPE)
-        img = live_image(driver.bm)
+        img = live_image(bm)
     finally:
-        driver.close()
+        try:
+            container.stop()
+        except Exception:  # pragma: no cover - teardown is best-effort
+            pass
     if len(img) != 0x10000:
         raise RuntimeError(f"short image: {len(img)} bytes")
     sig = bytes(img[boot.SIG_ADDR : boot.SIG_ADDR + len(boot.SIG_BYTES)])
@@ -76,14 +72,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=IMG)
     parser.add_argument("--force", action="store_true", help="re-dump if present")
-    parser.add_argument(
-        "--at-title", action="store_true", help="capture at the title screen"
-    )
     args = parser.parse_args(argv)
     if os.path.exists(args.out) and not args.force:
         print(f"{args.out} present; --force to regenerate")
         return 0
-    print(f"wrote {dump(args.out, at_title=args.at_title)}")
+    print(f"wrote {dump(args.out)}")
     return 0
 
 
