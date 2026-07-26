@@ -1416,10 +1416,12 @@ def _lattice_headings(hgrid, vgrid, cxs, cys):
 
 
 def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
-    """Ascending lattice-ray indices whose heading points into cell ``(tx, ty)`` from the eye
+    """Lattice-ray indices whose heading points into cell ``(tx, ty)`` from the eye
     centre ``(ex+.5, ey+.5)`` -- a PROVABLE superset of the rays that can land on the cell (a
     straight ray reaching a convex cell has heading within its angular span from the fixed
-    seed).  ``None`` == eye centre inside the cell (whole circle: keep every ray)."""
+    seed).  ``None`` == eye centre inside the cell (whole circle: keep every ray).  In
+    HEADING order (a view into the cached ``order``): :func:`landtable.candidates` sorts
+    the survivors of its crossing filter, ~3x fewer elements than this arc."""
     dxlo, dxhi = tx - ex - 0.5, tx - ex + 0.5
     dylo, dyhi = ty - ey - 0.5, ty - ey + 0.5
     if dxlo <= 0.0 <= dxhi and dylo <= 0.0 <= dyhi:
@@ -1436,7 +1438,7 @@ def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
     else:  # arc wraps past +pi
         hi_i = np.searchsorted(head_sorted, a_hi - _TWO_PI, side="right")
         idx = np.concatenate((order[lo_i:], order[:hi_i]))
-    return np.sort(idx)  # copy: `order` slices are views into the cache
+    return idx
 
 
 def landable_view_targeted(

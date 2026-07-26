@@ -36,6 +36,7 @@ COARSE_CY = list(range(63, 127, 2))
 BUCKET_LO = -24  # census T buckets, whole z units; real play spans -5..+6
 BUCKET_HI = 23
 MAX_STEPS = 6000  # the los sweep's march cap
+MARCH_CHUNK = 1 << 13  # first early-exit march chunk: ~20us/call fixed cost, <1% here
 LAND_BAND = 0x80  # check_flat_tile $1D1C lands only for surface-z in [0, $80)
 WRAP_D = 0x10000 - LAND_BAND  # z distance at which the 8-bit high-byte compare aliases
 _WILD = -(1 << 40)  # zmin sentinel: unbounded (wrap-aliasing) candidate
@@ -323,7 +324,8 @@ def stop_cells(vx, vy, vz, surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, ed
 def candidates(state, tile, slot, eye_z=None, grids=None, max_steps=MAX_STEPS):
     """Ascending lattice indices that can land on ``tile`` -- a proven superset of the
     rays the sweep finds, from the heading arc (:func:`los._tile_arc_indices`) narrowed
-    by :func:`crossing_mask`."""
+    by :func:`crossing_mask`.  Sorting the survivors (~3x fewer) rather than the arc is
+    the same set for a third of the sort."""
     grids = lattice() if grids is None else grids
     vx, vy, vz = cached_components(grids)
     ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
@@ -337,7 +339,7 @@ def candidates(state, tile, slot, eye_z=None, grids=None, max_steps=MAX_STEPS):
     keep = crossing_mask(
         vx, vy, vz, idx, tile[0] - ex, tile[1] - ey, lo - zs, hi - zs, max_steps
     )
-    return idx[keep]
+    return np.sort(idx[keep])
 
 
 def _march(state, slot, eye_z, grids, idx, max_steps):
@@ -366,7 +368,10 @@ def landable_view(
 
     :func:`los.landable_view_targeted` delegates here.  Only :func:`candidates` is
     marched -- a proven superset of the landing rays, so a set that lands nothing is a
-    proven "no view".  ``stats`` counts the work.
+    proven "no view".  The answer is the LOWEST landing lattice index, so the ascending
+    candidates are marched in doubling chunks and the first chunk that lands ends it:
+    the same index, marching under 2x the prefix before it instead of the whole set.
+    ``stats`` counts the rays actually marched.
     """
     if slot is None:
         slot = state.player
@@ -381,16 +386,20 @@ def landable_view(
     if never_lands(state, tile, slot):
         return None
     idx = candidates(state, tile, slot, eye_z, grids, max_steps)
-    if stats is not None:
-        stats["marched"] = stats.get("marched", 0) + int(idx.size)
-    if idx.size:
-        status, tx, ty = _march(state, slot, eye_z, grids, idx, max_steps)
+    lo, step = 0, MARCH_CHUNK
+    while lo < idx.size:
+        sel = idx[lo : lo + step]
+        if stats is not None:
+            stats["marched"] = stats.get("marched", 0) + int(sel.size)
+        status, tx, ty = _march(state, slot, eye_z, grids, sel, max_steps)
         hit = np.flatnonzero(
             (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
         )
         if hit.size:
-            h, v, cx, cy = los._meta_at(int(idx[hit].min()), *grids)
+            h, v, cx, cy = los._meta_at(int(sel[hit[0]]), *grids)
             return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+        lo += step
+        step += step
     if stats is not None:
         stats["proven_none"] = stats.get("proven_none", 0) + 1
     return None
