@@ -380,6 +380,7 @@ class StanceGraph:
         metric="hops",
         wait=None,
         priced=None,
+        fuel_bias=0.0,
     ):
         """Fewest-hop ENERGY-FEASIBLE climb to a stance that can land ``target``.
 
@@ -395,7 +396,13 @@ class StanceGraph:
         there.  ``build_frames`` is a function of ``k`` alone, while the real cost is
         aim-dominated and spreads hundreds of frames across tiles at fixed ``k``, so a
         router left to the floor cannot tell a cheap landing from an unbuildable one.
-        Only the ``frames`` metric is priced; ``hops`` counts edges by definition."""
+        Only the ``frames`` metric is priced; ``hops`` counts edges by definition.
+
+        ``fuel_bias`` prices a landing's cheap-aim trees into the edge, converting energy
+        to frames at ``DRAIN_DELAY`` -- what an idle body pays for one energy.  Fuel was
+        credited to energy FEASIBILITY only, so while energy held out the router took the
+        time-cheapest path: on ls335 all four stances it climbed carry fuel 0, out of the
+        506 of 1192 that carry any."""
         wait = (lambda _j, _t: 0.0) if wait is None else wait
         priced = {} if priced is None else priced
         goals = set(self.strike_stances(target).tolist()) - set(blocked)
@@ -412,6 +419,13 @@ class StanceGraph:
 
         spend = self._spend(dead)
         gain = self.fuel * mm.ENERGY_IN_OBJECTS[mm.T_TREE]
+        # forgone fuel in frames, penalised from the richest stance rather than credited so edges stay non-negative, and capped at one hop: a dry landing costs the DETOUR to fuel, never the whole board's supply
+        dry = (
+            np.minimum(
+                (gain.max(initial=0) - gain) * DRAIN_DELAY, build_frames(self.kmax)
+            )
+            * fuel_bias
+        )
         # best[node, e]: fewest hops to node holding exactly e; a state is dominated when a settled one there holds >= energy in <= hops
         ks = [k for _t, k in self.stances]
         best = np.full((n + 1, cap + 1), math.inf)
@@ -449,7 +463,7 @@ class StanceGraph:
                 if metric == "hops":
                     edge = 1.0
                 else:
-                    edge = priced.get(j, build_frames(ks[j])) + wait(j, spent)
+                    edge = priced.get(j, build_frames(ks[j])) + wait(j, spent) + dry[j]
                 ahead = spent + edge
                 if best[j, got:].min() <= ahead:
                     continue

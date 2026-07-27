@@ -532,3 +532,38 @@ def test_pricing_a_stance_beyond_reach_never_cheapens_a_route():
         dear = {node: 1e6 for node in range(len(graph))}
         moved = graph.route(target, _CAP, start=0, metric="frames", priced=dear)
         assert moved is None or moved.frames >= base.frames
+
+
+def test_fuel_bias_steers_the_route_toward_stances_that_carry_fuel():
+    """Energy is optionality, so a landing's cheap-aim trees belong in the edge cost.
+
+    Credited to energy FEASIBILITY alone, fuel changed nothing while energy held out, and
+    ls335 climbed four stances that all carry fuel 0."""
+    graph = _synth(seed=5, n=16)
+    graph.fuel[:] = 0
+    rich = len(graph) - 1
+    graph.fuel[rich] = 8
+    moved = 0
+    for j in range(len(graph)):
+        target = graph.stances[j][0]
+        blind = graph.route(target, _CAP, start=0, metric="frames")
+        keen = graph.route(target, _CAP, start=0, metric="frames", fuel_bias=1.0)
+        if blind is None or keen is None:
+            continue
+        assert keen.frames >= 0.0
+        if rich in keen.path and rich not in blind.path:
+            moved += 1
+    assert moved, "the fuel bias never once pulled a route through the fuelled stance"
+
+
+def test_fuel_bias_zero_is_the_fuel_blind_route_exactly():
+    """The bias is opt-in: at 0 every route is bit-identical to the unbiased one."""
+    graph = _synth(seed=2)
+    for energy in (12, _CAP):
+        for j in range(len(graph)):
+            target = graph.stances[j][0]
+            a = graph.route(target, energy, start=0, metric="frames")
+            b = graph.route(target, energy, start=0, metric="frames", fuel_bias=0.0)
+            assert (a is None) == (b is None)
+            if a is not None:
+                assert a.path == b.path and a.frames == b.frames

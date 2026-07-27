@@ -29,6 +29,7 @@ from sentinel.playerbase import DRAIN_DELAY, HOP_COST, HOP_FRAMES, REVOLUTION_FR
 FUEL_RESERVE = 6  # energy above a hop's cost that _harvest tops the stance back up to
 MAX_WAIT = 4000.0  # frames a planned wait may spend; beyond this the hop is not worth scheduling
 ROUTE_REPAIRS = 6  # stances one route child may blacklist before it gives up
+FUEL_BIAS = 0.0  # weight on a landing's forgone cheap-aim fuel (DRAIN_DELAY frames per energy, capped at one detour hop); OFF because measured: 1.0 uncapped distorts ls335's opening to k=2 and dies at 7 actions, capped it does not reorder priced hops at all
 SUBGOAL = False  # stop the search at the DP's next enemy rather than at the win; OFF because it leaves ls335's opening unchanged while costing ls110 417 f and 8 energy
 
 ROUTE_TARGETS = 3  # strategic goals routed to per expansion (nearest enemies first)
@@ -120,6 +121,7 @@ class StancePlayer(AStarPlayer):
                 metric=ROUTE_METRIC,
                 wait=self._route_wait(st) if ROUTE_METRIC == "frames" else None,
                 priced=self._edge_frames,
+                fuel_bias=FUEL_BIAS,
             )
             self._route_memo[key] = got
         return got

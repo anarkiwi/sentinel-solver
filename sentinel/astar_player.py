@@ -319,7 +319,38 @@ class AStarPlayer(BasePlayer):
         return False
 
     def _wait(self):
+        """Idle a beat -- but bank a FREE reclaim first if the sweep is offering one.
+
+        Waiting is never neutral: $178C holds a still-visible target so the cone does not
+        rotate off, and $1A31 re-arms after every drain, so an idle body pays 1 energy per
+        ``DRAIN_DELAY`` until it dies.  ls335 spends its last 16 ticks exactly that way.
+        An absorb whose toll is 0 costs the same frames the idle would have burned and
+        answers with energy instead, which is the whole difference between waiting and
+        being drained.  It goes through ``_fire`` like any other executed action --
+        ``_reclaim_one`` charges a state directly, which is a PLANNING primitive and would
+        move the model without pressing a key."""
+        got = self._free_reclaim(self.st)
+        if got is not None and self._fire("absorb", got[0], got[1]):
+            return
         self._advance(60)
+
+    def _free_reclaim(self, st):
+        """``(tile, view)`` for an absorb the sweep bills NO drains for, else ``None``."""
+        self.st = st
+        for _value, tile in self._reclaim_targets(st, True):
+            view = self._view_for(tile)
+            if view is None:
+                continue
+            top = terrain.top_object(st, *tile)
+            if top is None:
+                continue
+            toll = self._absorb_toll(
+                self._aim_frames(view) + self._settle("absorb", view),
+                gain=mm.ENERGY_IN_OBJECTS[st.obj_type[top]],
+            )
+            if toll == 0:
+                return tile, view
+        return None
 
     def _defend(self):
         """Non-conceding survival ladder on the observed board: counterattack a
@@ -1169,14 +1200,21 @@ class AStarPlayer(BasePlayer):
         return self._node(node, st, g, [step])
 
     def _reclaim_one(self, st, pedestal_only=False):
-        """Absorb ONE landable spent pedestal/shell (base <= eye), or a tree when
-        short; the player stays put so its own window bounds the aim.  Returns
-        ``(g_delta, step)`` or ``None``.  ``pedestal_only`` skips the tree sweep so
-        the inchworm recycle grabs only the player's own spent boulders/shells."""
+        """Absorb ONE landable spent pedestal/shell (base <= eye), or a tree; the player
+        stays put so its own window bounds the aim.  Returns ``(g_delta, step)`` or
+        ``None``.  ``pedestal_only`` skips the tree sweep so the inchworm recycle grabs
+        only the player's own spent boulders/shells.
+
+        A tree is banked whenever the sweep gives it away -- ``toll`` 0, no drains billed
+        -- and only bought at a price when the stance is SHORT.  Gating the tree sweep on
+        being short already meant fuel was taken only once it was needed: ls335 stalls at
+        E=12, one point over that line, so ``_reclaim_one`` never looked at a tree,
+        answered None, and the run loop idled at the drain rate until it died.  Energy is
+        optionality, and free energy has no reason to be declined."""
         self.st = st
-        want_trees = (not pedestal_only) and st.energy < HOP_COST + 6
+        short = st.energy < HOP_COST + 6
         best = None  # cheapest exposure toll among affordable targets, 0 wins outright
-        for _value, tile in self._reclaim_targets(st, want_trees):
+        for _value, tile in self._reclaim_targets(st, not pedestal_only):
             view = self._view_for(tile)
             if view is None:
                 continue
@@ -1189,6 +1227,8 @@ class AStarPlayer(BasePlayer):
             )
             if toll is None:
                 continue  # its drains would breach the floor: try a safer object
+            if toll and not short and st.obj_type[top] == mm.T_TREE:
+                continue  # not short: a tree is worth taking only for free
             if best is None or toll < best[0]:
                 best = (toll, tile)
             if not toll:
