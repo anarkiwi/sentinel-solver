@@ -361,3 +361,43 @@ highest board the planner cannot convert.
 `sentinel/tests/test_stancegraph.py` and `sentinel/tests/test_stance_player.py`. The
 whole-board sweep is too slow for CI, so the algorithms are pinned on synthetic graphs
 and the geometry on a `build(tiles=...)` subset checked against `landtable` directly.
+
+
+## Where ls335 stalls now, and why it is open item 1
+
+`--planner stance 335 --time-budget 20 --node-budget 20000` plays **9 actions and stops**:
+three boulders and a robot on `(10,17)`, transfer up to eye 5.375, four reclaims back to
+E=7. Then `_expand` returns **zero children** and every later search reports
+`plan (1 nodes): None` — the root itself is terminal.
+
+At that stance (`(10,17)`, eye 5.375, E=7, all 7 foes alive) every generator is empty:
+`_c_reclaim`, `_c_clear`, `_c_relocate`, no absorb target, `_c_pursue` `None` for all four
+pursue targets, and `_c_route` `None` for all three route targets. `fire_reason` is `None`
+throughout, so nothing is refused by a fire — it is refused by a gate.
+
+Tallying `_pick_hop`'s filters over its 20 landable tiles:
+
+| filter | kills |
+|---|---|
+| no viable `k` (energy or eye) | 6 |
+| `_drain_gate` | 0 |
+| **`_hop_price` returns `None`** | **12** |
+| window < priced tail + margin | 8 |
+| `_affords` (source side) | 2 |
+| **survive** | **0** |
+
+and inside `_hop_price` the break is **`_stack_holds` on 12 of 22 (tile, k) pairs** —
+nothing else. `_stack_holds` is passed the frames accumulated so far, so it is the TALL
+stacks that fail: by the third boulder the forecast says a cone has arrived and `$17B7`
+drains the stack to a tree before the robot caps it. ls335 is the board that needs k=3.
+
+That makes the ls335 stall a **gaze-forecast** problem, which is
+[plan_fidelity](plan_fidelity.md) open item 1 — `_cone_onset` projects a fixed rotation
+cadence, but a draining enemy stops sweeping. So the forecast's arrival times are wrong in
+a known direction, and `_stack_holds` inherits it.
+
+Two things are now settled about that item and worth carrying into any attempt on it.
+`enemies.step` is **byte-exact against the real 6502** on the divergent states
+([human_clock.md](human_clock.md)), so the stall is not a missing branch in the simulator —
+`_cone_onset` is a separate forecaster that never consults enemy state at all. And no
+constant cadence reproduces the recorded facings, so the fix is not a better number.
