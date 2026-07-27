@@ -3,6 +3,13 @@
 Each recorded event carries the true board before that action, so applying the human's
 own action through our machinery and comparing against the next event isolates one
 falsifiable defect at a time, in order, with ground truth attached.
+
+ls335 diverges at action 15 by ONE energy, and the cause is phase, not logic: the
+recorded facings show our enemy clock never drifts cumulatively (the h_angle error is
+always 0 or exactly one 20-unit rotation step) while our charged frames run ~6% long in
+aggregate -- 5576 f against the 5245 f the recorded rotations imply over the same span.
+That is ~330 f of accumulated phase by action 15, against a DRAIN_DELAY of 450 f, which
+is enough to insert exactly one drain the human never paid.
 """
 
 import sys
