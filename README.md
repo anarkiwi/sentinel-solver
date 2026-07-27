@@ -37,6 +37,7 @@ board offline.
 |------|------|------|
 | Model | `sentinel/` | standalone bit-exact forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). [docs/simulator.md](docs/simulator.md) |
 | A\* player | `sentinel/astar_player.py` | weighted best-first search that plans a winning line and executes it. [docs/astar_player.md](docs/astar_player.md) |
+| Stance planner | `sentinel/stancegraph.py`, `sentinel/stance_player.py` | the board's geometry as a graph: routes are shortest paths, not searched. [docs/stance_planner.md](docs/stance_planner.md) |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer`. [docs/player.md](docs/player.md) |
 | Policy + tuning | `sentinel/policy.py`, `sentinel/tune.py` | the player's tunable choices as one env-addressable schema, fitted against ground truth. [docs/tuning.md](docs/tuning.md) |
 | Driver | `driver/` | boot, enter a landscape, run memory-verified live keyboard operations (aim → fire → verify), record. Imports only `sentinel/`. [docs/driver.md](docs/driver.md) |
@@ -65,6 +66,7 @@ The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` im
 - [gameplay.md](docs/gameplay.md) — the game's rules and mechanics (ROM-derived spec).
 - [simulator.md](docs/simulator.md) — the model's modules and golden validation.
 - [astar_player.md](docs/astar_player.md) — search, candidate generators, cost model.
+- [stance_planner.md](docs/stance_planner.md) — the stance graph, why the A\* frontier empties on ls335, and the layered replacement.
 - [player.md](docs/player.md) — the reactive player: priorities, threat model, timing.
 - [render_cost.md](docs/render_cost.md) — the `plot_world` redraw/settle frame cost.
 - [driver.md](docs/driver.md) — boot/enter/record, keyboard aim → fire → verify.

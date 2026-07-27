@@ -18,6 +18,13 @@ a stance's whole occupancy, an `h` that credits the position a climb buys rather
 charging for every living enemy, and the ascend-then-hunt phase structure a human plays.
 The reactive greedy player is untouched and still loses ls42.
 
+The measured mechanism is now specific: on ls335 the **frontier empties after 30
+expansions**, not the node budget. `h`'s enemy term is constant across the whole 48-action
+ascent the human plays before its first kill, energy appears in no heuristic term so dead
+ends are invisible, and the Sentinel is landable from 13 of 1192 stances — a needle no
+forward ranker proposes. [stance_planner.md](stance_planner.md) is the layered replacement
+and its milestone table; `human_regress --planner stance` scores it.
+
 **The plan is a pure function of the board.** Two live ls42 runs produce identical action
 sequences and identical per-step measured frame counts. `_search` is bounded by
 `node_budget` alone; `time_budget` (a wall-clock cut) is **off by default**, because a

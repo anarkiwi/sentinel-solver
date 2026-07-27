@@ -152,6 +152,21 @@ class AStarPlayer(BasePlayer):
         self._hop_audit = None  # list => shadow-record the body-window hop gate
         self._on_plan = False  # last _react deviation WAS the plan's next step
         self._last_pbody = math.inf  # body window at the last _charge's pre-step state
+        self._target_eye = self._required_eye()
+
+    def _required_eye(self):
+        """Eye any plan must reach, from the board rather than a constant.
+
+        ``check_flat_tile`` $1D1C lands only for a surface-z in [0, $80): the target must
+        sit at or below the eye, so the Sentinel's own base height is a free lower bound
+        on the climb.  The shipped ``_TARGET_EYE`` 9.0 is ls0's value applied everywhere --
+        ls42/110 need 11 and ls335 needs 12, so `h` went FLAT exactly where those boards
+        get hard."""
+        st = self.st
+        slot = actions.SENTINEL_SLOT
+        if st.is_empty(slot):
+            return float(_TARGET_EYE)
+        return float(st.obj_z_height[slot])
 
     def _plan_step(self, verb, tile, budget, gate, window=None):
         """Record the step just charged: ``window`` defaults to the body window
@@ -225,6 +240,11 @@ class AStarPlayer(BasePlayer):
                 self.plan = None
             self._on_plan = False
             return
+        if self.plan and self._pi >= len(self.plan):
+            self.plan = (
+                self._search()
+            )  # plan spent but not won: re-plan (subgoal chain)
+            self._pi = 0
         if not self.plan or self._pi >= len(self.plan):
             self._wait()
             return
@@ -492,7 +512,7 @@ class AStarPlayer(BasePlayer):
                 _, _, node = heapq.heappop(heap)
                 if node.g > best_g.get(node.key, math.inf) + 1e-6:
                     continue
-                if actions.won(node.state):
+                if self._is_goal(node.state):
                     return list(node.path)
                 self.expansions += 1
                 if self.verbose and self.expansions % 40 == 0:
@@ -517,6 +537,10 @@ class AStarPlayer(BasePlayer):
             self.cursor = real_cursor
             self._margin_k = _MARGIN_K
             self._depth = 0
+
+    def _is_goal(self, st):
+        """What ``_search`` stops on.  The win here; a subgoal in ``StancePlayer``."""
+        return actions.won(st)
 
     def _key(self, st):
         """Dedup key: player tile+eye, energy, remaining enemies (bucketed
@@ -545,7 +569,7 @@ class AStarPlayer(BasePlayer):
         if actions.won(st):
             return 0.0
         remaining = len(enemies.enemy_slots(st))
-        hops = max(0.0, (_TARGET_EYE - st.eye_z()) / _EYE_PER_HOP)
+        hops = max(0.0, (self._target_eye - st.eye_z()) / _EYE_PER_HOP)
         return remaining * _ABSORB_EST + hops * _HOP_EST + _ENDGAME_EST
 
     # -------------------------------------------------------------- expansion
