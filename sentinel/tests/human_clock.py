@@ -38,6 +38,10 @@ def rounds_between(a, b, strict=True):
 
     An enemy whose cooldown reloaded or sits on the stick value cannot vote; `strict`
     demands unanimity among voters, which is what makes the count exact.
+
+    One voter is enough: `span_frames` still has to satisfy (bres, gate) AND the
+    decrement count jointly, so a wrong delta yields no candidate rather than a wrong
+    one. Demanding two voters only threw away every single-enemy board.
     """
     votes = {}
     for ca, cb in zip(a, b):
@@ -53,8 +57,7 @@ def rounds_between(a, b, strict=True):
         votes[d] = votes.get(d, 0) + 1
     if not votes or (strict and len(votes) > 1):
         return None
-    d, n = max(votes.items(), key=lambda kv: kv[1])
-    return d if n >= 2 else None
+    return max(votes.items(), key=lambda kv: kv[1])[0]
 
 
 def _base(ev, nxt):

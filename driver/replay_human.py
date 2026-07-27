@@ -46,6 +46,15 @@ def _enemy_truth(mem):
     return out
 
 
+def _clock_truth(mem):
+    """The $130C Bresenham accumulator and $0C50 gate: the sub-round phase that lets
+    ``sentinel.tests.human_clock.span_frames`` pin an inter-action span exactly."""
+    return {
+        "cooldown_bresenham": int(mem[mm.COOLDOWN_BRESENHAM]),
+        "cooldown_gate": int(mem[mm.COOLDOWN_GATE]),
+    }
+
+
 def _player_truth(mem):
     """Player stance/energy read straight from the live object arrays."""
     ps = mem[mm.PLAYER_OBJECT]
@@ -102,6 +111,7 @@ def replay(session, events, log, result):
             "snapped_view": view,
             "player": _player_truth(mem),
             "enemies": _enemy_truth(mem),
+            **_clock_truth(mem),
         }
 
         stp = {"verb": verb, "otype": otype, "target": list(tile), "view": view}
