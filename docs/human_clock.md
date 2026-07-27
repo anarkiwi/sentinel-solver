@@ -158,3 +158,56 @@ the floor for the action preceding them, so those bracket pairs are one action r
 twice — a recorder artifact class beyond the two `_is_player_action` already drops
 (enemy discharge trees, drain ticks minted as self-transfers). ls335 also carries 33
 events of those two known classes; `human_replay` skips them.
+
+
+## What the ls335 facing gap is, and is not
+
+28 of the 117 exact spans miss a facing, 43 enemy-facings in all. Every single one is
+**exactly one extra rotation step** — we never under-rotate
+(`test_every_facing_error_is_exactly_one_extra_rotation` pins that, so an over-correcting
+fix shows up as `-1`).
+
+The rotate gate itself is right: `$17FB LDA $0C28,X / CMP #$02 / BCC` fires when the
+rotation cooldown is below the stick value, which is what `_rotate_enemy` does. So the
+error is in **when the consideration happens**, not whether it fires.
+
+Rotation is the last thing `$16E6` reaches, so a held enemy is stuck in an earlier
+branch. Each candidate was tested against a trace it would have to leave, and each failed:
+
+| branch | trace it must leave | measured |
+|---|---|---|
+| owns a meanie | a `MEANIE` object | **none exist**, in the recording or our sim |
+| held drain target | `drain_cooldown != 0` | 39/43 have none on either side |
+| drains a boulder/tree | an object downgrade | we downgrade **more** (9 vs 5), 0/28 correlation |
+| discharges its bank | a new `TREE` | only 7 of 28 miss a tree we should have made |
+
+`$1B00`, which our model omits entirely, is a no-op on the common path — `SEC / BIT $0C1F
+/ BPL` returns carry set unless a visibility flag is set, so it does not gate the
+discharge.
+
+And it is not one missing fixed delay: measuring how early we fire, the margin spreads
+from 1 to 232 frames (median 43), so no single constant accounts for it.
+
+Cadence is out too. `$1289` calls `$16B5` exactly once per main-loop pass, so the
+cadence is just passes per frame. Sweeping `UPDATES_PER_FRAME` over 1..8 leaves facings
+at **89/117 throughout**, and driving the rate below one pass per frame (one
+consideration every K frames, the rest clock-only) only reaches 92/117 at K=16 — a
+sixteen-fold slowdown for three spans. An enemy's own `$16E9` gate rate-limits it far
+harder than the cursor ever does, exactly as `UPDATES_PER_FRAME`'s comment claims, so the
+cursor rate cannot move a rotation.
+
+One real asymmetry did survive, unexplained: on the **live, checkpoint-sampled** captures
+ls42's `$0C30` sits at 3-4 while ls335's sits at 1. Same tool, same sampling position,
+different boards — so unlike the async-vs-halted difference above, that one is not an
+artifact. A seven-enemy board does do more work per pass than a two-enemy board. It is
+just not enough to move a rotation, per the sweep.
+
+So the cause is none of: the rotate gate, any of the four blocking branches, `$1B00`, or
+the consideration cadence. That is a strong negative result rather than a fix, and the
+next attempt should start by instrumenting which branch `$16E6` actually takes on a live
+seven-enemy board — the one thing none of these measurements observes directly.
+
+The ROM uses **no undocumented opcodes**: tracing every instruction of landscape
+generation, a full `plot_world` frame, and 400 enemy rounds (about 1.1M instructions, 90
+distinct opcodes) hits none of the 105 illegal opcodes. A 6502 interpreter is a sound
+instrument here.

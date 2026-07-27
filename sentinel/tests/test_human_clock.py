@@ -25,7 +25,8 @@ FIXTURE = "ls335.json"  # the only watch_play/3 fixture: it carries the enemy cl
 
 # Debt measured against the recorded clock; each may only improve.
 EXACT_SPANS = 117  # spans whose frame count the clock pins outright
-FACING_EXACT = 89  # of those, how many our enemy advance reproduces
+FACING_EXACT = 89
+FACING_ERRORS = 43  # every one is +1 rotation step; see the one-sidedness test  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
 OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed time
 CADENCE = {False: 89, True: 64}  # plotting -> facings reproduced, vs recorded
@@ -297,6 +298,34 @@ def test_update_cooldown_is_sampling_dependent_and_not_a_score():
     halted_1 = sum(v == 1 for v in halted)
     assert async_1 / async_n > 0.7  # async polling: mostly on the stick value
     assert halted_1 / len(halted) < 0.2  # checkpoint-halted: almost never
+
+
+def test_every_facing_error_is_exactly_one_extra_rotation():
+    """The ls335 facing gap is ONE-SIDED: we rotate once too many, never too few.
+
+    $17FB ``CMP #$02 / BCC`` is the ROM's rotate gate and matches ours, so the threshold
+    is right and the error is when the consideration happens, not whether it fires.  A
+    fix that over-corrects would show -1 steps here, so the one-sidedness is the guard.
+    """
+    evs = _events()
+    seed = _load(FIXTURE)["landscape"]
+    steps = []
+    for i, n in _exact_spans(evs):
+        st = state_from_event(evs[i], seed)
+        hc.seed_clock(st, evs[i])
+        st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+        enemies.advance_frames(st, n)
+        for e in evs[i + 1]["enemy_clock"]:
+            got, want, step = (
+                int(st.obj_h_angle[e["slot"]]),
+                e["h_angle"],
+                e["rot_step"],
+            )
+            if got != want:
+                steps.append((got - want - step) % 256)
+    assert steps, "no facing error left -- retire this test and the debt it pins"
+    assert set(steps) == {0}, f"not all +1 rotation: {sorted(set(steps))}"
+    assert len(steps) == FACING_ERRORS
 
 
 def test_spans_below_the_rom_floor_are_not_two_actions():
