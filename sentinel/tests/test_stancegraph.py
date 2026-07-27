@@ -386,7 +386,9 @@ def test_route_reports_its_hops_and_its_arrival():
     """A route is its hop list: its length, and a repr naming the energy and the goal."""
     route = Route([4, 9], 12, (3, 5))
     assert len(route) == 2 and route.path == [4, 9]
-    assert repr(route) == "Route(hops=2, energy=12, goal=(3, 5))"
+    assert route.frames == 0.0  # unset unless the router priced the legs in time
+    assert repr(route) == "Route(hops=2, frames=0, energy=12, goal=(3, 5))"
+    assert repr(Route([4], 12, (3, 5), 900.0)).startswith("Route(hops=1, frames=900,")
 
 
 def test_probe_refuses_a_tile_no_stack_can_stand_on(new_state):

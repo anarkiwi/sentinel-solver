@@ -6,29 +6,34 @@ the ls335 Sentinel is landable from 13 of 1192 stances, which no ranker proposes
 """
 
 import argparse
+import math
 
 import numpy as np
 
 from sentinel import actions, enemies, memmap as mm, stancegraph, stanceorder
 from sentinel.astar_player import (
     AStarPlayer,
+    GATE_TILE,
     _ABSORB_EST,
     _ENDGAME_EST,
     _HOP_EST,
     _MAX_PURSUE,
     _MAX_RECLAIM,
+    _Node,
     _TAIL_FLOOR,
 )
 from sentinel.game import Game
 from sentinel.playerbase import HOP_COST
 
 FUEL_RESERVE = 6  # energy above a hop's cost that _harvest tops the stance back up to
+MAX_WAIT = 4000.0  # frames a planned wait may spend; beyond this the hop is not worth scheduling
 ROUTE_REPAIRS = 6  # stances one route child may blacklist before it gives up
 SUBGOAL = False  # stop the search at the DP's next enemy rather than at the win; OFF because it leaves ls335's opening unchanged while costing ls110 417 f and 8 energy
 
 ROUTE_TARGETS = 3  # strategic goals routed to per expansion (nearest enemies first)
 ROUTE_HOPS = 8  # hops one route child compiles before it hands back to the search
 ROUTE_POLICY = "stuck"  # when to offer route children: stuck | root | always; measured equal-best and cheapest, and h0 loses identically under all three
+ROUTE_FOLLOW = True  # a search that found nothing COMMITS to the route rather than stalling; it can only fire where the frontier already returned None
 _MISS = object()
 
 
@@ -46,10 +51,12 @@ class StancePlayer(AStarPlayer):
         cache_dir=stancegraph.CACHE_DIR,
         route_policy=ROUTE_POLICY,
         subgoal=SUBGOAL,
+        route_follow=ROUTE_FOLLOW,
         **kwargs,
     ):
         super().__init__(game, **kwargs)
         self.route_policy = route_policy
+        self.route_follow = route_follow
         self.subgoal = subgoal
         self._goal_slot = None
         self._graph = graph
@@ -101,24 +108,35 @@ class StancePlayer(AStarPlayer):
         return got
 
     def _hop_ok(self, st, tile, k):
-        """The tile's gaze window if this hop passes both of ``_pick_hop``'s gates, else
-        ``None`` -- a routed hop is held to exactly the ranked hop's standard."""
+        """``(window, wait)`` for this hop, or ``None`` if no phase of the sweep fits it.
+
+        A cone that cannot cover the hop NOW is a delay, not a refusal: ``_earliest_start``
+        returns the first verified moment the tile holds ``priced`` tail clear.  Without
+        it ls335's (13,27) reads 450 f against an 1141 f hop and is refused outright,
+        when waiting 773 f opens 1236 f."""
         self.st = st
         margin = self._margin()
         exposed = self._exposing_enemies(tile)
-        if not self._drain_gate("robot", tile, exposed, _TAIL_FLOOR + margin):
-            return None
-        window = self._gaze_window(tile, exposed=exposed)
         priced = self._hop_price(st, tile, k)
-        if priced is None or window < priced[1] + margin:
+        if priced is None:
             return None
+        need = priced[1] + margin
+        window = self._gaze_window(tile, exposed=exposed)
+        wait = 0.0
+        if window < need or not self._drain_gate(
+            "robot", tile, exposed, _TAIL_FLOOR + margin
+        ):
+            wait = self._earliest_start(tile, need, exposed=exposed)
+            if wait == math.inf or wait > MAX_WAIT:
+                return None
+            window = need  # the verified span the clock agreed to at `wait`
         if not self._affords(
             2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT],
             priced[0],
             window=self._player_window(),
         ):
             return None
-        return window
+        return window, wait
 
     def _c_route(self, node, target):
         """Follow the stance route toward ``target`` until it is landable.
@@ -148,8 +166,15 @@ class StancePlayer(AStarPlayer):
                 g += got[0]
                 steps.append(got[1])
                 continue
-            window = self._hop_ok(st, tile, k)
-            got = None if window is None else self._hop_exec(tile, k, window)
+            ok = self._hop_ok(st, tile, k)
+            got = None
+            if ok is not None:
+                window, wait = ok
+                if wait:
+                    enemies.advance_frames(st, int(wait))
+                    g += wait
+                    steps.append(self._plan_step("wait", tile, wait, GATE_TILE, window))
+                got = self._hop_exec(tile, k, window)
             if got is None:
                 route = self._repair(st, target, blocked, node_i)
                 if route is None:
@@ -252,9 +277,33 @@ class StancePlayer(AStarPlayer):
         """
         self._goal_slot = self._subgoal_slot(self.st)
         try:
-            return super()._search(margin_k)
+            plan = super()._search(margin_k)
         finally:
             self._goal_slot = None
+        if plan is not None or not self.route_follow:
+            return plan
+        return self._route_plan()
+
+    def _route_plan(self):
+        """Compile the DP's next goal into a plan directly, bypassing the frontier.
+
+        A route child bundles ~9 steps, so its ``g`` is thousands of frames and
+        ``f = g + weight*h`` pops cheap shallow children first: it never expands.  A
+        search returning ``None`` costs the run loop everything, so a route is worth
+        committing to on its own terms rather than entering a race it cannot win."""
+        if not self.graph:
+            return None
+        real, bearing, cursor = self.st, self.last_bearing, list(self.cursor)
+        try:
+            node = _Node(real.clone(), 0.0, (), None, bearing, cursor)
+            node.key = self._key(node.state)
+            for target in self._route_targets(real):
+                child = self._c_route(node, target)
+                if child is not None and child.path:
+                    return list(child.path)
+            return None
+        finally:
+            self.st, self.last_bearing, self.cursor = real, bearing, cursor
 
     def _hops_to_tile(self, st, tile):
         """Hops from this stance to one that strikes ``tile``, or ``None`` if unreached."""

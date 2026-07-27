@@ -185,7 +185,7 @@ def test_a_refused_hop_truncates_the_route_child():
     )  # no re-route: pin truncation
     player._landable = lambda st, tile: False
     player._can_hop = lambda st: True
-    player._hop_ok = lambda st, tile, k: 900.0
+    player._hop_ok = lambda st, tile, k: (900.0, 0.0)
     player._harvest = (
         lambda st, steps: 0.0
     )  # isolate the hop chain from the fuel top-up
@@ -221,25 +221,31 @@ def test_the_graph_is_built_once_from_the_board_captured_at_construction(
     assert player._graph_state is not player.st
 
 
-def test_hop_ok_holds_a_routed_hop_to_every_ranked_gate():
-    """Each of ``_pick_hop``'s refusals answers None; only a hop past all three has a window."""
+def test_hop_ok_schedules_a_hop_rather_than_refusing_it():
+    """An unaimable, unschedulable or unaffordable hop answers None; a late one WAITS.
+
+    A cone that cannot cover the hop now is a delay, not a refusal, so only the three
+    real refusals survive -- the window gate became a start time."""
     player = StancePlayer(Game.typed(_LS), graph=_empty_graph())
     st = player.st.clone()
     tile = flat_tiles(st)[0]
     player._exposing_enemies = lambda t: ()
     player._gaze_window = lambda t, exposed=None: 900.0
-    player._drain_gate = lambda verb, t, exposed=None, budget=0.0: False
-    assert player._hop_ok(st, tile, 1) is None
     player._drain_gate = lambda verb, t, exposed=None, budget=0.0: True
     player._hop_price = lambda state, t, k: None
     assert player._hop_ok(st, tile, 1) is None  # the stack cannot be built or aimed
     player._hop_price = lambda state, t, k: (10.0, 5000.0)
-    assert player._hop_ok(st, tile, 1) is None  # the window cannot cover the tail
+    assert player._hop_ok(st, tile, 1) is None  # no phase of the sweep fits the tail
     player._hop_price = lambda state, t, k: (10.0, 5.0)
     player._affords = lambda cost, budget, window=None: False
     assert player._hop_ok(st, tile, 1) is None  # the source side cannot fund it
     player._affords = lambda cost, budget, window=None: True
-    assert player._hop_ok(st, tile, 1) == 900.0
+    assert player._hop_ok(st, tile, 1) == (900.0, 0.0)  # clear now: no wait needed
+
+    player._earliest_start = lambda t, need, exposed=None: 773.0
+    player._drain_gate = lambda verb, t, exposed=None, budget=0.0: False
+    window, wait = player._hop_ok(st, tile, 1)
+    assert wait == 773.0 and window == 5.0 + player._margin()
 
 
 def test_a_route_child_reclaims_when_it_cannot_fund_the_next_hop():

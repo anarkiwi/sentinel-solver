@@ -8,6 +8,7 @@ resource-constrained shortest path and "what can strike this tile" is a table lo
 import argparse
 import hashlib
 import heapq
+import math
 import os
 import time
 
@@ -103,20 +104,24 @@ def _cheap_fuel(player, probe, seen):
 
 
 class Route:
-    """A stance route: the hops taken, the energy left on arrival, and the goal tile."""
+    """A stance route: the hops, the frames they take, and the energy left on arrival."""
 
-    __slots__ = ("path", "energy", "goal")
+    __slots__ = ("path", "energy", "goal", "frames")
 
-    def __init__(self, path, energy, goal):
+    def __init__(self, path, energy, goal, frames=0.0):
         self.path = path  # stance indices in order, excluding the start
         self.energy = energy
         self.goal = goal
+        self.frames = frames  # elapsed time, waits included, not a hop count
 
     def __len__(self):
         return len(self.path)
 
     def __repr__(self):
-        return f"Route(hops={len(self.path)}, energy={self.energy}, goal={self.goal})"
+        return (
+            f"Route(hops={len(self.path)}, frames={self.frames:.0f}, "
+            f"energy={self.energy}, goal={self.goal})"
+        )
 
 
 class StanceGraph:
@@ -363,13 +368,19 @@ class StanceGraph:
         monotone=True,
         dead=(),
         blocked=(),
+        metric="hops",
+        wait=None,
     ):
         """Fewest-hop ENERGY-FEASIBLE climb to a stance that can land ``target``.
 
         A resource-constrained shortest path over ``(stance, energy)``: a hop spends its
         stack plus its exposure toll, and the arrival pays back the pedestal climbed off
         plus the cheap-aim trees it reaches.  Start at a stance or at a live body.
-        """
+
+        ``metric="frames"`` schedules instead of counting hops: an edge costs its build time
+        plus ``wait(stance, elapsed)``, so a leg that must sit out a cone is priced for it
+        and a short-but-blocked route loses to a longer one that never waits."""
+        wait = (lambda _j, _t: 0.0) if wait is None else wait
         goals = set(self.strike_stances(target).tolist()) - set(blocked)
         if not goals:
             return None
@@ -385,21 +396,21 @@ class StanceGraph:
         spend = self._spend(dead)
         gain = self.fuel * mm.ENERGY_IN_OBJECTS[mm.T_TREE]
         # best[node, e]: fewest hops to node holding exactly e; a state is dominated when a settled one there holds >= energy in <= hops
-        best = np.full((n + 1, cap + 1), 1 << 30, dtype=np.int32)
+        ks = [k for _t, k in self.stances]
+        best = np.full((n + 1, cap + 1), math.inf)
         parent = (
             {}
-        )  # keyed by hops too: (node, energy) alone lets a longer push overwrite a shorter one's chain
+        )  # push id -> (previous id, stance): a float cost makes a poor dict key
         origin = n if start is None else start
-        heap = [(0, -min(cap, int(energy)), origin)]
+        counter = 0
+        heap = [(0.0, 0, origin, min(cap, int(energy)), -1)]
         while heap:
-            hops, nege, node = heapq.heappop(heap)
-            have = -nege
+            spent, _, node, have, pid = heapq.heappop(heap)
             if node in goals:
-                path = self._unwind(parent, (node, have, hops))
-                return Route(path, have, target)
-            if best[node, have:].min() <= hops:
+                return Route(self._unwind(parent, pid), have, target, spent)
+            if best[node, have:].min() <= spent:
                 continue
-            best[node, have] = hops
+            best[node, have] = spent
             if node == n:
                 here, here_k = start_tile, start_k
                 succ = np.flatnonzero(start_seen[self._cols])
@@ -418,22 +429,23 @@ class StanceGraph:
                 if here is not None and self.lands(j, here):
                     got += hop_energy(here_k)  # the inchworm reclaim of the pedestal
                 got = min(cap, got)
-                if best[j, got:].min() <= hops + 1:
+                edge = 1.0 if metric == "hops" else build_frames(ks[j]) + wait(j, spent)
+                ahead = spent + edge
+                if best[j, got:].min() <= ahead:
                     continue
-                nxt = (j, got, hops + 1)
-                if nxt in parent:
-                    continue
-                parent[nxt] = (node, have, hops)
-                heapq.heappush(heap, (hops + 1, -got, j))
+                counter += 1
+                parent[counter] = (pid, j)
+                heapq.heappush(heap, (ahead, counter, j, got, counter))
         return None
 
     @staticmethod
-    def _unwind(parent, state):
-        """The stance indices of the chain ending at ``state``, start excluded."""
+    def _unwind(parent, pid):
+        """The stance indices of the chain ending at push ``pid``, start excluded."""
         path = []
-        while state in parent:
-            path.append(state[0])
-            state = parent[state]
+        while pid in parent:
+            prev, stance = parent[pid]
+            path.append(stance)
+            pid = prev
         return list(reversed(path))
 
     def describe(self, route, state):
