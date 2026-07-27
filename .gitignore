@@ -27,3 +27,4 @@ __pycache__/
 # local working directives (not part of the project)
 /CLAUDE.md
 /.claude/
+sentinel/tests/*.json.[0-9]*
