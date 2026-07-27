@@ -154,41 +154,47 @@ class StancePlayer(AStarPlayer):
         ``HOP_COST``, the k=1 price of a hop nobody has picked yet: ls335's second hop is
         a k=0 landing costing 3, held against 5 at the E=3 the router itself predicted.
 
-        Exposure is the other half of funding: the body stands on the SOURCE tile for the
-        whole build, so a stance with energy but no window owes drains that waiting
-        cancels rather than debts that reclaiming can pay."""
+        Exposure is the other half of funding, and it is asked FIRST: ``_can_hop`` is a
+        drain-RATE test -- can the body pay the hop and the drains its span bills -- which
+        a stance can pass while no span of the sweep is long enough to build in at all.
+        ls335 (10,18) affords a hop at E=7 and has a 367 f window ceiling (400 f is
+        already ``inf``) against destinations priced at 1250 f+, so affordability alone
+        called a dead end fundable."""
         self.st = st
-        if self._can_hop(st, cost):
-            return True, 0.0
         if st.energy - self._reserve() < cost:
             return False, 0.0  # genuinely broke: no phase of the sweep funds it
         wait = self._earliest_start(tuple(st.player_xy()), HOP_FRAMES)
         if wait == math.inf or wait > MAX_WAIT:
             return False, 0.0
-        return True, wait
+        return (True, 0.0) if self._can_hop(st, cost) else (True, wait)
 
     def _can_leave(self, st, target):
         """Whether a landing can be LEFT again, or is a trap that has to be refused.
 
         ``_hop_ok`` gates ARRIVAL -- can this tile hold the build long enough -- and
-        nothing gated departure, so ls335's route spends 9 of the opening 10 energy on
-        (10,17) k=3 and dies there.  A body on the bare tile has ONE full-sight seer; one
-        on three boulders has FOUR, and a draining enemy stops rotating ($178C returns
-        before the $17F9 rotate), so the cone never leaves: ``_earliest_start`` is inf for
-        every duration down to 50 f, and no reclaim is aimable from the stack.
+        nothing gated departure, so ls335's route spends 9 of the opening 10 energy
+        climbing a stack it can never step off.  A body on the bare tile has ONE
+        full-sight seer; one on three boulders has FOUR, and a draining enemy stops
+        rotating ($178C returns before the $17F9 rotate), so the cone never clears: the
+        window ceiling collapses below any hop's aim tail and no reclaim is aimable.
 
         A landing that strikes the target needs no departure -- the absorb is the exit.
         """
         self.st = st
         return self._landable(st, target) or self._hop_funds(st)[0]
 
-    def _hop_ok(self, st, tile, k):
+    def _hop_ok(self, st, tile, k, wait_ok=True):
         """``(window, wait)`` for this hop, or ``None`` if no phase of the sweep fits it.
 
         A cone that cannot cover the hop NOW is a delay, not a refusal: ``_earliest_start``
         returns the first verified moment the tile holds ``priced`` tail clear.  Without
         it ls335's (13,27) reads 450 f against an 1141 f hop and is refused outright,
-        when waiting 773 f opens 1236 f."""
+        when waiting 773 f opens 1236 f.
+
+        ``wait_ok=False`` forbids scheduling and asks only whether the hop stands RIGHT
+        NOW.  That is the re-gate ``_try_hop`` runs after it has actually waited: the
+        price was taken on the pre-wait board, and the wait is exactly what invalidates
+        it."""
         self.st = st
         margin = self._margin()
         exposed = self._exposing_enemies(tile)
@@ -201,6 +207,8 @@ class StancePlayer(AStarPlayer):
         if window < need or not self._drain_gate(
             "robot", tile, exposed, _TAIL_FLOOR + margin
         ):
+            if not wait_ok:
+                return None
             wait = self._earliest_start(tile, need, exposed=exposed)
             if wait == math.inf or wait > MAX_WAIT:
                 return None
@@ -281,6 +289,10 @@ class StancePlayer(AStarPlayer):
         steps = []
         if wait:
             enemies.advance_frames(trial, int(wait))
+            again = self._hop_ok(trial, tile, k, wait_ok=False)
+            if again is None:
+                return None  # the wait moved the board the price was taken on
+            window = again[0]
             steps.append(self._plan_step("wait", tile, wait, GATE_TILE, window))
         got = self._hop_exec(tile, k, window)
         if got is None:
