@@ -65,13 +65,32 @@ the recorded value:
 | ours | 0 | 183 | 163 | 149 | 11 |
 
 The real `$0C30` sits on the stick value 1 in 78% of samples; ours never does, and the
-two agree on 41 of 506. `_consider_enemy_state` writes `UPDATE_COOLDOWN_SCAN` (4) at the
-top as soon as it passes the `$16E9` gate, so in our model an enemy that decays to 1 is
-reloaded on the very next consideration. For the ROM to leave it at 1 that often, either
-the enemy is considered far more rarely than `UPDATES_PER_FRAME = 8` assumes, or `$16ED`
-is not written on every path out of `$16E6`. Those two are distinguishable by reading
-`$16E6` — not by fitting, and not from the facings alone, which is why the existing
-400-frame instrument check passes without catching it.
+two agree on 41 of 506. `_consider_enemy_state` writes `UPDATE_COOLDOWN_SCAN` (4) as soon
+as it passes the `$16E9` gate, so an enemy that decays to 1 is reloaded on the very next
+consideration.
+
+The image settles which side is wrong. `$16ED LDA #$04 / STA $0C30,X` sits immediately
+after the `$16E9` gate, on every path — our write matches the ROM. `$16D9 DEC $90 / BPL /
+LDA #$07` confirms the 8-slot cursor, and `$131C LDX #$17` confirms the 24-byte cooldown
+sweep. So the model of *what* happens per consideration is right; what is wrong is **how
+often a consideration happens**.
+
+`advance_frames` already takes a `plotting` flag that suppresses `update_enemies` while
+keeping the cooldown clock — the ROM's own behaviour while the foreground is inside
+`plot_world`, the dither loop, or a scroll, none of which call `$16B5`. Running the same
+91 spans both ways:
+
+| whole span advanced as | facings exact | `$0C30` agree |
+|---|---|---|
+| `plotting=False` (what we do now) | 67/91 | 41/506 |
+| `plotting=True` | 55/91 | **399/506** |
+
+Neither extreme is right, which is the point: a span is *part* plotting (the settle's
+dither and replot, the aim's scroll notches — all already counted term by term in
+`actioncost`) and part idle main loop (the human's think time, where `$16B5` really does
+run). The executor advances the whole span as idle. Splitting the advance by phase is the
+next change, and it is a behavioural one, so it wants its own validation pass against
+these two columns rather than a constant nudged until a board is won.
 
 ## Fixture hygiene
 

@@ -21,6 +21,8 @@ EXACT_SPANS = 91  # spans whose frame count the clock pins outright
 FACING_EXACT = 67  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
 OVERCHARGED_SPANS = 17  # actions we bill more for than the whole elapsed time
+CLOCK_SAMPLES = 506  # per-enemy $0C30 readings over the exact spans
+CADENCE = {False: (67, 41), True: (55, 399)}  # plotting -> (facings, $0C30) vs recorded
 
 
 def _events(name=FIXTURE):
@@ -93,6 +95,38 @@ def test_enemy_facings_after_a_measured_span():
         want = [e["h_angle"] for e in evs[i + 1]["enemy_clock"]]
         exact += [int(st.obj_h_angle[s]) for s in slots] == want
     assert exact >= FACING_EXACT, f"regressed: {exact} < {FACING_EXACT}"
+
+
+@pytest.mark.parametrize("plotting", (False, True))
+def test_enemy_update_cadence_brackets_the_truth(plotting):
+    """Neither extreme is the ROM's cadence, which is what indicts advancing a span as
+    one phase.
+
+    ``$16ED`` reloads ``$0C30`` on every path out of ``$16E6`` and the ``$90`` cursor is
+    8 slots wide, both as modelled -- so a ``$0C30`` this far off is the CONSIDERATION
+    RATE, not the consideration.  A span is part plotting (dither, replot, scroll: no
+    ``$16B5``) and part idle main loop, and a phase-split advance must beat both rows.
+    """
+    evs = _events()
+    seed = _load(FIXTURE)["landscape"]
+    facings = agree = samples = 0
+    for i, n in _exact_spans(evs):
+        st = state_from_event(evs[i], seed)
+        hc.seed_clock(st, evs[i])
+        st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+        enemies.advance_frames(st, n, plotting=plotting)
+        clock = evs[i + 1]["enemy_clock"]
+        facings += [int(st.obj_h_angle[e["slot"]]) for e in clock] == [
+            e["h_angle"] for e in clock
+        ]
+        for e in clock:
+            agree += (
+                int(st.mem[mm.ENEMIES_UPDATE_COOLDOWN + e["slot"]])
+                == e["update_cooldown"]
+            )
+            samples += 1
+    assert samples == CLOCK_SAMPLES
+    assert (facings, agree) == CADENCE[plotting]
 
 
 def test_spans_below_the_rom_floor_are_not_two_actions():
