@@ -216,12 +216,13 @@ class StancePlayer(AStarPlayer):
         takes the body from E=12 to E=10 and its window down to 4 f.  Charging only the
         build made standing still look free.
 
-        A window too short for the tail is a PRICE, not a prohibition.  Sight only arms
-        the $0C20 countdown, so the refused windows are exactly one ``DRAIN_DELAY``
-        (449.6 f) -- the scheduler already credits that (``_gap_starts``) while this gate
-        called it fatal, and refused 5 of the 16 hops the ls335 human WON with.  When no
-        phase of the sweep ever fits, the hop stands and pays, and ``_affords`` -- the
-        rate model this branch already moved to -- decides whether the body can."""
+        A window too short for the tail is a PROHIBITION, not a price.  The tile window
+        does not bound the body's drains -- those are payable at the $0C20 rate, which
+        ``_affords`` prices -- it bounds how long the STACK survives: a sentry that sees
+        the boulder absorbs it and leaves a tree ($1A5D).  On ls335 (12,27) the trace is
+        literal: ``create(boulder)`` returns slot 55, and 135 f later ``create(robot)``
+        returns None with a TREE on top, so the transfer has no robot to enter.  A build
+        that outlasts its tile is not expensive, it is destroyed."""
         self.st = st
         margin = self._margin()
         exposed = self._exposing_enemies(tile)
@@ -238,9 +239,8 @@ class StancePlayer(AStarPlayer):
                 return None
             wait = self._earliest_start(tile, need, exposed=exposed)
             if wait == math.inf or wait > MAX_WAIT:
-                wait = 0.0  # no phase ever fits: stand and PAY, if _affords allows
-            else:
-                window = need  # the verified span the clock agreed to at `wait`
+                return None  # the stack would be absorbed mid-build, not merely drained
+            window = need  # the verified span the clock agreed to at `wait`
         if not self._affords(
             2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT],
             wait + priced[0],

@@ -276,12 +276,11 @@ def test_the_graph_is_built_once_from_the_board_captured_at_construction(
 
 
 def test_hop_ok_schedules_a_hop_rather_than_refusing_it():
-    """An unaimable or unaffordable hop answers None; a late one WAITS, a hopeless one
-    stands and PAYS.
+    """An unaimable, unschedulable or unaffordable hop answers None; a late one WAITS.
 
-    A cone that cannot cover the hop now is a delay, not a refusal, and a sweep that
-    never covers it is a price, not one either: only being unbuildable or unable to
-    afford the drains still refuses."""
+    A cone that cannot cover the hop NOW is a delay.  A sweep that never covers it is a
+    refusal, not a price: the tile window bounds how long the STACK survives, and a
+    sentry that sees the boulder absorbs it and leaves a tree."""
     player = StancePlayer(Game.typed(_LS), graph=_empty_graph())
     st = player.st.clone()
     tile = flat_tiles(st)[0]
@@ -292,10 +291,8 @@ def test_hop_ok_schedules_a_hop_rather_than_refusing_it():
     assert player._hop_ok(st, tile, 1) is None  # the stack cannot be built or aimed
     player._hop_price = lambda state, t, k: (10.0, 5000.0)
     player._earliest_start = lambda t, need, exposed=None: math.inf
-    player._affords = lambda cost, budget, window=None: False
-    assert player._hop_ok(st, tile, 1) is None  # no phase fits AND it cannot pay
     player._affords = lambda cost, budget, window=None: True
-    assert player._hop_ok(st, tile, 1) == (900.0, 0.0)  # no phase fits, so it pays now
+    assert player._hop_ok(st, tile, 1) is None  # no phase holds the stack: never built
     del player._earliest_start, player._affords
     player._hop_price = lambda state, t, k: (10.0, 5.0)
     player._affords = lambda cost, budget, window=None: False
