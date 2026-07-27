@@ -71,5 +71,6 @@ The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` im
 - [render_cost.md](docs/render_cost.md) — the `plot_world` redraw/settle frame cost.
 - [driver.md](docs/driver.md) — boot/enter/record, keyboard aim → fire → verify.
 - [instrument.md](docs/instrument.md) — the frame-locked divergence gate.
+- [human_clock.md](docs/human_clock.md) — recovering exactly what an action cost from the recorded enemy clock, and what that grades.
 - [plan_fidelity.md](docs/plan_fidelity.md) — measured plan-vs-live error budget and ranked open problems.
 - [tuning.md](docs/tuning.md) — the policy schema and the staged objective it is fitted against.

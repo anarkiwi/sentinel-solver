@@ -4,19 +4,20 @@ Each recorded event carries the true board before that action, so applying the h
 own action through our machinery and comparing against the next event isolates one
 falsifiable defect at a time, in order, with ground truth attached.
 
-ls335 diverges at action 15 by ONE energy, and the cause is phase, not logic: the
-recorded facings show our enemy clock never drifts cumulatively (the h_angle error is
-always 0 or exactly one 20-unit rotation step) while our charged frames run ~6% long in
-aggregate -- 5576 f against the 5245 f the recorded rotations imply over the same span.
-That is ~330 f of accumulated phase by action 15, against a DRAIN_DELAY of 450 f, which
-is enough to insert exactly one drain the human never paid.
+ls335 diverges at action 15 by ONE energy, from accumulated enemy phase.  The size of
+that error is now MEASURED rather than inferred: ``human_clock.span_frames`` recovers the
+exact frames the real game advanced between two events from the fixture's own
+$1335/$0C50/$0C28 readings, and against those the bill is 0.993x in aggregate -- not the
+~6% long that the quantised h_angle proxy suggested.  What the same measurement does
+indict is elsewhere; see ``test_human_clock``.
 """
 
 import sys
 import types
 from sentinel import memmap as mm
 from sentinel.astar_player import AStarPlayer
-from sentinel.test_human_win_logs import _load, state_from_event
+from sentinel.test_human_win_logs import _is_player_action, _load, state_from_event
+from sentinel.tests.human_clock import seed_clock
 
 _PLAYER_TYPES = (mm.T_BOULDER, mm.T_ROBOT, mm.T_TREE)
 
@@ -49,9 +50,12 @@ def replay(name, landscape=None, limit=None, quiet=False):
     st = state_from_event(evs[0], landscape)
     p = AStarPlayer(types.SimpleNamespace(state=st))
     st = p.st
+    seed_clock(st, evs[0])  # phase is an input, not something the cost model must earn
     say = (lambda *a: None) if quiet else print
     say(f"{name}: replaying {len(evs)} human actions through our executor")
     for i, ev in enumerate(evs[: limit or len(evs)]):
+        if not _is_player_action(ev):
+            continue  # a discharge tree / drain tick is not an action to reproduce
         verb, otype, tile = ev["verb"], ev["otype"], tuple(ev["target"])
         fverb = {"create": "boulder" if otype == mm.T_BOULDER else "robot"}.get(
             verb, verb
