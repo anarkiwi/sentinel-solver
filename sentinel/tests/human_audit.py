@@ -166,9 +166,11 @@ def _audit_step(i, ev, evs, seed, truth=None):
         gate_allow = bp._drain_gate(fverb, tgt, exposed_t, aim_frames + need)
 
     fire_ok = None
+    fire_reason = None
     breaches = []
     if view is not None:
         fire_ok = bp._fire(fverb, tgt, view)
+        fire_reason = bp.fire_reason
         breaches = [
             {"verb": b[1], "tile": list(b[2]), "seen_by": b[3]} for b in bp.breaches
         ]
@@ -229,7 +231,12 @@ def _audit_step(i, ev, evs, seed, truth=None):
             "aim_frames": _rd(aim_frames),
             "view_matches_human_facing": view_matches,
         },
-        "verdict": {"gate_allow": gate_allow, "fire_ok": fire_ok, "breaches": breaches},
+        "verdict": {
+            "gate_allow": gate_allow,
+            "fire_ok": fire_ok,
+            "fire_reason": fire_reason,
+            "breaches": breaches,
+        },
         "disagreements": dis,
     }
 

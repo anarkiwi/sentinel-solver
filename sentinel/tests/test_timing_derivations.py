@@ -6,6 +6,7 @@ import pytest
 from driver import kbd_aim
 from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
 from sentinel import pancost, playerbase, projector
+from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
 
@@ -126,3 +127,44 @@ def test_hop_frames_matches_claimed_composition():
     assert playerbase.HOP_FRAMES == pytest.approx(
         2 * actioncost.SETTLE["create"] + actioncost.SETTLE["transfer"]
     )
+
+
+def _units_turned(landscape):
+    """Bearing units each enemy actually sweeps in one REVOLUTION_FRAMES period."""
+    st = Game.typed(landscape).state.clone()
+    st.mem[mm.PLAYER_NOT_ACTED] = 0
+    slots = list(enemies.enemy_slots(st))
+    turned = {e: 0 for e in slots}
+    was = {e: int(st.obj_h_angle[e]) for e in slots}
+    for _ in range(int(playerbase.REVOLUTION_FRAMES)):
+        enemies.advance_frame(st)
+        for e in slots:
+            now = int(st.obj_h_angle[e])
+            turned[e] += min((now - was[e]) % 256, (was[e] - now) % 256)
+            was[e] = now
+    return turned
+
+
+def test_revolution_steps_cover_a_turn_at_the_rom_rotation_step():
+    """14 rotations x the +-20 $1813 step is 280 units, against the 256 a circle needs."""
+    for landscape in (0, 42, 110, 335):
+        st = Game.typed(landscape).state
+        steps = {
+            abs(playerbase._signed(st.mem[mm.ROTATION_SPEED_TABLE + e]))
+            for e in enemies.enemy_slots(st)
+        }
+        assert steps and all(s * playerbase.REVOLUTION_STEPS >= 256 for s in steps)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the rotation STALL: a draining or gated enemy skips its $17F9 rotate, so "
+    "ls0 slot 0 turns 120 of 280 units per REVOLUTION_FRAMES, ls110 slot 0 turns 80 "
+    "and ls335 slots 1/5/6 turn 220/120/180 -- why _verify_starts re-asks the clock",
+)
+def test_revolution_frames_is_a_full_cone_revolution():
+    """One calendar period would sweep every cone past all 256 bearings -- if it did,
+    a "never busy" span would mean never rather than not yet."""
+    for landscape in (0, 42, 110, 335):
+        turned = _units_turned(landscape)
+        assert all(t >= 256 for t in turned.values()), (landscape, turned)

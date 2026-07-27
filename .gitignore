@@ -17,6 +17,8 @@ __pycache__/
 /.vice-home/
 /out/*.json
 /out/*.jsonl
+# stance-graph sweeps: a pure function of the tile map, rebuilt in ~40 s
+/out/stancegraph/
 
 # editor swap files
 *.swp
@@ -25,3 +27,4 @@ __pycache__/
 # local working directives (not part of the project)
 /CLAUDE.md
 /.claude/
+sentinel/tests/*.json.[0-9]*

@@ -15,6 +15,8 @@ V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
 SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
 _VIEW_CACHE = {}
 _VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
+_EPOCH_CACHE = {}  # measured first-rotation frames, keyed by the enemy clock
+_EPOCH_CACHE_MAX = 256
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -25,6 +27,8 @@ TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
 UTURN_FRAMES = 74  # a u-turn is a full action tap (want-flag $23, kbd_aim._uturn), not a bare keystroke: idle+press scans plus the action's own consumption. Live ls42 p1, n=1.
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
+REVOLUTION_STEPS = 14  # rotations covering a full 256-bearing turn at the +-20 step
+REVOLUTION_FRAMES = REVOLUTION_STEPS * ROT_PERIOD_FRAMES  # the threat calendar's period
 FOV_HALF = enemies.FOV_SCAN // 2  # +-10 units of the enemy scan cone
 FOV_MARGIN = 4  # safety margin on top of the cone half-width
 ROBOT_EYE = 0.875  # a robot's eye above its foot tile ($E0 fraction)
@@ -41,7 +45,6 @@ MEANIE_ARM_FRAMES = (
     * enemies.UPDATE_COOLDOWN_MEANIE_ROTATE
     * UNIT_FRAMES
 )  # $171B worst-case meanie rotate-to-face the player
-MEANIE_HORIZON = 3 * HOP_FRAMES  # forced-hyperspace lookahead the reserve floor covers
 
 
 def _signed(b):
@@ -160,13 +163,33 @@ class BasePlayer:
         self.verbose = verbose
         self.audit = audit  # strict post-settle invariant accounting (below)
         self.breaches = []
+        self.fire_reason = None  # clause that refused the last _fire, or None
         self.trace = []
 
     # ------------------------------------------------------------------ clock
-    def _advance(self, frames):
+    def _advance(self, frames, plotting=False):
+        """Advance `frames`; `plotting` marks foreground the ROM spends inside
+        plot_world/dither/scroll, where $16B5 is never reached and only the raster
+        cooldown clock runs ($130C).  Measured against the recorded enemy clock in
+        ``sentinel/tests/test_human_clock.py``."""
         frames = int(round(frames))
-        enemies.advance_frames(self.st, frames)
+        enemies.advance_frames(self.st, frames, plotting=plotting)
         self.frames += frames
+
+    def _advance_phases(self, phases):
+        """Advance a sequence of ``(frames, plotting)`` segments in order."""
+        for frames, plotting in phases:
+            if frames > 0:
+                self._advance(frames, plotting=plotting)
+
+    @staticmethod
+    def advance_phases(st, phases):
+        """Advance `st` through ``(frames, plotting)`` segments; the search prices a
+        step with this so it evolves the world exactly as ``_fire`` will."""
+        for frames, plotting in phases:
+            n = int(round(frames))
+            if n > 0:
+                enemies.advance_frames(st, n, plotting=plotting)
 
     # ------------------------------------------------------------- geometry
     def _my_eye(self):
@@ -336,6 +359,140 @@ class BasePlayer:
                 return first + (k - 1) * ROT_PERIOD_FRAMES
         return math.inf
 
+    def _rotation_epochs(self):
+        """Frame of each enemy's FIRST rotation, MEASURED on a clone of the live clock.
+
+        ``rotation_cooldown * UNIT_FRAMES`` is not that instant -- the $1335 bresenham
+        accumulator and the enemy's own $16E9 update gate both offset it, and a cd of 0
+        read as t=0 put every interval a rotation early (ls335 (13,27): predicted clear at
+        749, actually covered until ~800).  Every later gap is exactly one period."""
+        st = self.st
+        key = (
+            bytes(
+                st.mem[mm.ENEMIES_ROTATION_COOLDOWN : mm.ENEMIES_ROTATION_COOLDOWN + 8]
+            )
+            + bytes(st.mem[mm.ENEMIES_UPDATE_COOLDOWN : mm.ENEMIES_UPDATE_COOLDOWN + 8])
+            + bytes([st.mem[mm.COOLDOWN_BRESENHAM], st.mem[mm.COOLDOWN_GATE]])
+            + bytes(int(st.obj_h_angle[e]) for e in range(8))
+        )
+        got = _EPOCH_CACHE.get(key)
+        if got is not None:
+            return got
+        clone = st.clone()
+        clone.mem[mm.PLAYER_NOT_ACTED] = 0
+        slots = list(enemies.enemy_slots(clone))
+        was = {e: int(clone.obj_h_angle[e]) for e in slots}
+        seen = {e: [] for e in slots}
+        for frame in range(1, int(2.2 * ROT_PERIOD_FRAMES) + 2):
+            enemies.advance_frame(clone)
+            for e in slots:
+                now = int(clone.obj_h_angle[e])
+                if now != was[e]:
+                    if len(seen[e]) < 2:
+                        seen[e].append(float(frame))
+                    was[e] = now
+            if all(len(v) >= 2 for v in seen.values()):
+                break
+        epochs = {}
+        for e in slots:  # a stalled or non-rotating enemy never sets one
+            got = seen[e]
+            first = got[0] if got else ROT_PERIOD_FRAMES
+            period = got[1] - got[0] if len(got) > 1 else ROT_PERIOD_FRAMES
+            epochs[e] = (first, period)
+        if len(_EPOCH_CACHE) > _EPOCH_CACHE_MAX:
+            _EPOCH_CACHE.clear()
+        _EPOCH_CACHE[key] = epochs
+        return epochs
+
+    def _cover_intervals(self, e, angle_hi, half, horizon, epochs=None):
+        """``[start, end)`` frame spans inside ``horizon`` where ``e``'s cone holds
+        ``angle_hi``.  Facing only changes at a rotation boundary, so the calendar is a
+        step function: facing after ``n`` rotations is ``facing0 + n*step``."""
+        st = self.st
+        facing = int(st.obj_h_angle[e])
+        step = _signed(st.mem[mm.ROTATION_SPEED_TABLE + e])
+        if step == 0:  # never rotates: its bearing decides once, for all time
+            return [(0.0, horizon)] if self._in_cone(angle_hi, facing, half) else []
+        epochs = self._rotation_epochs() if epochs is None else epochs
+        first, period = epochs.get(e, (ROT_PERIOD_FRAMES, ROT_PERIOD_FRAMES))
+        out = []
+        n = 0
+        while True:
+            lo = 0.0 if n == 0 else first + (n - 1) * period
+            if lo >= horizon:
+                return out
+            hi = first if n == 0 else first + n * period
+            if self._in_cone(angle_hi, (facing + step * n) & 0xFF, half):
+                out.append((lo, min(hi, horizon)))
+            n += 1
+
+    def _busy_spans(self, exposed, horizon):
+        """The exposing enemies' cover intervals, unioned into disjoint busy spans."""
+        half = FOV_HALF + FOV_MARGIN
+        spans = []
+        for e, angle_hi, full in exposed:
+            if full:
+                spans.extend(self._cover_intervals(e, angle_hi, half, horizon))
+        if not spans:
+            return []
+        spans.sort(key=lambda s: (s[0], s[1]))
+        merged = [list(spans[0])]
+        for lo, hi in spans[1:]:
+            if lo <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], hi)
+            else:
+                merged.append([lo, hi])
+        return merged
+
+    def _earliest_start(self, tile, duration, exposed=None, horizon=None):
+        """Frames to wait before a body on ``tile`` gets ``duration`` clear of drains.
+
+        The scheduling primitive the gates lacked: a cone that cannot cover an action NOW
+        is a DELAY, not a refusal.  ls335 (13,27) offers 450 f at once and 3304 f after
+        ~1000 f of waiting, against a hop needing 1141 f.  ``inf`` if no phase ever fits.
+        """
+        return self._verify_starts(
+            tile, duration, self._gap_starts(tile, duration, exposed, horizon)
+        )
+
+    def _gap_starts(self, tile, duration, exposed=None, horizon=None):
+        """Candidate waits: the start of every calendar gap long enough to hold
+        ``duration``.  A gap is longest at its own start, so only starts can be answers.
+        """
+        if exposed is None:
+            exposed = self._exposing_enemies(tile)
+        horizon = REVOLUTION_FRAMES if horizon is None else horizon
+        out = []
+        at = 0.0
+        for lo, hi in self._busy_spans(exposed, horizon):
+            if lo - at + DRAIN_DELAY >= duration:
+                out.append(at)
+            at = hi
+        if horizon - at + DRAIN_DELAY >= duration:
+            out.append(at)
+        return out
+
+    def _verify_starts(self, tile, duration, cands):
+        """The first candidate the BIT-EXACT clock agrees on, else ``inf``.
+
+        The calendar proposes and the clock disposes: ``_cone_onset`` assumes
+        uninterrupted rotation, but a draining enemy stalls ($178C returns before the
+        $17F9 rotate) and its cone then holds, so an unverified gap reads far too long.
+        """
+        real = self.st
+        try:
+            for at in cands:
+                probe = real.clone()
+                probe.mem[mm.PLAYER_NOT_ACTED] = 0
+                if at:
+                    enemies.advance_frames(probe, int(at))
+                self.st = probe
+                if self._gaze_window(tile) >= duration:
+                    return at
+        finally:
+            self.st = real
+        return math.inf
+
     def _drain_clock(self, e, angle_hi, half, target):
         """Frames until enemy `e` can take energy off (or arm a meanie against) a
         body on bearing `angle_hi`: the cone onset PLUS the draining countdown still
@@ -416,7 +573,7 @@ class BasePlayer:
         never gated here."""
         if not n_drains:
             return True
-        return self.st.energy - cost - n_drains >= max(self._reserve(), 1)
+        return self.st.energy - cost - n_drains >= self._reserve()
 
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
         """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
@@ -443,48 +600,35 @@ class BasePlayer:
         accumulated per-step error at plan depth (`astar_player._margin`)."""
         return 0.0
 
-    def _stall_drains(self):
-        """Energy an UNFORESEEN stall hands the enemies while the body stands
-        exposed: `_margin()` frames of accumulated phase error at the ROM's own
-        exchange rate of 1 energy per `DRAIN_DELAY` of continuous sight ($0C20)."""
-        return int(math.ceil(self._margin() / DRAIN_DELAY))
-
     def _reserve(self):
-        """Survival floor: the SUM of what the stance actually owes, not a constant.
+        """Energy the stance owes unconditionally -- 0 unless a meanie is ALIVE.
 
-        * A forced hyperspace spends the 3-energy robot cost and $215F kills below
-          it -- owed while a meanie is alive or armable against this body inside
-          `MEANIE_HORIZON` ($19C3 needs a partial seer and a tree within 10 tiles,
-          then `_meanie_window`'s drain + spawn + arm clock).
-        * An EXPOSED body owes its ESCAPE plus the drains a stall costs.  Sight is
-          not a passing weather front: $178C keeps a still-visible target held, and
-          that path returns before the `no_drain` rotate at $17F9, so a seeing enemy
-          STOPS rotating -- the cone does not sweep off, and $1A31 re-arms the
-          countdown after every drain, billing 1 energy per `DRAIN_DELAY` for as long
-          as the player cannot act.  The exit is an action, and the last-resort one is
-          the conceded hyperspace: it spends the 3-energy robot cost and $215F kills
-          below it, so `_react` concedes it only while E > 3.  A body that reaches 3
-          under a cone has NO exit left and is simply billed to death -- the ls110
-          live death, 26 waits at E=3.  `_stall_drains` adds the drains the plan's own
-          accumulated phase uncertainty can bill before the escape fires.
-
-        An UNEXPOSED stance (`_player_window` inf) owes neither term and may be spent
-        to the bone: that is where the human ls110 line runs to E=1 and refuels by
-        absorbing the pedestal behind it."""
+        Reaching 0 is not death ($1A08 debits; $1A00 kills only on a drain arriving at
+        0) and $1BBF lets a create spend to empty, so survival is
+        `energy - cost - drains >= reserve` -- `_affords`, exposure billed as the
+        $0C20 RATE it is.  A live meanie owes its forced hyperspace's robot cost
+        ($2156 spends 3, $2170 kills on underflow); an ARMABLE one owes nothing here,
+        `_gaze_window` already folds `_meanie_window` into every gate's window."""
         st = self.st
         floor = 0
-        armed = any(
+        if any(
             not st.is_empty(s) and st.obj_type[s] == mm.T_MEANIE
             for s in range(mm.NUM_SLOTS)
-        )
-        if not armed and not self._frozen() and enemies.enemy_slots(st):
-            exposed = self._exposures(st, st.player)
-            armed = self._meanie_window(st.player_xy(), exposed) <= MEANIE_HORIZON
-        if armed:
+        ):
             floor += mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-        if self._player_window() != math.inf:
-            floor += 1 + self._stall_drains()
         return floor
+
+    def _affords(self, cost, budget, window=None):
+        """Whether spending `cost` energy survives the drains `budget` frames of
+        exposure bill at the $0C20/$1A31 rate, over `_reserve`.
+
+        `budget` is the span the body stands exposed for -- a create's settle, a hop's
+        whole build.  Executor and search both gate on this, at the same instant, so a
+        plan cannot carry a step the executor then refuses."""
+        if window is None:
+            window = self._player_window()
+        drains = self._drains_in(window, budget + self._margin())
+        return self.st.energy - cost - drains >= self._reserve()
 
     def _player_window(self, exclude=None):
         """Frames until the player's OWN body is drainable (inf if never; no
@@ -499,11 +643,15 @@ class BasePlayer:
         return self._gaze_window(st.player_xy(), exposed=exposed)
 
     # ------------------------------------------------------------------- aim
-    def _aim_frames(self, view):
-        """Frames the executor's aim method costs, mechanism for mechanism: a
-        same-bearing REUSE keeps sights on and drives the cursor from where it
-        is; otherwise sights toggle off/on (gated scans + replots, and $134C
-        re-centres the cursor) before the coarse pan and a from-centre drive."""
+    def _aim_phases(self, view):
+        """The aim as ordered ``(frames, plotting)`` segments, mechanism for mechanism.
+
+        A same-bearing REUSE keeps sights on and drives the cursor from where it is;
+        otherwise sights toggle off/on ($134C re-centres the cursor) before the coarse
+        pan and a from-centre drive.  The toggle's replot and the pan's per-notch
+        scroll+replot are foreground ($16B5 unreached); the u-turn taps, the cursor
+        drive and the firing tap are gated main-loop scans, where it runs.
+        """
         st = self.st
         me = st.player
         want = (view["h_angle"], view["v_angle"])
@@ -525,7 +673,16 @@ class BasePlayer:
         pan = pancost.pan_frames(
             st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, me
         )
-        return toggles + nu * UTURN_FRAMES + pan + cur + TAP_FRAMES
+        return (
+            (toggles, True),
+            (nu * UTURN_FRAMES, False),
+            (pan, True),
+            (cur + TAP_FRAMES, False),
+        )
+
+    def _aim_frames(self, view):
+        """Total frames the executor's aim method costs."""
+        return sum(f for f, _ in self._aim_phases(view))
 
     def _aim_unfreeze_split(self, view):
         """Frames of aim elapsing BEFORE a u-turn unfreezes the world, else None.
@@ -543,6 +700,26 @@ class BasePlayer:
         reuse = self.last_bearing == (view["h_angle"], view["v_angle"])
         return (0.0 if reuse else TOGGLE_FRAMES) + nu * UTURN_FRAMES
 
+    def _step_aim_phases(self, verb, view):
+        """`_aim_phases` for `verb`, empty when a transfer rides a reused bearing."""
+        if verb == "transfer" and self.last_bearing == (
+            view["h_angle"],
+            view["v_angle"],
+        ):
+            return ()
+        return self._aim_phases(view)
+
+    def _aim_head_tail(self, verb, view):
+        """The aim split at the u-turn unfreeze: ``(before, after)`` phase segments.
+
+        A non-empty head means keying the u-turn starts the enemy clock part-way
+        through the aim ($12E1), so the caller clears $0CE5 between the two.
+        """
+        phases = self._step_aim_phases(verb, view)
+        if self._aim_unfreeze_split(view) is None:
+            return (), phases
+        return phases[:2], phases[2:]
+
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
         committed bearing sends no aim keys ($21 fires on the object under the cursor the
@@ -559,17 +736,19 @@ class BasePlayer:
     def _fire(self, verb, tile, view):
         """Aim (world advances), re-gate, apply `verb` on `tile`, settle.
         Returns False if the gate fails after the aim (the world changed under
-        us) -- the caller just re-plans next tick."""
+        us) -- the caller just re-plans next tick.
+
+        ``fire_reason`` names the clause that refused, so a refusal measured against a
+        human WIN can be attributed instead of merely counted."""
         st = self.st
-        aim_f = self._step_aim_frames(verb, view)
-        split = self._aim_unfreeze_split(view)
-        if split is None:
-            self._advance(aim_f)
-        else:
-            self._advance(min(aim_f, split))
+        self.fire_reason = None
+        head, tail = self._aim_head_tail(verb, view)
+        self._advance_phases(head)
+        if head:
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00  # $12E1: the u-turn unfroze the world
-            self._advance(max(0.0, aim_f - split))
+        self._advance_phases(tail)
         if actions.player_dead(st):
+            self.fire_reason = "dead_during_aim"
             return False
         me = st.player
         st.obj_h_angle[me] = view["h_angle"]
@@ -579,13 +758,15 @@ class BasePlayer:
         if not aim.gate(st, view, tile):
             view = aim.propose(st, tile, v_band=True)
             if view is None or not aim.gate(st, view, tile):
+                self.fire_reason = "aim_gate"
                 return False
         if verb in ("boulder", "robot"):
             cost = mm.ENERGY_IN_OBJECTS[
                 mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
             ]
-            if st.energy - cost < self._reserve():
-                return False  # drained during the aim: creating now breaches the floor
+            if not self._affords(cost, self._settle(verb, view)):
+                self.fire_reason = "affords"
+                return False  # the drains this create's own settle bills take the body
         ok = False
         if verb == "boulder":
             ok = actions.create(st, mm.T_BOULDER, tile) is not None
@@ -600,10 +781,13 @@ class BasePlayer:
         if ok:
             if verb == "transfer":
                 self.last_bearing = None  # new body: committed bearing is stale
-            self._advance(self._settle(verb, view))
+            # dither/replot ($1FA4/$86A5) or the viewpoint redraw ($357D): all foreground
+            self._advance(self._settle(verb, view), plotting=True)
             if self.audit and verb in ("boulder", "robot", "transfer"):
                 self._account(verb, tile)
             self._log(verb, tile)
+        else:
+            self.fire_reason = "rom_refused"  # $1B46/$1B9B: the action itself would not
         return ok
 
     def _settle_eye(self, verb, tile):

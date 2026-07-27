@@ -62,7 +62,17 @@ enemies, not the number of hops.
   frozen tile set) makes one affordable.
 - `_c_reclaim` — absorb landable own boulders/shells (base <= eye) and, when short, trees,
   up to `_MAX_RECLAIM` per macro; the player stays put so its own window bounds the aim.
-- `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace.
+- `_c_relocate` — transfer into an **existing** remote robot that is aimable from here
+  (`_TOP_RELOCS` = 4, cheapest aim first). The body otherwise only ever reaches viewpoints
+  the planner built itself: at ls335 handover 144, where the human simply steps into the
+  robot they left by the platform, the only two children both *absorbed* it.
+- `_c_reach` — climb toward a tile until it is landable: the pursuit's climb with no
+  strike. The endgame needs it, because the Sentinel can be absorbed from range while the
+  platform is still out of sight, and `_c_endgame` only builds on a platform it can see.
+- `_c_endgame` — Sentinel gone: robot on the platform tile, transfer, hyperspace. When the
+  platform is not landable it is joined by `_c_relocate`/`_c_reach`; without them the
+  frontier empties one move from a win (handover 140: one expansion, and neither 20x the
+  node budget nor pure Dijkstra changes it, because the heap exhausts rather than runs out).
 
 The climb **inchworms** (the measured human pattern,
 [gameplay §7](gameplay.md#7-how-a-human-wins-quick-strategy)): each transfer-up reclaims
@@ -83,16 +93,15 @@ expensive, so one constant is simultaneously too strict and too lax.
   + transfer, the only span a *drainable* body stands there (`$16E6` drains robots, not
   boulders). Charging the whole hop here rejected tiles that were clear for every frame
   the robot existed.
-- **Source** (shadow-recorded in `_record_hop_gate`, decides nothing): the player stands
-  on its *current* tile for the whole build, so its `_player_window()` would have to
-  cover `total`. This is the half the destination gate cannot see, and it is the check
-  that refuses ls335's fatal `(8,21)` hop — 1294 f against a 120 f body window. Enforcing
-  it is measured **unaffordable**: on ls42 hops cost 891–1572 f from body
-  windows of 120–892 f, so the search falls to 6 expansions and no plan on a board it
-  otherwise wins — the same collapse enforcing it live produced
-  ([plan_fidelity.md](plan_fidelity.md)). Exposure onset is not death: a drain costs
-  energy over frames and the transfer moves the body off. The condition needs a cost
-  model, not a deadline.
+- **Source** (enforced as a *price*, `policy.source_gate`): the player stands on its
+  *current* tile for the whole build, so that exposure is billed at the `$0C20` rate —
+  `_affords(2k + 3, total)` — and only a hop the body cannot pay for is refused. As a
+  **deadline** (`_player_window() >= total`) this was measured unaffordable: ls42 hops
+  cost 891–1572 f from body windows of 120–892 f, so the search fell to 6 expansions and
+  no plan on a board it wins, the same collapse enforcing it live produced
+  ([plan_fidelity.md](plan_fidelity.md)). Exposure onset is not death — a drain costs
+  energy over frames and the transfer moves the body off — so it needed a cost model,
+  which `_affords` now supplies. `_record_hop_gate` still shadow-records both halves.
 
 Ranking is cheap and pricing is not, so candidates are pre-filtered on the per-verb cost
 *floors* (`_TAIL_FLOOR`, a lower bound on the drainable span) and priced exactly only in

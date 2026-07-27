@@ -23,8 +23,11 @@ python -m sentinel.astar_player 110               # offline, same board
 | landscape | enemies | offline | live |
 |---|---|---|---|
 | 0 | 1 | 23 actions | — |
-| 42 | 2 | 35 | **36 actions** |
-| 110 | 3 | 42 | **41 actions** |
+| 42 | 2 | 34 | **36 actions** |
+| 110 | 3 | 37 | **41 actions** |
+
+The live column predates the phase-split advance ([human_clock.md](docs/human_clock.md))
+and has not been re-run against it.
 
 A landscape is identified by one number: the one a player types on the keypad. Every
 tool here — `driver.play_player`, `sentinel.astar_player`, `sentinel.player`,
@@ -37,7 +40,9 @@ board offline.
 |------|------|------|
 | Model | `sentinel/` | standalone bit-exact forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). [docs/simulator.md](docs/simulator.md) |
 | A\* player | `sentinel/astar_player.py` | weighted best-first search that plans a winning line and executes it. [docs/astar_player.md](docs/astar_player.md) |
+| Stance planner | `sentinel/stancegraph.py`, `sentinel/stance_player.py` | the board's geometry as a graph: routes are shortest paths, not searched. [docs/stance_planner.md](docs/stance_planner.md) |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer`. [docs/player.md](docs/player.md) |
+| Policy + tuning | `sentinel/policy.py`, `sentinel/tune.py` | the player's tunable choices as one env-addressable schema, fitted against ground truth. [docs/tuning.md](docs/tuning.md) |
 | Driver | `driver/` | boot, enter a landscape, run memory-verified live keyboard operations (aim → fire → verify), record. Imports only `sentinel/`. [docs/driver.md](docs/driver.md) |
 | Instrument | `driver/instrument.py`, `sentinel/statecmp.py` | frame-locked sim-vs-emulator divergence: seed the sim from the live image, step both one frame at a time, report the first disagreement. [docs/instrument.md](docs/instrument.md) |
 
@@ -64,8 +69,11 @@ The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` im
 - [gameplay.md](docs/gameplay.md) — the game's rules and mechanics (ROM-derived spec).
 - [simulator.md](docs/simulator.md) — the model's modules and golden validation.
 - [astar_player.md](docs/astar_player.md) — search, candidate generators, cost model.
+- [stance_planner.md](docs/stance_planner.md) — the stance graph, why the A\* frontier empties on ls335, and the layered replacement.
 - [player.md](docs/player.md) — the reactive player: priorities, threat model, timing.
 - [render_cost.md](docs/render_cost.md) — the `plot_world` redraw/settle frame cost.
 - [driver.md](docs/driver.md) — boot/enter/record, keyboard aim → fire → verify.
 - [instrument.md](docs/instrument.md) — the frame-locked divergence gate.
+- [human_clock.md](docs/human_clock.md) — recovering exactly what an action cost from the recorded enemy clock, and what that grades.
 - [plan_fidelity.md](docs/plan_fidelity.md) — measured plan-vs-live error budget and ranked open problems.
+- [tuning.md](docs/tuning.md) — the policy schema and the staged objective it is fitted against.
