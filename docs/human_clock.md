@@ -46,12 +46,22 @@ of overcharge regardless of think time.
 91**: an enemy the ROM holds in an earlier branch of `consider_enemy_state` (`$16E6`)
 rotates in ours. Rotation is the last thing that routine reaches — after discharge, a
 held target, a drainable robot, and a drainable boulder/tree have all declined — so a
-facing that runs ahead means we exit a branch the ROM stays in. The same defect shows up
-as energy: replayed per action from ground truth, ours ends one *above* the human on
-several absorbs, a drain we do not model.
+facing that runs ahead means we exit a branch the ROM stays in.
 
-Swapping our billed cost for the exactly measured span changes the per-action energy
-outcome on 1 of 122 actions. The charge model is therefore **not** the lever for the
+Energy says the same thing, but only once the action is placed correctly. A bracket
+fires *when the action lands*, so within span `i` the action is the LAST thing that
+happens, not the first — seed the clock, advance the span, then apply it. Done that way
+**64 of 69** exact-span actions reproduce the human's next energy. The five misses are
+all off by exactly one energy and go in *both* directions (two high, three low), so they
+are drain-timing scatter inside the span, not a systematic over-credit.
+
+A drain does not decrement a counter — `$1A08` DOWNGRADES its target (robot → boulder →
+tree → gone). So an absorb whose object was drained mid-span yields one less, and whether
+we agree turns entirely on placing the drain on the right side of the action. That makes
+the residual an *ordering* question, the same one the `$0C30` gap below is about.
+
+Swapping our billed cost for the exactly measured span moves the per-action outcome by
+one action (64/69 against 63/68). The charge model is therefore **not** the lever for the
 ls335 replay floor; the enemy branch is.
 
 ## The sharpest lead: `$0C30` never reaches 1 in our model
