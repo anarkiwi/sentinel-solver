@@ -163,6 +163,7 @@ class BasePlayer:
         self.verbose = verbose
         self.audit = audit  # strict post-settle invariant accounting (below)
         self.breaches = []
+        self.fire_reason = None  # clause that refused the last _fire, or None
         self.trace = []
 
     # ------------------------------------------------------------------ clock
@@ -683,8 +684,12 @@ class BasePlayer:
     def _fire(self, verb, tile, view):
         """Aim (world advances), re-gate, apply `verb` on `tile`, settle.
         Returns False if the gate fails after the aim (the world changed under
-        us) -- the caller just re-plans next tick."""
+        us) -- the caller just re-plans next tick.
+
+        ``fire_reason`` names the clause that refused, so a refusal measured against a
+        human WIN can be attributed instead of merely counted."""
         st = self.st
+        self.fire_reason = None
         aim_f = self._step_aim_frames(verb, view)
         split = self._aim_unfreeze_split(view)
         if split is None:
@@ -694,6 +699,7 @@ class BasePlayer:
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00  # $12E1: the u-turn unfroze the world
             self._advance(max(0.0, aim_f - split))
         if actions.player_dead(st):
+            self.fire_reason = "dead_during_aim"
             return False
         me = st.player
         st.obj_h_angle[me] = view["h_angle"]
@@ -703,12 +709,14 @@ class BasePlayer:
         if not aim.gate(st, view, tile):
             view = aim.propose(st, tile, v_band=True)
             if view is None or not aim.gate(st, view, tile):
+                self.fire_reason = "aim_gate"
                 return False
         if verb in ("boulder", "robot"):
             cost = mm.ENERGY_IN_OBJECTS[
                 mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
             ]
             if not self._affords(cost, self._settle(verb, view)):
+                self.fire_reason = "affords"
                 return False  # the drains this create's own settle bills take the body
         ok = False
         if verb == "boulder":
@@ -728,6 +736,8 @@ class BasePlayer:
             if self.audit and verb in ("boulder", "robot", "transfer"):
                 self._account(verb, tile)
             self._log(verb, tile)
+        else:
+            self.fire_reason = "rom_refused"  # $1B46/$1B9B: the action itself would not
         return ok
 
     def _settle_eye(self, verb, tile):
