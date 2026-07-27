@@ -180,7 +180,7 @@ def evaluate(policy, args, report=None):
 
 def optimize(args):
     """Run the study, persisting to SQLite so a run is resumable."""
-    import optuna
+    import optuna  # pylint: disable=import-error  # optional: not in requirements.txt
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(

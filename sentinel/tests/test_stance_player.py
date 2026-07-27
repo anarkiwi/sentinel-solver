@@ -120,7 +120,7 @@ def test_route_targets_are_the_platform_once_the_sentinel_is_gone():
     player._landable = lambda state, tile: False
     assert player._route_targets(st) == [tuple(st.platform_xy)]
     player._landable = lambda state, tile: True
-    assert player._route_targets(st) == []
+    assert not player._route_targets(st)
 
 
 def test_route_mask_is_the_landset():
@@ -332,7 +332,7 @@ def test_route_targets_come_from_the_ordering_dp_once_the_graph_has_stances():
     plat = tuple(st.platform_xy)
     assert tuple(int(v) for v in st.tile_of(actions.SENTINEL_SLOT)) == plat
     assert player._order_for(st) == [plat, plat]
-    assert player._route_targets(st) == []
+    assert not player._route_targets(st)
     lone = st.clone()
     for slot in enemies.enemy_slots(lone):
         if slot != actions.SENTINEL_SLOT:

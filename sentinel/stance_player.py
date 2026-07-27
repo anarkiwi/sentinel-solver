@@ -205,7 +205,7 @@ class StancePlayer(AStarPlayer):
 
         Nearest-first is what the A\\* player guesses with; the order is what a human
         plays and what the ordering DP solves for."""
-        if not len(self.graph):
+        if not self.graph:
             return self._nearest_targets(st)
         foes = enemies.enemy_slots(st)
         locked = tuple(st.platform_xy) if len(foes) > 1 else None
@@ -259,7 +259,7 @@ class StancePlayer(AStarPlayer):
     def _hops_to_tile(self, st, tile):
         """Hops from this stance to one that strikes ``tile``, or ``None`` if unreached."""
         graph = self.graph
-        if not len(graph):
+        if not graph:
             return None
         if self._landable(st, tile):
             return 0.0
@@ -292,7 +292,7 @@ class StancePlayer(AStarPlayer):
         """Hops from this stance to one that strikes the nearest goal, or ``None`` when
         the graph cannot answer -- the board-derived replacement for the eye deficit."""
         graph = self.graph
-        if not len(graph):
+        if not graph:
             return None
         targets = self._route_targets(st)
         if not targets:
