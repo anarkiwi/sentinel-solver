@@ -146,6 +146,7 @@ class AStarPlayer(BasePlayer):
         self._plane_memo = {}  # per-(sig, tile) targeted $F5-plane march results
         self._cone_memo = {}  # per-(sig, tile) targeted band march results
         self._hop_price_memo = {}  # per-(stance, tile, k) exact hop cost
+        self._hold_memo = {}  # per-(stance, tile, span) boulder survival
         self._hs_streak = 0  # consecutive last-resort hyperspaces (spiral guard)
         self._depth = 0  # steps charged ahead of the live board (margin scale)
         self._margin_k = _MARGIN_K  # 0 in a relaxed (last-chance) re-search
@@ -970,6 +971,37 @@ class AStarPlayer(BasePlayer):
             }
         )
 
+    def _stack_holds(self, st, tile, span):
+        """Whether a boulder on ``tile`` is still a boulder ``span`` frames later.
+
+        ``_drain_gate`` exempts boulders because $16E6 drains a BODY and a boulder body is
+        not drainable.  That is the wrong path: $17B7 has an enemy drain a boulder as an
+        OBJECT, downgrading it to a tree, so an uncapped stack rots under a cone the body
+        would have been safe in.  ls335 (12,27) holds 103 f against the 135 f the robot
+        needs, and the trace is literal -- the boulder is created, then the robot create
+        answers None with a TREE on top.
+
+        Measured, the lifetime is a per-tile CONSTANT and independent of when the boulder
+        is placed (103 f at delays 0/100/200/400), so simulating the span is exact rather
+        than a sample."""
+        if span <= 0:
+            return True
+        key = (self._sig(st), tuple(tile), int(span))
+        got = self._hold_memo.get(key)
+        if got is None:
+            trial = st.clone()
+            trial.energy = mm.ENERGY_MASK  # geometry only; funding is gated elsewhere
+            slot = actions.create(trial, mm.T_BOULDER, tile)
+            if slot is None:
+                got = False
+            else:
+                enemies.advance_frames(trial, int(span))
+                got = (not trial.is_empty(slot)) and trial.obj_type[
+                    slot
+                ] == mm.T_BOULDER
+            self._hold_memo[key] = got
+        return got
+
     def _hop_price(self, st, tile, k):
         """``(total, tail)`` frames for ``k`` boulders + a robot + the transfer up on
         ``tile`` -- exactly what ``_hop_exec`` will charge -- priced on a clone, or
@@ -1009,6 +1041,8 @@ class AStarPlayer(BasePlayer):
                 self._commit_view(view, verb)
                 if actions.create(trial, otype, tile) is None:
                     break
+                if verb == "boulder" and not self._stack_holds(st, tile, total):
+                    break  # $17B7 drains it to a tree before the stack is capped
                 if verb == "robot":
                     tail = cost
                     # the transfer's ROM gate is the `view is None` break below
