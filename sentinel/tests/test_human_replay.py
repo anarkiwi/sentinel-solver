@@ -15,5 +15,5 @@ def test_ls0_replays_exactly():
 
 def test_ls42_and_ls335_replay_at_least_as_far_as_measured():
     """Regression floors.  Raising these is the work; lowering one is a bug."""
-    assert (first_divergence("ls42.json") or 10**6) >= 8
-    assert (first_divergence("ls335.json") or 10**6) >= 15
+    assert (first_divergence("ls42.json") or 10**6) >= 14
+    assert (first_divergence("ls335.json") or 10**6) >= 19

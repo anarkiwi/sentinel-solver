@@ -167,10 +167,29 @@ class BasePlayer:
         self.trace = []
 
     # ------------------------------------------------------------------ clock
-    def _advance(self, frames):
+    def _advance(self, frames, plotting=False):
+        """Advance `frames`; `plotting` marks foreground the ROM spends inside
+        plot_world/dither/scroll, where $16B5 is never reached and only the raster
+        cooldown clock runs ($130C).  Measured against the recorded enemy clock in
+        ``sentinel/tests/test_human_clock.py``."""
         frames = int(round(frames))
-        enemies.advance_frames(self.st, frames)
+        enemies.advance_frames(self.st, frames, plotting=plotting)
         self.frames += frames
+
+    def _advance_phases(self, phases):
+        """Advance a sequence of ``(frames, plotting)`` segments in order."""
+        for frames, plotting in phases:
+            if frames > 0:
+                self._advance(frames, plotting=plotting)
+
+    @staticmethod
+    def advance_phases(st, phases):
+        """Advance `st` through ``(frames, plotting)`` segments; the search prices a
+        step with this so it evolves the world exactly as ``_fire`` will."""
+        for frames, plotting in phases:
+            n = int(round(frames))
+            if n > 0:
+                enemies.advance_frames(st, n, plotting=plotting)
 
     # ------------------------------------------------------------- geometry
     def _my_eye(self):
@@ -624,11 +643,15 @@ class BasePlayer:
         return self._gaze_window(st.player_xy(), exposed=exposed)
 
     # ------------------------------------------------------------------- aim
-    def _aim_frames(self, view):
-        """Frames the executor's aim method costs, mechanism for mechanism: a
-        same-bearing REUSE keeps sights on and drives the cursor from where it
-        is; otherwise sights toggle off/on (gated scans + replots, and $134C
-        re-centres the cursor) before the coarse pan and a from-centre drive."""
+    def _aim_phases(self, view):
+        """The aim as ordered ``(frames, plotting)`` segments, mechanism for mechanism.
+
+        A same-bearing REUSE keeps sights on and drives the cursor from where it is;
+        otherwise sights toggle off/on ($134C re-centres the cursor) before the coarse
+        pan and a from-centre drive.  The toggle's replot and the pan's per-notch
+        scroll+replot are foreground ($16B5 unreached); the u-turn taps, the cursor
+        drive and the firing tap are gated main-loop scans, where it runs.
+        """
         st = self.st
         me = st.player
         want = (view["h_angle"], view["v_angle"])
@@ -650,7 +673,16 @@ class BasePlayer:
         pan = pancost.pan_frames(
             st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, me
         )
-        return toggles + nu * UTURN_FRAMES + pan + cur + TAP_FRAMES
+        return (
+            (toggles, True),
+            (nu * UTURN_FRAMES, False),
+            (pan, True),
+            (cur + TAP_FRAMES, False),
+        )
+
+    def _aim_frames(self, view):
+        """Total frames the executor's aim method costs."""
+        return sum(f for f, _ in self._aim_phases(view))
 
     def _aim_unfreeze_split(self, view):
         """Frames of aim elapsing BEFORE a u-turn unfreezes the world, else None.
@@ -667,6 +699,26 @@ class BasePlayer:
             return None
         reuse = self.last_bearing == (view["h_angle"], view["v_angle"])
         return (0.0 if reuse else TOGGLE_FRAMES) + nu * UTURN_FRAMES
+
+    def _step_aim_phases(self, verb, view):
+        """`_aim_phases` for `verb`, empty when a transfer rides a reused bearing."""
+        if verb == "transfer" and self.last_bearing == (
+            view["h_angle"],
+            view["v_angle"],
+        ):
+            return ()
+        return self._aim_phases(view)
+
+    def _aim_head_tail(self, verb, view):
+        """The aim split at the u-turn unfreeze: ``(before, after)`` phase segments.
+
+        A non-empty head means keying the u-turn starts the enemy clock part-way
+        through the aim ($12E1), so the caller clears $0CE5 between the two.
+        """
+        phases = self._step_aim_phases(verb, view)
+        if self._aim_unfreeze_split(view) is None:
+            return (), phases
+        return phases[:2], phases[2:]
 
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
@@ -690,14 +742,11 @@ class BasePlayer:
         human WIN can be attributed instead of merely counted."""
         st = self.st
         self.fire_reason = None
-        aim_f = self._step_aim_frames(verb, view)
-        split = self._aim_unfreeze_split(view)
-        if split is None:
-            self._advance(aim_f)
-        else:
-            self._advance(min(aim_f, split))
+        head, tail = self._aim_head_tail(verb, view)
+        self._advance_phases(head)
+        if head:
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00  # $12E1: the u-turn unfroze the world
-            self._advance(max(0.0, aim_f - split))
+        self._advance_phases(tail)
         if actions.player_dead(st):
             self.fire_reason = "dead_during_aim"
             return False
@@ -732,7 +781,8 @@ class BasePlayer:
         if ok:
             if verb == "transfer":
                 self.last_bearing = None  # new body: committed bearing is stale
-            self._advance(self._settle(verb, view))
+            # dither/replot ($1FA4/$86A5) or the viewpoint redraw ($357D): all foreground
+            self._advance(self._settle(verb, view), plotting=True)
             if self.audit and verb in ("boulder", "robot", "transfer"):
                 self._account(verb, tile)
             self._log(verb, tile)

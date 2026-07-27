@@ -52,17 +52,15 @@ def test_charge_matches_executor_cost_and_advances_enemies():
             _reset_stance(player, st)
             aim_f = player._step_aim_frames(verb, view)
             expected = aim_f + player._settle(verb, view)
-            split = player._aim_unfreeze_split(view)
+            head, tail = player._aim_head_tail(verb, view)
             clone = st.clone()
             reference = st.clone()
-            if split is None:
-                enemies.advance_frames(reference, int(expected))
-            else:
-                # $12E1: keying the u-turn unfreezes the world part-way through the aim
-                pre = int(min(aim_f, split))
-                enemies.advance_frames(reference, pre)
+            # the settle and the aim's toggle/pan are foreground redraws: no $16B5
+            player.advance_phases(reference, head)
+            if head:  # $12E1: the u-turn unfreezes the world part-way through the aim
                 reference.mem[mm.PLAYER_NOT_ACTED] = 0x00
-                enemies.advance_frames(reference, int(expected) - pre)
+            player.advance_phases(reference, tail)
+            player.advance_phases(reference, ((expected - aim_f, True),))
             _reset_stance(player, st)
             cost = player._charge(clone, verb, tile)
             assert cost == expected, f"{verb}@{tile}: {cost} != executor {expected}"

@@ -23,8 +23,11 @@ python -m sentinel.astar_player 110               # offline, same board
 | landscape | enemies | offline | live |
 |---|---|---|---|
 | 0 | 1 | 23 actions | — |
-| 42 | 2 | 32 | **36 actions** |
-| 110 | 3 | 48 | **41 actions** |
+| 42 | 2 | 34 | **36 actions** |
+| 110 | 3 | 37 | **41 actions** |
+
+The live column predates the phase-split advance ([human_clock.md](docs/human_clock.md))
+and has not been re-run against it.
 
 A landscape is identified by one number: the one a player types on the keypad. Every
 tool here — `driver.play_player`, `sentinel.astar_player`, `sentinel.player`,

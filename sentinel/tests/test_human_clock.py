@@ -23,6 +23,7 @@ SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
 OVERCHARGED_SPANS = 17  # actions we bill more for than the whole elapsed time
 CLOCK_SAMPLES = 506  # per-enemy $0C30 readings over the exact spans
 CADENCE = {False: (67, 41), True: (55, 399)}  # plotting -> (facings, $0C30) vs recorded
+SPLIT_CADENCE = (71, 290)  # the executor's phase split, scored the same way
 
 
 def _events(name=FIXTURE):
@@ -105,7 +106,8 @@ def test_enemy_update_cadence_brackets_the_truth(plotting):
     ``$16ED`` reloads ``$0C30`` on every path out of ``$16E6`` and the ``$90`` cursor is
     8 slots wide, both as modelled -- so a ``$0C30`` this far off is the CONSIDERATION
     RATE, not the consideration.  A span is part plotting (dither, replot, scroll: no
-    ``$16B5``) and part idle main loop, and a phase-split advance must beat both rows.
+    ``$16B5``) and part idle main loop; ``test_phase_split_beats_either_extreme`` scores
+    the split that follows from that.
     """
     evs = _events()
     seed = _load(FIXTURE)["landscape"]
@@ -127,6 +129,61 @@ def test_enemy_update_cadence_brackets_the_truth(plotting):
             samples += 1
     assert samples == CLOCK_SAMPLES
     assert (facings, agree) == CADENCE[plotting]
+
+
+def test_phase_split_beats_either_extreme():
+    """Advancing each span as settle(plotting) -> think(idle) -> aim(split) reproduces
+    more of the recorded enemy state than treating the whole span as either one.
+
+    This is the executor's own split (``_aim_phases`` / the plotting settle) scored
+    against ground truth: the think time is the residue the human spent in the main loop.
+    """
+    evs = _events()
+    seed = _load(FIXTURE)["landscape"]
+    facings = agree = 0
+    for i, n in _exact_spans(evs):
+        st = state_from_event(evs[i], seed)
+        p = AStarPlayer(types.SimpleNamespace(state=st))
+        st = p.st
+        hc.seed_clock(st, evs[i])
+        st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+        settle, aim_plot = 0.0, 0.0
+        if i:
+            prev = evs[i - 1]
+            pverb = {
+                "create": "boulder" if prev["otype"] == mm.T_BOULDER else "robot"
+            }.get(prev["verb"], prev["verb"])
+            settle = min(p._settle(pverb), n)
+            st.obj_h_angle[st.player] = prev["player"]["hang"]
+            st.obj_v_angle[st.player] = prev["player"]["vang"]
+            p.cursor = list(prev["cursor"])
+            p.last_bearing = (prev["player"]["hang"], prev["player"]["vang"])
+            view = {
+                "h_angle": evs[i]["player"]["hang"],
+                "v_angle": evs[i]["player"]["vang"],
+                "cursor": list(evs[i]["cursor"]),
+            }
+            phases = (
+                ()  # a recorded transfer's hang/vang is the new body's facing, not an aim
+                if evs[i]["verb"] == "transfer"
+                else p._aim_phases(view)
+            )
+            aim_plot = min(sum(f for f, plot in phases if plot), n - settle)
+        p._advance_phases(
+            ((settle, True), (n - settle - aim_plot, False), (aim_plot, True))
+        )
+        clock = evs[i + 1]["enemy_clock"]
+        facings += [int(st.obj_h_angle[e["slot"]]) for e in clock] == [
+            e["h_angle"] for e in clock
+        ]
+        for e in clock:
+            agree += (
+                int(st.mem[mm.ENEMIES_UPDATE_COOLDOWN + e["slot"]])
+                == e["update_cooldown"]
+            )
+    assert facings >= max(v[0] for v in CADENCE.values())
+    assert agree >= CADENCE[False][1]
+    assert (facings, agree) == SPLIT_CADENCE
 
 
 def test_spans_below_the_rom_floor_are_not_two_actions():

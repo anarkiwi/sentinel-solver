@@ -710,23 +710,20 @@ class AStarPlayer(BasePlayer):
         if view is None:
             enemies.advance_frames(st, int(cost))
             return cost
-        split = self._aim_unfreeze_split(view)
-        spent = 0
-        if (
-            split is not None
-        ):  # $12E1: keying the u-turn started the enemy clock mid-aim
-            spent = int(min(aim, split))
-            enemies.advance_frames(st, spent)
+        head, tail = self._aim_head_tail(verb, view)
+        self.advance_phases(st, head)
+        if head:  # $12E1: keying the u-turn started the enemy clock mid-aim
             st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+        settle = ((max(0.0, cost - aim), True),)  # the ROM redraws: no $16B5 in it
         if create_cost is not None:
-            enemies.advance_frames(st, max(0, int(aim) - spent))
-            spent = max(spent, int(aim))
+            self.advance_phases(st, tail)
             self._commit_view(view, verb)  # _fire gates from the stance the aim left
             if not self._affords(create_cost, self._settle(verb, view)):
                 return None
-            enemies.advance_frames(st, int(cost) - spent)
+            self.advance_phases(st, settle)
             return cost
-        enemies.advance_frames(st, int(cost) - spent)
+        self.advance_phases(st, tail)
+        self.advance_phases(st, settle)
         self._commit_view(view, verb)
         return cost
 

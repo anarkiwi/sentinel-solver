@@ -88,9 +88,38 @@ keeping the cooldown clock — the ROM's own behaviour while the foreground is i
 Neither extreme is right, which is the point: a span is *part* plotting (the settle's
 dither and replot, the aim's scroll notches — all already counted term by term in
 `actioncost`) and part idle main loop (the human's think time, where `$16B5` really does
-run). The executor advances the whole span as idle. Splitting the advance by phase is the
-next change, and it is a behavioural one, so it wants its own validation pass against
-these two columns rather than a constant nudged until a board is won.
+run).
+
+## The phase split
+
+`BasePlayer._aim_phases` now returns the aim as ordered `(frames, plotting)` segments and
+`_settle` is advanced as plotting, so an action evolves the world the way the ROM does:
+
+| segment | ROM | runs `$16B5`? |
+|---|---|---|
+| sights toggle | `$134C` re-centre + `plot_sights` | no |
+| u-turn taps | action tap `$23`, no scroll, no replot | yes |
+| pan notches | `$10EE`/`$1135` scroll + `plot_world` per notch | no |
+| cursor drive + firing tap | gated `move_sights`/`tap_action` scans | yes |
+| settle | `$1FA4`/`$86A5` dither + replot, or `$357D` redraw | no |
+
+Scored the same way as the table above, the split gives **71/91 facings and 290/506
+`$0C30`** — better than either extreme on facings, and far better than idle-only on
+`$0C30`. `UPDATES_PER_FRAME` is not the remaining lever: 2, 3, 4 and 8 all score within
+7 of each other, because an enemy's own `$16E9` gate rate-limits it harder than the
+cursor does.
+
+Search and executor share one sequence (`_aim_head_tail` + `advance_phases`), so a plan
+is priced against the world evolution `_fire` will actually produce. Letting them drift
+costs real quality — with only the executor split, ls0 went from 23 actions to 25; with
+both sharing the sequence it is 23 again.
+
+Replay floors moved **ls42 8 → 14** and **ls335 15 → 19**, and offline ls110 went
+**48 → 37 actions** (ls42 32 → 34).
+
+The residual `$0C30` gap says our plotting terms are still short of what the ROM really
+spends in the foreground — a separate, ROM-answerable question, and not one to close by
+inflating a constant.
 
 ## Fixture hygiene
 
