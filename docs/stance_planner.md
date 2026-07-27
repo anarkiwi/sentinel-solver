@@ -401,3 +401,15 @@ Two things are now settled about that item and worth carrying into any attempt o
 ([human_clock.md](human_clock.md)), so the stall is not a missing branch in the simulator —
 `_cone_onset` is a separate forecaster that never consults enemy state at all. And no
 constant cadence reproduces the recorded facings, so the fix is not a better number.
+
+## The smallest board that still loses
+
+ls335 does not need 7 enemies to beat this planner. Deleting sentries localises the
+failure to **three**: the Sentinel plus `(4,18)` and `(12,10)` — the only loss of the 15
+two-sentry boards, with both of its own proper subsets winning
+([ls335_minimal.md](ls335_minimal.md)). It dies on the same stance the A\* player dies
+on, `(18,24)` at eye 8.375, having transferred onto it at E=0.
+
+That board is small enough to checkpoint and re-enter directly, which puts a
+`_pick_hop` change 210 ms from a verdict instead of a 94 s replay
+([fast_iteration.md](fast_iteration.md)).

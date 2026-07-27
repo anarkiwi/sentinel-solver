@@ -70,6 +70,8 @@ The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` im
 - [simulator.md](docs/simulator.md) — the model's modules and golden validation.
 - [astar_player.md](docs/astar_player.md) — search, candidate generators, cost model.
 - [stance_planner.md](docs/stance_planner.md) — the stance graph, why the A\* frontier empties on ls335, and the layered replacement.
+- [ls335_minimal.md](docs/ls335_minimal.md) — the smallest ls335 board the stance planner loses: 3 enemies, and where it dies.
+- [fast_iteration.md](docs/fast_iteration.md) — checkpointing a stalled tick so a planner change is judged in milliseconds, not a board replay.
 - [player.md](docs/player.md) — the reactive player: priorities, threat model, timing.
 - [render_cost.md](docs/render_cost.md) — the `plot_world` redraw/settle frame cost.
 - [driver.md](docs/driver.md) — boot/enter/record, keyboard aim → fire → verify.
