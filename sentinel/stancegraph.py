@@ -284,6 +284,15 @@ class StanceGraph:
         """Whether stance ``index`` can land ``tile`` -- the single-cell read."""
         return bool(self.seen[index, tile[0] * mm.N + tile[1]])
 
+    def stances_on(self, tile):
+        """Every stance standing on ``tile`` -- its whole k column.
+
+        The graph is exactly ``tiles x (kmax + 1)``, so a refusal that turns on the TILE
+        (its gaze window, which no stack height changes) condemns all of them, and a
+        caller that rules them out one at a time re-asks the same question kmax times.
+        """
+        return np.flatnonzero(self._cols == tile[0] * mm.N + tile[1])
+
     def hops_to(self, tile, monotone=True):
         """Hops from every stance to the nearest one that can strike ``tile``; -1 never.
 
@@ -370,6 +379,7 @@ class StanceGraph:
         blocked=(),
         metric="hops",
         wait=None,
+        priced=None,
     ):
         """Fewest-hop ENERGY-FEASIBLE climb to a stance that can land ``target``.
 
@@ -379,8 +389,15 @@ class StanceGraph:
 
         ``metric="frames"`` schedules instead of counting hops: an edge costs its build time
         plus ``wait(stance, elapsed)``, so a leg that must sit out a cone is priced for it
-        and a short-but-blocked route loses to a longer one that never waits."""
+        and a short-but-blocked route loses to a longer one that never waits.
+
+        ``priced`` overrides ``build_frames`` per stance with what the executor MEASURED
+        there.  ``build_frames`` is a function of ``k`` alone, while the real cost is
+        aim-dominated and spreads hundreds of frames across tiles at fixed ``k``, so a
+        router left to the floor cannot tell a cheap landing from an unbuildable one.
+        Only the ``frames`` metric is priced; ``hops`` counts edges by definition."""
         wait = (lambda _j, _t: 0.0) if wait is None else wait
+        priced = {} if priced is None else priced
         goals = set(self.strike_stances(target).tolist()) - set(blocked)
         if not goals:
             return None
@@ -429,7 +446,10 @@ class StanceGraph:
                 if here is not None and self.lands(j, here):
                     got += hop_energy(here_k)  # the inchworm reclaim of the pedestal
                 got = min(cap, got)
-                edge = 1.0 if metric == "hops" else build_frames(ks[j]) + wait(j, spent)
+                if metric == "hops":
+                    edge = 1.0
+                else:
+                    edge = priced.get(j, build_frames(ks[j])) + wait(j, spent)
                 ahead = spent + edge
                 if best[j, got:].min() <= ahead:
                     continue

@@ -65,6 +65,8 @@ class StancePlayer(AStarPlayer):
         self._graph_state = self.st.clone()
         self._cache_dir = cache_dir
         self._route_memo = {}
+        self._edge_frames = {}  # stance -> the build frames the executor MEASURED there
+        self._cost_epoch = 0  # bumped per correction; part of the route memo key
         self._mask_memo = {}
         self._order_memo = {}
         self._span_memo = {}
@@ -95,8 +97,17 @@ class StancePlayer(AStarPlayer):
         return mask
 
     def _route_for(self, st, target, blocked=()):
-        """The stance route from this stance to a strike stance for ``target``."""
-        key = (self._sig(st), int(st.energy), tuple(target), tuple(sorted(blocked)))
+        """The stance route from this stance to a strike stance for ``target``.
+
+        Memoized against ``_cost_epoch`` as well as the board: every correction
+        ``_repair`` learns invalidates the routes priced before it."""
+        key = (
+            self._sig(st),
+            int(st.energy),
+            tuple(target),
+            tuple(sorted(blocked)),
+            self._cost_epoch,
+        )
         got = self._route_memo.get(key, _MISS)
         if got is _MISS:
             got = self.graph.route(
@@ -108,6 +119,7 @@ class StancePlayer(AStarPlayer):
                 blocked=blocked,
                 metric=ROUTE_METRIC,
                 wait=self._route_wait(st) if ROUTE_METRIC == "frames" else None,
+                priced=self._edge_frames,
             )
             self._route_memo[key] = got
         return got
@@ -261,7 +273,7 @@ class StancePlayer(AStarPlayer):
                 )
             got = self._try_hop(st, tile, k, target)
             if got is None:
-                route = self._repair(st, target, blocked, node_i)
+                route = self._repair(st, target, blocked, node_i, tile, k)
                 if route is None:
                     break
                 i = 0
@@ -301,17 +313,52 @@ class StancePlayer(AStarPlayer):
         steps.extend(got[1])
         return (trial, g, steps) if self._can_leave(trial, target) else None
 
-    def _repair(self, st, target, blocked, node_i):
-        """Re-route around a stance the executor's exact gates refused.
+    def _repair(self, st, target, blocked, node_i, tile, k):
+        """Correct the router's price for the stance it just failed on, and re-route.
 
-        ``route`` prices a hop at its FLOOR, but the real cost is aim-dominated -- ls335
-        (13,27) has a 450 f window against a 1141 f priced tail -- so the planner keeps
-        proposing hops the executor must refuse.  Its verdict is the exact information.
-        """
-        if len(blocked) >= ROUTE_REPAIRS:
+        LazySP: ``route`` prices an edge at ``build_frames(k)``, a function of k ALONE
+        (372/469/565/662 f), while ``_hop_price`` -- what the executor actually charges --
+        runs 981-2261 f and spreads ~790 f across tiles at fixed k.  The router therefore
+        cannot tell a cheap landing from an unbuildable one, and blacklisting one stance
+        per refusal threw away the exact number needed to fix that.  Measuring the truth
+        only on edges a proposed route USES pays for exactness where it changes the answer
+        and nowhere else.
+
+        The veto and the correction are SEPARATE verdicts, and both are recorded.  The
+        stance was refused here and now, so it leaves the current query whatever the
+        reason; the measured price is what the NEXT query, and every later search, ranks
+        with.  Vetoing only when the price looked uninformative meant never vetoing at
+        all -- the measurement always exceeds the floor.
+
+        A refusal the TILE owns condemns its whole k column.  The graph is 298 tiles x 4
+        stacks on ls335, the gaze window is a property of the tile, and banning one stance
+        at a time spent the entire budget re-asking (12,27) at k=0,1,2,3.  The budget is
+        counted in TILES for the same reason."""
+        if len({self.graph.stances[j][0] for j in blocked}) >= ROUTE_REPAIRS:
             return None
-        blocked.add(node_i)
+        self.st = st
+        priced = self._hop_price(st, tile, k)
+        if priced is not None:
+            was = self._edge_frames.get(node_i, stancegraph.build_frames(k))
+            self._edge_frames[node_i] = max(was, priced[0])  # weights only ever rise
+            self._cost_epoch += 1
+        if self._tile_refused(st, tile, priced):
+            blocked.update(self.graph.stances_on(tile).tolist())
+        else:
+            blocked.add(node_i)
         return self._route_for(st, target, blocked=frozenset(blocked))
+
+    def _tile_refused(self, st, tile, priced):
+        """Whether the refusal belongs to the TILE rather than to this stack height.
+
+        The tail a hop stands drainable for is the robot create plus the transfer -- no
+        boulder is drainable ($16E6) -- so it barely moves with k, and a tile whose sweep
+        never holds it refuses every stance on it.  An unbuildable stack or an energy
+        shortfall is the stance's own and bans only that one."""
+        if priced is None:
+            return False
+        self.st = st
+        return self._earliest_start(tile, priced[1] + self._margin()) == math.inf
 
     def _harvest(self, st, steps):
         """Absorb reachable fuel from the landing until the stance can fund a hop again.

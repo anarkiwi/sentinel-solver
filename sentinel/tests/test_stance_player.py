@@ -21,7 +21,7 @@ from sentinel.astar_player import (
     _Node,
 )
 from sentinel.game import Game
-from sentinel.stancegraph import Route, StanceGraph, flat_tiles
+from sentinel.stancegraph import Route, StanceGraph, build_frames, flat_tiles
 from sentinel.stance_player import ROUTE_TARGETS, StancePlayer, main
 
 _LS = 335  # 7 enemies: more pursue targets than ROUTE_TARGETS, so the cap bites
@@ -181,11 +181,11 @@ def test_a_refused_hop_truncates_the_route_child():
     target = tiles[1]
     player._route_for = lambda st, tgt, blocked=(): Route([0, 1], 9, tgt)
     player._repair = (
-        lambda st, tgt, blocked, node_i: None
+        lambda st, tgt, blocked, node_i, tile, k: None
     )  # no re-route: pin truncation
     player._landable = lambda st, tile: False
     player._hop_funds = lambda st, cost=None: (True, 0.0)
-    player._hop_ok = lambda st, tile, k: (900.0, 0.0)
+    player._hop_ok = lambda st, tile, k, wait_ok=True: (900.0, 0.0)
     player._harvest = (
         lambda st, steps: 0.0
     )  # isolate the hop chain from the fuel top-up
@@ -199,7 +199,7 @@ def test_a_refused_hop_truncates_the_route_child():
     assert child is not None and list(child.path) == [step]
     assert child.g == node.g + 7.0
 
-    player._hop_ok = lambda st, tile, k: None
+    player._hop_ok = lambda st, tile, k, wait_ok=True: None
     assert player._c_route(node, target) is None  # refused at the first hop: no child
 
 
@@ -217,15 +217,44 @@ def test_a_landing_that_cannot_be_left_is_refused_and_re_routed():
     player._route_for = lambda st, tgt, blocked=(): Route([0, 1], 9, tgt)
     player._landable = lambda st, tile: False
     player._hop_funds = lambda st, cost=None: (True, 0.0)
-    player._hop_ok = lambda st, tile, k: (900.0, 0.0)
+    player._hop_ok = lambda st, tile, k, wait_ok=True: (900.0, 0.0)
     player._harvest = lambda st, steps: 0.0
     step = PlanStep("robot", tiles[0], 7.0, GATE_TILE, 900.0, math.inf)
     player._hop_exec = lambda tile, k, window: (7.0, [step])
     player._can_leave = lambda st, target: False
     blocked = []
-    player._repair = lambda st, tgt, seen, node_i: blocked.append(node_i)
+    player._repair = lambda st, tgt, seen, node_i, tile, k: blocked.append(node_i)
     assert player._c_route(node, tiles[1]) is None  # nothing committed
     assert blocked == [0]  # and the trap was handed to the router to route around
+
+
+def test_repair_both_vetoes_the_stance_and_keeps_what_it_measured():
+    """The ban is for THIS query; the measured price is for every later one.
+
+    ``build_frames`` knows only k, so the router keeps proposing aim-expensive landings.
+    Vetoing alone throws away the number that would stop it; re-pricing alone never
+    removes the stance just refused, because the measurement always beats the floor."""
+    game = Game.typed(_LS)
+    player = StancePlayer(game, graph=_empty_graph())
+    tiles = flat_tiles(player.st.clone())[:2]
+    player._graph = _stub_graph(tiles)
+    seen = []
+    player._route_for = lambda st, tgt, blocked=(): seen.append(blocked) or None
+    floor = build_frames(1)
+
+    player._hop_price = lambda st, tile, k: (floor * 3, 0.0)  # dearer than the floor
+    assert player._repair(player.st, tiles[1], set(), 0, tiles[0], 1) is None
+    assert player._edge_frames[0] == floor * 3  # re-priced...
+    assert seen[-1] == frozenset({0})  # ...AND out of this query
+
+    player._hop_price = lambda st, tile, k: (floor, 0.0)  # a cheaper later reading
+    player._repair(player.st, tiles[1], set(), 0, tiles[0], 1)
+    assert player._edge_frames[0] == floor * 3  # weights only ever rise
+
+    player._hop_price = lambda st, tile, k: None  # cannot be built at all
+    assert player._repair(player.st, tiles[1], set(), 1, tiles[0], 1) is None
+    assert 1 not in player._edge_frames  # nothing to learn, but still vetoed
+    assert seen[-1] == frozenset({1})
 
 
 def test_the_graph_is_built_once_from_the_board_captured_at_construction(

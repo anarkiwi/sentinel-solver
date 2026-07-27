@@ -494,3 +494,41 @@ def test_main_reports_no_route_on_an_open_board(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "target=(1, 1)" in out
     assert "0 strike stances on 0 tiles" in out and "NO ROUTE" in out
+
+
+def test_a_measured_price_re_ranks_the_route_the_floor_chose():
+    """``priced`` overrides ``build_frames`` per stance, so the executor can correct it.
+
+    Without it the router weighs an edge by ``k`` alone and re-proposes the same
+    aim-expensive landing for ever; the whole point is that a measurement moves the
+    route."""
+    graph = _synth(seed=3, n=14)
+    for energy in (12, _CAP):
+        for j in range(len(graph)):
+            target = graph.stances[j][0]
+            base = graph.route(target, energy, start=0, metric="frames")
+            if base is None or not base.path:
+                continue
+            dear = {node: 1e6 for node in base.path}
+            moved = graph.route(target, energy, start=0, metric="frames", priced=dear)
+            if moved is not None and moved.path != base.path:
+                assert moved.frames >= base.frames  # only ever costlier, never free
+                break
+        else:
+            continue
+        break
+    else:
+        pytest.fail("no synthetic route was re-ranked by a measured price")
+
+
+def test_pricing_a_stance_beyond_reach_never_cheapens_a_route():
+    """Corrections only ever RAISE weights, which is what makes the repair loop finite."""
+    graph = _synth(seed=1)
+    for j in range(len(graph)):
+        target = graph.stances[j][0]
+        base = graph.route(target, _CAP, start=0, metric="frames")
+        if base is None:
+            continue
+        dear = {node: 1e6 for node in range(len(graph))}
+        moved = graph.route(target, _CAP, start=0, metric="frames", priced=dear)
+        assert moved is None or moved.frames >= base.frames
