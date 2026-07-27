@@ -51,54 +51,49 @@ facing that runs ahead means we exit a branch the ROM stays in.
 Energy says the same thing, but only once the action is placed correctly. A bracket
 fires *when the action lands*, so within span `i` the action is the LAST thing that
 happens, not the first — seed the clock, advance the span, then apply it. Done that way
-**64 of 69** exact-span actions reproduce the human's next energy. The five misses are
-all off by exactly one energy and go in *both* directions (two high, three low), so they
+**83 of 91** exact-span actions reproduce the human's next energy. The misses are
+all off by exactly one energy and go in *both* directions (both directions), so they
 are drain-timing scatter inside the span, not a systematic over-credit.
 
 A drain does not decrement a counter — `$1A08` DOWNGRADES its target (robot → boulder →
 tree → gone). So an absorb whose object was drained mid-span yields one less, and whether
 we agree turns entirely on placing the drain on the right side of the action. That makes
-the residual an *ordering* question, the same one the `$0C30` gap below is about.
+the residual an *ordering* question: where inside the span the drain falls.
 
 Swapping our billed cost for the exactly measured span moves the per-action outcome by
-one action (64/69 against 63/68). The charge model is therefore **not** the lever for the
+one action (83/91 against the charged span's equivalent). The charge model is therefore **not** the lever for the
 ls335 replay floor; the enemy branch is.
 
-## The sharpest lead: `$0C30` never reaches 1 in our model
+## Why `$0C30` is not a score (a retracted lead)
 
-Advancing the same 91 spans and reading each enemy's `update_cooldown` (`$0C30`) against
-the recorded value:
+An earlier revision scored the enemy advance on each enemy's `update_cooldown` (`$0C30`),
+because the recorded value sits on its stick value 1 in 78% of ls335 samples while ours
+never does. Re-recording ls42 live killed that lead:
 
-| value | 1 | 2 | 3 | 4 | >4 |
-|---|---|---|---|---|---|
-| recorded | **393** | 30 | 49 | 18 | 16 |
-| ours | 0 | 183 | 163 | 149 | 11 |
-
-The real `$0C30` sits on the stick value 1 in 78% of samples; ours never does, and the
-two agree on 41 of 506. `_consider_enemy_state` writes `UPDATE_COOLDOWN_SCAN` (4) as soon
-as it passes the `$16E9` gate, so an enemy that decays to 1 is reloaded on the very next
-consideration.
-
-The image settles which side is wrong. `$16ED LDA #$04 / STA $0C30,X` sits immediately
-after the `$16E9` gate, on every path — our write matches the ROM. `$16D9 DEC $90 / BPL /
-LDA #$07` confirms the 8-slot cursor, and `$131C LDX #$17` confirms the 24-byte cooldown
-sweep. So the model of *what* happens per consideration is right; what is wrong is **how
-often a consideration happens**.
-
-`advance_frames` already takes a `plotting` flag that suppresses `update_enemies` while
-keeping the cooldown clock — the ROM's own behaviour while the foreground is inside
-`plot_world`, the dither loop, or a scroll, none of which call `$16B5`. Running the same
-91 spans both ways:
-
-| whole span advanced as | facings exact | `$0C30` agree |
+| capture | method | `$0C30 == 1` |
 |---|---|---|
-| `plotting=False` (what we do now) | 67/91 | 41/506 |
-| `plotting=True` | 55/91 | **399/506** |
+| ls335 | `watch_play`, polls a free-running machine | 77% |
+| ls42 | `replay_human`, halts at a driver checkpoint | 8% |
 
-Neither extreme is right, which is the point: a span is *part* plotting (the settle's
-dither and replot, the aim's scroll notches — all already counted term by term in
-`actioncost`) and part idle main loop (the human's think time, where `$16B5` really does
-run).
+Same register, same game, opposite readings — `$0C30` depends on **where in the loop the
+capture stops**, so scoring on it measures the recorder, not the model. Our sim reads it
+at a frame boundary and matches neither (290/506 async, 3/18 halted).
+`test_update_cooldown_is_sampling_dependent_and_not_a_score` pins both sides so the trap
+stays closed.
+
+**Facings are the sound score.** A facing only moves when a rotation actually fires, so it
+is a real state change no sampling position can manufacture.
+
+The image is still worth having read: `$16ED LDA #$04 / STA $0C30,X` sits immediately
+after the `$16E9` gate on every path, `$16D9 DEC $90 / BPL / LDA #$07` confirms the
+8-slot cursor, and `$131C LDX #$17` the 24-byte cooldown sweep — all as modelled.
+
+`advance_frames` takes a `plotting` flag that suppresses `update_enemies` while keeping
+the cooldown clock — the ROM's behaviour whenever the foreground is inside `plot_world`,
+the dither loop, or a scroll, none of which call `$16B5`. On facings alone, over the 91
+exact spans: `plotting=False` 67/91, `plotting=True` 55/91. Neither extreme is right,
+because a span is *part* plotting (the settle's dither and replot, the aim's scroll
+notches, each already counted term by term in `actioncost`) and part idle main loop.
 
 ## The phase split
 
@@ -113,11 +108,12 @@ run).
 | cursor drive + firing tap | gated `move_sights`/`tap_action` scans | yes |
 | settle | `$1FA4`/`$86A5` dither + replot, or `$357D` redraw | no |
 
-Scored the same way as the table above, the split gives **71/91 facings and 290/506
-`$0C30`** — better than either extreme on facings, and far better than idle-only on
-`$0C30`. `UPDATES_PER_FRAME` is not the remaining lever: 2, 3, 4 and 8 all score within
-7 of each other, because an enemy's own `$16E9` gate rate-limits it harder than the
-cursor does.
+Scored on facings over the 117 exact spans the split gives **90/117** against
+idle-only's 89 and plotting-only's 64. On the larger sample that margin is thin — one
+span — so the split rests mainly on the replay floors and action counts below, not on
+facings. `UPDATES_PER_FRAME` is not a remaining lever: 2, 3, 4 and 8 all score within a
+few of each other, because an enemy's own `$16E9` gate rate-limits it harder than the
+`$90` cursor does.
 
 Search and executor share one sequence (`_aim_head_tail` + `advance_phases`), so a plan
 is priced against the world evolution `_fire` will actually produce. Letting them drift
@@ -127,9 +123,32 @@ both sharing the sequence it is 23 again.
 Replay floors moved **ls42 8 → 14** and **ls335 15 → 19**, and offline ls110 went
 **48 → 37 actions** (ls42 32 → 34).
 
-The residual `$0C30` gap says our plotting terms are still short of what the ROM really
-spends in the foreground — a separate, ROM-answerable question, and not one to close by
-inflating a constant.
+## All three boards, live
+
+`replay_human` now records `$1335`/`$0C50` alongside the per-enemy cooldowns, so any
+re-recorded line is measurable the way ls335 is. Re-recording all three
+(`ls*_clock.json`, derived state with no `mem` — the same non-copyrighted class as
+`ls42_truth.json`) settles what one board could not:
+
+| board | enemies | capture | exact spans | clock round-trip | facings |
+|---|---|---|---|---|---|
+| ls0 | 1 | live | 16 | 16/16 | **16/16** |
+| ls42 | 2 | live | 10 | 10/10 | **10/10** |
+| ls335 | 7 | live | 18 | 18/18 | 12/18 |
+| ls335 | 7 | async | 117 | 117/117 | 89/117 |
+
+The cooldown clock round-trips perfectly everywhere. The **facing** gap is ls335's alone,
+and it survives re-recording by the checkpoint method, so it is a real defect of the model
+on a seven-enemy board — not an artifact of the async recorder that produced its fixture.
+That is the open question, now well posed: what does a seven-enemy board do that a one-
+or two-enemy board does not.
+
+Recording ls0 also paid for itself indirectly. `rounds_between` demanded two agreeing
+enemies, which a single-enemy board can never supply, so ls0 silently measured nothing.
+One voter suffices — `span_frames` must satisfy (bres, gate) AND the decrement count
+jointly, so a wrong delta yields no candidate rather than a wrong one. Dropping the guard
+took ls335 from 91 exact spans to **117** and unlocked ls0 entirely, with the round-trip
+still 100%.
 
 ## Fixture hygiene
 
