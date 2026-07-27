@@ -168,6 +168,39 @@ a safety test the ranked climb would refuse.
 Targets are the platform once the Sentinel is gone, else the nearest living non-landable
 enemies (`ROUTE_TARGETS` = 3).
 
+### Departure, not just arrival
+
+Those gates all ask **can the body get here**. None asked **can it leave again**, and a
+stance it cannot leave is where the ls335 opening died. The route's first hop is
+`(10,17) k=3`, and the gate probes exposure with a phantom on the *bare* tile: one
+full-sight seer. A body on three boulders has **four**. They lock on the landed robot,
+and a draining enemy stops rotating (`$178C` returns before the `$17F9` rotate), so the
+cone never leaves — `_earliest_start` is `inf` for every duration down to 50 f, no
+reclaim is aimable from the stack, and the climb has just spent 9 of its 10 energy
+getting there.
+
+`_try_hop` therefore compiles each hop on a **trial clone**, harvests, and only commits
+if `_can_leave` holds: the landing must fund and start another hop, or strike the target
+outright. A refusal leaves the pre-hop state intact for `_repair` to blacklist the stance
+and re-route — the same propose/verify split, now closed on both ends of a hop. This is
+the discipline `_advance_hop` already keeps for the ranked climb (`_climb_continues`),
+which the route path bypassed entirely.
+
+The affordability screen is priced at the hop the route **named** — `2k + robot` — not at
+`HOP_COST`, which is the k=1 price of a hop nobody has picked yet. ls335's second hop is
+a k=0 landing costing 3, held against 5 at the E=3 the router itself predicted.
+
+Measured on the ls335 opening (`--planner stance`, 20 s/search, 20000 nodes):
+
+| | actions | line |
+|---|---|---|
+| before | **0** | route stalls one hop in, at E=3 on `(10,17) k=3`, and the run loop is drained to death |
+| after | **9** | `k=3` on `(10,18)`, transfer, four reclaims — E=7 at eye 5.38 |
+
+Routing to `(7,11)` now compiles the human's own inchworm instead: `k=1` onto `(10,17)`,
+three reclaims, `k=0` onto `(9,21)`, then absorbing the `(10,17)` stack back — 2 hops,
+**E=12**. ls0/42/110 and handovers 111/133/144 are bit-identical.
+
 The graph is a **snapshot** of the board the player starts on. Later creates and absorbs
 change LOS; a stale hop simply fails to compile and the child truncates. Re-planning on
 divergence is the existing `_plan_step_stale` / `_restale` machinery.

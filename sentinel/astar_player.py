@@ -192,12 +192,17 @@ class AStarPlayer(BasePlayer):
             window = self._player_window()
         return window < budget + self._margin()
 
-    def _can_hop(self, st):
+    def _can_hop(self, st, cost=HOP_COST):
         """Whether the stance can fund the next hop: at the $0C20 RATE (the drains a
-        hop's span bills) or, under ``liquidity_gate=0``, on the bare energy floor."""
+        hop's span bills) or, under ``liquidity_gate=0``, on the bare energy floor.
+
+        ``cost`` defaults to ``HOP_COST``, the k=1 price of a hop nobody has picked yet.
+        A caller that HAS picked one -- ``_pick_hop`` prices its candidates at
+        ``2k + robot`` -- must pass that instead, or a k=0 landing is held against a
+        boulder it does not build."""
         if _LIQUIDITY_GATE:
-            return self._affords(HOP_COST, HOP_FRAMES)
-        return st.energy >= HOP_COST + self._reserve()
+            return self._affords(cost, HOP_FRAMES)
+        return st.energy >= cost + self._reserve()
 
     def _absorb_toll(self, budget, window=None, gain=0):
         """Frames of ``g`` an absorb costs for standing exposed ``budget`` frames, or

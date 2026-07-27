@@ -184,7 +184,7 @@ def test_a_refused_hop_truncates_the_route_child():
         lambda st, tgt, blocked, node_i: None
     )  # no re-route: pin truncation
     player._landable = lambda st, tile: False
-    player._can_hop = lambda st: True
+    player._hop_funds = lambda st, cost=None: (True, 0.0)
     player._hop_ok = lambda st, tile, k: (900.0, 0.0)
     player._harvest = (
         lambda st, steps: 0.0
@@ -201,6 +201,31 @@ def test_a_refused_hop_truncates_the_route_child():
 
     player._hop_ok = lambda st, tile, k: None
     assert player._c_route(node, target) is None  # refused at the first hop: no child
+
+
+def test_a_landing_that_cannot_be_left_is_refused_and_re_routed():
+    """A hop the board permits but whose landing traps the body is not taken.
+
+    ls335's route opens onto (10,17) k=3 -- one full-sight seer for a body on the bare
+    tile, four for one on three boulders, which then hold it -- and the executor must
+    hand that verdict to ``_repair`` rather than land and die there."""
+    game = Game.typed(_LS)
+    player = StancePlayer(game, graph=_empty_graph())
+    node = _root(player)
+    tiles = flat_tiles(node.state)[:2]
+    player._graph = _stub_graph(tiles)
+    player._route_for = lambda st, tgt, blocked=(): Route([0, 1], 9, tgt)
+    player._landable = lambda st, tile: False
+    player._hop_funds = lambda st, cost=None: (True, 0.0)
+    player._hop_ok = lambda st, tile, k: (900.0, 0.0)
+    player._harvest = lambda st, steps: 0.0
+    step = PlanStep("robot", tiles[0], 7.0, GATE_TILE, 900.0, math.inf)
+    player._hop_exec = lambda tile, k, window: (7.0, [step])
+    player._can_leave = lambda st, target: False
+    blocked = []
+    player._repair = lambda st, tgt, seen, node_i: blocked.append(node_i)
+    assert player._c_route(node, tiles[1]) is None  # nothing committed
+    assert blocked == [0]  # and the trap was handed to the router to route around
 
 
 def test_the_graph_is_built_once_from_the_board_captured_at_construction(
@@ -257,7 +282,7 @@ def test_a_route_child_reclaims_when_it_cannot_fund_the_next_hop():
     step = PlanStep("absorb", tiles[0], 5.0, GATE_TILE, 900.0, math.inf)
     player._route_for = lambda st, tgt, blocked=(): Route([0, 1], 9, tgt)
     player._landable = lambda st, tile: False
-    player._can_hop = lambda st: False
+    player._hop_funds = lambda st, cost=None: (False, 0.0)
     left = [(4.0, step)]
     player._reclaim_one = lambda st: left.pop() if left else None
     child = player._c_route(node, tiles[1])
@@ -272,7 +297,9 @@ def test_a_route_child_stops_once_the_target_is_already_landable():
     node = _root(player)
     player._route_for = lambda st, tgt, blocked=(): Route([0], 9, tgt)
     player._landable = lambda st, tile: True
-    player._can_hop = lambda st: pytest.fail("a landable target must not be climbed to")
+    player._hop_funds = lambda st, cost=None: pytest.fail(
+        "a landable target must not be climbed to"
+    )
     assert player._c_route(node, (3, 4)) is None
 
 

@@ -13,6 +13,7 @@ import numpy as np
 from sentinel import actions, enemies, memmap as mm, stancegraph, stanceorder
 from sentinel.astar_player import (
     AStarPlayer,
+    GATE_BODY,
     GATE_TILE,
     _ABSORB_EST,
     _ENDGAME_EST,
@@ -23,7 +24,7 @@ from sentinel.astar_player import (
     _TAIL_FLOOR,
 )
 from sentinel.game import Game
-from sentinel.playerbase import DRAIN_DELAY, HOP_COST, REVOLUTION_FRAMES
+from sentinel.playerbase import DRAIN_DELAY, HOP_COST, HOP_FRAMES, REVOLUTION_FRAMES
 
 FUEL_RESERVE = 6  # energy above a hop's cost that _harvest tops the stance back up to
 MAX_WAIT = 4000.0  # frames a planned wait may spend; beyond this the hop is not worth scheduling
@@ -145,6 +146,42 @@ class StancePlayer(AStarPlayer):
 
         return wait
 
+    def _hop_funds(self, st, cost=HOP_COST):
+        """``(ok, wait)``: whether this stance funds a hop costing ``cost``, and the
+        frames to wait until it does.
+
+        A route NAMES its next stance, so the spend is exactly ``2k + robot`` rather than
+        ``HOP_COST``, the k=1 price of a hop nobody has picked yet: ls335's second hop is
+        a k=0 landing costing 3, held against 5 at the E=3 the router itself predicted.
+
+        Exposure is the other half of funding: the body stands on the SOURCE tile for the
+        whole build, so a stance with energy but no window owes drains that waiting
+        cancels rather than debts that reclaiming can pay."""
+        self.st = st
+        if self._can_hop(st, cost):
+            return True, 0.0
+        if st.energy - self._reserve() < cost:
+            return False, 0.0  # genuinely broke: no phase of the sweep funds it
+        wait = self._earliest_start(tuple(st.player_xy()), HOP_FRAMES)
+        if wait == math.inf or wait > MAX_WAIT:
+            return False, 0.0
+        return True, wait
+
+    def _can_leave(self, st, target):
+        """Whether a landing can be LEFT again, or is a trap that has to be refused.
+
+        ``_hop_ok`` gates ARRIVAL -- can this tile hold the build long enough -- and
+        nothing gated departure, so ls335's route spends 9 of the opening 10 energy on
+        (10,17) k=3 and dies there.  A body on the bare tile has ONE full-sight seer; one
+        on three boulders has FOUR, and a draining enemy stops rotating ($178C returns
+        before the $17F9 rotate), so the cone never leaves: ``_earliest_start`` is inf for
+        every duration down to 50 f, and no reclaim is aimable from the stack.
+
+        A landing that strikes the target needs no departure -- the absorb is the exit.
+        """
+        self.st = st
+        return self._landable(st, target) or self._hop_funds(st)[0]
+
     def _hop_ok(self, st, tile, k):
         """``(window, wait)`` for this hop, or ``None`` if no phase of the sweep fits it.
 
@@ -197,33 +234,60 @@ class StancePlayer(AStarPlayer):
                 break
             node_i = route.path[i]
             tile, k = self.graph.stances[node_i]
-            if not self._can_hop(st):
+            fundable, source_wait = self._hop_funds(
+                st, 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+            )
+            if not fundable:
                 got = self._reclaim_one(st)
                 if got is None:
                     break
                 g += got[0]
                 steps.append(got[1])
                 continue
-            ok = self._hop_ok(st, tile, k)
-            got = None
-            if ok is not None:
-                window, wait = ok
-                if wait:
-                    enemies.advance_frames(st, int(wait))
-                    g += wait
-                    steps.append(self._plan_step("wait", tile, wait, GATE_TILE, window))
-                got = self._hop_exec(tile, k, window)
+            if source_wait:
+                here = tuple(st.player_xy())
+                enemies.advance_frames(st, int(source_wait))
+                g += source_wait
+                steps.append(
+                    self._plan_step("wait", here, source_wait, GATE_BODY, HOP_FRAMES)
+                )
+            got = self._try_hop(st, tile, k, target)
             if got is None:
                 route = self._repair(st, target, blocked, node_i)
                 if route is None:
                     break
                 i = 0
                 continue
-            g += got[0]
-            steps.extend(got[1])
+            st, delta, hop_steps = got
+            g += delta
+            steps.extend(hop_steps)
             i += 1
-            g += self._harvest(st, steps)
         return self._node(node, st, g, steps) if steps else None
+
+    def _try_hop(self, st, tile, k, target):
+        """One routed hop on a TRIAL clone: ``(landed, g, steps)``, or ``None`` when the
+        board refuses it or the landing cannot be left.
+
+        Trial rather than in place because a refusal has to leave ``st`` intact for
+        ``_repair`` to re-route from -- the discipline ``_advance_hop`` already keeps for
+        the ranked climb, and what makes ``_can_leave`` a gate rather than an epitaph.
+        Harvest runs BEFORE that gate: the reclaims are the landing's own way out."""
+        ok = self._hop_ok(st, tile, k)
+        if ok is None:
+            return None
+        window, wait = ok
+        trial = st.clone()
+        self.st = trial
+        steps = []
+        if wait:
+            enemies.advance_frames(trial, int(wait))
+            steps.append(self._plan_step("wait", tile, wait, GATE_TILE, window))
+        got = self._hop_exec(tile, k, window)
+        if got is None:
+            return None
+        g = wait + got[0] + self._harvest(trial, got[1])
+        steps.extend(got[1])
+        return (trial, g, steps) if self._can_leave(trial, target) else None
 
     def _repair(self, st, target, blocked, node_i):
         """Re-route around a stance the executor's exact gates refused.

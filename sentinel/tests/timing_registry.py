@@ -233,6 +233,7 @@ _ENJ = "sentinel.enemies_jit"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
+_SP = "sentinel.stance_player"
 _CORE = "driver.core"
 _ROW = "ray-march/sweep iteration cap; unmeasured"
 _RELOAD = "ROM cooldown reload value; no derivation test"
@@ -294,6 +295,13 @@ REGISTRY = {
     "SAFE_FRAMES": _u(_PB, "post-action safety margin; unmeasured"),
     "WAIT_FRAMES": _u(_PB, "idle wait quantum; unmeasured"),
     "DRAIN_DELAY": _d(_PB, "DRAINING_COOLDOWN_RELOAD x UNIT_FRAMES ($1835)"),
+    "REVOLUTION_FRAMES": _u(
+        _PB,
+        "14 x ROT_PERIOD_FRAMES covers a 256-unit turn at the +-20 $1813 step, but "
+        "a stalled enemy skips its rotate and sweeps as little as 80 units in one "
+        "period, so the calendar it bounds is optimistic (strict xfail: "
+        "test_revolution_frames_is_a_full_cone_revolution)",
+    ),
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
     "BASE_CYCLES": _u(_PR, "plot_world base cycles; no fixture"),
@@ -352,6 +360,11 @@ REGISTRY = {
     "boot.attempts": _u(_CORE, "boot retry budget; unmeasured"),
     "boot_loaded.attempts": _u("driver.boot", "boot retry budget; unmeasured"),
     "save_snapshot.timeout": _u("driver.boot", _GUARD),
+    "MAX_WAIT": _u(
+        _SP,
+        "planner budget, not a ROM quantity: frames a scheduled hop may sit out "
+        "before it is not worth waiting for; unmeasured",
+    ),
     "load_snapshot.timeout": _u("driver.boot", _GUARD),
     "run_frames.timeout": _u("driver.clock", _GUARD),
 }
@@ -372,6 +385,8 @@ UNVALIDATED_PIN = frozenset(
         "ENERGY_MASK",
         "FRAME_TICKS",
         "H_SCROLL",
+        "MAX_WAIT",
+        "REVOLUTION_FRAMES",
         "ROTATION_COOLDOWN_RELOAD",
         "SAFE_FRAMES",
         "SETTLE_FIXED_FRAMES",
