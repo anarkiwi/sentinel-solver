@@ -16,6 +16,7 @@ from sentinel.astar_player import (
     GATE_BODY,
     GATE_TILE,
     _ABSORB_EST,
+    _OP_FLOOR,
     _ENDGAME_EST,
     _HOP_EST,
     _MAX_PURSUE,
@@ -69,6 +70,7 @@ class StancePlayer(AStarPlayer):
         self._edge_frames = {}  # stance -> the build frames the executor MEASURED there
         self._cost_epoch = 0  # bumped per correction; part of the route memo key
         self._mask_memo = {}
+        self._hold_veto_memo = {}  # per board: stances whose tile loses a boulder
         self._order_memo = {}
         self._span_memo = {}
 
@@ -97,11 +99,43 @@ class StancePlayer(AStarPlayer):
             self._mask_memo[sig] = mask
         return mask
 
+    def _unholdable(self, st):
+        """Stances whose tile cannot keep a boulder even for the CHEAPEST possible cap.
+
+        $17B7 drains an uncapped boulder to a tree, so a tile that loses one inside
+        ``_OP_FLOOR["create"]`` can never carry a stack, whatever the aim or the route.
+        Only ``k >= 1`` is vetoed: a bare robot has no uncapped phase to lose.  At ls335's
+        stall 14 of the 21 reachable tiles hold a boulder for 2 frames, and the router
+        kept proposing them while the 4 that hold forever went untried.
+
+        Keyed on the LIVE ENEMY SET, not the board signature.  Sentries only rotate, so
+        which of them can reach a tile changes when one DIES and at no other time; keying
+        per state re-swept all 298 tiles for every node expanded and never finished a
+        search at all."""
+        key = tuple(sorted(enemies.enemy_slots(st)))
+        got = self._hold_veto_memo.get(key)
+        if got is None:
+            floor = _OP_FLOOR["create"]
+            out = set()
+            for tile in {t for t, _k in self.graph.stances}:
+                if not self._stack_holds(st, tile, floor):
+                    out.update(
+                        j
+                        for j in self.graph.stances_on(tile).tolist()
+                        if self.graph.stances[j][1] >= 1
+                    )
+            got = frozenset(out)
+            self._hold_veto_memo[key] = got
+        return got
+
     def _route_for(self, st, target, blocked=()):
         """The stance route from this stance to a strike stance for ``target``.
 
         Memoized against ``_cost_epoch`` as well as the board: every correction
-        ``_repair`` learns invalidates the routes priced before it."""
+        ``_repair`` learns invalidates the routes priced before it.  Stances whose tile
+        cannot hold a boulder are vetoed outright -- the stack rots before it is capped.
+        """
+        blocked = frozenset(blocked) | self._unholdable(st)
         key = (
             self._sig(st),
             int(st.energy),
