@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from sentinel import actioncost, enemies, memmap as mm, projector
+from sentinel import actioncost, actions, enemies, memmap as mm, projector, terrain
 from sentinel.astar_player import AStarPlayer
 from sentinel.test_human_win_logs import _load, _is_player_action, state_from_event
 from sentinel.tests import human_clock as hc
@@ -24,6 +24,8 @@ OVERCHARGED_SPANS = 17  # actions we bill more for than the whole elapsed time
 CLOCK_SAMPLES = 506  # per-enemy $0C30 readings over the exact spans
 CADENCE = {False: (67, 41), True: (55, 399)}  # plotting -> (facings, $0C30) vs recorded
 SPLIT_CADENCE = (71, 290)  # the executor's phase split, scored the same way
+ENERGY_EXACT = 64  # exact-span actions whose next energy we reproduce
+ENERGY_MISSES = 5  # the rest, all off by one in both directions (drain timing)
 
 
 def _events(name=FIXTURE):
@@ -184,6 +186,44 @@ def test_phase_split_beats_either_extreme():
     assert facings >= max(v[0] for v in CADENCE.values())
     assert agree >= CADENCE[False][1]
     assert (facings, agree) == SPLIT_CADENCE
+
+
+def test_measured_span_reproduces_the_humans_next_energy():
+    """Seed the clock, advance the measured span, THEN apply the action.
+
+    A bracket fires when the action lands, so the action is the last thing in its span,
+    not the first.  The misses are off by one energy in both directions -- drain-timing
+    scatter, since $1A08 downgrades its target (robot -> boulder -> tree) and an absorb
+    of a drained object yields less.
+    """
+    evs = _events()
+    seed = _load(FIXTURE)["landscape"]
+    ok = fails = 0
+    for i, n in _exact_spans(evs):
+        ev = evs[i]
+        if not _is_player_action(ev):
+            continue
+        st = state_from_event(ev, seed)
+        hc.seed_clock(st, ev)
+        st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+        enemies.advance_frames(st, n)
+        tile = tuple(ev["target"])
+        if ev["verb"] == "create":
+            done = actions.create(st, ev["otype"], tile) is not None
+        else:
+            top = terrain.top_object(st, *tile)
+            done = top is not None and (
+                actions.absorb(st, top)
+                if ev["verb"] == "absorb"
+                else actions.transfer(st, top)
+            )
+        assert done, f"step {i}: the human's own {ev['verb']} at {tile} was refused"
+        if int(st.energy) == int(evs[i + 1]["energy"]):
+            ok += 1
+        else:
+            fails += 1
+    assert ok >= ENERGY_EXACT, f"regressed: {ok} < {ENERGY_EXACT}"
+    assert fails <= ENERGY_MISSES
 
 
 def test_spans_below_the_rom_floor_are_not_two_actions():
