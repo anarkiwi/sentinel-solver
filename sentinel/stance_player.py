@@ -206,7 +206,13 @@ class StancePlayer(AStarPlayer):
         ``wait_ok=False`` forbids scheduling and asks only whether the hop stands RIGHT
         NOW.  That is the re-gate ``_try_hop`` runs after it has actually waited: the
         price was taken on the pre-wait board, and the wait is exactly what invalidates
-        it."""
+        it.
+
+        The wait is scheduled on the DESTINATION's calendar but served by the body on the
+        SOURCE tile, so it is billed with the build: 45 of the 48 hops ls335 tries at
+        (8,21) are waits, and the 890 f one that opens (12,27) from 450 f to 1203 f also
+        takes the body from E=12 to E=10 and its window down to 4 f.  Charging only the
+        build made standing still look free."""
         self.st = st
         margin = self._margin()
         exposed = self._exposing_enemies(tile)
@@ -227,7 +233,7 @@ class StancePlayer(AStarPlayer):
             window = need  # the verified span the clock agreed to at `wait`
         if not self._affords(
             2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT],
-            priced[0],
+            wait + priced[0],
             window=self._player_window(),
         ):
             return None
