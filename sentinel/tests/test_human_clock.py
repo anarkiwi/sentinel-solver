@@ -26,7 +26,9 @@ FIXTURE = "ls335.json"  # the only watch_play/3 fixture: it carries the enemy cl
 # Debt measured against the recorded clock; each may only improve.
 EXACT_SPANS = 117  # spans whose frame count the clock pins outright
 FACING_EXACT = 89
-FACING_ERRORS = 43  # every one is +1 rotation step; see the one-sidedness test  # of those, how many our enemy advance reproduces
+FACING_ERRORS = 43  # every one is +1 rotation step; see the one-sidedness test
+DIVERGENT_SPANS = (10, 15, 17, 18, 33)  # spans whose facings we get wrong
+ROM_ROUNDS = 60  # rounds of byte-exact agreement demanded on each  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
 OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed time
 CADENCE = {False: 89, True: 64}  # plotting -> facings reproduced, vs recorded
@@ -326,6 +328,45 @@ def test_every_facing_error_is_exactly_one_extra_rotation():
     assert steps, "no facing error left -- retire this test and the debt it pins"
     assert set(steps) == {0}, f"not all +1 rotation: {sorted(set(steps))}"
     assert len(steps) == FACING_ERRORS
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("span", DIVERGENT_SPANS)
+def test_enemies_step_matches_the_rom_on_a_divergent_state(span):
+    """On the very states whose facings we get wrong, our round is byte-exact vs the ROM.
+
+    That puts the branch logic of $16E6 beyond suspicion and leaves only the frame-to-
+    round cadence above it.  ``machine_from_image`` overlays $9D37 and $1335 from the
+    image, so the recorded rotation steps must be rewritten or the ROM turns by the
+    wrong amount and the comparison is silently meaningless.
+    """
+    oracle = pytest.importorskip("sentinel.tests.oracle")
+    if not oracle.available():
+        pytest.skip("stage2 image absent")
+    evs = _events()
+    seed = _load(FIXTURE)["landscape"]
+    ev = evs[span]
+    st = state_from_event(ev, seed)
+    hc.seed_clock(st, ev)
+    st.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    cpu, rom, state = oracle.machine_from_image(bytes(st.mem))
+    for addr in oracle.RENDER_STUBS:
+        rom[addr] = 0x60
+    rom[oracle.WORLD_BUSY_PLOTTING] = 0x00
+    rom[mm.COOLDOWN_GATE] = st.mem[mm.COOLDOWN_GATE]
+    rom[0x0090] = 7
+    for e in ev["enemy_clock"]:
+        rom[mm.ROTATION_SPEED_TABLE + e["slot"]] = e["rot_step"] & 0xFF
+    ours = state_from_event(ev, seed)
+    hc.seed_clock(ours, ev)
+    ours.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    ours.mem[0x0090] = 7
+    for r in range(ROM_ROUNDS):
+        oracle.step_enemy_round(cpu, rom, state)
+        enemies.step(ours)
+        got = [int(ours.obj_h_angle[s]) for s in range(8)]
+        want = [int(rom[mm.OBJECTS_H_ANGLE + s]) for s in range(8)]
+        assert got == want, f"round {r + 1}: ours {got} != ROM {want}"
 
 
 def test_spans_below_the_rom_floor_are_not_two_actions():

@@ -103,7 +103,13 @@ def fresh_machine():
 def machine_from_image(src):
     """A play machine whose board is ``src`` (a live 64 KB sim image, e.g.
     ``State.mem``) with the ROM code/tables overlaid from the game image; the
-    board lives in low RAM outside the ROM ``LOADED`` regions, so it survives."""
+    board lives in low RAM outside the ROM ``LOADED`` regions, so it survives.
+
+    Per-enemy state INSIDE a LOADED region does not: ``ROTATION_SPEED_TABLE`` ($9D37)
+    and ``COOLDOWN_BRESENHAM`` ($1335) are overwritten by the image, so a caller seeding
+    a recorded clock must rewrite them after this returns or the ROM rotates by the
+    wrong step and every comparison is silently invalid.
+    """
     img = _rom_image()
     mem = bytearray(src)
     for a, b in LOADED:

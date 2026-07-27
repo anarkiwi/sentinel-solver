@@ -202,10 +202,28 @@ different boards — so unlike the async-vs-halted difference above, that one is
 artifact. A seven-enemy board does do more work per pass than a two-enemy board. It is
 just not enough to move a rotation, per the sweep.
 
-So the cause is none of: the rotate gate, any of the four blocking branches, `$1B00`, or
-the consideration cadence. That is a strong negative result rather than a fix, and the
-next attempt should start by instrumenting which branch `$16E6` actually takes on a live
-seven-enemy board — the one thing none of these measurements observes directly.
+### The 6502 settles it offline
+
+No live instrumentation is needed to see which branch `$16E6` takes — the oracle runs the
+same code. Seeded with a divergent ls335 state and stepped round for round against
+`oracle.step_enemy_round`, `enemies.step` is **byte-exact against the real 6502 for 119
+rounds** on every span we get wrong. The per-round transition function, branches
+included, is right; only the frame-to-round cadence layer above it can be wrong.
+
+(Two traps on the way: `machine_from_image` overlays `$9D37` and `$1335` from the ROM
+image, so a seeded rotation-speed table is silently replaced and the ROM then rotates by
+the wrong step; and `prime_enemy_driver` resets `$0C50` and the cursor. Both make a
+comparison look like a model defect. `machine_from_image`'s docstring now says so.)
+
+Then the cadence itself is searchable. Sweeping a uniform *updates per round* U over
+1..40 on the 28 spans we get wrong: **U = 1 fixes 10 of them, and no U fixes the other
+18**. So no constant cadence reproduces the recording.
+
+That is the result. The round logic is exact, and the cadence cannot be a constant, so
+the real cadence must vary WITHIN a span — which is what the phase split models
+(foreground `plot_world`/dither/scroll stretches reach no `$16B5`) and why sweeping a
+constant could never find it. Closing the gap means pricing those stretches better, not
+picking a better number.
 
 The ROM uses **no undocumented opcodes**: tracing every instruction of landscape
 generation, a full `plot_world` frame, and 400 enemy rounds (about 1.1M instructions, 90
