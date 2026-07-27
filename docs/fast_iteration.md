@@ -137,11 +137,16 @@ tick 22: tile=(18,24) eye=8.375 E=0 foes=3     <- the stall
 ```
 
 At tick 20 the player lays a boulder on `(18,24)` while `_pick_hop` at that same state
-offers **no hop at all**. The hop is being executed from a plan committed at an earlier
-tick, and the departure discipline the code does have — `_climb_continues` for the
-ranked climb, `_can_leave` for routed hops — is applied when the hop is **proposed**,
-not when it is **executed**. Nothing re-asks "does this landing still have an exit?"
-against the board as it actually is, three ticks later, at E=3 instead of the energy the
-plan assumed.
+offers **no hop at all**: the hop is executed from a plan committed at an earlier tick.
 
-That is a hypothesis the corpus can test in milliseconds, which is the point.
+That framed the right question and the wrong answer. The corpus settled it in minutes —
+which is the point, because the cheap loop is what makes a wrong guess survivable.
+`(18,24)` is *not* fatal; the run refuels off it from E=0 to E=4. Reading `plan`/`_pi`
+straight out of the checkpoint series (no replay at all) shows one 55-step plan
+committed at tick 14, and the kill at **tick 24**: live energy 4, next build group
+`boulder`+`robot`+`transfer` on `(26,21)` costing 5. The boulder goes down anyway, the
+robot is then unaffordable, and a half-built pedestal strands the body.
+
+A hop is atomic; the executor was committing it one keypress at a time against drifted
+energy. `_group_need` + a `_tick` guard fixes it, byte-identically on every board that
+already won. Total cost of the diagnosis: four checkpoint probes and one field dump.
