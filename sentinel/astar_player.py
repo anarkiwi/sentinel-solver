@@ -981,9 +981,11 @@ class AStarPlayer(BasePlayer):
         needs, and the trace is literal -- the boulder is created, then the robot create
         answers None with a TREE on top.
 
-        Measured, the lifetime is a per-tile CONSTANT and independent of when the boulder
-        is placed (103 f at delays 0/100/200/400), so simulating the span is exact rather
-        than a sample."""
+        The lifetime is strongly PHASE-dependent: (0,22) holds 103 f, then 3 f, then
+        forever at placement delays 0/100/200/400.  An earlier reading of it as a per-tile
+        constant was taken with $12E1 still set, where the world does not run and no delay
+        changes anything -- so this must be asked of the live state at the moment of the
+        build, and never precomputed for a board."""
         if span <= 0:
             return True
         key = (self._sig(st), tuple(tile), int(span))
