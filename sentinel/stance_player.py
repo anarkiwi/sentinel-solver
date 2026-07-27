@@ -23,7 +23,7 @@ from sentinel.astar_player import (
     _TAIL_FLOOR,
 )
 from sentinel.game import Game
-from sentinel.playerbase import HOP_COST
+from sentinel.playerbase import DRAIN_DELAY, HOP_COST, REVOLUTION_FRAMES
 
 FUEL_RESERVE = 6  # energy above a hop's cost that _harvest tops the stance back up to
 MAX_WAIT = 4000.0  # frames a planned wait may spend; beyond this the hop is not worth scheduling
@@ -33,6 +33,7 @@ SUBGOAL = False  # stop the search at the DP's next enemy rather than at the win
 ROUTE_TARGETS = 3  # strategic goals routed to per expansion (nearest enemies first)
 ROUTE_HOPS = 8  # hops one route child compiles before it hands back to the search
 ROUTE_POLICY = "stuck"  # when to offer route children: stuck | root | always; measured equal-best and cheapest, and h0 loses identically under all three
+ROUTE_METRIC = "frames"  # price legs in TIME including waits, not hop count: hops biased the climb toward tall stacks
 ROUTE_FOLLOW = True  # a search that found nothing COMMITS to the route rather than stalling; it can only fire where the frontier already returned None
 _MISS = object()
 
@@ -65,6 +66,7 @@ class StancePlayer(AStarPlayer):
         self._route_memo = {}
         self._mask_memo = {}
         self._order_memo = {}
+        self._span_memo = {}
 
     @property
     def graph(self):
@@ -103,9 +105,45 @@ class StancePlayer(AStarPlayer):
                 start_tile=tuple(st.player_xy()),
                 start_eye=st.eye_z(),
                 blocked=blocked,
+                metric=ROUTE_METRIC,
+                wait=self._route_wait(st) if ROUTE_METRIC == "frames" else None,
             )
             self._route_memo[key] = got
         return got
+
+    def _stance_spans(self, st, tile):
+        """The busy spans of ``tile`` on this board's clock, memoized per (stance, tile).
+
+        The calendar is ABSOLUTE, so one computation answers every elapsed time: no
+        re-simulation per edge, which is what makes waiting affordable as a route cost.
+        """
+        key = (self._sig(st), tuple(tile))
+        got = self._span_memo.get(key)
+        if got is None:
+            self.st = st
+            got = self._busy_spans(self._exposing_enemies(tile), REVOLUTION_FRAMES)
+            self._span_memo[key] = got
+        return got
+
+    def _route_wait(self, st, need=_TAIL_FLOOR):
+        """``wait(stance, elapsed)`` for ``route(metric="frames")``.
+
+        Frames the hop onto that stance must sit out, read off the absolute calendar at
+        the time the route reaches it.  Analytic and optimistic on purpose -- ``_hop_ok``
+        re-asks the bit-exact clock before any of it is committed."""
+
+        def wait(j, spent):
+            tile = self.graph.stances[j][0]
+            at = float(spent)
+            for lo, hi in self._stance_spans(st, tile):
+                if hi <= at:
+                    continue
+                if lo - at + DRAIN_DELAY >= need:
+                    return 0.0
+                at = hi
+            return min(at - spent, MAX_WAIT)
+
+        return wait
 
     def _hop_ok(self, st, tile, k):
         """``(window, wait)`` for this hop, or ``None`` if no phase of the sweep fits it.
