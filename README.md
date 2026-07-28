@@ -15,6 +15,8 @@ landscape-complete flag (`$0CDE` bit 6) — landscape 335 in 66 actions, final e
 
 ![the phase player winning landscape 335 live in VICE](docs/media/ls335_phase_win.png)
 
+The whole run, duplicate frames dropped and every fifth survivor kept: 66 actions in 57 s.
+
 ```bash
 python -m driver.play_player 335        # live in VICE, records an AVI
 python -m sentinel.phase_player 335     # offline, same board
