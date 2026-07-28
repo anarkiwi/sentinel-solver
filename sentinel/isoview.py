@@ -146,6 +146,10 @@ def _terrain_svg(state):
     return out
 
 
+def _signed_byte(b):
+    return b - 256 if b >= 128 else b
+
+
 def _cone(state, slot, reach=9.0):
     """The enemy's scan cone as a ground wedge on its current facing."""
     x, y = state.tile_of(slot)
@@ -159,6 +163,55 @@ def _cone(state, slot, reach=9.0):
             project(x + 0.5 + reach * math.cos(t), y + 0.5 + reach * math.sin(t), z)
         )
     return _poly(pts, "#ff5a5a", "#ff8080", 0.6, ' fill-opacity="0.16"')
+
+
+def _sweep(state, slot, reach=11.0):
+    """Which way the cone is travelling: an arc off the leading edge, plus its sign.
+
+    $1805 adds the per-enemy step from ROTATION_SPEED_TABLE ($14 or $EC, i.e. +20 or
+    -20), so the sign of that byte is the scan's direction of travel.
+    """
+    step = _signed_byte(state.mem[mm.ROTATION_SPEED_TABLE + slot])
+    if not step:
+        return ""
+    x, y = state.tile_of(slot)
+    z = state.obj_z_height[slot]
+    a = state.obj_h_angle[slot] / 256.0 * 2 * math.pi
+    half = FOV_HALF / 256.0 * 2 * math.pi
+    lead = a + (half if step > 0 else -half)
+    span = abs(step) / 256.0 * 2 * math.pi
+    pts = []
+    for k in range(7):
+        t = lead + (span if step > 0 else -span) * k / 6.0
+        pts.append(
+            project(x + 0.5 + reach * math.cos(t), y + 0.5 + reach * math.sin(t), z)
+        )
+    d = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+    tip = pts[-1]
+    label = "CW" if step > 0 else "CCW"
+    return (
+        f'<polyline points="{d}" fill="none" stroke="#ffd166" stroke-width="2.2" '
+        f'stroke-linecap="round"/>'
+        + _text(tip[0], tip[1] - 4, label, 9.5, "#ffd166", "middle", "bold")
+    )
+
+
+def _origin(state):
+    """Mark tile 0,0 and the two axis directions, so the grid can be read."""
+    z = 0
+    o = project(0.5, 0.5, z)
+    xa = project(4.5, 0.5, z)
+    ya = project(0.5, 4.5, z)
+    return [
+        f'<circle cx="{o[0]:.1f}" cy="{o[1]:.1f}" r="4" fill="#ffd166"/>',
+        _text(o[0], o[1] - 9, "0,0", 11, "#ffd166", "middle", "bold"),
+        f'<line x1="{o[0]:.1f}" y1="{o[1]:.1f}" x2="{xa[0]:.1f}" y2="{xa[1]:.1f}" '
+        f'stroke="#ffd166" stroke-width="1.6"/>',
+        _text(xa[0] + 6, xa[1], "+x", 10.5, "#ffd166", "start", "bold"),
+        f'<line x1="{o[0]:.1f}" y1="{o[1]:.1f}" x2="{ya[0]:.1f}" y2="{ya[1]:.1f}" '
+        f'stroke="#ffd166" stroke-width="1.6"/>',
+        _text(ya[0] - 6, ya[1], "+y", 10.5, "#ffd166", "end", "bold"),
+    ]
 
 
 def _glyph(state, slot, is_player):
@@ -215,6 +268,37 @@ def _glyph(state, slot, is_player):
     return out
 
 
+def _enemy_labels(state):
+    """Number each enemy and give its height, so the diagram can be talked about.
+
+    The Sentinel is slot 0 ($1B8E locks it last); sentries are numbered by slot in
+    generation order, which is the numbering every measurement in the docs uses.
+    """
+    out = []
+    n = 0
+    for e in enemies.enemy_slots(state):
+        x, y = state.tile_of(e)
+        z = state.obj_z_height[e] + state.obj_z_frac[e] / 256.0
+        if state.obj_type[e] == mm.T_SENTINEL:
+            tag = "SENTINEL"
+        else:
+            n += 1
+            tag = f"S{n}"
+        cx, cy = project(x + 0.5, y + 0.5, z)
+        out.append(
+            _text(
+                cx,
+                cy - GLYPH_H.get(state.obj_type[e], 20.0) - 13,
+                f"{tag}  {x},{y}  z={z:.2f}",
+                10,
+                TYPE_COLOR.get(state.obj_type[e], "#ffffff"),
+                "middle",
+                "bold",
+            )
+        )
+    return out
+
+
 def _tile_ring(state, x, y, color, label):
     """A coloured diamond on a tile's surface, with a label above it."""
     z = terrain.resolve_ground(state, x, y)[0]
@@ -234,17 +318,20 @@ def _tile_ring(state, x, y, color, label):
 def _objects_svg(state):
     """Cones behind everything, then glyphs back to front so near hides far."""
     out = [_cone(state, e) for e in enemies.enemy_slots(state)]
+    out += [_sweep(state, e) for e in enemies.enemy_slots(state)]
+    out += _origin(state)
     px, py = state.platform_xy
     out += _tile_ring(state, px, py, TYPE_COLOR[mm.T_PLATFORM], f"PLATFORM {px},{py}")
     for slot in sorted(
         state.occupied_slots(), key=lambda s: state.obj_x[s] + state.obj_y[s]
     ):
         out += _glyph(state, slot, slot == state.player)
+    out += _enemy_labels(state)
     ex, ey = state.player_xy()
     out += [
         _text(
             *project(ex + 0.5, ey + 0.5, state.obj_z_height[state.player] + 3.4),
-            f"YOU {ex},{ey} E={state.energy}",
+            f"YOU {ex},{ey} z={state.eye_z():.2f} E={state.energy}",
             10.5,
             "#ffffff",
             "middle",
