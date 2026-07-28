@@ -564,27 +564,27 @@ class BasePlayer:
         return int(math.ceil((budget - window) / DRAIN_DELAY))
 
     def _drain_units(self, budget, tile=None, exposed=None):
-        """Energy `budget` frames of exposure costs, billed PER SEER.
+        """Energy `budget` frames of exposure costs a body that STAYS there.
 
-        ``_gaze_window`` is a min: the time to the FIRST drain from anyone.  Charging
-        one stream off it prices N simultaneous cones as one, because $16E6 considers
-        each enemy separately and each re-arms its own $1A31 countdown -- so a body two
-        cones see is drained twice a cycle, not once.
+        Once a cone holds a target it keeps it ($178C returns before the $17F9 rotate)
+        and $1A31 re-arms after every drain, so exposure is an aggregate RATE that runs
+        until the body leaves: ``n_seers / DRAIN_DELAY`` from the first onset, not one
+        stream and not each seer on its own (unreached) onset clock.
+
+        Measured standing under four cones: first drain 150 f, then every 125 f
+        (= DRAIN_DELAY / 4), energy 13 -> 0 in 875 f.  This law gives 6 over the 841 f
+        that board's build takes and 7 over 875 f; the ROM does 6 and 7.
         """
         if tile is None:
             tile = self.st.player_xy()
         if exposed is None:
             exposed = self._exposing_enemies(tile)
-        half = FOV_HALF + FOV_MARGIN
-        target = self._top(tile)
-        units = 0
-        for e, angle_hi, full in exposed:
-            if full:
-                units += self._drains_in(
-                    self._drain_clock(e, angle_hi, half, target), budget
-                )
-        meanie = self._meanie_window(tile, exposed)
-        return max(units, self._drains_in(meanie, budget))
+        seers = sum(1 for _, _, full in exposed if full)
+        window = self._gaze_window(tile, exposed=exposed)
+        if not seers or budget <= window or window == math.inf:
+            return self._drains_in(self._meanie_window(tile, exposed), budget)
+        rate = int(math.floor((budget - window) * seers / DRAIN_DELAY)) + 1
+        return max(rate, self._drains_in(self._meanie_window(tile, exposed), budget))
 
     def _affords_drains(self, n_drains, cost=0):
         """Whether the player can hand `n_drains` energy to the enemies on top of an

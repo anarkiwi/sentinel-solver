@@ -351,10 +351,31 @@ highest board the planner cannot convert.
    of losing the DAG.
 4. **Only bare flat tiles are stances.** A tile holding a tree becomes a legal stance once
    the tree is absorbed, and the snapshot does not know that.
-5. **A missing action class.** The human line has **19 `create TREE` actions**, and an
-   enemy with something to drain stops rotating — a legal move that buys ≥449 frames of
-   stall, which no generator produces. It only becomes representable once the stall is
-   modelled, the same change that makes waiting under a cone terminate.
+5. ~~**A missing action class.** The human line has 19 `create TREE` actions...~~
+   **WITHDRAWN — the premise was a fixture artifact.** The human player confirms they
+   never created a tree, and the recording agrees: on ls335 every `BOULDER` create
+   debits exactly −2 energy (17/17) and every `ROBOT` −3 (18/18), while all 19 `TREE`
+   "creates" debit **0**. A player create spends first ($1BBF), so a zero-cost create
+   is not one. They are enemy discharges ($1A5D → `create_object #$2` →
+   `put_object_in_random_tile_below_z $1238`) that `_extract.py`'s object-table diff
+   attributed to the player: its LOS filter drops a candidate only when NO keyboard aim
+   reaches the tile, and a discharge lands on a random tile among 1024, so plenty are
+   aimable. `_extract._paid_for` now requires the energy debit. Applied to the
+   recordings it drops 19 events on ls335 (156 → **137** real player actions) and 7 on
+   ls110; ls0 and ls42 have no trees at all and are unaffected.
+
+   **The committed `ls*.json` still carry the artifact**, because correcting them is
+   not a row deletion. `ls335_clock.json` is a live replay *of the corrupted line* —
+   and already only `reproduced: 35` of 156, first divergence at step 20 — and
+   `ls335_audit.json` is scored against it, so ten `test_human_clock` /
+   `test_human_audit` assertions pin numbers derived from it. Regenerating needs the
+   raw `watch_play` logs, which are gitignored. Until then treat any per-index human
+   figure on ls335/ls110, **including the handover indices**, as counting phantom
+   events.
+
+   What actually drains the player is the mechanism in
+   [ls335_minimal.md](ls335_minimal.md): a body that transits exposed cells is drained
+   all the way down, because a holding cone does not rotate off.
 
 ## Tests
 
