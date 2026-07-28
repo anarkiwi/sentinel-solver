@@ -1,7 +1,7 @@
 ***Claude - including Fable - was unable to solve this simple game from 1986 without my help. Is what it is.***
 
 
-# The Sentinel — bit-exact model + live driver
+# The Sentinel — ROM-faithful model + live driver
 
 A ROM-faithful model of **The Sentinel** (Geoff Crammond, Firebird, 1986) on the
 Commodore 64, plus a live driver that plays the real game in
@@ -43,7 +43,7 @@ here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sent
 
 | Area | Path | Role |
 |------|------|------|
-| Model | `sentinel/` | standalone bit-exact forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator) |
+| Model | `sentinel/` | standalone forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). Transition primitives are byte-for-byte against the 6502; see [architecture.md](docs/architecture.md) for what is exact and what is not |
 | Phase player | `sentinel/phase_player.py` | the default player: freedom first, then convert. Wins all eight measured boards |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer` |
 | Landscape analyzer | `sentinel/landscan.py` | enemy count and terrain shape per landscape, to match one board to another |
@@ -52,18 +52,28 @@ here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sent
 
 ## Fixtures (not distributed)
 
-The game is copyrighted and is **not** included. Place your own copies at
-`sentinel-gold.tap` (C64 tape image, used by the live driver) and
-`out/sentinel_stage2.bin` (64 KB memory image of the loaded game, used only by the
-`oracle`-marked tests that regenerate the goldens). Both are gitignored; tests that need
-them auto-skip when absent. The live driver additionally needs Docker and the
-`anarkiwi/asid-vice:latest` image (build from https://github.com/anarkiwi/asid-vice).
+The game is copyrighted and is **not** included. There is **one** supplied fixture: place
+your own copy of the C64 tape image at `sentinel-gold.tap`.
+
+`out/sentinel_stage2.bin` — the 64 KB memory image of the loaded game, used by the
+`oracle`-marked tests that regenerate the goldens — is **not** a second supplied file: it is
+**generated** from the tape. `driver/dump_stage2.py` boots the tape in asid-vice, dumps RAM,
+and verifies the image by running the ROM's own generator against the model:
+
+```bash
+python -m driver.dump_stage2                    # --out PATH, --force to re-dump
+```
+
+Both files are gitignored; tests that need them auto-skip when absent. Generating the image
+and running the live driver need Docker and the `anarkiwi/asid-vice:latest` image (build
+from https://github.com/anarkiwi/asid-vice).
 
 ## Docs
 
 - [gameplay.md](docs/gameplay.md) — the game's rules and mechanics, ROM-derived spec.
-- [architecture.md](docs/architecture.md) — the model's modules, the landability filter and
-  render-cost model, the driver, the instrument, and the measurement tooling.
+- [architecture.md](docs/architecture.md) — how the game works, a table of the ROM routines,
+  how the model mirrors them, then the subsystems: landability filter, render-cost model,
+  driver, instrument, measurement tooling.
 - [players.md](docs/players.md) — the phase player and the reactive greedy player: the rules
   that decide a move, the phases, current results.
 - [open_items.md](docs/open_items.md) — everything unsolved, and what was disproved.

@@ -75,18 +75,18 @@ Each is a fact about the ROM, not a tuned quantity.
 ### Results
 
 No node budget and no wall-clock cutoff: the planner is deterministic, so a run's outcome
-does not depend on host load and the times below are observation only.
+does not depend on host load.
 
-| board | enemies | result | actions | energy left | wall |
-|---|---|---|---|---|---|
-| ls0 | 1 | won | 16 | 1 | 13 s |
-| ls42 | 2 | won | 35 | 4 | 92 s |
-| ls110 | 3 | won | 53 | 17 | 126 s |
-| ls60 | 7 | won | 55 | 15 | 231 s |
-| ls298 | 7 | won | 34 | 5 | 51 s |
-| ls321 | 7 | won | 78 | 12 | 127 s |
-| ls373 | 7 | won | 65 | 15 | 159 s |
-| ls335 | 7 | won | 73 | 20 | 90 s |
+| board | enemies | result | actions | energy left |
+|---|---|---|---|---|
+| ls0 | 1 | won | 16 | 1 |
+| ls42 | 2 | won | 35 | 4 |
+| ls110 | 3 | won | 53 | 17 |
+| ls60 | 7 | won | 55 | 15 |
+| ls298 | 7 | won | 34 | 5 |
+| ls321 | 7 | won | 78 | 12 |
+| ls373 | 7 | won | 65 | 15 |
+| ls335 | 7 | won | 73 | 20 |
 
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
@@ -117,9 +117,9 @@ away, and no valuation at any affordable depth reaches it.
 So the tie is not scored, it is **played**. `_settle_tie` forks each tied candidate, builds
 it, and runs the fixed ladder to termination, keeping the first that wins — no weight, no
 horizon, the only thing consulted is whether the game was won. It is affordable because
-ties are rare (two of fifteen ticks on ls110) and the rollout plays a whole board in
-seconds; a tie costs one rollout per candidate until one wins (~50 s at the ls110 opening,
-where none does).
+ties are rare (two of fifteen ticks on ls110) and a rollout plays a whole board; a tie costs
+one rollout per candidate until one wins, and the full nine at the ls110 opening, where none
+does.
 
 ## The reactive greedy player
 
