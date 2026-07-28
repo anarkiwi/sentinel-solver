@@ -5,10 +5,8 @@ than from a cost model, because the weighted search
 ([stance_planner.md](stance_planner.md)) does not convert ls335 and its failures were
 never in the search — they were in what the search was asked to optimise.
 
-In its fixed-ladder form it wins **ls335 from entry** in 55 actions — the board this
-repo is named for losing. In the fork-arbiter form committed here it wins ls110 and
-ls298 instead, and loses ls335. Six of eight either way; see [Where it
-stands](#where-it-stands).
+It wins **ls335 from entry** in 73 actions — the board this repo is named for losing —
+and seven of the eight boards measured. See [Where it stands](#where-it-stands).
 
 ## The three facts it is built on
 
@@ -46,8 +44,8 @@ height too (`hot` 2.75 -> 4.9), so the climb is not into safety, it is into opti
 | **1b breakout** | height, per unit of a finite purse | an enemy is landable |
 | **2 convert** | absorb, Sentinel last, then the platform | hyperspace from the platform |
 
-Splitting 1 from 2 took ls335 from unwinnable to won. Splitting 1a from 1b halved the
-opening, 107 actions to 55: the two want opposite things from the same tile — 1a wants
+Splitting 1 from 2 took ls335 from unwinnable to won. Splitting 1a from 1b then halved
+the opening, 107 actions to 55: the two want opposite things from the same tile — 1a wants
 to stay where the trees are, 1b wants to leave for height — and a single scorer
 blending them strands the body at eye 7.875 with 56 climbs available and one absorbable
 object in reach.
@@ -72,44 +70,58 @@ Each is a fact about the ROM, not a tuned quantity.
 
 ## Where it stands
 
-Node-budget-free; every run is bounded by wall clock only.
+There is no node budget and no wall-clock cutoff: the planner is deterministic, so a
+run's outcome does not depend on host load and the times below are observation only.
 
-| board | enemies | result | actions | wall |
-|---|---|---|---|---|
-| ls0 | 1 | won | 16 | 26 s |
-| ls42 | 2 | won | 44 | 56 s |
-| ls110 | 3 | won | 65 | 131 s |
-| ls60 | 7 | won | 38 | 69 s |
-| ls298 | 7 | won | 30 | 70 s |
-| ls321 | 7 | won | 58 | 126 s |
-| ls373 | 7 | lost | 24 | 104 s |
-| ls335 | 7 | lost | 32 | 76 s |
+| board | enemies | result | actions | eye | wall |
+|---|---|---|---|---|---|
+| ls0 | 1 | won | 16 | 6.875 | 12 s |
+| ls42 | 2 | won | 32 | 8.875 | 38 s |
+| ls110 | 3 | **lost** | 17 | 7.375 | 20 s |
+| ls60 | 7 | won | 56 | 7.875 | 71 s |
+| ls298 | 7 | won | 34 | 8.875 | 43 s |
+| ls321 | 7 | won | 85 | 7.875 | 107 s |
+| ls373 | 7 | won | 65 | 7.875 | 150 s |
+| ls335 | 7 | won | 73 | 8.875 | 80 s |
 
-**6 of 8, and WHICH six depends on the arbitration order** — see below. With the fork
-arbiter as committed, ls110 and ls298 win and ls335 does not; with the fixed ladder that
-preceded it, ls335 wins in 55 actions and ls110 does not. Both configurations score 6,
-which is the clearest statement of the open problem: the planner is one decision rule
-short, not one board short.
-
-The losses share a signature — `E=0, dead, most enemies alive` — the establish/breakout
-boundary failing the way ls335 did before the fuel rule, not a new fault.
+**7 of 8.** ls335 and ls373 converted when the four invented `BUILD_FRAMES` durations
+were replaced by each action's real aim-plus-settle (`_span`). That is worth stating
+plainly: the planner was not mis-reasoning about those boards, it was asking for gaps of
+the wrong length, and the strategy was sound before the arithmetic was.
 
 ## What is not solved
 
-**The arbiter.** A fixed priority ladder cannot express which of climb / harvest /
-salvage is right at an ambiguous point: ordering them one way wins ls110 and loses
-ls335, the other way does the reverse. The right answer is to decide by playing each
-option out on a fork (`_arbitrate`), which is sound and which did fix ls110 — but an
-honest rollout must rank on the same view model it plays, and that is unaffordable:
-lookahead 2 costs ~52 s a board, lookahead 4 exceeds 120 s. Ranking forks on the cheap
-primary sweep instead makes the arbiter decide a different game than it plays, and it
-stalls at ls335's opening where that plane finds no climbs at all.
+**ls110 walks into a local trap and no global rule fixes it.** At 17 actions it stands
+at eye 7.375 with 3 energy under a cone, and is drained to death over the next 765
+frames. The deadlock is mechanical, and was measured rather than inferred:
 
-So the arbiter is blocked behind cost, and the cost is one function: **97% of runtime is
-`los._landable_batch`**, the pitch-band sweep, at ~0.4 s a call. Make that cheap and the
-rollout becomes affordable, the arbiter becomes honest, and the ordering problem
-dissolves. That is the next thing to do, and it is engineering rather than strategy.
+* the only climb on offer costs exactly 3, and paying it lands the body on zero, which
+  $1A00 kills;
+* every remaining absorbable object is out of view, so `_refuel` cannot raise the purse;
+* no hop is available, so the under-fire fallback finds nothing.
 
-Second, `_refuel` has no value test: on ls373 it harvests under a cone at a loss,
-taking +1 trees for 2 drains, and starves at eye 6.875 having eaten its own freshly
-built boulder. An absorb should be worth what standing there costs.
+The mistake is therefore several actions upstream, and the fork arbiter cannot see it:
+forks play `rollout=True` — a fixed policy order — so a fork's future is not the future
+the top level will actually have. Deepening lookahead from 4 to 8 to 16 changes nothing
+on ls110 (measured), which rules out depth as the cause and leaves policy mismatch.
+
+Three global rules were tried against this trap and each traded boards rather than
+fixing it, so none is committed:
+
+| rule tried | result |
+|---|---|
+| absorb only if its value exceeds the drain over its own span | ls110 won, ls321 + ls373 lost — 6/8 |
+| under fire, let escape pre-empt harvesting | no change anywhere: at the stall there is no escape to pre-empt |
+| make `_supply`'s affordability test agree with `_best_climb`'s | ls42 + ls110 lost — 6/8 |
+
+The first of those also **disproves an earlier claim in this document**, that `_refuel`
+harvests "at a loss" under a cone. It cannot: idling through the same span costs the
+same drain and yields nothing, so an absorb under fire is never worse than waiting.
+What ls110 loses to is not the absorb's price, it is the *time* the absorb occupies.
+
+**So the next step is to make forks play the policy they are ranking.** Give
+`_arbitrate` a rollout that runs the real `_tick` — arbiter included — rather than the
+fixed ladder. That is what makes the score mean what it claims. It is blocked on cost,
+and the cost is one function: **97% of runtime is `los._landable_batch`**, the
+pitch-band sweep, at ~0.4 s a call. Making that cheap is the enabling work, and it is
+engineering rather than strategy.
