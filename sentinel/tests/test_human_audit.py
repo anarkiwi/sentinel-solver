@@ -13,7 +13,7 @@ from sentinel.tests import human_audit
 _BREACH335 = [23, 24, 28, 44, 45, 94, 137]  # 52 retired by the phase-split advance
 _GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
 # was [30, 32, 34, 50, 51, 77, 84, 92, 94, 95] against the flat survival floor; pricing
-# exposure as the $0C20 RATE accepts seven of those human creates (docs/human_regress.md)
+# exposure as the $0C20 RATE accepts seven of those human creates (docs/architecture.md)
 _FIRE335 = [32, 34, 77]
 _DRAIN335 = [
     19,

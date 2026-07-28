@@ -9,7 +9,7 @@ Driven by the GREEDY player: the subject is the driver's clock discipline, and g
 decides in milliseconds, so a divergence here can only be the driver.  The phase player
 fails this gate -- the monitor socket drops across the ~25 s think gap a tie opens and the
 reconnect leaks frames into the measurement -- which is a measured defect, not a reason to weaken the gate
-(phase_player.md, "What is not solved").
+(open_items.md).
 """
 
 import os

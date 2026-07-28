@@ -225,7 +225,7 @@ def test_occlusion_is_view_independent_and_hides_tiles():
     assert hidden > 32  # the far/edge rows plus terrain-occluded tiles are hidden
 
 
-# Exact live $9630 transfer-settle frame counts, per landscape (docs/render_cost.md).
+# Exact live $9630 transfer-settle frame counts, per landscape (docs/architecture.md).
 _LIVE_SETTLES = {42: (338, 305, 435, 460), 335: (259, 333, 371)}
 
 

@@ -56,7 +56,7 @@ FRAME_TICKS = float(os.environ.get("FRAME_TICKS", "1.0"))
 # Object dither animation loop ($1FA4 create / $86A5 absorb): 977904 cycles at the
 # 19656-cycle PAL frame.
 DITHER_FRAMES = float(os.environ.get("DITHER_FRAMES", str(977904.0 / 19656.0)))
-# Transfer settle ($357D): fixed #$19 tune wait (96) + fixed $245B/$3700/fill/status foreground (~176) + 2x plot_world; live 259-460f, modelled per-scene by projector.viewpoint_replot_frames (docs/render_cost.md). This constant is the view-less fallback (tune+fixed base only).
+# Transfer settle ($357D): fixed #$19 tune wait (96) + fixed $245B/$3700/fill/status foreground (~176) + 2x plot_world; live 259-460f, modelled per-scene by projector.viewpoint_replot_frames (docs/architecture.md). This constant is the view-less fallback (tune+fixed base only).
 VIEWPOINT_REPLOT_FRAMES = float(
     os.environ.get(
         "VIEWPOINT_REPLOT_FRAMES",

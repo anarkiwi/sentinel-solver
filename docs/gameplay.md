@@ -6,7 +6,7 @@ from the original C64 6502 code; routine names and `$hex` addresses cite the exa
 ROM source. No emulator or existing simulator was used to derive behaviour — the
 ROM is the ground truth. The last section, [Writing a solver](#writing-a-solver),
 distils the mechanics into what a search needs; the implemented players
-([player.md](player.md), [astar_player.md](astar_player.md)) apply it.
+([players.md](players.md)) apply it.
 
 The board and object placement are **deterministic given the landscape number**,
 and the effect of each player action is deterministic. The one thing a player
@@ -614,139 +614,90 @@ energy; a drain landing at 0 energy is death.**
 ## 7. How a human wins (quick strategy)
 
 1. **Absorb trees opportunistically, not as a phase.** Each tree is +1 energy that
-   widens your future boulder/robot options, so when your current tile buys you
-   spare time and one is cheap to aim at, grab it. Under time pressure, don't —
-   energy is a means, and a drain mid-aim costs more than a tree is worth. Watch the
-   exposure bar.
+   widens your future boulder/robot options, so take one when your tile buys you
+   spare time and it is cheap to aim at. Under time pressure, don't: a drain mid-aim
+   costs more than a tree is worth. Watch the exposure bar.
 2. **Build a boulder** on a visible tile, **transfer** onto it, build another from
    the higher vantage, and **climb** until you have a sight line over the terrain.
    Prefer tiles the enemies' rotating gaze cannot reach.
-3. Work toward a line of sight to the **Sentinel's platform**, absorbing the
-   Sentinel's **sentries** and any supporting scenery *when it pays* — to open a
-   sight line, clear a threat, or bank energy you have time to take.
-4. **The one hard ordering rule:** absorbing the Sentinel **permanently disables
-   all further absorption** (`$1B8E` checks the Sentinel's slot 0), leaving you only
-   create/transfer/hyperspace. So the Sentinel must be your **final** absorb — take
-   whatever sentries/scenery/energy you still want *before* it, as time allows, but
-   this is opportunistic harvesting, not a mandatory "absorb everything first" step.
-5. When you can see the Sentinel — and have grabbed anything else you wanted —
+3. Work toward a line of sight to the **Sentinel's platform**, absorbing **sentries**
+   and supporting scenery when it pays — to open a sight line, clear a threat, or
+   bank energy you have time to take.
+4. **The one hard ordering rule:** absorbing the Sentinel **permanently disables all
+   further absorption** (`$1B8E` checks the Sentinel's slot 0), leaving you only
+   create/transfer/hyperspace. So the Sentinel is your **final** absorb — take
+   whatever sentries, scenery and energy you still want before it. This is an
+   ordering constraint, not a mandatory "absorb everything first" phase.
+5. When you can see the Sentinel — and have taken anything else you wanted —
    **absorb it** (+4).
 6. **Create a robot on the platform tile** (still stackable, since the platform
    object remains), **transfer** into it, and **hyperspace** to complete the
    landscape. Note the completion code to skip ahead.
 
-Constant pressure management: never sit fully visible to a rotating enemy long
-enough for its ~120-unit drain countdown to finish.
+**Never sit fully visible to a rotating enemy long enough for its ~120-unit drain
+countdown to finish.**
 
 **Deny meanies, and kill the ones that appear.** A meanie can only be born from a
 **tree within 10 tiles of your body while an enemy half-sees you**
 ([§6](#meanies--the-mobile-hunter-consider_creating_meanie-1986)), so the first
-defence is positional: don't loiter *partially* exposed near standing trees —
-absorb such trees pre-emptively when you have the time, or don't stand there. If a
-meanie does spawn, it will slowly turn to face you and then hyperspace you off your
-hard-won height (or kill you if you can't pay the 3-energy jump), so deal with it
-promptly — you have three outs: **absorb the meanie** (while the Sentinel still
-lives), **absorb the body it's bound to**, or **transfer out of that body**; any of
-the three dissolves it back into a harmless tree. Don't ignore it and keep climbing.
+defence is positional: don't loiter *partially* exposed near standing trees. A spawned
+meanie turns to face you and then hyperspaces you off your height — or kills you if
+you cannot pay the 3-energy jump — and you have three outs, each of which dissolves it
+back into a tree: **absorb the meanie** (only while the Sentinel lives), **absorb the
+body it is bound to**, or **transfer out of that body**.
 
-**Never enter the Sentinel's (or a sentry's) gaze unless there is literally no
-other option.** Being in the gaze is a *guaranteed net energy loss*, twice over:
-
-- **You lose energy before you can get out.** Leaving takes time — you must aim and
-  then transfer, many world-clock ticks ([§6](#timing--the-world-clock)) — and the
-  drain lands in that window, so you give up at least one unit no matter how fast
-  you react.
-- **Your abandoned body keeps bleeding after you leave.** The robot you transferred
-  *out of* stays on its tile in the gaze; the enemy keeps working it, downgrading
-  robot → boulder → tree and banking that energy. To get it back you must re-enter
-  the gaze and fight for it, losing at least another unit in the process.
-
-So gaze tiles are effectively off-limits, not merely "risky": treat exposure to an
-enemy's current or reachable facing as a wall, and only cross it when every
-alternative is worse.
+**Gaze tiles are near-forbidden, not merely risky.** Being in a gaze is a guaranteed
+net energy loss twice over: leaving takes an aim plus a transfer, many world-clock
+ticks ([§6](#timing--the-world-clock)), so the drain lands in that window; and the
+body you transferred *out of* stays on its tile in the gaze, where the enemy keeps
+working it, downgrading robot → boulder → tree. Recovering it means re-entering the
+gaze and losing at least another unit. Treat exposure to an enemy's current or
+reachable facing as a wall.
 
 **If there are sentries, hunt them down early and aggressively.** Every sentry is
-another independent rotating gaze ([§6](#6-enemies)), and their swept cones
-compound: each one shrinks the set of safe standing tiles, narrows your time
-windows, and forces more moves. Removing a sentry is worth far more than its +3
-energy — it permanently deletes a whole hazard and *loosens the time budget for the
-entire rest of the solve*, which is your scarcest resource. So a sentry is a
-high-priority absorb target, not incidental scenery: work to open a safe sight line
-to each one and take it as soon as you can (from outside its gaze — you need LOS to
-its tile, not to be in its cone). Clear the board down toward just the Sentinel
-before you commit to the final climb; fewer gazes early pays off compoundingly
-later. (They must precede the Sentinel anyway — the absorb-lock,
-[§4](#absorb--try_to_absorb_object-1b8e).)
+another independent rotating gaze ([§6](#6-enemies)), and their swept cones compound:
+each shrinks the set of safe standing tiles and narrows your time windows. Removing one
+permanently deletes a hazard and loosens the time budget for the entire rest of the
+solve — worth far more than its +3 energy. You need LOS to its tile, not to be in its
+cone. They must precede the Sentinel anyway ([§4](#absorb--try_to_absorb_object-1b8e)).
 
 **Time is the scarce resource, and aiming spends it.** The world clock never stops
-([§6](#timing--the-world-clock)): every pan step you take to swing the sights onto
-a target is real time in which enemies keep rotating and draining. So an action's
-true cost is *aim time + the act itself*, and you plan the whole route to minimise
-it. Two practical rules:
+([§6](#timing--the-world-clock)), so an action's true cost is *aim time + the act
+itself*. Pick destinations that are both strong and cheap to aim at — a slightly lower
+boulder you can fire on with a small swing often beats a taller one that costs a long
+sweep of the sights. Spend aim time in proportion to the time your current tile
+affords: under a gaze sweeping toward you, a cheap hop somewhere safer and still
+leverageable beats a perfect move that gets you drained mid-aim.
 
-- **Pick destinations that are both strong and cheap to aim at.** A transfer target
-  isn't just "how high/safe is it" — it's also "how many pan steps from where I'm
-  already looking." A slightly lower boulder you can fire on with a small swing
-  often beats a marginally taller one that costs a long sweep of the sights (and
-  the exposure that sweep buys the enemies).
-- **Spend aim time in proportion to the time your current tile affords you.** On a
-  tile safe from every enemy rotation you can afford a big, deliberate aim toward
-  the best next position. Under time pressure — an enemy's gaze sweeping toward
-  you, the exposure bar filling — don't linger to line up the perfect move; make a
-  cheap, quick hop to somewhere *safer but still leverageable* and re-plan from
-  there. A good-enough move made in time beats a perfect move that gets you drained
-  mid-aim.
+**Ping-pong across the gap, and go long.** A robot you create is always spawned facing
+back at you (`objects_h_angle = your angle ⊕ $80`,
+[§4 Create](#create--try_to_create_object-1bba), `$1BE0`), so transferring into it
+leaves your view already pointed back where you came from. From a high tile far terrain
+is compressed into a small span of angle, so the sights cursor sweeps a long
+world-distance for the same keyboard input: long-range placements are **cheap** in
+keystrokes and near tiles expensive. Skilled play alternates placements between two
+widely separated high vantage points, each transfer landing you pre-aimed across the
+gap.
 
-**Ping-pong across the gap, and go long.** A robot you create is always spawned
-*facing back at you* (`objects_h_angle = your angle ⊕ $80`;
-[§4 Create](#create--try_to_create_object-1bba), `$1BE0` "make new robot face
-player"). So the instant you transfer into a new robot — however far and however
-much higher — your view is already pointed back where you came from, so aiming to
-your *next* spot (a **higher, cheap-to-aim tile**, not something "around the old
-spot") starts from a useful heading. Skilled play is a **ping-pong**: alternate
-placements between two widely separated high vantage points, each transfer landing
-you pre-aimed across the gap.
-
-**Long distance is the point, not a tolerated cost.** From a high tile you see much
-more of the landscape at once, and far terrain is compressed into a small span of
-angle — so the sights cursor sweeps a *long* world-distance for the *same* keyboard
-input. Aiming between two distant high spots is therefore **cheap in keystrokes**
-(the opposite of aiming among near tiles, which are spread across wide angles). So
-reach for far, tall tiles: they give the commanding view, and — combined with the
-auto-face-back and diagonal steering above — make the long exchange cheap to aim.
-This pairs with the create/transfer climb ([§4](#create--try_to_create_object-1bba))
-to gain height and cover ground fast.
-
-**Reclaim what you climbed off — never abandon that energy.** Every transfer-up
-leaves behind, at the tile you came from, a spent **boulder** pedestal (2 energy
-each) and the **robot shell** you transferred out of (3 energy). That is your own
-invested energy sitting in the world, and after the transfer you are already
-pre-aimed back at it (the face-back rule above) and looking *down* at it, so
-absorbing it is cheap and unblocked. So the standard hop is create→transfer→**absorb
-your old boulder(s) and shell from the new vantage**, recovering the 2/3 units —
-this both refills your budget for the next boulder and denies the enemy a target it
-would otherwise dismantle and drain ([§6](#6-enemies)). Leave that energy behind
-only when there is literally no other choice (e.g. a gaze makes reclaiming it a
-worse trade than moving on).
-
-Measured across the recorded human wins, this is an **inchworm**: a hop stacks at
-most two boulders (the observed count is `k ∈ {1, 2}` — never a tall ground-up
-tower), and every climb is followed by reclaiming the pedestal below, so energy
-rides the ~3-unit reserve floor rather than being locked up in height. A solver's
-directed climb should do the same — build ≤2, transfer up, recycle the abandoned
-pedestal, repeat — instead of committing energy to a single deep stack it cannot
-afford to complete.
+**Reclaim what you climbed off.** Every transfer-up leaves behind a spent **boulder**
+pedestal (2 energy) and the **robot shell** you left (3 energy), and the face-back rule
+leaves you pre-aimed down at both. So the standard hop is create→transfer→**absorb your
+old boulder(s) and shell from the new vantage**, which refills the budget for the next
+boulder and denies the enemy a target it would otherwise dismantle
+([§6](#6-enemies)). Measured across the recorded human wins this is an **inchworm**: a
+hop stacks `k ∈ {1, 2}` boulders — never a tall ground-up tower — and every climb is
+followed by reclaiming the pedestal below, so energy rides the ~3-unit reserve floor
+rather than being locked up in height. A solver's directed climb should do the same.
 
 ---
 
 ## Writing a solver
 
 The mechanics above are the specification. The implementation is documented
-separately and is not restated here: the bit-exact forward model in
-[simulator.md](simulator.md), the search and its cost model in
-[astar_player.md](astar_player.md), the reactive player in [player.md](player.md),
-model-vs-game accuracy in [plan_fidelity.md](plan_fidelity.md). This section keeps
-only what those do not cover.
+separately and is not restated here: the bit-exact forward model, cost model and
+driver in [architecture.md](architecture.md), the players in
+[players.md](players.md), the remaining model-vs-game gaps in
+[open_items.md](open_items.md). This section keeps only what those do not cover.
 
 ### State
 

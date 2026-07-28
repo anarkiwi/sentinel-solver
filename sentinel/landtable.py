@@ -2,7 +2,7 @@
 
 The ray seed is state-independent (get_object_details $1ECC always centres x/y), so a
 ray's track of (tile offset, ray z) is a pure function of its aim; terrain only decides
-where the march stops.  Derivation, soundness and sizing: docs/landtable.md.
+where the march stops.  Derivation, soundness and sizing: docs/architecture.md.
 """
 
 import os

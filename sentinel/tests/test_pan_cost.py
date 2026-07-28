@@ -150,7 +150,7 @@ def test_horizontal_pan_window_is_not_the_play_window():
 
 
 def test_pan_notch_cost_matches_the_measured_plot():
-    """Whole-notch accuracy. The residual is the fill proxy's (docs/render_cost.md
+    """Whole-notch accuracy. The residual is the fill proxy's (docs/architecture.md
     gap 3), not the notch model's -- tile selection is exact -- so this bracket is the
     same class as ``test_render_cost_matches_golden``'s."""
     errors = []

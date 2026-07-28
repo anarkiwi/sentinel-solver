@@ -171,4 +171,4 @@ def test_project_scene_tiles_and_replot():
     assert settle == base + projector.REPLOT_PASSES * single
     assert (
         base <= settle <= 700
-    )  # tune+fixed base .. live 259-460f (docs/render_cost.md)
+    )  # tune+fixed base .. live 259-460f (docs/architecture.md)
