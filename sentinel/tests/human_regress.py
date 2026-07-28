@@ -1,8 +1,8 @@
-"""Retrograde A* regression over a recorded human win.
+"""Retrograde planner regression over a recorded human win.
 
-Hands the A* player the human's PRE-action state at event ``i`` (rebuilt as the
+Hands ``PhasePlayer`` the human's PRE-action state at event ``i`` (rebuilt as the
 human-win tests do, enemy clock applied) and scans ``i`` DOWN from the last event:
-the first ``i`` it cannot win from within budget is the board it cannot recover.
+the first ``i`` it cannot win from is the board it cannot recover.
 """
 
 import argparse
@@ -12,16 +12,11 @@ import os
 import time
 
 from sentinel import enemies, isoview, los, memmap as mm
-from sentinel.astar_player import AStarPlayer
+from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
-from sentinel.stance_player import StancePlayer
 from sentinel.test_human_win_logs import state_from_event, _load
 from sentinel.tests.human_audit import _apply_truth
 
-PLANNERS = {"astar": AStarPlayer, "stance": StancePlayer}
-PLANNER = "astar"
-NODE_BUDGET = 20000
-TIME_BUDGET = 15.0  # per _search wall-clock cut
 CAP = 600.0  # hard wall clock for one whole attempt
 ESCALATE = 3.0  # cap multiplier for the re-run that confirms a loss
 MAX_ACTIONS = 250
@@ -58,16 +53,14 @@ def _human_action(name, i):
     }
 
 
-def attempt(name, i, node_budget=NODE_BUDGET, time_budget=TIME_BUDGET, planner=PLANNER):
-    """Run a planner from the human's pre-action state at event ``i``, returning the
+def attempt(name, i):
+    """Run the planner from the human's pre-action state at event ``i``, returning the
     outcome, its own action trace and the human's move.
 
     The whole-attempt cap is enforced by the PARENT killing this process: a signal
     raised inside the numba LOS march corrupts the dispatcher."""
     st = state_at(name, i)
-    player = PLANNERS[planner](
-        Game(st), node_budget=node_budget, time_budget=time_budget
-    )
+    player = PhasePlayer(Game(st))
     t0 = time.time()
     won = player.run(max_actions=MAX_ACTIONS)
     return {
@@ -75,7 +68,7 @@ def attempt(name, i, node_budget=NODE_BUDGET, time_budget=TIME_BUDGET, planner=P
         "won": won,
         "outcome": "won" if won else "lost",
         "seconds": round(time.time() - t0, 1),
-        "expansions": player.expansions,
+        "waited": player.waited,
         "human_action": _human_action(name, i),
         "start": {
             "energy": int(st.energy),
@@ -90,7 +83,7 @@ def attempt(name, i, node_budget=NODE_BUDGET, time_budget=TIME_BUDGET, planner=P
     }
 
 
-def _worker(name, i, node_budget, time_budget, threads, planner, q):
+def _worker(name, i, threads, q):
     """One attempt on ``threads`` numba threads: ``los_jit.march_batch`` is
     ``parallel=True``, so an uncapped worker takes a thread per core (load 117/24)."""
     try:
@@ -99,7 +92,7 @@ def _worker(name, i, node_budget, time_budget, threads, planner, q):
         numba.set_num_threads(max(1, threads))
     except ImportError:
         pass
-    q.put(attempt(name, i, node_budget, time_budget, planner))
+    q.put(attempt(name, i))
 
 
 def _capped(name, i, seconds):
@@ -108,7 +101,7 @@ def _capped(name, i, seconds):
         "won": None,
         "outcome": "capped",
         "seconds": round(seconds, 1),
-        "expansions": None,
+        "waited": None,
         "human_action": _human_action(name, i),
         "start": None,
         "player_trace": [],
@@ -116,7 +109,7 @@ def _capped(name, i, seconds):
     }
 
 
-def _run(name, batch, budgets, cap, log):
+def _run(name, batch, cap, log):
     """Run one index per process, killing any that outlives ``cap``.
 
     Spawned, not forked: the numba LOS march leaves an OpenMP runtime in the parent
@@ -128,15 +121,7 @@ def _run(name, batch, budgets, cap, log):
     for i in batch:
         p = ctx.Process(
             target=_worker,
-            args=(
-                name,
-                i,
-                budgets["node_budget"],
-                budgets["time_budget"],
-                threads,
-                budgets.get("planner", PLANNER),
-                q,
-            ),
+            args=(name, i, threads, q),
         )
         p.start()
         live[i] = (p, time.time())
@@ -171,16 +156,7 @@ def _run(name, batch, budgets, cap, log):
 
 
 def _budgets(over=None):
-    return dict(
-        {
-            "node_budget": NODE_BUDGET,
-            "time_budget": TIME_BUDGET,
-            "cap": CAP,
-            "escalate": ESCALATE,
-            "planner": PLANNER,
-        },
-        **(over or {}),
-    )
+    return dict({"cap": CAP, "escalate": ESCALATE}, **(over or {}))
 
 
 def _settle(name, results, candidates, budgets, log):
@@ -193,7 +169,7 @@ def _settle(name, results, candidates, budgets, log):
             return top
         cap = budgets["cap"] * budgets["escalate"]
         log(f"i={top}: capped -- re-running alone at cap={cap:.0f}s")
-        results.update(_run(name, [top], budgets, cap, log))
+        results.update(_run(name, [top], cap, log))
         if results[top]["outcome"] == "capped":
             return top
 
@@ -219,7 +195,7 @@ def bisect(name, budgets=None, workers=None, log=None):
             {span[round(j * (len(span) - 1) / max(1, k - 1))] for j in range(k)}
         )
         log(f"interval ({lo}, {hi}) -- probing {probes}")
-        results.update(_run(name, probes, budgets, budgets["cap"], log))
+        results.update(_run(name, probes, budgets["cap"], log))
         top = _settle(name, results, probes, budgets, log)
         if top is not None:
             lo = max(lo, top)
@@ -242,7 +218,7 @@ def bisect(name, budgets=None, workers=None, log=None):
 def regress(
     name, budgets=None, workers=None, stop_at_loss=True, indices=None, log=None
 ):
-    """Scan handover points from the last event backwards until the A* player first
+    """Scan handover points from the last event backwards until the planner first
     fails -- the exhaustive form of :func:`bisect`, one batch of moves at a time."""
     budgets = _budgets(budgets)
     n = _load(name)["n_events"]
@@ -258,7 +234,7 @@ def regress(
         ]
         if not batch:
             break
-        results.update(_run(name, batch, budgets, budgets["cap"], log))
+        results.update(_run(name, batch, budgets["cap"], log))
         first_loss = _settle(name, results, list(results), budgets, log)
         if stop_at_loss and first_loss is not None:
             break
@@ -277,7 +253,7 @@ def regress(
 
 def _acts(name, i, horizon, trace=None, start_tile=None):
     """The human's next ``horizon`` moves from event ``i`` as solid arrows, plus the
-    A* player's own trace (dashed) if one is given."""
+    planner's own trace (dashed) if one is given."""
     out = []
     for ev in _load(name)["events"][i : i + horizon]:
         out.append(
@@ -350,7 +326,7 @@ def diagram(name, i, rec=None, horizon=8, path=None, with_astar=True, anim=False
     tail = f" after {len(trace)} actions" if trace else ""
     notes = [
         "solid arrows = what the HUMAN did next, in order",
-        "dashed arrows = what the A* player did instead",
+        "dashed arrows = what the PLANNER did instead",
         "red wedges = enemy scan cones on their true recorded facings",
         "gold diamond = the platform (stand on it, then hyperspace)",
     ]
@@ -368,7 +344,7 @@ def diagram(name, i, rec=None, horizon=8, path=None, with_astar=True, anim=False
         [
             f"typed landscape {data['entered_code']} (generate seed "
             f"{data['landscape']}), event {i}/{data['n_events'] - 1}",
-            f"A* handover here: {outcome.upper()}{tail}",
+            f"handover here: {outcome.upper()}{tail}",
         ],
         acts,
         notes,
@@ -399,15 +375,7 @@ def main(argv=None):
         help="also write the annotated isometric SVG of the first losing board",
     )
     parser.add_argument("--horizon", type=int, default=8, help="human moves to draw")
-    parser.add_argument("--node-budget", type=int, default=NODE_BUDGET)
-    parser.add_argument("--time-budget", type=float, default=TIME_BUDGET)
     parser.add_argument("--cap", type=float, default=CAP)
-    parser.add_argument(
-        "--planner",
-        choices=sorted(PLANNERS),
-        default=PLANNER,
-        help="which planner to score; 'stance' adds the stance-graph route generator",
-    )
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--linear",
@@ -429,12 +397,7 @@ def main(argv=None):
     def log(msg):
         print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-    budgets = {
-        "node_budget": args.node_budget,
-        "time_budget": args.time_budget,
-        "cap": args.cap,
-        "planner": args.planner,
-    }
+    budgets = {"cap": args.cap}
     indices = [int(s) for s in args.indices.split(",")] if args.indices else None
     if args.linear or indices:
         out = regress(

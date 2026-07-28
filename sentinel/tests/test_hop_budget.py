@@ -2,17 +2,15 @@
 
 ``HOP_FRAMES`` is the exposure budget the REACTIVE player (``sentinel/player.py``) gates a
 pedestal build on, so if it is wrong the gate clears hops the body cannot survive. It had
-no fixture; ``live_ls42_hops.json`` is the first.  The A* planner no longer uses it: it
-prices each hop from its own actions (``astar_player._hop_price``), because the constant
-was measured on ls42's 745-879 f hops and ls335's cost ~1294 f.
+no fixture; ``live_ls42_hops.json`` is the first.  ``PhasePlayer`` does not use it: it
+prices each hop from its own actions (``phase_player._hop_span``), because the constant was
+measured on ls42's 745-879 f hops and ls335's cost ~1294 f.
 """
 
 import json
 import math
 import os
 import statistics
-
-import pytest
 
 from sentinel import playerbase as pb
 
@@ -68,17 +66,3 @@ def test_uturn_is_charged_as_an_action_tap_not_a_keystroke():
     for rec in ut:
         assert pb.UTURN_FRAMES == rec["measured"], rec["step"]
     assert pb.UTURN_FRAMES > 10 * pb.TAP_FRAMES  # it is nothing like a bare tap
-
-
-def test_step_sigma_is_the_measured_whole_step_rms():
-    """The margin is k*sigma*sqrt(depth+1) over the per-step error, so sigma must BE
-    that error. 68.4 predated the driver fixes (a swallowed u-turn among them); with
-    the body-window hop gate on, an over-stated sigma makes every hop unaffordable and
-    the planner finds no line at all."""
-    from sentinel import astar_player
-
-    errs = [s["measured"] - s["charged"] for s in _data()["steps"]]
-    rms = math.sqrt(statistics.fmean(e * e for e in errs))
-    assert astar_player._STEP_SIGMA == pytest.approx(
-        rms, abs=1.0
-    ), f"_STEP_SIGMA {astar_player._STEP_SIGMA} vs measured rms {rms:.1f}"

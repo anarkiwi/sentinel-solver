@@ -2,8 +2,8 @@
 """Run a sim player against the REAL game in VICE, recording an AVI.
 
 The live-execution machinery lives in :mod:`driver.live_player`; this is the
-shared runner.  ``--player {greedy,astar}`` selects ``LiveGreedy``/``LiveAStar``
-(``python -m driver.play_player 0`` or ``... 42 --player astar``).
+shared runner.  ``--player {greedy,phase}`` selects ``LiveGreedy``/``LivePhase``
+(``python -m driver.play_player 335`` or ``... 0 --player greedy``).
 """
 
 import argparse
@@ -12,21 +12,14 @@ import os
 import time
 
 from driver import core
-from driver.live_player import LiveAStar, LiveGreedy
+from driver.live_player import LiveGreedy, LivePhase
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _make_player(args, session, log, result):
-    if args.player == "astar":
-        return LiveAStar(
-            session,
-            log,
-            result,
-            node_budget=args.node_budget,
-            time_budget=args.time_budget,
-            weight=args.weight,
-        )
+    if args.player == "phase":
+        return LivePhase(session, log, result)
     return LiveGreedy(session, log, result)
 
 
@@ -39,16 +32,8 @@ def main(argv=None):
         default=0,
         help="the landscape number you TYPE",
     )
-    parser.add_argument("--player", choices=("greedy", "astar"), default="greedy")
+    parser.add_argument("--player", choices=("greedy", "phase"), default="phase")
     parser.add_argument("--max-actions", type=int, default=120)
-    parser.add_argument("--node-budget", type=int, default=200000)
-    parser.add_argument(
-        "--time-budget",
-        type=float,
-        default=None,
-        help="wall-clock search cut (s); off by default -- setting it makes the plan depend on host load",
-    )
-    parser.add_argument("--weight", type=float, default=1.4)
     parser.add_argument("--video", default=None)
     args = parser.parse_args(argv)
     digits = f"{args.landscape:04d}"

@@ -13,13 +13,13 @@ win/lose profile; `--indices` runs an explicit list.
 
 ```bash
 python -m sentinel.tests.human_regress ls335.json --out out/ls335_regress.json --diagram
-python -m sentinel.tests.human_regress ls335.json --planner stance   # score the stance planner
+python -m sentinel.tests.human_regress ls335.json --planner phase    # score the phase player
 python -m sentinel.isoview 335                       # the board at entry, no annotations
 ```
 
 `--planner` selects which planner is scored: `astar` (the default,
-[astar_player.md](astar_player.md)) or `stance` (that plus the stance-graph route
-generator, [stance_planner.md](stance_planner.md)).
+[astar_player.md](astar_player.md)) or `phase` (the phase player,
+[phase_player.md](phase_player.md)).
 
 ## The handover board
 

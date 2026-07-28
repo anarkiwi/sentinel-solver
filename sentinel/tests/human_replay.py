@@ -15,7 +15,7 @@ indict is elsewhere; see ``test_human_clock``.
 import sys
 import types
 from sentinel import memmap as mm
-from sentinel.astar_player import AStarPlayer
+from sentinel.phase_player import PhasePlayer
 from sentinel.test_human_win_logs import _is_player_action, _load, state_from_event
 from sentinel.tests.human_clock import seed_clock
 
@@ -48,7 +48,7 @@ def replay(name, landscape=None, limit=None, quiet=False):
     landscape = data["landscape"]  # the SEED; entered_code is the typed-in number
     evs = data["events"]
     st = state_from_event(evs[0], landscape)
-    p = AStarPlayer(types.SimpleNamespace(state=st))
+    p = PhasePlayer(types.SimpleNamespace(state=st))
     st = p.st
     seed_clock(st, evs[0])  # phase is an input, not something the cost model must earn
     say = (lambda *a: None) if quiet else print
@@ -61,9 +61,9 @@ def replay(name, landscape=None, limit=None, quiet=False):
             verb, verb
         )
         p.st = st
-        view = p._view_for(tile)
+        view = p._views_now().get(tile, band=True)
         if view is None:
-            say(f"  [{i:3}] {verb:8} {tile}: DIVERGE -- our _view_for finds no aim")
+            say(f"  [{i:3}] {verb:8} {tile}: DIVERGE -- no keyboard aim lands it")
             return i
         before_e = int(st.energy)
         ok = p._fire(fverb, tile, view)

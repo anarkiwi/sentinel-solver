@@ -36,12 +36,9 @@ def freeze_sim_enemies():
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("landscape", type=int, help="the landscape number you TYPE")
-    p.add_argument("--player", choices=("greedy", "astar"), default="greedy")
+    p.add_argument("--player", choices=("greedy", "phase"), default="phase")
     p.add_argument("--max-actions", type=int, default=120)
     p.add_argument("--no-freeze", action="store_true")
-    p.add_argument("--node-budget", type=int, default=200000)
-    p.add_argument("--time-budget", type=float, default=30.0)
-    p.add_argument("--weight", type=float, default=1.4)
     args = p.parse_args(argv)
 
     digits = f"{args.landscape:04d}"

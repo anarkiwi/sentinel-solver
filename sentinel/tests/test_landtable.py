@@ -138,11 +138,8 @@ def test_landable_view_matches_exact(new_state, kind):
 
 
 def test_coarse_lattice_is_the_landset_lattice():
-    """The coarse grid IS ``astar_player``'s landset grid, and its rays are a subset of
-    the full band lattice's -- one candidate rule serves both paths."""
-    from sentinel import astar_player as ap
-
-    assert lt.COARSE_CX == ap._COARSE_CX and lt.COARSE_CY == ap._COARSE_CY
+    """The coarse grid's rays are a subset of the full band lattice's -- one candidate
+    rule serves both paths."""
     assert set(lt.COARSE_CX) <= set(los.CURSOR_CX)
     assert set(lt.COARSE_CY) <= set(los.CURSOR_CY)
     coarse, band = lt.lattice(coarse=True), lt.lattice()
@@ -163,14 +160,11 @@ def test_coarse_lattice_is_the_landset_lattice():
 
 @pytest.mark.parametrize("name", ["ls0", "ls42", "ls0-stacked", "ls42-eyez"])
 def test_landable_set_matches_coarse_sweep(new_state, name):
-    """The whole-board set is EXACTLY ``_coarse_landable``'s -- every tile including the
-    outer ring, over bare boards, an object-tile stance and an eye_z override."""
-    from sentinel import astar_player as ap
-
+    """The whole-board set is EXACTLY the coarse lattice's own sweep -- every tile
+    including the outer ring, over bare boards, an object-tile stance and an eye_z
+    override."""
     _name, st, slot, eye_z = next(v for v in _variants(new_state) if v[0] == name)
     got = lt.landable_set(st, slot, eye_z)
-    if eye_z is None and slot == st.player:
-        assert got == ap.AStarPlayer._coarse_landable(st)
     assert got == set(_landings(st, slot, lt.lattice(coarse=True), eye_z))
 
 

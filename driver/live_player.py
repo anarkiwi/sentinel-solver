@@ -2,12 +2,12 @@
 """Player-agnostic machinery for driving a sim player against the REAL game in VICE.
 
 ``LiveMixin`` carries ONLY observation + execution over live memory; decision
-logic (``_tick``, A*'s ``_search``) comes from the composed sim player via MRO.
+logic (``_tick``) comes from the composed sim player via MRO.
 It goes first in the bases so its execution overrides win over ``BasePlayer``'s.
 """
 
 from driver import clock, core, kbd_aim, sentinel_execute as sx
-from sentinel import astar_player, memmap as mm, player as sim_player, playerbase
+from sentinel import phase_player, memmap as mm, player as sim_player, playerbase
 from sentinel.game import Game
 from sentinel.state import State
 
@@ -69,8 +69,8 @@ class LiveMixin:
     """Observation + execution over live VICE memory; no decision logic.
 
     ``__init__`` builds the sim ``Game`` from a live snapshot and forwards any
-    player-specific kwargs (A*'s ``node_budget``/``time_budget``/``weight``) to
-    the composed sim player's constructor via ``super().__init__``."""
+    player-specific kwargs to the composed sim player's constructor via
+    ``super().__init__``."""
 
     def __init__(self, session, log, result, **kwargs):
         game = Game(State.from_mem(core.live_image(session.bm)))
@@ -121,9 +121,9 @@ class LiveMixin:
         return False
 
     def _advance(self, frames):
-        """Real time passes in the live game; the model clock is a no-op.  For A*
-        this keeps heavy ``_search`` think time out of the live world -- the real
-        world moves only when ``_fire`` replays the plan's keystrokes."""
+        """Real time passes in the live game; the model clock is a no-op.  This keeps
+        the player's think time out of the live world -- the real world moves only
+        when ``_fire``/``_wait`` drive the keyboard."""
 
     def _wait(self):
         """A deliberate wait spends REAL world time, FRAME-EXACT: step the $9630
@@ -231,58 +231,11 @@ class LiveMixin:
         self._observe()
         self._log("hyperspace", self.st.player_xy())
 
-    def _plan_step_stale(self, step, view):
-        """Re-validate the next planned step against the LIVE enemy phase, on the
-        window the PLAN gated it with -- ``step.gate``, carried by the search: the body
-        window for an absorb (``_c_absorb`` / ``_reclaim_one`` via ``_hot``), the target
-        tile's for a build or transfer (``_pick_hop`` / ``_hop_exec`` via ``_drain_gate``).
-
-        Re-deriving a stricter rule here instead -- the body window for every verb --
-        refuses steps the plan never promised and cannot re-plan away, because
-        ``_search`` re-derives the same head: ls42 live looped on `robot (2,24)`,
-        then on `boulder (0,25)`, and conceded the escape hyperspace that lost the
-        run, at a point the offline line fires and survives.
-
-        The BUDGET stays priced from the LIVE view (not ``step.budget``): the executor
-        pays the live aim cost, so that is what the live window must cover.  The plan
-        supplies the rule, reality the price.
-
-        The margin absorbs prediction error; it may not deadlock.  Once ``_restale``
-        has waited on this same step (``_stale`` count > 1, so the enemy phase behind
-        the earlier verdict is gone) and the RAW budget clears, the step proceeds."""
-        verb, tile = step.verb, step.tile
-        budget = self._step_aim_frames(verb, view) + self._settle(
-            verb, view, self._settle_eye(verb, tile)
-        )
-        margin_fn = getattr(self, "_margin", None)  # planner-only (greedy has none)
-        margin = margin_fn(0) if margin_fn is not None else 0.0
-        window = (
-            self._player_window()
-            if step.gate == astar_player.GATE_BODY
-            else self._gaze_window(tile)
-        )
-        if window >= budget + margin:
-            return False
-        stale = self._stale
-        waited = stale is not None and stale[0] == (verb, tuple(tile)) and stale[1] > 1
-        if waited and window >= budget:
-            self.live_log(
-                f"    (plan step {verb} {tile}: window {window:.0f}f clears the raw "
-                f"budget {budget:.0f}f after a wait; margin-only block released)"
-            )
-            return False
-        self.live_log(
-            f"    (plan step {verb} {tile}: live gaze window {window:.0f}f "
-            f"< step budget {budget:.0f}f + margin {margin:.0f}f; replan from live)"
-        )
-        return True
-
 
 class LiveGreedy(LiveMixin, sim_player.Player):
     """The reactive greedy player over live VICE memory instead of the simulator."""
 
 
-class LiveAStar(LiveMixin, astar_player.AStarPlayer):
-    """The A* planner over live VICE memory; ``_search`` think time stays out of
-    the live clock, the real world moving only as ``_fire``/``_hyperspace``
-    replay the plan's keystrokes."""
+class LivePhase(LiveMixin, phase_player.PhasePlayer):
+    """The phase player over live VICE memory; its tie rollouts run on simulator
+    clones, so only the move it settles on reaches the real keyboard."""

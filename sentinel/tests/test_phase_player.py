@@ -1,13 +1,13 @@
 """The phase player's rules, pinned on the cheapest board that exercises them."""
 
-from sentinel import actions, enemies, freeplayer, memmap as mm
-from sentinel.freeplayer import FreePlayer
+from sentinel import actions, enemies, phase_player, memmap as mm
+from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
 from sentinel.playerbase import _Views
 
 
 def _player(code=0):
-    return FreePlayer(Game.typed(code), verbose=False)
+    return PhasePlayer(Game.typed(code), verbose=False)
 
 
 def test_an_unseen_body_needs_no_drain_simulation():
@@ -82,7 +82,7 @@ def test_a_tie_is_settled_by_the_outcome_not_the_order(monkeypatch):
         return twins[len(order) - 1]
 
     monkeypatch.setattr(player, "_fork", fork)
-    monkeypatch.setattr(freeplayer.actions, "won", lambda st: id(st) in winners)
+    monkeypatch.setattr(phase_player.actions, "won", lambda st: id(st) in winners)
     assert player._best_climb(_Views(player.st), affordable=True)[0] == (2, 2)
     assert order == [(1, 1), (2, 2)]  # stops at the first winner
     assert twins[1].built == ((2, 2), 0)
@@ -90,7 +90,7 @@ def test_a_tie_is_settled_by_the_outcome_not_the_order(monkeypatch):
 
 def test_a_rollout_never_settles_a_tie(monkeypatch):
     """A fork plays the fixed ladder: settling inside one would nest without bound."""
-    player = FreePlayer(Game.typed(0), rollout=True)
+    player = PhasePlayer(Game.typed(0), rollout=True)
     monkeypatch.setattr(player, "_climb_candidates", lambda *_a: [_tie((1, 1))] * 2)
 
     def boom():

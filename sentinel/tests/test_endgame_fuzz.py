@@ -11,7 +11,7 @@ import random
 import pytest
 
 from sentinel import actions, enemies, memmap as mm, terrain
-from sentinel.astar_player import AStarPlayer
+from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
 from sentinel.playerbase import ROBOT_EYE
 
@@ -21,8 +21,6 @@ _NEAR, _MAX_RANGE = 2, 8  # chebyshev band the perch is drawn from
 _STANCES = 4  # perches kept per board: the "which stance" fuzz axis
 _PROBES = 60  # candidate tiles tried while looking for those perches
 _EYE_MARGIN = 0.6  # eye clearance over the platform's top face
-_NODE_BUDGET = 400  # the endgame is one macro deep; a wide search means a bug
-_TIME_BUDGET = 30.0
 _SAFE_WINDOW = 4000.0  # frames a surviving sentry must be off draining anything
 _NEED = {1: 3, 2: 3, 3: 6}  # energy floor: 3 per hyperspace, +3 for the robot
 
@@ -66,8 +64,8 @@ def _quiet(player, ptile):
 
 def _perches(landscape, keep_sentry):
     """Up to ``_STANCES`` boards for ``landscape`` with the player perched where the
-    platform tile is genuinely landable (the search's ``_landable`` AND the executor's
-    ``_view_for``), every enemy gone bar an optional far-off sentry."""
+    platform tile carries a real keyboard-aim view, every enemy gone bar an optional
+    far-off sentry."""
     key = (landscape, keep_sentry)
     if key in _BASES:
         return _BASES[key]
@@ -97,8 +95,8 @@ def _perches(landscape, keep_sentry):
         st = board.clone()
         if not _perch(st, tile, height):
             continue
-        player = AStarPlayer(Game(st), node_budget=1)
-        if player._view_for(ptile) is None or not player._landable(st, ptile):
+        player = PhasePlayer(Game(st))
+        if player._views_now().get(ptile, band=True) is None:
             continue
         if sentry is not None and not _quiet(player, ptile):
             continue
@@ -140,7 +138,7 @@ def test_planner_closes_a_known_distance_endgame(landscape, distance):
     st = _endgame(landscape, distance, rng)
     if st is None:
         pytest.skip(f"ls{landscape}: no synthetic perch sees the platform")
-    player = AStarPlayer(Game(st), node_budget=_NODE_BUDGET, time_budget=_TIME_BUDGET)
+    player = PhasePlayer(Game(st))
     won = player.run(max_actions=3 * distance + 2)
     verbs = [rec[1] for rec in player.trace]
     assert verbs, f"ls{landscape} d={distance}: planner froze, zero actions"
@@ -162,16 +160,3 @@ def test_endgame_distances_are_exact_by_construction():
         assert (st.obj_type[top] == mm.T_ROBOT) is has_robot
         assert st.energy >= _NEED[distance]
         assert not actions.won(st)
-
-
-def test_a_robot_on_the_platform_is_transferred_into_not_rebuilt():
-    """The d=2 defect at its source: ``_c_endgame`` must yield a successor when the
-    platform tile already carries a robot -- ``create`` there is refused by $1F38, and
-    the endgame is the only child a Sentinel-free board has."""
-    st = _endgame(_LANDSCAPES[0], 2, random.Random(3))
-    assert st is not None and st.is_empty(actions.SENTINEL_SLOT)
-    player = AStarPlayer(Game(st), node_budget=_NODE_BUDGET, time_budget=_TIME_BUDGET)
-    plan = player._search()
-    assert plan, "no plan two moves from the win"
-    assert [step.verb for step in plan] == ["transfer", "hyperspace"]
-    assert plan[0].tile == st.platform_xy

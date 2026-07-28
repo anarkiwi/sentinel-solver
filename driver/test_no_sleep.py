@@ -19,7 +19,6 @@ LIVE_MODULES = [
     "driver/core.py",
     "driver/clock.py",
     "driver/play_player.py",
-    "driver/plan_audit.py",
     "driver/boot.py",
     "driver/instrument.py",
 ]

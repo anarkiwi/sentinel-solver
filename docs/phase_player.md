@@ -1,9 +1,9 @@
 # The phase player: freedom first, then convert
 
-`sentinel/freeplayer.py`. A second planner, written from the game's own rules rather
-than from a cost model, because the weighted search
-([stance_planner.md](stance_planner.md)) does not convert ls335 and its failures were
-never in the search — they were in what the search was asked to optimise.
+`sentinel/phase_player.py`, the repo's player. Written from the game's own rules rather
+than from a cost model, because the weighted searches it replaced did not convert ls335
+and their failures were never in the search — they were in what the search was asked to
+optimise.
 
 It wins **all eight boards measured**, ls335 from entry in 73 actions — the board this
 repo is named for losing — and ls110 in 53. See [Where it stands](#where-it-stands).
@@ -20,8 +20,7 @@ predicting when a cone arrives (`_cone_onset`, and the errors that cost this rep
 documented open item), clone the state, run it forward over the action's real duration,
 and look. `_drained_over` is four lines and is never wrong.
 
-**Height buys freedom, and nothing else does.** Measured over the whole stance graph on
-ls335:
+**Height buys freedom, and nothing else does.** Measured over every stance on ls335:
 
 | eye | tiles it can land | stances it can climb to | enemies it can strike |
 |---|---|---|---|
@@ -110,9 +109,10 @@ planner otherwise untouched:
 | (25,4) | **won** 42, E=5 | | (24,11) (26,10) | lost |
 
 Three of nine win the board outright. The score cannot see which, and neither can any
-other measurement taken there: eye, energy, the stance graph's fuel, its seer count, its
-landable-set size, its hop-distance to a strike, and the 4-tick fork outcome were all
-computed for the nine, and **two of the three winners rank last on every one**. That is
+other measurement taken there: eye, energy, the landing's reachable fuel, how many
+enemies watch it, its landable-set size, its hop-distance to a strike, and the 4-tick
+fork outcome were all computed for the nine, and **two of the three winners rank last on
+every one**. That is
 why deepening the lookahead from 4 to 8 to 16 changed nothing: the winning hop's payoff
 is 40 actions away, and no valuation at any affordable depth reaches it.
 
@@ -131,7 +131,7 @@ were attempts to score the move rather than play it:
 |---|---|
 | absorb only if its value exceeds the drain over its own span | ls110 won, ls321 + ls373 lost — 6/8 |
 | make `_supply`'s affordability test agree with `_best_climb`'s | ls42 + ls110 lost — 6/8 |
-| route every climb through `stancegraph.route` instead | 5/8: ls42 and ls373 lost, ls110 still lost |
+| route every climb over the board's exact stance geometry instead | 5/8: ls42 and ls373 lost, ls110 still lost |
 
 The first also **disproves an earlier claim in this document**, that `_refuel` harvests
 "at a loss" under a cone. It cannot: idling through the same span costs the same drain
@@ -143,3 +143,11 @@ and yields nothing, so an absorb under fire is never worse than waiting.
 and a tie now multiplies that by the number of candidates. Making the sweep cheap is the
 enabling work for anything that wants to play more of the tree, and it is engineering
 rather than strategy.
+
+**Live frame accounting leaks across a tie.** Two frozen live ls42 runs take an identical
+action sequence but measure different frames per step (`create` 633 vs 925, `transfer` 3
+vs 378); the same pair driven by the greedy player is bit-identical. A tie pauses tens of
+seconds between keypresses and the driver's halt discipline does not survive the gap, so
+`driver/test_live_determinism.py` gates the driver with greedy. The live win itself is
+unaffected — it is verified by the ROM's own `$0CDE` bit 6 — but the measured clock a live
+run reports is not trustworthy across a tie.

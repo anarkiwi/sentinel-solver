@@ -623,8 +623,8 @@ class BasePlayer:
 
     def _margin(self, depth=None):  # pylint: disable=unused-argument
         """Frames of enemy-phase uncertainty a gate holds back.  Zero for a player
-        that acts on the board in front of it; the planner overrides it with the
-        accumulated per-step error at plan depth (`astar_player._margin`)."""
+        that acts on the board in front of it; a lookahead planner overrides it with
+        the accumulated per-step error at its own plan depth."""
         return 0.0
 
     def _reserve(self):

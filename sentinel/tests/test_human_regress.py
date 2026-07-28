@@ -1,4 +1,4 @@
-"""Retrograde handover: the reconstructed board is the human's, and the A* player
+"""Retrograde handover: the reconstructed board is the human's, and the phase player
 closes the recorded ls335 endgame from it."""
 
 import xml.etree.ElementTree as ET
@@ -23,9 +23,9 @@ def test_state_at_is_the_human_pre_action_board():
         assert st.mem[mm.ENEMIES_ROTATION_COOLDOWN + e["slot"]] == e["rot_cooldown"]
 
 
-def test_astar_closes_the_recorded_ls335_endgame():
-    """From the human's last recorded move the plan is transfer then hyperspace."""
-    rec = hr.attempt(_FIX, _LAST, node_budget=400, time_budget=30.0)
+def test_planner_closes_the_recorded_ls335_endgame():
+    """From the human's last recorded move the line is transfer then hyperspace."""
+    rec = hr.attempt(_FIX, _LAST)
     assert rec["outcome"] == "won"
     assert [s["verb"] for s in rec["player_trace"]] == ["transfer", "hyperspace"]
     assert rec["human_action"]["verb"] == "transfer"
@@ -33,7 +33,7 @@ def test_astar_closes_the_recorded_ls335_endgame():
 
 def test_regress_scan_reports_a_win(tmp_path):
     """A one-index scan runs the worker process and finds no losing handover."""
-    out = hr.regress(_FIX, budgets={"node_budget": 400}, workers=1, indices=[_LAST])
+    out = hr.regress(_FIX, workers=1, indices=[_LAST])
     assert out["first_loss"] is None and out["last_win"] == _LAST
     assert out["attempts"][0]["won"] is True
 
@@ -43,7 +43,7 @@ def test_bisect_finds_the_boundary_without_walking_it(monkeypatch):
     probes far fewer handovers than the interval is wide."""
     probed = []
 
-    def fake_run(name, batch, _budgets, _cap, _log):
+    def fake_run(name, batch, _cap, _log):
         probed.extend(batch)
         out = {}
         for i in batch:
@@ -65,10 +65,10 @@ def test_capped_probe_is_escalated_before_being_called_a_loss(monkeypatch):
     not the boundary."""
     caps = []
 
-    def fake_run(name, batch, budgets, cap, _log):
+    def fake_run(name, batch, cap, _log):
         caps.append(cap)
         rec = hr._capped(name, batch[0], cap)
-        if cap > budgets["cap"]:
+        if cap > hr.CAP:
             rec["won"], rec["outcome"] = True, "won"
         return {batch[0]: rec}
 
@@ -80,8 +80,8 @@ def test_capped_probe_is_escalated_before_being_called_a_loss(monkeypatch):
 
 
 def test_diagram_annotates_the_handover(tmp_path):
-    """The SVG carries the human's next moves and the A* trace as arrows."""
-    rec = hr.attempt(_FIX, _LAST, node_budget=400, time_budget=30.0)
+    """The SVG carries the human's next moves and the planner trace as arrows."""
+    rec = hr.attempt(_FIX, _LAST)
     path = hr.diagram(_FIX, _LAST, rec, horizon=4, path=str(tmp_path / "d.svg"))
     root = ET.parse(path).getroot()
     ns = "{http://www.w3.org/2000/svg}"
