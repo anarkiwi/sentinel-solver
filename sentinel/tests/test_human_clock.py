@@ -12,7 +12,7 @@ import types
 import pytest
 
 from sentinel import actioncost, actions, enemies, memmap as mm, projector, terrain
-from sentinel.astar_player import AStarPlayer
+from sentinel.phase_player import PhasePlayer
 from sentinel.test_human_win_logs import (
     _FIX_DIR,
     _is_player_action,
@@ -150,7 +150,7 @@ def test_phase_split_beats_either_extreme():
     facings = 0
     for i, n in _exact_spans(evs):
         st = state_from_event(evs[i], seed)
-        p = AStarPlayer(types.SimpleNamespace(state=st))
+        p = PhasePlayer(types.SimpleNamespace(state=st))
         st = p.st
         hc.seed_clock(st, evs[i])
         st.mem[mm.PLAYER_NOT_ACTED] = 0x00
@@ -402,7 +402,7 @@ def test_billed_cost_against_measured_elapsed():
             continue
         prev = evs[i - 1]
         st = state_from_event(evs[i], seed)
-        p = AStarPlayer(types.SimpleNamespace(state=st))
+        p = PhasePlayer(types.SimpleNamespace(state=st))
         st = p.st
         st.obj_h_angle[st.player] = prev["player"]["hang"]
         st.obj_v_angle[st.player] = prev["player"]["vang"]

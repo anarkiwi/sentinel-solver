@@ -17,8 +17,7 @@ import os
 
 import pytest
 
-from sentinel import actions, astar_player, los, memmap as mm, terrain, threat
-from sentinel.astar_player import AStarPlayer
+from sentinel import landtable, los, memmap as mm, terrain, threat
 from sentinel.tests.telemetry import log_path, records, state_from_record, tile_ladder
 
 LS0 = log_path("play_20260707_193356.jsonl")
@@ -89,8 +88,6 @@ def _tile_is_bare(state, tile):
     """A fresh build lands on a BARE tile; a move onto an already-occupied tile is a
     transfer to a standing synthoid (a backtrack), for which aim-landability from the
     previous tile does not apply."""
-    from sentinel import terrain, memmap as mm
-
     return terrain.tile_byte(state, tile[0], tile[1]) < mm.OBJECT_TILE
 
 
@@ -129,10 +126,9 @@ def test_generated_landscape_oracle_invariants(new_state):
 
 
 def test_targeted_view_matches_full_board_sweep(new_state):
-    """The heading-cone single-tile band march (:func:`los.landable_view_targeted`, the A*
-    planner's fallback) is bit-identical to ``landable_views(st).get(tile)`` for every tile,
-    and returns None off the landable set -- the g-invariance the node-cost win relies on.
-    """
+    """The heading-cone single-tile band march (:func:`los.landable_view_targeted`) is
+    bit-identical to ``landable_views(st).get(tile)`` for every tile, and returns None off
+    the landable set."""
     st = new_state(0)
     full = los.landable_views(st, st.player)
     for tile, view in full.items():
@@ -142,88 +138,13 @@ def test_targeted_view_matches_full_board_sweep(new_state):
             assert los.landable_view_targeted(st, tile) is None, tile
 
 
-def _stack_and_transfer(st):
-    """Build a 2-boulder + robot stack on a bare neighbour tile and transfer onto it: object
-    tiles in the map, a raised eye and a different observer slot."""
-    px, py = st.player_xy()
-    tile = next(
-        (px + dx, py + dy)
-        for dx in (0, 1, -1)
-        for dy in (1, -1, 0)
-        if (dx or dy) and _tile_is_bare(st, (px + dx, py + dy))
-    )
-    for otype in (mm.T_BOULDER, mm.T_BOULDER, mm.T_ROBOT):
-        slot = actions.create(st, otype, tile)
-    assert actions.transfer(st, slot)
-    return tile
-
-
-def _sweeps(st):
-    """``(primary, band)``: the whole-board $F5-plane and full-pitch-band sweeps."""
-    primary = los._landable_sweep(
-        st, st.player, None, 6000, want_centres=False, v_primary=True
-    )[0]
-    return primary, los.landable_views(st, st.player)
-
-
-@pytest.mark.parametrize("ls,stack", [(0, False), (42, False), (0, True), (42, True)])
-def test_view_for_matches_whole_board_sweeps(new_game, ls, stack):
-    """``AStarPlayer._view_for`` is bit-identical on EVERY tile to the composition it answers
-    with targeted cones: the $F5-plane sweep's entry for the tile, else the full-band sweep's.
-    Its targeted primary result is pinned against the plane sweep through the memo it fills,
-    so a plane hit cannot hide behind a band view that happens to agree."""
-    if not los._HAVE_JIT:
-        pytest.skip("numba not available -- _view_for takes the sweep path unchanged")
-    game = new_game(ls)
-    st = game.state
-    if stack:
-        _stack_and_transfer(st)
-    player = AStarPlayer(game)
-    primary, band = _sweeps(st)
-    tiles = [(x, y) for x in range(mm.N) for y in range(mm.N)]
-    sig = player._sig()
-    # Band cone == band sweep is pinned above, so seeding its memo makes this pass affordable.
-    player._cone_memo.update({(sig, t): band.get(t) for t in tiles})
-    for t in tiles:
-        expect = primary[t] if t in primary else band.get(t)
-        assert player._view_for(t) == expect, t
-        assert player._plane_memo[(sig, t)] == primary.get(t), t
-    player._view_memo[sig] = primary  # whole plane already swept: same answers
-    for t in tiles:
-        assert player._view_for(t) == (primary[t] if t in primary else band.get(t)), t
-
-
-def test_view_for_band_fallback_marches_the_real_cone(new_game):
-    """Below-eye tiles miss the $F5 plane, so ``_view_for`` falls through to the targeted band
-    march: with nothing memoized it must still return the band sweep's view, and None for a
-    tile in neither set."""
-    if not los._HAVE_JIT:
-        pytest.skip("numba not available -- _view_for takes the sweep path unchanged")
-    game = new_game(0)
-    st = game.state
-    player = AStarPlayer(game)
-    primary, band = _sweeps(st)
-    eye = st.eye_z()
-    below = [
-        t
-        for t in sorted(band)
-        if t not in primary and (terrain.tile_byte(st, *t) >> 4) < eye
-    ]
-    assert len(below) >= 8, below
-    for t in below[:8]:
-        assert player._view_for(t) == band[t], t
-    for t in ((0, 0), (30, 30), (2, 2), (28, 5)):
-        assert t not in primary and t not in band
-        assert player._view_for(t) is None, t
-
-
 def test_targeted_view_matches_coarse_lattice_sweep(new_state):
-    """On the A* planner's SUBSAMPLED cursor lattice, the per-tile heading cone agrees with
-    that lattice's own full sweep on every tile of the board -- the membership equality
-    ``AStarPlayer._landable`` substitutes for ``tile in _landset``."""
+    """On the SUBSAMPLED cursor lattice, the per-tile heading cone agrees with that
+    lattice's own full sweep on every tile of the board."""
     st = new_state(0)
-    coarse = AStarPlayer._coarse_landable(st)
-    cxs, cys = astar_player._COARSE_CX, astar_player._COARSE_CY
+    grids = landtable.lattice(coarse=True)
+    coarse = set(landtable.landable_set(st, st.player, grids=grids))
+    cxs, cys = landtable.COARSE_CX, landtable.COARSE_CY
     for x in range(mm.N):
         for y in range(mm.N):
             got = los.landable_view_targeted(st, (x, y), cxs=cxs, cys=cys) is not None

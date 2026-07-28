@@ -1,30 +1,34 @@
-# Iterating on the stance player without replaying the board
+# Iterating on a planner without replaying the board
 
-Changing a generator and re-running `--planner stance` on the minimal losing board
-([ls335_minimal.md](ls335_minimal.md)) costs **94 s** solo and 494 s under load. Almost
-none of that is the thing being changed: it is 34 ticks of already-correct play being
-re-derived from cold caches so the planner can arrive at the one stance that fails.
+Changing a generator and re-running a planner over a whole board costs **94 s** solo and
+494 s under load. Almost none of that is the thing being changed: it is dozens of ticks
+of already-correct play being re-derived from cold caches so the planner can arrive at
+the one stance that fails.
 
 The failure is a property of a **single state**. So re-enter that state instead of
 replaying to it.
 
+`sentinel/tests/ckpt.py` does this for both surviving planners: `PhasePlayer`
+([phase_player.md](phase_player.md), the default) and `AStarPlayer`
+([astar_player.md](astar_player.md)), selected by `restore(snap, cls=...)`.
+
 ## Tiers
 
 Each tier answers a narrower question and costs 1-2 orders of magnitude less than the
-next. Promote a change only when the tier below it passes. Measured on `{(4,18),
-(12,10)}`:
+next. Promote a change only when the tier below it passes. Measured on a reduced ls335
+board, enemies `{(4,18), (12,10)}` plus the Sentinel:
 
 | tier | question | measured |
 |---|---|---|
 | 0 filter tally | which gate kills each `(tile, k)` here? | **0-5 ms** |
-| 1 probe | does `_pick_hop` / `_expand` yield anything here? | **140-210 ms** |
-| 1b search | does one `_search` from here return a plan? | 0.8-4.6 s |
+| 1 probe | does the candidate generator (`_climb_candidates` / `_mount`, or A\*'s `_pick_hop` / `_expand`) yield anything here? | **140-210 ms** |
+| 1b search | does one A\* `_search` from here return a plan? | 0.8-4.6 s |
 | 2 resume | does the run still die from this tick on? | 0.5 s (5 acts) - 6.5 s (32 acts) |
 | 3 board | does the whole board flip to a win? | 94 s |
 | 4 matrix | did any other board regress? | existing `human_regress` |
 
-Tier 0-1 is the loop you actually iterate in: a `_pick_hop` change is judged in
-**210 ms** against the stance that defeats it, not 94 s.
+Tier 0-1 is the loop you actually iterate in: a generator change is judged in **210 ms**
+against the stance that defeats it, not 94 s.
 
 ## The checkpoint
 
@@ -33,39 +37,41 @@ scalars it does not carry. Everything else the player holds (`_view_memo`, `_con
 `_hop_price_memo`, `_hold_memo`, the module-level `_VIEW_CACHE`) is a pure cache keyed
 on a state signature and is rebuilt on demand.
 
-Two images are stored, not one. `StancePlayer._graph_state` is a clone of the board the
-player was **constructed** on, because the stance graph is a snapshot of it; restoring
-only the live board would build the graph from the wrong tile map. So `restore`
-constructs on the start image and then overwrites the live image.
+Two images are stored, not one. The board the player was **constructed** on is stored
+beside the live image, for any player whose caches snapshot it; restoring only the live
+board would rebuild those caches from the wrong tile map. So `restore` constructs on the
+start image and then overwrites the live image. A player with no such snapshot
+(`PhasePlayer`) stores its live state twice.
 
 ```python
 FIELDS = ("cursor", "last_bearing", "frames", "trace", "fire_reason", "_stale",
           "plan", "_pi", "expansions", "_hs_streak", "_depth", "_margin_k",
-          "_on_plan", "_last_pbody", "_goal_slot", "_edge_frames", "_cost_epoch")
+          "_on_plan", "_last_pbody", "waited")
 
-def snapshot(player, tick):
+def snapshot(player, tick=0):
+    start = getattr(player, "_graph_state", player.st)
     return {"tick": tick,
-            "start_mem": bytes(player._graph_state.mem),
+            "start_mem": bytes(start.mem),
             "mem": bytes(player.st.mem),
-            "fields": {n: copy.deepcopy(getattr(player, n)) for n in FIELDS}}
+            "fields": {n: copy.deepcopy(getattr(player, n))
+                       for n in FIELDS if hasattr(player, n)}}
 
-def restore(snap, **kw):
-    game = Game(State(bytearray(snap["start_mem"])))
-    player = StancePlayer(game, **kw)
+def restore(snap, cls=PhasePlayer, **kwargs):
+    player = cls(Game(State(bytearray(snap["start_mem"]))), **kwargs)
     player.st.mem[:] = snap["mem"]
     for name, value in snap["fields"].items():
         setattr(player, name, copy.deepcopy(value))
     return player
 ```
 
-`_edge_frames` and `_cost_epoch` are **learned** during a run — the executor's measured
-build frames feed later route costs — so they are state, not cache, and must be carried.
+One field list serves both planners: a field the player lacks is skipped, so `waited` is
+carried for `PhasePlayer` and `plan`/`_pi`/`expansions` for `AStarPlayer`.
 
 The deep copies are load-bearing on both sides, and both were caught by the fidelity
 gate below rather than by inspection:
 
-- on `snapshot`, because `trace`/`plan`/`cursor`/`_edge_frames` are live mutable
-  objects: storing references makes every checkpoint alias the final tick;
+- on `snapshot`, because `trace`/`plan`/`cursor` are live mutable objects: storing
+  references makes every checkpoint alias the final tick;
 - on `restore`, because assigning the snapshot's own list to the player means replaying
   **mutates the checkpoint** — fatal for a corpus that is re-entered many times.
 
@@ -97,11 +103,11 @@ state.
 
 One checkpoint is a debugger. The set of them is a regression suite.
 
-Keep, from every run and every board, the ticks where `_expand` returned no children,
-plus the tick that **committed the hop** that led there. Score a change by how many
-corpus stances now yield a viable child — a dense, millisecond-cheap objective in place
-of one binary win/lose that costs 94 s. Boards that already win contribute their own
-near-miss stances, so the corpus also catches regressions the win/lose bit hides.
+Keep, from every run and every board, the ticks where the candidate generator returned
+nothing, plus the tick that **committed the hop** that led there. Score a change by how
+many corpus stances now yield a viable child — a dense, millisecond-cheap objective in
+place of one binary win/lose that costs 94 s. Boards that already win contribute their
+own near-miss stances, so the corpus also catches regressions the win/lose bit hides.
 
 ## Persistent memoisation
 
@@ -120,33 +126,3 @@ Anything whose result is compared must be bounded by **node budget only**, never
 pass at `--time-budget 20` under 6-way parallelism reported permanent stalls on boards
 that win solo in 15 s. With the clock out of the loop, parallelism changes wall time and
 never a verdict, so the corpus can be scored across all cores at once.
-
-## What tier 1 already says about ls335
-
-Probing the two interesting ticks on `{(4,18), (12,10)}` — 210 ms each, no replay:
-
-```
-tick 20: tile=(11,13) eye=7.375 E=3 foes=3     <- the tick that builds on (18,24)
-  _pick_hop -> 0 hops
-  filters: {no viable k: 21, window < tail+margin: 10, _affords (source): 3, not a stance: 3}
-
-tick 22: tile=(18,24) eye=8.375 E=0 foes=3     <- the stall
-  _pick_hop -> 0 hops
-  filters: {no viable k: 92, not a stance: 12}
-  _search -> 13 expansions, plan=None
-```
-
-At tick 20 the player lays a boulder on `(18,24)` while `_pick_hop` at that same state
-offers **no hop at all**: the hop is executed from a plan committed at an earlier tick.
-
-That framed the right question and the wrong answer. The corpus settled it in minutes —
-which is the point, because the cheap loop is what makes a wrong guess survivable.
-`(18,24)` is *not* fatal; the run refuels off it from E=0 to E=4. Reading `plan`/`_pi`
-straight out of the checkpoint series (no replay at all) shows one 55-step plan
-committed at tick 14, and the kill at **tick 24**: live energy 4, next build group
-`boulder`+`robot`+`transfer` on `(26,21)` costing 5. The boulder goes down anyway, the
-robot is then unaffordable, and a half-built pedestal strands the body.
-
-A hop is atomic; the executor was committing it one keypress at a time against drifted
-energy. `_group_need` + a `_tick` guard fixes it, byte-identically on every board that
-already won. Total cost of the diagnosis: four checkpoint probes and one field dump.

@@ -4,6 +4,12 @@
 The driver halts the CPU between primitives, so every emulated frame the game
 advances should be one it deliberately ran; host-clock leakage (a swallowed
 ``run_until_pc`` timeout resumes the CPU and halts it wall-clock late) diverges here.
+
+Driven by the GREEDY player: the subject is the driver's clock discipline, and greedy
+decides in milliseconds, so a divergence here can only be the driver.  The phase player
+fails this gate -- the monitor socket drops across the ~25 s think gap a tie opens and the
+reconnect leaks frames into the measurement -- which is a measured defect, not a reason to weaken the gate
+(phase_player.md, "What is not solved").
 """
 
 import os
@@ -39,7 +45,7 @@ def _run(tag):
             "driver.frozen_run",
             "42",
             "--player",
-            "astar",
+            "greedy",
             "--max-actions",
             str(_MAX_ACTIONS),
         ],

@@ -22,8 +22,9 @@ The measured mechanism is now specific: on ls335 the **frontier empties after 30
 expansions**, not the node budget. `h`'s enemy term is constant across the whole 48-action
 ascent the human plays before its first kill, energy appears in no heuristic term so dead
 ends are invisible, and the Sentinel is landable from 13 of 1192 stances — a needle no
-forward ranker proposes. [stance_planner.md](stance_planner.md) is the layered replacement
-and its milestone table; `human_regress --planner stance` scores it.
+forward ranker proposes. [phase_player.md](phase_player.md) is the replacement for the
+weighted search and wins all eight measured boards; `human_regress --planner phase`
+scores it.
 
 **The plan is a pure function of the board.** Two live ls42 runs produce identical action
 sequences and identical per-step measured frame counts. `_search` is bounded by

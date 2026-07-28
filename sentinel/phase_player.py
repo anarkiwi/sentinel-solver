@@ -5,6 +5,7 @@ so exposure is a question of WHEN, not where, and no forecast is needed: ``enemi
 is byte-exact, so a gap is found by running the world forward and looking.
 """
 
+import argparse
 import math
 
 from sentinel import actions, enemies, memmap as mm, terrain
@@ -17,7 +18,7 @@ HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
 
 
-class FreePlayer(BasePlayer):
+class PhasePlayer(BasePlayer):
     """Absorb what is reachable, climb when it is not, and only ever act in a gap."""
 
     def __init__(self, game, verbose=False, horizon=WAIT_HORIZON, rollout=False):
@@ -102,7 +103,7 @@ class FreePlayer(BasePlayer):
 
     def _fork(self):
         """A copy of this player on a copy of the world, for trying a policy out."""
-        twin = FreePlayer(
+        twin = PhasePlayer(
             Game(self.st.clone()), verbose=False, horizon=self.horizon, rollout=True
         )
         twin.cursor = list(self.cursor)
@@ -433,13 +434,16 @@ class FreePlayer(BasePlayer):
                 return False
             self._hyperspace()
             return True
-        need = toll + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+        top = self._top(ptile)
+        standing = top is not None and st.obj_type[top] == mm.T_ROBOT
+        need = toll if standing else toll + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         if st.energy < need and not self._refuel(views, need):
             return False  # climbing the platform broke is a dead end, not a win
-        if not self._do(
-            "robot", ptile, views, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], band=True
-        ):
-            return False
+        if not standing:  # $1F38 refuses a create on a tile that already carries one
+            if not self._do(
+                "robot", ptile, views, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], band=True
+            ):
+                return False
         return self._do("transfer", ptile, _Views(st), band=True)
 
     def _tick(self):
@@ -468,3 +472,25 @@ class FreePlayer(BasePlayer):
                     return
         enemies.advance_frames(self.st, WAIT_QUANTUM)
         self.frames += WAIT_QUANTUM
+
+
+def main(argv=None):
+    """Play one landscape offline, by the number a player types on the keypad."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("landscape", type=int)
+    parser.add_argument("--max-actions", type=int, default=200)
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args(argv)
+    game = Game.typed(args.landscape)
+    player = PhasePlayer(game, verbose=not args.quiet)
+    won = player.run(max_actions=args.max_actions)
+    print(
+        f"landscape {args.landscape}: {'WON' if won else 'lost'} in "
+        f"{len(player.trace)} actions / {player.frames} frames, "
+        f"energy {game.energy}, dead={actions.player_dead(game.state)}"
+    )
+    return 0 if won else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -10,11 +10,11 @@ import pickle
 import zlib
 
 from sentinel import actions, enemies
+from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
 from sentinel.state import State
-from sentinel.stance_player import StancePlayer
 
-# Decision state absent from the memory image; _edge_frames/_cost_epoch are LEARNED
+# Decision state absent from the memory image; a field a player lacks is skipped
 FIELDS = (
     "cursor",
     "last_bearing",
@@ -22,17 +22,7 @@ FIELDS = (
     "trace",
     "fire_reason",
     "_stale",
-    "plan",
-    "_pi",
-    "expansions",
-    "_hs_streak",
-    "_depth",
-    "_margin_k",
-    "_on_plan",
-    "_last_pbody",
-    "_goal_slot",
-    "_edge_frames",
-    "_cost_epoch",
+    "waited",
 )
 
 
@@ -40,13 +30,12 @@ def snapshot(player, tick=0):
     """A picklable checkpoint of ``player`` at decision tick ``tick``.
 
     Fields are DEEP-COPIED: they are live mutable objects, so references would make
-    every checkpoint alias the last tick.  ``_graph_state`` is stored beside the live
-    image: a stance graph is a snapshot of the CONSTRUCTED board.
+    every checkpoint alias the last tick.  ``start_mem`` is the board a restored player
+    is CONSTRUCTED on, before the live image is written over it.
     """
-    start = getattr(player, "_graph_state", player.st)
     return {
         "tick": tick,
-        "start_mem": bytes(start.mem),
+        "start_mem": bytes(player.st.mem),
         "mem": bytes(player.st.mem),
         "fields": {
             name: copy.deepcopy(getattr(player, name))
@@ -56,12 +45,11 @@ def snapshot(player, tick=0):
     }
 
 
-def restore(snap, cls=StancePlayer, **kwargs):
+def restore(snap, cls=PhasePlayer, **kwargs):
     """Rebuild a player of ``cls`` sitting exactly at the checkpointed tick.
 
-    Constructed on the START board so any graph snapshot matches the original run, then
-    the live board is overwritten.  Fields are DEEP-COPIED out so replaying a restored
-    player cannot mutate the checkpoint it came from.
+    Fields are DEEP-COPIED out so replaying a restored player cannot mutate the
+    checkpoint it came from.
     """
     player = cls(Game(State(bytearray(snap["start_mem"]))), **kwargs)
     player.st.mem[:] = snap["mem"]
@@ -81,7 +69,7 @@ def load(path):
 
 
 def describe(player):
-    """One line naming the stance a checkpoint sits on."""
+    """One line naming the tile and eye a checkpoint sits on."""
     st = player.st
     return (
         f"tile={st.player_xy()} eye={st.eye_z():.3f} E={st.energy} "
@@ -104,7 +92,7 @@ def capture(player, max_actions=200, snaps=None):
     return actions.won(player.st), "action cap"
 
 
-def verify(snaps, backs=(5, 10, 20), cls=StancePlayer, **kwargs):
+def verify(snaps, backs=(5, 10, 20), cls=PhasePlayer, **kwargs):
     """Fidelity gate: re-entry must reproduce the run's own trace tail.
 
     Ground truth is the trace in the LAST snapshot; restoring at tick ``t`` and

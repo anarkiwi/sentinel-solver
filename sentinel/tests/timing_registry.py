@@ -233,7 +233,6 @@ _ENJ = "sentinel.enemies_jit"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
-_SP = "sentinel.stance_player"
 _CORE = "driver.core"
 _ROW = "ray-march/sweep iteration cap; unmeasured"
 _RELOAD = "ROM cooldown reload value; no derivation test"
@@ -324,13 +323,6 @@ REGISTRY = {
     "COOLDOWN_BRESENHAM_STEP": _u(_MM, "ROM Bresenham step; no derivation test"),
     "ENERGY_MASK": _u(_MM, "bit mask, not a duration"),
     "_MASK_TABLE": _u("sentinel.landscape", "bit mask table, not a duration"),
-    "_STEP_SIGMA": entry(
-        "sentinel.astar_player",
-        MEASURED,
-        "whole-step charged-vs-measured rms of the live ls42 run in "
-        "live_ls42_hops.json; one run, n=11",
-        "test_step_sigma_is_the_measured_whole_step_rms",
-    ),
     "_march_python.max_steps": _u(_LOS, _ROW),
     "_march_jit.max_steps": _u(_LOS, _ROW),
     "check_for_line_of_sight_to_tile.max_steps": _u(_LOS, _ROW),
@@ -360,11 +352,6 @@ REGISTRY = {
     "boot.attempts": _u(_CORE, "boot retry budget; unmeasured"),
     "boot_loaded.attempts": _u("driver.boot", "boot retry budget; unmeasured"),
     "save_snapshot.timeout": _u("driver.boot", _GUARD),
-    "MAX_WAIT": _u(
-        _SP,
-        "planner budget, not a ROM quantity: frames a scheduled hop may sit out "
-        "before it is not worth waiting for; unmeasured",
-    ),
     "load_snapshot.timeout": _u("driver.boot", _GUARD),
     "run_frames.timeout": _u("driver.clock", _GUARD),
 }
@@ -385,7 +372,6 @@ UNVALIDATED_PIN = frozenset(
         "ENERGY_MASK",
         "FRAME_TICKS",
         "H_SCROLL",
-        "MAX_WAIT",
         "REVOLUTION_FRAMES",
         "ROTATION_COOLDOWN_RELOAD",
         "SAFE_FRAMES",

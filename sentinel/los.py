@@ -1100,7 +1100,7 @@ def kbd_grids(cxs=None, cys=None, v_primary=False):
 
     ``v_primary`` = the $F5 plane alone, whose sole pitch control is the cursor cy, so it
     must span :data:`CURSOR_CY_FULL` (see :func:`_landable_sweep`); ``cxs``/``cys`` override
-    the cursor grid (:mod:`sentinel.astar_player`'s 2:1 landset subsample)."""
+    the cursor grid (:mod:`sentinel.landtable`'s 2:1 landset subsample)."""
     return (
         list(range(0, 256, AZIMUTH_STEP)),
         [KBD_V_ANGLE] if v_primary else _V_PRIORITY,

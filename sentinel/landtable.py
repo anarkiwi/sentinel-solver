@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover - numba absent -> pure-Python (slow) build
 
 
 RADIUS = 30  # max in-board tile offset (LOS quits at coord $1F, so 0..30 is the board)
-# the landset grid (astar_player._COARSE_CX/_CY, pinned by tests): CURSOR_CX/CY 2:1
+# the landset grid (pinned by tests): CURSOR_CX/CY subsampled 2:1
 COARSE_CX = list(range(48, 112, 2))
 COARSE_CY = list(range(63, 127, 2))
 BUCKET_LO = -24  # census T buckets, whole z units; real play spans -5..+6
@@ -45,7 +45,7 @@ _WILD = -(1 << 40)  # zmin sentinel: unbounded (wrap-aliasing) candidate
 def lattice(v_primary=False, coarse=False):
     """The (hgrid, vgrid, cxs, cys) a query runs on: the grids
     :func:`los._landable_sweep` sweeps (``v_primary`` = the cheap $F5 plane), or the 2:1
-    landset grid ``AStarPlayer._coarse_landable`` / ``_landable`` use (``coarse``)."""
+    subsampled landset grid :func:`landable_set` uses (``coarse``)."""
     if coarse:
         return los.kbd_grids(COARSE_CX, COARSE_CY)
     return los.kbd_grids(v_primary=v_primary)
