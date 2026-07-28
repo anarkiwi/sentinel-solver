@@ -146,8 +146,8 @@ rather than strategy.
 
 **Live frame accounting leaks across a tie.** Two frozen live ls42 runs take an identical
 action sequence but measure different frames per step (`create` 633 vs 925, `transfer` 3
-vs 378); the same pair driven by the greedy player is bit-identical. A tie pauses tens of
-seconds between keypresses and the driver's halt discipline does not survive the gap, so
-`driver/test_live_determinism.py` gates the driver with greedy. The live win itself is
+vs 378); the same pair driven by the greedy player is bit-identical. The VICE binary-monitor
+socket drops during the ~25 s think gap a tie opens, and the reconnect leaks emulated frames
+into the measurement, so `driver/test_live_determinism.py` gates the driver with greedy. The live win itself is
 unaffected — it is verified by the ROM's own `$0CDE` bit 6 — but the measured clock a live
 run reports is not trustworthy across a tie.

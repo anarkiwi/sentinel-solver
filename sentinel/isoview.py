@@ -345,7 +345,7 @@ def _arrow(state, act, seq, stack=0):
     """A numbered action arc from the actor's tile to its target tile; ``stack`` lifts
     the badge clear of earlier actions on the same tile."""
     col = VERB_COLOR.get(act["verb"], "#ffffff")
-    dash = ' stroke-dasharray="6 4"' if act.get("kind") == "astar" else ""
+    dash = ' stroke-dasharray="6 4"' if act.get("kind") == "planner" else ""
     x0, y0 = _tile_top(state, *act["from"])
     x1, y1 = _tile_top(state, *act["to"])
     lift = 17.0 * stack
@@ -412,7 +412,7 @@ def _panel(x, y, title, subtitle, state, acts, notes):
     y += 18
     for i, a in enumerate(acts, 1):
         col = VERB_COLOR.get(a["verb"], "#ffffff")
-        who = "A*" if a.get("kind") == "astar" else "human"
+        who = "planner" if a.get("kind") == "planner" else "human"
         out.append(
             _text(
                 x,

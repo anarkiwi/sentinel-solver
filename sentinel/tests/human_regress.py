@@ -271,7 +271,7 @@ def _acts(name, i, horizon, trace=None, start_tile=None):
         tile = tuple(step["tile"])
         out.append(
             {
-                "kind": "astar",
+                "kind": "planner",
                 "verb": step["verb"],
                 "otype_name": None,
                 "from": here or tile,

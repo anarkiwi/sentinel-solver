@@ -7,8 +7,8 @@ advances should be one it deliberately ran; host-clock leakage (a swallowed
 
 Driven by the GREEDY player: the subject is the driver's clock discipline, and greedy
 decides in milliseconds, so a divergence here can only be the driver.  The phase player
-fails this gate -- its tie rollouts pause tens of seconds between keypresses and frames
-leak across the pause -- which is a measured defect, not a reason to weaken the gate
+fails this gate -- the monitor socket drops across the ~25 s think gap a tie opens and the
+reconnect leaks frames into the measurement -- which is a measured defect, not a reason to weaken the gate
 (phase_player.md, "What is not solved").
 """
 

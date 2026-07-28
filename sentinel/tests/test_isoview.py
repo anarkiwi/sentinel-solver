@@ -60,7 +60,7 @@ def test_annotations_render_arrows_and_panel():
             "energy": 4,
         },
         {
-            "kind": "astar",
+            "kind": "planner",
             "verb": "create",
             "otype_name": None,
             "from": (5, 5),
