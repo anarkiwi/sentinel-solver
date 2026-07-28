@@ -5,8 +5,8 @@ than from a cost model, because the weighted search
 ([stance_planner.md](stance_planner.md)) does not convert ls335 and its failures were
 never in the search — they were in what the search was asked to optimise.
 
-It wins **ls335 from entry** in 73 actions — the board this repo is named for losing —
-and seven of the eight boards measured. See [Where it stands](#where-it-stands).
+It wins **all eight boards measured**, ls335 from entry in 73 actions — the board this
+repo is named for losing — and ls110 in 53. See [Where it stands](#where-it-stands).
 
 ## The three facts it is built on
 
@@ -67,62 +67,79 @@ Each is a fact about the ROM, not a tuned quantity.
   before the strike, not gathered after it.
 * **The endgame is exclusive** — with the Sentinel gone the platform is an eye gain, so
   an unguarded climb will spend the hyperspace toll on height.
+* **A tie is settled by the outcome** — when the score cannot separate the candidates it
+  holds no information about them, so each is played to the end and one that wins is
+  kept ([the tie](#the-tie-that-decided-ls110)).
 
 ## Where it stands
 
 There is no node budget and no wall-clock cutoff: the planner is deterministic, so a
 run's outcome does not depend on host load and the times below are observation only.
 
-| board | enemies | result | actions | eye | wall |
+| board | enemies | result | actions | energy left | wall |
 |---|---|---|---|---|---|
-| ls0 | 1 | won | 16 | 6.875 | 12 s |
-| ls42 | 2 | won | 32 | 8.875 | 38 s |
-| ls110 | 3 | **lost** | 17 | 7.375 | 20 s |
-| ls60 | 7 | won | 56 | 7.875 | 71 s |
-| ls298 | 7 | won | 34 | 8.875 | 43 s |
-| ls321 | 7 | won | 85 | 7.875 | 107 s |
-| ls373 | 7 | won | 65 | 7.875 | 150 s |
-| ls335 | 7 | won | 73 | 8.875 | 80 s |
+| ls0 | 1 | won | 16 | 1 | 13 s |
+| ls42 | 2 | won | 35 | 4 | 92 s |
+| ls110 | 3 | **won** | 53 | 17 | 126 s |
+| ls60 | 7 | won | 55 | 15 | 231 s |
+| ls298 | 7 | won | 34 | 5 | 51 s |
+| ls321 | 7 | won | 78 | 12 | 127 s |
+| ls373 | 7 | won | 65 | 15 | 159 s |
+| ls335 | 7 | won | 73 | 20 | 90 s |
 
-**7 of 8.** ls335 and ls373 converted when the four invented `BUILD_FRAMES` durations
-were replaced by each action's real aim-plus-settle (`_span`). That is worth stating
-plainly: the planner was not mis-reasoning about those boards, it was asking for gaps of
-the wrong length, and the strategy was sound before the arithmetic was.
+**8 of 8.** ls335 and ls373 converted when the four invented `BUILD_FRAMES` durations
+were replaced by each action's real aim-plus-settle (`_span`) — the planner was not
+mis-reasoning about those boards, it was asking for gaps of the wrong length. ls110
+converted when the tie below stopped being broken by dictionary order.
 
-## What is not solved
+## The tie that decided ls110
 
-**ls110 walks into a local trap and no global rule fixes it.** At 17 actions it stands
-at eye 7.375 with 3 energy under a cone, and is drained to death over the next 765
-frames. The deadlock is mechanical, and was measured rather than inferred:
+The old run died at 17 actions, eye 7.375, E=0. The stall itself was forced: at the
+previous tick 11 of its 12 candidates failed the arrival probe and the survivor was the
+tile it died on. The decision that lost the board was four ticks earlier.
 
-* the only climb on offer costs exactly 3, and paying it lands the body on zero, which
-  $1A00 kills;
-* every remaining absorbable object is out of view, so `_refuel` cannot raise the purse;
-* no hop is available, so the under-fire fallback finds nothing.
+At that tick, eye 6.375 with E=10, **nine candidates scored identically** —
+`(gain/cost, fuel_near) = (0.1667, 5)` for every one — so `_best_climb` returned
+whichever `views.band()` yielded first. Forcing each of the nine and playing on with the
+planner otherwise untouched:
 
-The mistake is therefore several actions upstream, and the fork arbiter cannot see it:
-forks play `rollout=True` — a fixed policy order — so a fork's future is not the future
-the top level will actually have. Deepening lookahead from 4 to 8 to 16 changes nothing
-on ls110 (measured), which rules out depth as the cause and leaves policy mismatch.
+| forced | outcome | | forced | outcome |
+|---|---|---|---|---|
+| (23,1) | **won** 73, E=11 | | (25,0) | lost — the one taken |
+| (24,1) | **won** 53, E=17 | | (26,0) (26,8) (26,9) | lost |
+| (25,4) | **won** 42, E=5 | | (24,11) (26,10) | lost |
 
-Four rules were tried against this trap and none is committed — each either traded
-boards or could not see it:
+Three of nine win the board outright. The score cannot see which, and neither can any
+other measurement taken there: eye, energy, the stance graph's fuel, its seer count, its
+landable-set size, its hop-distance to a strike, and the 4-tick fork outcome were all
+computed for the nine, and **two of the three winners rank last on every one**. That is
+why deepening the lookahead from 4 to 8 to 16 changed nothing: the winning hop's payoff
+is 40 actions away, and no valuation at any affordable depth reaches it.
+
+So the tie is not scored, it is **played**. `_settle_tie` forks each tied candidate,
+builds it, and runs the fixed ladder to termination, keeping the first that wins. No
+weight and no horizon — the only thing consulted is whether the game was won.
+
+It is affordable because ties are rare (two of fifteen ticks on ls110) and because the
+rollout is the fixed ladder, which plays a whole board in seconds. A tie costs one
+rollout per candidate until one wins: ~50 s at the ls110 opening, where none does.
+
+Two rules were tried against this trap before and are recorded as failures, because both
+were attempts to score the move rather than play it:
 
 | rule tried | result |
 |---|---|
 | absorb only if its value exceeds the drain over its own span | ls110 won, ls321 + ls373 lost — 6/8 |
-| under fire, let escape pre-empt harvesting | no change anywhere: at the stall there is no escape to pre-empt |
 | make `_supply`'s affordability test agree with `_best_climb`'s | ls42 + ls110 lost — 6/8 |
-| rank a rollout that ends stuck below one that does not | no change: four ticks out the body is not yet stuck by any local measure |
+| route every climb through `stancegraph.route` instead | 5/8: ls42 and ls373 lost, ls110 still lost |
 
-The first of those also **disproves an earlier claim in this document**, that `_refuel`
-harvests "at a loss" under a cone. It cannot: idling through the same span costs the
-same drain and yields nothing, so an absorb under fire is never worse than waiting.
-What ls110 loses to is not the absorb's price, it is the *time* the absorb occupies.
+The first also **disproves an earlier claim in this document**, that `_refuel` harvests
+"at a loss" under a cone. It cannot: idling through the same span costs the same drain
+and yields nothing, so an absorb under fire is never worse than waiting.
 
-**So the next step is to make forks play the policy they are ranking.** Give
-`_arbitrate` a rollout that runs the real `_tick` — arbiter included — rather than the
-fixed ladder. That is what makes the score mean what it claims. It is blocked on cost,
-and the cost is one function: **97% of runtime is `los._landable_batch`**, the
-pitch-band sweep, at ~0.4 s a call. Making that cheap is the enabling work, and it is
-engineering rather than strategy.
+## What is not solved
+
+**Runtime.** 97% of it is `los._landable_batch`, the pitch-band sweep, at ~0.4 s a call,
+and a tie now multiplies that by the number of candidates. Making the sweep cheap is the
+enabling work for anything that wants to play more of the tree, and it is engineering
+rather than strategy.

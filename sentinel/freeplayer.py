@@ -14,6 +14,7 @@ from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _View
 WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
+ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
 
 
 class FreePlayer(BasePlayer):
@@ -248,8 +249,8 @@ class FreePlayer(BasePlayer):
                 n += 1
         return n
 
-    def _best_climb(self, views, affordable):
-        """(tile, k, cost, gain) for the biggest eye gain on offer, or None.
+    def _climb_candidates(self, views, affordable):
+        """[(score, tile, k, cost, gain)] for every climb the ROM's own gates allow.
 
         Candidates rank by height per energy -- the purse is finite and only refills
         by absorbing -- and ``affordable`` restricts to what is payable now, which is
@@ -257,7 +258,7 @@ class FreePlayer(BasePlayer):
         """
         st = self.st
         my_eye = st.eye_z()
-        best = None
+        out = []
         for tile in views.band():  # candidates need the down-look plane
             base = self._stance_base(tile)
             if base is None:
@@ -278,9 +279,40 @@ class FreePlayer(BasePlayer):
                 if not self._landing_holds(tile, k):
                     continue  # the destination's cone, not ours, decides this
             score = (gain / cost, fuel)  # height per unit of a scarce, finite purse
-            if best is None or score > best[0]:
-                best = (score, tuple(tile), k, cost, gain)
-        return None if best is None else best[1:]
+            out.append((score, tuple(tile), k, cost, gain))
+        return out
+
+    def _best_climb(self, views, affordable):
+        """(tile, k, cost, gain) for the biggest eye gain on offer, or None."""
+        cands = self._climb_candidates(views, affordable)
+        if not cands:
+            return None
+        top = max(c[0] for c in cands)
+        tied = [c for c in cands if c[0] == top]
+        if len(tied) > 1 and affordable and not self.rollout:
+            return self._settle_tie(tied)
+        return tied[0][1:]
+
+    def _settle_tie(self, tied):
+        """Play each tied climb out to the END and keep one that wins.
+
+        When the score cannot separate the candidates it holds no information about
+        them, and no deeper VALUATION helps -- ls110's winning hop is 40 actions from
+        its payoff.  What separates them is the outcome, so take the outcome: a fork
+        plays the fixed ladder, which is a whole board in seconds, and ties are rare.
+        """
+        for cand in tied:
+            _score, tile, k, _cost, _gain = cand
+            twin = self._fork()
+            try:
+                if not twin._build_and_mount(_Views(twin.st), tile, k):
+                    continue
+                twin.run(max_actions=ROLLOUT_ACTIONS)
+            except Exception:  # pylint: disable=broad-except
+                continue
+            if actions.won(twin.st):
+                return cand[1:]
+        return tied[0][1:]
 
     def _mount(self, views):
         """Stand on a robot we already own that is higher than we are.
