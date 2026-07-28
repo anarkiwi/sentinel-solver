@@ -40,6 +40,8 @@ board offline.
 |------|------|------|
 | Model | `sentinel/` | standalone bit-exact forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). [docs/simulator.md](docs/simulator.md) |
 | A\* player | `sentinel/astar_player.py` | weighted best-first search that plans a winning line and executes it. [docs/astar_player.md](docs/astar_player.md) |
+| Phase player | `sentinel/freeplayer.py` | freedom first, then convert: no cost model, gaps found by forward simulation. [docs/phase_player.md](docs/phase_player.md) |
+| Landscape analyzer | `sentinel/landscan.py` | enemy count and terrain shape per landscape, to match one board to another. |
 | Stance planner | `sentinel/stancegraph.py`, `sentinel/stance_player.py` | the board's geometry as a graph: routes are shortest paths, not searched. [docs/stance_planner.md](docs/stance_planner.md) |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer`. [docs/player.md](docs/player.md) |
 | Policy + tuning | `sentinel/policy.py`, `sentinel/tune.py` | the player's tunable choices as one env-addressable schema, fitted against ground truth. [docs/tuning.md](docs/tuning.md) |
@@ -70,6 +72,7 @@ The live driver additionally needs Docker and the `anarkiwi/asid-vice:latest` im
 - [simulator.md](docs/simulator.md) — the model's modules and golden validation.
 - [astar_player.md](docs/astar_player.md) — search, candidate generators, cost model.
 - [stance_planner.md](docs/stance_planner.md) — the stance graph, why the A\* frontier empties on ls335, and the layered replacement.
+- [phase_player.md](docs/phase_player.md) — the phase player: freedom first, then convert; the planner that wins ls335 from entry.
 - [ls335_minimal.md](docs/ls335_minimal.md) — the smallest ls335 board the stance planner loses: 3 enemies, and where it dies.
 - [fast_iteration.md](docs/fast_iteration.md) — checkpointing a stalled tick so a planner change is judged in milliseconds, not a board replay.
 - [player.md](docs/player.md) — the reactive player: priorities, threat model, timing.
