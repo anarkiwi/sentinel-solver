@@ -426,9 +426,9 @@ class StanceGraph:
             )
             * fuel_bias
         )
-        # best[node, e]: fewest hops to node holding exactly e; a state is dominated when a settled one there holds >= energy in <= hops
+        # best[node][e]: cost of the cheapest settled state at node holding >= e, so the domination test (some settled state there is no dearer AND no poorer) is one read instead of a suffix scan
         ks = [k for _t, k in self.stances]
-        best = np.full((n + 1, cap + 1), math.inf)
+        best = [[math.inf] * (cap + 1) for _ in range(n + 1)]
         parent = (
             {}
         )  # push id -> (previous id, stance): a float cost makes a poor dict key
@@ -439,9 +439,15 @@ class StanceGraph:
             spent, _, node, have, pid = heapq.heappop(heap)
             if node in goals:
                 return Route(self._unwind(parent, pid), have, target, spent)
-            if best[node, have:].min() <= spent:
+            row = best[node]
+            if row[have] <= spent:
                 continue
-            best[node, have] = spent
+            for e in range(
+                have, -1, -1
+            ):  # a settled state also serves every poorer one
+                if row[e] <= spent:
+                    break
+                row[e] = spent
             if node == n:
                 here, here_k = start_tile, start_k
                 succ = np.flatnonzero(start_seen[self._cols])
@@ -465,7 +471,7 @@ class StanceGraph:
                 else:
                     edge = priced.get(j, build_frames(ks[j])) + wait(j, spent) + dry[j]
                 ahead = spent + edge
-                if best[j, got:].min() <= ahead:
+                if best[j][got] <= ahead:
                     continue
                 counter += 1
                 parent[counter] = (pid, j)
