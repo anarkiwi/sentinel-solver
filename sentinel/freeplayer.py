@@ -13,7 +13,7 @@ from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _View
 
 WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
-BUILD_FRAMES = {"boulder": 500.0, "robot": 620.0, "transfer": 480.0, "absorb": 420.0}
+HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 
 
 class FreePlayer(BasePlayer):
@@ -63,6 +63,27 @@ class FreePlayer(BasePlayer):
                 return False
         return False
 
+    def _span(self, verb, view, tile):
+        """What ``verb`` on ``tile`` will really take: its aim plus its settle.
+
+        Priced from the view the executor will actually fire, so the gap asked for is
+        the gap the action needs -- no invented duration.
+        """
+        return self._step_aim_frames(verb, view) + self._settle(
+            verb, view, self._settle_eye(verb, tile)
+        )
+
+    def _hop_span(self, tile, k):
+        """Frames a whole ``k``-boulder hop plus one act on arrival will occupy."""
+        view = self._views_now().get(tile, band=True)
+        if view is None:
+            return math.inf
+        per = {v: self._span(v, view, tile) for v in HOP_VERBS + ("absorb",)}
+        return k * per["boulder"] + per["robot"] + per["transfer"] + per["absorb"]
+
+    def _views_now(self):
+        return _Views(self.st)
+
     def _do(self, verb, tile, views, cost=0, band=False):
         """Fire ``verb`` at ``tile``, in a gap if one can be had, at once if not.
 
@@ -73,7 +94,7 @@ class FreePlayer(BasePlayer):
         view = views.get(tile, band=band)
         if view is None or self.st.energy - cost < 0:
             return False
-        if not self._wait_for_gap(BUILD_FRAMES.get(verb, 420.0)):
+        if not self._wait_for_gap(self._span(verb, view, tile)):
             if not self._under_fire():
                 return False  # no gap and no pressure: this action is not worth it
         return self._fire(verb, tile, view)
@@ -207,12 +228,9 @@ class FreePlayer(BasePlayer):
         slot = actions.create(probe, mm.T_ROBOT, tile)
         if slot is None or not actions.transfer(probe, slot):
             return False
-        span = (
-            k * BUILD_FRAMES["boulder"]
-            + BUILD_FRAMES["robot"]
-            + BUILD_FRAMES["transfer"]
-            + BUILD_FRAMES["absorb"]
-        )  # the whole hop plus one act on arrival, not a fragment of it
+        span = self._hop_span(tile, k)  # the whole hop plus one act, not a fragment
+        if span == math.inf:
+            return False
         enemies.advance_frames(probe, int(span))
         return probe.energy > 0 and not actions.player_dead(probe)
 
@@ -300,9 +318,12 @@ class FreePlayer(BasePlayer):
         probe = self.st.clone()
         if not actions.transfer(probe, slot):
             return False
-        enemies.advance_frames(
-            probe, int(BUILD_FRAMES["transfer"] + BUILD_FRAMES["absorb"])
-        )
+        tile = tuple(self.st.tile_of(slot))
+        view = self._views_now().get(tile, band=True)
+        if view is None:
+            return False
+        span = self._span("transfer", view, tile) + self._span("absorb", view, tile)
+        enemies.advance_frames(probe, int(span))
         return probe.energy > 0 and not actions.player_dead(probe)
 
     def _establish(self, views, price):
@@ -349,10 +370,13 @@ class FreePlayer(BasePlayer):
             ):
                 return False
             views = _Views(self.st)
-        if (
-            not self._wait_for_gap(BUILD_FRAMES["robot"] + BUILD_FRAMES["transfer"])
-            and not self._under_fire()
-        ):
+        cap_view = views.get(tile, band=True)
+        if cap_view is None:
+            return False
+        cap_span = self._span("robot", cap_view, tile) + self._span(
+            "transfer", cap_view, tile
+        )
+        if not self._wait_for_gap(cap_span) and not self._under_fire():
             return False  # do not buy a cap we cannot climb onto
         if not self._do(
             "robot", tile, views, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], band=True

@@ -1,7 +1,7 @@
 """The phase player's rules, pinned on the cheapest board that exercises them."""
 
 from sentinel import actions, enemies, memmap as mm
-from sentinel.freeplayer import BUILD_FRAMES, FreePlayer
+from sentinel.freeplayer import FreePlayer
 from sentinel.game import Game
 from sentinel.playerbase import _Views
 
@@ -16,7 +16,7 @@ def test_an_unseen_body_needs_no_drain_simulation():
     st = player.st
     for slot in enemies.enemy_slots(st):
         st.obj_flags[slot] = 0x80  # no enemies at all -> nothing can see us
-    assert not player._drained_over(BUILD_FRAMES["robot"])
+    assert not player._drained_over(600.0)
     assert not player._under_fire()
 
 
@@ -25,7 +25,7 @@ def test_waiting_is_refused_while_under_fire():
     player = _player()
     player._under_fire = lambda: True
     player._drained_over = lambda _frames: True
-    assert not player._wait_for_gap(BUILD_FRAMES["robot"])
+    assert not player._wait_for_gap(600.0)
 
 
 def test_the_sentinel_is_not_taken_without_the_endgame_banked():
