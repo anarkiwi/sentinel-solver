@@ -8,7 +8,7 @@ geometric, not read off a flat board -- see docs/architecture.md.
 import numpy as np
 import pytest
 
-from sentinel import actions, landtable as lt, los, memmap as mm, terrain
+from sentinel import actions, landtable as lt, los, memmap as mm, playerbase, terrain
 
 pytestmark = pytest.mark.skipif(
     not los._HAVE_JIT, reason="numba absent: landtable queries defer to the exact path"
@@ -135,6 +135,83 @@ def test_landable_view_matches_exact(new_state, kind):
             h, v, cx, cy = los._meta_at(int(rays.min()), *grids)
             want = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
         assert lt.landable_view(st, tile, slot, grids=grids) == want, tile
+
+
+def _buildable(st, want):
+    """The ``want`` bare, non-sloping tiles nearest the player -- where a create lands."""
+    px, py = st.player_xy()
+    near = []
+    for x in range(mm.N):
+        for y in range(mm.N):
+            b = terrain.tile_byte(st, x, y)
+            if b < mm.OBJECT_TILE and not b & 0x0F:
+                near.append((abs(x - px) + abs(y - py), (x, y)))
+    near.sort()
+    return [t for _d, t in near[:want]]
+
+
+def _hop(st):
+    """Stack boulder+boulder+robot on the nearest buildable tile and transfer onto it."""
+    st.energy = mm.ENERGY_MASK
+    tile = _buildable(st, 1)[0]
+    slot = None
+    for otype in (mm.T_BOULDER, mm.T_BOULDER, mm.T_ROBOT):
+        slot = actions.create(st, otype, tile)
+    assert slot is not None and actions.transfer(st, slot)
+
+
+def _midgame(new_state, number=321):
+    """A board partway through a game: three hops (a raised eye on an object tile, a
+    player slot that is not the starting one) plus loose boulders around it."""
+    st = new_state(number)
+    for _ in range(3):
+        _hop(st)
+    st.energy = mm.ENERGY_MASK
+    for tile in _buildable(st, 8):
+        actions.create(st, mm.T_BOULDER, tile)
+    return st
+
+
+@pytest.mark.parametrize("kind", ["plane", "band"])
+def test_landable_view_matches_sweep_every_tile_midgame(new_state, kind):
+    """EVERY tile of a MID-GAME board agrees with that lattice's own full sweep.
+
+    Start-state sampling never reaches this case: the surface bracket the candidate
+    filter rests on is exact on bare terrain and only approximate over object stacks,
+    which exist only after the player has built.
+    """
+    st = _midgame(new_state)
+    slot = st.player
+    grids = lt.lattice(kind == "plane")
+    land = _landings(st, slot, grids)
+    for x in range(mm.N):
+        for y in range(mm.N):
+            rays = land.get((x, y))
+            want = None
+            if rays is not None:
+                h, v, cx, cy = los._meta_at(int(rays.min()), *grids)
+                want = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+            assert lt.landable_view(st, (x, y), slot, grids=grids) == want, (x, y)
+
+
+def test_views_answer_from_the_board_pinned_at_the_first_query(new_state):
+    """``_Views`` answers every later query from the board pinned at its first one.
+
+    A caller builds and transfers while holding the instance, so a per-tile march on the
+    LIVE state would disagree with the sweep dict the same instance hands out -- both
+    ``get`` and the whole-sweep readers must see one board.
+    """
+    st = _midgame(new_state)
+    views = playerbase._Views(st)
+    tiles = list(_landings(st, st.player, lt.lattice(True)))[:24]
+    tiles += [(0, 0), (30, 30), (2, 3)]
+    views.band_get(tiles[0])  # touch both lattices: each pins at ITS first query
+    before = {t: views.get(t, band=True) for t in tiles}
+    assert any(v is not None for v in before.values())
+    _hop(st)  # the caller acts: new object tiles, a raised eye, a new observer slot
+    assert {t: views.get(t, band=True) for t in tiles} == before
+    plane, band = views.primary(), views.band()
+    assert {t: plane.get(t, band.get(t)) for t in tiles} == before
 
 
 def test_coarse_lattice_is_the_landset_lattice():
