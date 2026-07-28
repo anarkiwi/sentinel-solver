@@ -1155,10 +1155,11 @@ class AStarPlayer(BasePlayer):
             tile_ok = priced is not None and window >= priced[1] + margin
             if self._hop_audit is not None:
                 self._record_hop_gate(tile, k, exposed, tile_ok, priced)
-            if tile_ok and _SOURCE_GATE:  # the body stands HERE for the whole build
-                tile_ok = self._affords(
-                    2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], priced[0], window=body
-                )
+            if tile_ok and _SOURCE_GATE:  # the body stands HERE, billed per seer
+                spend = 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+                budget = priced[0] + self._margin()
+                drains = max(self._drains_in(body, budget), self._drain_units(budget))
+                tile_ok = st.energy - spend - drains >= self._reserve()
             if tile_ok:
                 out.append((tile, k, window))
                 if len(out) == _TOP_HOPS:
