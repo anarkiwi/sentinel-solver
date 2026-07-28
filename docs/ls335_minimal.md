@@ -104,6 +104,36 @@ with all three alive.
 The guard is measured **byte-identical** on ls0 / ls42 / ls110 under both planners, so
 it never fires there at all; on this board it fires at exactly ticks 24 and 25.
 
+## What exposure actually costs
+
+A body that stays in an exposed cell is drained **all the way down**. Measured on the
+4-enemy board's stall stance with the byte-exact simulator, standing still and taking no
+action:
+
+```
+first drain f=150, then 275, 375, 500, 625, 750, 875 -- gap 125 f
+energy 13 -> 0 in 875 frames
+```
+
+`DRAIN_DELAY` ($0C20) is 449.6 f, but that is the FIRST-seen-to-first-drain countdown of
+ONE enemy. Four cones held that body, and $178C returns before the $17F9 rotate while a
+target is still visible, so none of them rotated off and each re-armed ($1A31). The
+aggregate cadence is `DRAIN_DELAY / n_seers` = 112 f against the 125 f measured.
+
+`_drains_in` priced this as a single stream off the `min` window and so charged ~1/N of
+the truth. `_drain_units` bills the rate from the first onset times the seer count:
+
+| span | old model | corrected | ROM |
+|---|---|---|---|
+| 150 f | 1 | 1 | 1 |
+| 500 f | 1 | 4 | 4 |
+| 841 f (that board's build) | 2 | 7 | 6 |
+| 875 f | 2 | 7 | 7 |
+
+Three exact and one over by a unit — over-charging is the safe direction for a gate.
+This is also why difficulty climbs so steeply with enemy count: the cost of standing
+still is linear in the number of cones on you, and the old model did not see it.
+
 ## Determinism
 
 Every number here is bounded by **node budget only** (`--node-budget 2000`,

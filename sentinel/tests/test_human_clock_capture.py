@@ -24,10 +24,10 @@ def _img_with(objs):
     return mem
 
 
-def _record(mem, clock=None, bracket=None):
+def _record(mem, clock=None, bracket=None, energy=10):
     rec = {
         "player": {"slot": 62, "x": 5, "y": 5, "z": 3, "zf": 0, "hang": 0, "vang": 0},
-        "energy": 10,
+        "energy": energy,
         "do_los": 0,
         "cursor": [40, 40],
         "mem": base64.b64encode(bytes(mem[:0x0D00])).decode("ascii"),
@@ -71,7 +71,10 @@ def test_extract_threads_enemy_clock(tmp_path):
     pre = _img_with({62: (5, 5, mm.T_ROBOT)})  # no enemy -> the create is kept
     post = _img_with({62: (5, 5, mm.T_ROBOT), 5: (7, 7, mm.T_BOULDER)})
     log = _write_log(
-        tmp_path, _record(pre, clock=_CLOCK), _record(post, _CLOCK, "post")
+        tmp_path,
+        _record(pre, clock=_CLOCK),
+        # the boulder is PAID FOR: _extract._paid_for drops a create that cost nothing
+        _record(post, _CLOCK, "post", energy=10 - mm.ENERGY_IN_OBJECTS[mm.T_BOULDER]),
     )
 
     data = _extract.extract(log, entered_code=0, seed=0)
@@ -86,7 +89,11 @@ def test_extract_omits_clock_for_legacy_logs(tmp_path):
     """A watch_play/2 log (no ``enemies``) still extracts, without the new fields."""
     pre = _img_with({62: (5, 5, mm.T_ROBOT)})
     post = _img_with({62: (5, 5, mm.T_ROBOT), 5: (7, 7, mm.T_BOULDER)})
-    log = _write_log(tmp_path, _record(pre), _record(post, bracket="post"))
+    log = _write_log(
+        tmp_path,
+        _record(pre),
+        _record(post, bracket="post", energy=10 - mm.ENERGY_IN_OBJECTS[mm.T_BOULDER]),
+    )
 
     ev = _extract.extract(log, entered_code=0, seed=0)["events"][0]
     assert "enemy_clock" not in ev and "cooldown_bresenham" not in ev

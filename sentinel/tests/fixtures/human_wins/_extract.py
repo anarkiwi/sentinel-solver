@@ -145,6 +145,19 @@ def _is_enemy_spawn(event, seed):
     return view is None
 
 
+def _paid_for(event, post_energy):
+    """Whether the player's own energy paid for this create ($1BBF spends first).
+
+    The LOS test alone is too weak: a discharge lands on a RANDOM tile ($1238), and
+    among 1024 tiles plenty are aimable, so enemy trees were emitted as player builds
+    (19 of them on ls335).  A create the player made always debits
+    ``ENERGY_IN_OBJECTS[otype]``; an enemy spawn costs the player nothing.
+    """
+    if event["verb"] != "create":
+        return True
+    return event["energy"] - post_energy >= mm.ENERGY_IN_OBJECTS[event["otype"]]
+
+
 def _occupied(mem):
     """{slot: [x, y, z_height, z_frac, type, flags]} for every occupied slot."""
     out = {}
@@ -239,7 +252,9 @@ def extract(path, entered_code, seed):
             candidate["cooldown_gate"] = prev_rec.get("cooldown_gate")
         # Fold the change into the world baseline regardless (it really happened);
         # emit it as a player event only if it is not an enemy-spawned object.
-        if not _is_enemy_spawn(candidate, seed):
+        if not _is_enemy_spawn(candidate, seed) and _paid_for(
+            candidate, post["energy"]
+        ):
             events.append(candidate)
         prev_rec = post
         prev_objs = post_objs
