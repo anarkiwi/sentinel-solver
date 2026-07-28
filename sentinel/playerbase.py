@@ -39,6 +39,9 @@ SAFE_FRAMES = 250  # window below which the current tile is "urgent"
 WAIT_FRAMES = 60  # idle advance when no action is available
 EYE_EPS = 0.1  # minimum eye-height progress for a climb move
 DRAIN_DELAY = 120.0 * UNIT_FRAMES  # $0C20: first-seen -> first drain countdown
+DRAIN_STEP = (
+    enemies.UPDATE_COOLDOWN_DRAIN * UNIT_FRAMES
+)  # $17F1 re-arm: gap between drains on a HELD target, measured 125 f
 MEANIE_SPAWN_FRAMES = enemies.UPDATE_COOLDOWN_MEANIE_MADE * UNIT_FRAMES  # $1869 hold
 MEANIE_ARM_FRAMES = (
     (128 // enemies.MEANIE_ROTATE_STEP)
@@ -566,25 +569,26 @@ class BasePlayer:
     def _drain_units(self, budget, tile=None, exposed=None):
         """Energy `budget` frames of exposure costs a body that STAYS there.
 
-        Once a cone holds a target it keeps it ($178C returns before the $17F9 rotate)
-        and $1A31 re-arms after every drain, so exposure is an aggregate RATE that runs
-        until the body leaves: ``n_seers / DRAIN_DELAY`` from the first onset, not one
-        stream and not each seer on its own (unreached) onset clock.
+        `DRAIN_DELAY` is only the FIRST drain.  A holder keeps its target while it stays
+        visible ($178C returns before the $17F9 rotate) and re-arms to
+        `UPDATE_COOLDOWN_DRAIN`, so the body is re-drained every `DRAIN_STEP` until it
+        leaves -- SEER-INDEPENDENT: one holder is enough and more do not speed it up.
 
-        Measured standing under four cones: first drain 150 f, then every 125 f
-        (= DRAIN_DELAY / 4), energy 13 -> 0 in 875 f.  This law gives 6 over the 841 f
-        that board's build takes and 7 over 875 f; the ROM does 6 and 7.
+        Measured at the ls335 4-enemy stall, one seer and two seers alike: drains at
+        150, 275, 375, 500, 625, 750, 875 f, gap 125 against DRAIN_STEP 112.4, energy
+        13 -> 0 in 875 f.
         """
         if tile is None:
             tile = self.st.player_xy()
         if exposed is None:
             exposed = self._exposing_enemies(tile)
-        seers = sum(1 for _, _, full in exposed if full)
         window = self._gaze_window(tile, exposed=exposed)
-        if not seers or budget <= window or window == math.inf:
-            return self._drains_in(self._meanie_window(tile, exposed), budget)
-        rate = int(math.floor((budget - window) * seers / DRAIN_DELAY)) + 1
-        return max(rate, self._drains_in(self._meanie_window(tile, exposed), budget))
+        meanie = self._drains_in(self._meanie_window(tile, exposed), budget)
+        if not any(full for _, _, full in exposed) or budget <= window:
+            return meanie
+        if window == math.inf:
+            return meanie
+        return max(meanie, int(math.floor((budget - window) / DRAIN_STEP)) + 1)
 
     def _affords_drains(self, n_drains, cost=0):
         """Whether the player can hand `n_drains` energy to the enemies on top of an
