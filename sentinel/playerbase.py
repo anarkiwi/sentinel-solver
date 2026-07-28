@@ -563,6 +563,29 @@ class BasePlayer:
             return 0
         return int(math.ceil((budget - window) / DRAIN_DELAY))
 
+    def _drain_units(self, budget, tile=None, exposed=None):
+        """Energy `budget` frames of exposure costs, billed PER SEER.
+
+        ``_gaze_window`` is a min: the time to the FIRST drain from anyone.  Charging
+        one stream off it prices N simultaneous cones as one, because $16E6 considers
+        each enemy separately and each re-arms its own $1A31 countdown -- so a body two
+        cones see is drained twice a cycle, not once.
+        """
+        if tile is None:
+            tile = self.st.player_xy()
+        if exposed is None:
+            exposed = self._exposing_enemies(tile)
+        half = FOV_HALF + FOV_MARGIN
+        target = self._top(tile)
+        units = 0
+        for e, angle_hi, full in exposed:
+            if full:
+                units += self._drains_in(
+                    self._drain_clock(e, angle_hi, half, target), budget
+                )
+        meanie = self._meanie_window(tile, exposed)
+        return max(units, self._drains_in(meanie, budget))
+
     def _affords_drains(self, n_drains, cost=0):
         """Whether the player can hand `n_drains` energy to the enemies on top of an
         action costing `cost` and stay alive above the survival floor (`_reserve`).
