@@ -73,10 +73,36 @@ because the drain outruns the reclaims, and `_wait` is billed 1 energy per
 dies at f=12035.
 
 The `_pick_hop` tally at death reads "98 of 104 landable tiles killed by no viable k",
-but that is **downstream of E=0, not the cause**. The cause is upstream: a hop was
-committed that lands the body with nothing left to leave on. The first question for
-any fix is therefore why the climb onto `(18,24)` was permitted, not why the tiles
-after it were refused — the pre-hop tick is in the checkpoint corpus for exactly that.
+but that is **downstream of E=0, not the cause**.
+
+## The cause, and the fix
+
+The checkpoint corpus ([fast_iteration.md](fast_iteration.md)) settles it, and the
+answer is not the `(18,24)` landing — that one is survivable, and the run does refuel
+off it from E=0 to E=4. Plan provenance across the series shows **one 55-step plan
+committed at tick 14** and executed step by step. Then:
+
+| tick | E | plan's next group | costs | outcome |
+|---|---|---|---|---|
+| 24 | 4 | `boulder`+`robot`+`transfer` on `(26,21)` | 5 | boulder laid anyway, E -> 2 |
+| 25 | 2 | `robot`+`transfer` on `(26,21)` | 3 | unaffordable; pedestal stranded |
+
+A hop is **atomic** — boulders, robot, transfer — but the executor commits it one
+keypress at a time against energy that has drifted since the plan was made. Entering a
+group two short spends the boulder, strands a half-built pedestal with the body on it,
+and every later search returns a scavenge.
+
+`AStarPlayer._group_need` prices the remaining group and `_tick` re-plans rather than
+entering one it can no longer finish. It cannot spin: a fresh plan's head is always
+affordable, because `_pick_hop` gates on exactly that.
+
+The re-plan the guard forces refuels first and then hops — `absorb, absorb,
+boulder (26,23), robot, transfer, absorb, absorb, absorb (12,10)` — and the board is
+**won in 52 actions, E=8, all three enemies absorbed**, where it previously died at E=0
+with all three alive.
+
+The guard is measured **byte-identical** on ls0 / ls42 / ls110 under both planners, so
+it never fires there at all; on this board it fires at exactly ticks 24 and 25.
 
 ## Determinism
 

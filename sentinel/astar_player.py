@@ -80,6 +80,13 @@ _NO_VIEW = object()  # cone-memo miss sentinel (a cached view may legitimately b
 _COARSE_CX = landtable.COARSE_CX  # landset sights-cursor grid: the 1px window 2:1
 _COARSE_CY = landtable.COARSE_CY  # subsampled; _landable queries the SAME lattice
 
+# the creates one atomic hop spends, by verb; "transfer" closes a group and is free
+_GROUP_COST = {
+    "boulder": mm.ENERGY_IN_OBJECTS[mm.T_BOULDER],
+    "robot": mm.ENERGY_IN_OBJECTS[mm.T_ROBOT],
+    "transfer": 0,
+}
+
 GATE_BODY = "body"  # gated on the PLAYER'S body window (_hot): absorbs
 GATE_TILE = "tile"  # gated on the TARGET TILE's window (_drain_gate): builds/transfers
 
@@ -260,6 +267,12 @@ class AStarPlayer(BasePlayer):
             self._hyperspace()
             self._pi += 1
             return
+        if self._group_need() > self.st.energy:
+            self.plan = self._search()  # a hop is atomic: never half-build one
+            self._pi = 0
+            if not self.plan:
+                self._wait()
+            return
         view = self._view_for(tile)
         if view is not None and self._plan_step_stale(step, view):
             self._restale((verb, tuple(tile)))
@@ -312,6 +325,25 @@ class AStarPlayer(BasePlayer):
             self.plan, self._pi = plan, 0
             return
         self._wait()  # let the enemy cone rotate (react acts once it is on us)
+
+    def _group_need(self):
+        """Energy the plan's current build group still needs: creates up to its transfer.
+
+        A hop is ATOMIC -- boulders, robot, transfer -- but the executor commits it one
+        keypress at a time against energy that has drifted since the plan was made, so a
+        group entered short strands a half-built pedestal and the body with it.  A fresh
+        plan's head is always affordable (``_pick_hop`` gates on it), so re-planning on
+        this cannot spin.  0 when the next step is not a build.
+        """
+        if not self.plan:
+            return 0
+        need = 0
+        for step in self.plan[self._pi :]:
+            cost = _GROUP_COST.get(step.verb)
+            if cost is None:
+                break
+            need += cost
+        return need
 
     def _plan_step_stale(self, step, view):
         """Whether the next planned ``PlanStep`` needs a fresh search before firing. The

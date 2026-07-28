@@ -413,3 +413,10 @@ on, `(18,24)` at eye 8.375, having transferred onto it at E=0.
 That board is small enough to checkpoint and re-enter directly, which puts a
 `_pick_hop` change 210 ms from a verdict instead of a 94 s replay
 ([fast_iteration.md](fast_iteration.md)).
+
+It is now **won**, in 52 actions with E=8 and all three enemies absorbed. The corpus
+localised the loss to a plan-vs-execution gap rather than to the gaze forecast: a hop is
+atomic, but the executor committed one keypress at a time against energy that had
+drifted since the plan was made, laying a boulder for a pedestal it could no longer cap.
+`_group_need` re-plans instead of entering a group it cannot finish, and is measured
+byte-identical on ls0/42/110 under both planners.
