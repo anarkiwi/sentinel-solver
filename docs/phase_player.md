@@ -105,14 +105,15 @@ forks play `rollout=True` — a fixed policy order — so a fork's future is not
 the top level will actually have. Deepening lookahead from 4 to 8 to 16 changes nothing
 on ls110 (measured), which rules out depth as the cause and leaves policy mismatch.
 
-Three global rules were tried against this trap and each traded boards rather than
-fixing it, so none is committed:
+Four rules were tried against this trap and none is committed — each either traded
+boards or could not see it:
 
 | rule tried | result |
 |---|---|
 | absorb only if its value exceeds the drain over its own span | ls110 won, ls321 + ls373 lost — 6/8 |
 | under fire, let escape pre-empt harvesting | no change anywhere: at the stall there is no escape to pre-empt |
 | make `_supply`'s affordability test agree with `_best_climb`'s | ls42 + ls110 lost — 6/8 |
+| rank a rollout that ends stuck below one that does not | no change: four ticks out the body is not yet stuck by any local measure |
 
 The first of those also **disproves an earlier claim in this document**, that `_refuel`
 harvests "at a loss" under a cone. It cannot: idling through the same span costs the
