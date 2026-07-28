@@ -2,7 +2,7 @@
 
 One keyboard notch clears the strip buffer, adds its $9925 delta, runs ONE plot_world
 ($2625) at that INTERMEDIATE angle (not the destination), then fixes the residue and
-queues the notch's scroll steps. See docs/render_cost.md for the derivation.
+queues the notch's scroll steps. See docs/architecture.md for the derivation.
 """
 
 import os

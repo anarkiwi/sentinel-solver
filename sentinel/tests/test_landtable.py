@@ -2,7 +2,7 @@
 
 Everything rests on one property: the candidate set for a cell CONTAINS every lattice
 ray the exact sweep lands there.  Outer-ring tiles are asserted too -- soundness here is
-geometric, not read off a flat board -- see docs/landtable.md.
+geometric, not read off a flat board -- see docs/architecture.md.
 """
 
 import numpy as np

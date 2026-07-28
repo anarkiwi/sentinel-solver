@@ -2,7 +2,7 @@
 
 The game state is one 64 KB ``bytearray``, so a checkpoint is that image plus the
 player scalars it does not carry; the rest of a player is cache keyed on a state
-signature and rebuilds on demand.  See [fast_iteration.md](../../docs/fast_iteration.md).
+signature and rebuilds on demand.  See [architecture.md](../../docs/architecture.md).
 """
 
 import copy

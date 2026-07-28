@@ -96,7 +96,7 @@ def test_transfer_charged_settles_clear_the_projector_fixed_floor():
     reason="The per-scene transfer settle model (viewpoint_replot_frames = "
     "TUNE_TRANSFER_FRAMES + SETTLE_FIXED_FRAMES + REPLOT_PASSES*render_cost) is "
     "biased LOW by 27.30 f with rms residual 46.8 f against measured mean "
-    "376.14 f (sd 65.14, range 270..474, n=7). Open item: docs/plan_fidelity.md "
+    "376.14 f (sd 65.14, range 270..474, n=7). Open item: docs/open_items.md "
     "open problem 1 (render_cost-class scene model).",
 )
 def test_transfer_settle_model_is_unbiased_and_within_scatter():

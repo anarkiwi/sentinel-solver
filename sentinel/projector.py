@@ -547,7 +547,7 @@ C_EXAMINE = float(os.environ.get("RENDER_C_EXAMINE", "1737"))
 PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b) edge/row
 PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))  # term (b) span_fill byte
 
-# term (c) plot_object ($8533) base floor (docs/render_cost.md); object fill = residual.
+# term (c) plot_object ($8533) base floor (docs/architecture.md); object fill = residual.
 C_VERTEX = float(os.environ.get("RENDER_C_VERTEX", "2200"))  # transform_vertex trig
 C_PREP_CALL = float(os.environ.get("RENDER_C_PREP_CALL", "625"))  # off-band prepare
 SECTIONS = int(os.environ.get("RENDER_SECTIONS", "2"))  # wide play buffer ($2AAB)
@@ -626,7 +626,7 @@ def _exact_render_cost(state, h, v, observer):
 
 
 def render_cost(state, view, observer=None, mode=PLAY_MODE):
-    """One plot_world pass in PAL frames (docs/render_cost.md): examine floor +
+    """One plot_world pass in PAL frames (docs/architecture.md): examine floor +
     terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
     buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
     ``RENDER_COST_BACKEND=py65`` (ROM present) replaces the proxy for the play buffer.
@@ -650,7 +650,7 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE):
     return memo(_COST_CACHE, (scene_key(state), obs, h, v, mode), _CACHE_MAX, make)
 
 
-# Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/render_cost.md).
+# Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/architecture.md).
 REPLOT_PASSES = float(os.environ.get("RENDER_REPLOT_PASSES", "2"))
 # wait_for_end_of_tune ($35D5): #$19 tune ($1B82/$AB69) = FIXED 96 note-hold frames ($0CDF@$9630), == #$0 TUNE_FRAMES.
 TUNE_TRANSFER_FRAMES = float(os.environ.get("TUNE_TRANSFER_FRAMES", "96"))
@@ -659,7 +659,7 @@ SETTLE_FIXED_FRAMES = float(os.environ.get("SETTLE_FIXED_FRAMES", "176"))
 
 
 def viewpoint_replot_frames(state, view, observer=None):
-    """Transfer/viewpoint-change settle in frames (docs/render_cost.md): fixed tune
+    """Transfer/viewpoint-change settle in frames (docs/architecture.md): fixed tune
     wait + fixed $245B/$3700/fill/status foreground + ``REPLOT_PASSES`` plot_world
     passes, all seen from ``observer`` (the POST-transfer eye $0C63; default player).
     Live $9630 settle 259-460f; median abs error <15%
