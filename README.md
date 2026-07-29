@@ -46,7 +46,7 @@ here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sent
 | Model | `sentinel/` | standalone forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). Transition primitives are byte-for-byte against the 6502; see [architecture.md](docs/architecture.md) for what is exact and what is not |
 | Phase player | `sentinel/phase_player.py` | the default player: freedom first, then convert. Wins all eight measured boards |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer` |
-| Landscape analyzer | `sentinel/landscan.py` | enemy count and terrain shape per landscape, to match one board to another |
+| Landscape atlas | `sentinel/atlas.py`, `sentinel/statecache.py` | per-landscape metrics (enemies, energy, terrain shape) over a cache of generated boards; `--like` matches one board to another |
 | Driver | `driver/` | boot, enter a landscape, run memory-verified live keyboard operations (aim → fire → verify), record. Imports only `sentinel/` |
 | Instrument | `driver/instrument.py`, `sentinel/statecmp.py` | frame-locked sim-vs-emulator divergence: seed the sim from the live image, step both one frame at a time, report the first disagreement |
 

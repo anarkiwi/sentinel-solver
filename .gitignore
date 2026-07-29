@@ -19,6 +19,8 @@ __pycache__/
 /out/*.jsonl
 # stance-graph sweeps: a pure function of the tile map, rebuilt in ~40 s
 /out/stancegraph/
+# landscape atlas state cache: generated boards, keyed by generator signature
+/out/atlas/
 
 # editor swap files
 *.swp
