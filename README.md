@@ -71,8 +71,9 @@ from https://github.com/anarkiwi/asid-vice).
 ## Docs
 
 - [gameplay.md](docs/gameplay.md) — the game's rules and mechanics, ROM-derived spec.
-- [architecture.md](docs/architecture.md) — how the game works, a table of the ROM routines,
-  how the model mirrors them, then the subsystems: landability filter, render-cost model,
+- [architecture.md](docs/architecture.md) — the landscape's geometry and the constraints it
+  imposes, the game's state machines, one table mapping every ROM routine to its model
+  function and validation, then the subsystems: landability filter, render-cost model,
   driver, instrument, measurement tooling.
 - [players.md](docs/players.md) — the phase player and the reactive greedy player: the rules
   that decide a move, the phases, current results.
