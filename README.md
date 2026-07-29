@@ -26,14 +26,14 @@ python -m driver.instrument 42          # race the model against the ROM, frame 
 
 | landscape | enemies | offline | live |
 |---|---|---|---|
-| 0 | 1 | 16 actions | — |
-| 42 | 2 | 34 | — |
-| 60 | 7 | 47 | — |
-| 110 | 3 | 50 | — |
-| 298 | 7 | 44 | — |
-| 321 | 7 | 53 | — |
-| 335 | 7 | 75 | **66 actions** |
-| 373 | 7 | lost (13) | — |
+| 0 | 1 | 16 | — |
+| 42 | 2 | 35 | — |
+| 60 | 7 | 46 | — |
+| 110 | 3 | 49 | — |
+| 298 | 7 | 32 | — |
+| 321 | 7 | 35 | — |
+| 335 | 7 | 58 | **66 actions** |
+| 373 | 7 | 45 | — |
 
 A landscape is identified by one number: the one a player types on the keypad. Every tool
 here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sentinel.isoview`

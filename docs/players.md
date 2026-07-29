@@ -79,27 +79,27 @@ does not depend on host load.
 
 | board | enemies | result | actions | energy left |
 |---|---|---|---|---|
-| ls0 | 1 | won | 16 | 2 |
-| ls42 | 2 | won | 34 | 4 |
-| ls110 | 3 | won | 50 | 10 |
-| ls60 | 7 | won | 47 | 4 |
-| ls298 | 7 | won | 44 | 15 |
-| ls321 | 7 | won | 53 | 3 |
-| ls373 | 7 | **lost** | 13 | 0 |
-| ls335 | 7 | won | 75 | 19 |
+| ls0 | 1 | won | 16 | 1 |
+| ls42 | 2 | won | 35 | 1 |
+| ls110 | 3 | won | 49 | 7 |
+| ls60 | 7 | won | 46 | 3 |
+| ls298 | 7 | won | 32 | 2 |
+| ls321 | 7 | won | 35 | 2 |
+| ls373 | 7 | won | 45 | 0 |
+| ls335 | 7 | won | 58 | 0 |
 
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
 
-**ls373 is lost to the arbitration horizon, not to the aim price.** `_arbitrate` scores each
-option on a fork that plays the FIXED rollout ladder, so `_breakout` — the right move at tick
-0, and the opening of a 63-action win — is judged by a greedy continuation that climbs to eye
-7.875 and starves inside the four ticks. One probe carries the whole board: forcing
-`_landing_holds((8,8), 0)` in that fork to False wins ls373 in 63 actions, and that landing is
-survivable (the body arrives with energy 1 on an unexposed tile and dies twelve actions later
-elsewhere), so no accurate probe refuses it. `ARBITRATE_ACTIONS` 2 wins all eight boards and
-the shipped 4 wins seven; the constant is not derived, so it is not tuned. Measurements in
-[open item 14](open_items.md#14-ls373-turns-on-the-arbitration-horizon-not-on-the-safety-probes).
+**The arbitration horizon is a bound, not a depth.** `_arbitrate` scores each option on a fork
+that plays the FIXED rollout ladder, so when that continuation blunders the death is charged to
+the option under test. On ls373 the `_breakout` fork tracks the winning line node for node — eye
+5.875 E=7, 6.875 E=3, 7.875 E=1 — and then the ladder dies at the third node where the
+arbitrating player absorbs `(14,3)` and goes on to win. Deeper lookahead therefore imports more
+of the ladder's errors: `ARBITRATE_ACTIONS` 3, 4, 5, 6 and 8 all lose ls373, and off the suite
+deeper search returns longer solutions. 2 bounds the damage and wins all eight; what needs
+fixing is the attribution, in
+[open item 14](open_items.md#14-arbitration-charges-an-option-with-its-continuations-mistakes).
 
 ### The tie that decided ls110
 

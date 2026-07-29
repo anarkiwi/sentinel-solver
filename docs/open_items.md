@@ -221,16 +221,38 @@ Three distinct failures sit underneath that, and they need different fixes:
 **Resolves.** The order is forced by the numbers: make a solve finish before judging
 whether it wins. Until the 84 are resolved the win rate is a floor, not a measurement.
 
-## 14. ls373 turns on the arbitration horizon, not on the safety probes
+## 14. Arbitration charges an option with its continuation's mistakes
 
 **Wrong.** `_arbitrate` scores each option on a fork with `rollout=True` — the fixed
 breakout/supply/harvest/mount ladder — so an option is judged by a continuation the
-arbitrating player will never take. `ARBITRATE_ACTIONS` (4) sets how far that continuation
-runs and has no derivation. It, not the aim price, decides ls373.
+arbitrating player will never take. When that continuation blunders, the death is attributed
+to the option under test, and `ARBITRATE_ACTIONS` sets how many of its blunders get charged.
+Depth therefore subtracts information rather than adding it, which is why the constant, and
+not the aim price, decides ls373.
 
-**Measured.** This item previously read that the safety probes rest on an over-priced aim
-(`playerbase._cheapest_ray`, mean 9 f and up to 141 f cheaper per action, took ls373 from a
-65-action win to a loss in 13). That diagnosis does not survive measurement.
+**Measured — the attribution, node for node.** At ls373 tick 0 the `_breakout` fork and the
+winning line agree exactly: eye 5.875 E=7, then 6.875 E=3, then 7.875 E=1. At that third node
+the fork's ladder dies within one tick; the arbitrating player absorbs `(14,3)`, reaches E=3
+and wins in 45. `_breakout` is not fatal — the continuation is, three ticks later, at a node
+the real policy handles. Horizon 2 wins by stopping before the fork reaches it.
+
+Two corollaries, both measured:
+
+* **Playing to termination does not help.** The fixed ladder makes the same blunder at the
+  same node however long it runs, so `_breakout` played out loses in 15 — `_settle_tie`'s
+  method (no horizon, consult only the outcome) would reject it too.
+* **Policy-consistent forks do not help by themselves.** A `rollout=False` fork at depth 4
+  also dies (E=0), because its own internal arbitration runs at the same horizon and repeats
+  the error.
+
+**Measured — off the suite.** Twelve boards outside both the suite and the hardest-128: of the
+four that both horizons finished, horizon 2 is shorter or equal on every one (35 v 59, 36 v
+41, 28 v 28, 32 v 62). Deeper search produced longer solutions on boards it was never chosen
+against, so the effect is not a fit to the eight.
+
+**Measured — not the safety probes.** This item previously read that the probes rest on an
+over-priced aim (`playerbase._cheapest_ray`, mean 9 f and up to 141 f cheaper per action, took
+ls373 from a 65-action win to a loss in 13). That diagnosis does not survive measurement.
 
 * One probe carries the board: `_landing_holds((8,8), 0)` inside the tick-0 `_breakout` fork,
   at stance (14,3), eye 6.875, energy 6. Forcing that single call to False and changing
@@ -248,10 +270,10 @@ runs and has no derivation. It, not the aim price, decides ls373.
   priced from the arrival stance (20 actions); phase-ordered probe, source then destination
   (5); ROM-ordered purse, each create paid out of a purse the step's own frames have already
   drained (10); verdict "can still afford the exit" (13); verdict "did not bleed" (15).
-* `ARBITRATE_ACTIONS` alone moves the verdict. 1 and 2 win ls373 in 45 actions; 3, 4
-  (shipped), 5, 6 and 8 lose it in 13. At 2 the whole suite wins — ls0 16, ls42 35, ls60 46,
-  ls110 49, ls298 32, ls321 35, ls335 58, ls373 45 — and at 1 it is 6/8 (ls60 and ls298 lost).
-  The constant is not derived from anything, so this is a free parameter, not a fix.
+* `ARBITRATE_ACTIONS` alone moves the verdict. 1 and 2 win ls373 in 45 actions; 3, 4, 5, 6
+  and 8 lose it in 13. At 2 the whole suite wins; at 1 it is 6/8 (ls60 and ls298 lost). 2 is
+  what ships, as a bound on how much of the ladder's error the score absorbs — it is not
+  derived, and the mechanism above, not the number, is what needs resolving.
 * Gating a climb's purse on `_affords(cost, _hop_span)` — the invariant `_affords` states it
   holds ("executor and search both gate on this, at the same instant"), which
   `_climb_candidates` does not — wins ls373 in 62 and loses ls110. It reaches (8,8) only by
@@ -259,11 +281,12 @@ runs and has no derivation. It, not the aim price, decides ls373.
   where nothing sees it. Billing each phase at its own clock instead wins ls110 in 49 and
   loses ls373. The two differ in which board they lose, not in a number.
 
-**Resolves.** Scoring an option under the policy that will actually follow it. Nesting
-arbitration is what `rollout` exists to prevent (4 options × 4 ticks squared per decision) and
-scoring instead of playing is disproved below, so this needs a third construction. Until it
-exists `ARBITRATE_ACTIONS` carries the eight-board result and no probe change can be credited
-with it.
+**Resolves.** Attribution: when a fork dies at tick *j*, ask whether an alternative at *j*
+survives before charging the death to the option under test. Equivalently, a continuation at
+least as strong as the policy that will follow — which nesting would give and `rollout` exists
+to prevent (4 options × N ticks squared per decision), and which scoring instead of playing is
+disproved below. Until one exists `ARBITRATE_ACTIONS` bounds the damage and no probe change
+can be credited with the eight-board result.
 
 ## Disproved — do not resurrect
 
