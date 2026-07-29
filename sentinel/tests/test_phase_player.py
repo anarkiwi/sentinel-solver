@@ -2,7 +2,7 @@
 
 import pytest
 
-from sentinel import actions, enemies, phase_player, terrain, memmap as mm
+from sentinel import actions, enemies, phase_player, playerbase, terrain, memmap as mm
 from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
 from sentinel.playerbase import BOULDER_H, ROBOT_EYE, _Views
@@ -24,6 +24,14 @@ class _Barren:
     @staticmethod
     def primary():
         return {}
+
+    @staticmethod
+    def band_get(_tile):
+        return None
+
+    @staticmethod
+    def band_ordered(_pick):
+        return []
 
 
 def test_an_unseen_body_needs_no_drain_simulation():
@@ -142,6 +150,16 @@ def test_a_stance_with_a_move_is_not_barren():
     assert not player._barren(views)
     assert not player._relocate(views)
     assert not player.trace
+
+
+def test_barren_asks_per_tile_and_short_circuits():
+    """It runs on EVERY tick, so finding that ONE action is available must not cost a
+    whole 3,538,944-ray lattice."""
+    player = _player(42)
+    views = _Views(player.st)
+    playerbase._VIEW_CACHE.clear()
+    assert not player._barren(views)
+    assert not playerbase._VIEW_CACHE
 
 
 @pytest.mark.xfail(

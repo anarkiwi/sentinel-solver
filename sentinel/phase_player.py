@@ -8,6 +8,8 @@ is byte-exact, so a gap is found by running the world forward and looking.
 import argparse
 import math
 
+import numpy as np
+
 from sentinel import actions, enemies, memmap as mm, terrain
 from sentinel.game import Game
 from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _Views
@@ -257,51 +259,64 @@ class PhasePlayer(BasePlayer):
         enemies.advance_frames(probe, int(span))
         return probe.energy > 0 and not actions.player_dead(probe)
 
-    def _fuel_near(self, tile, reach=10):
-        """Absorbable objects lying near ``tile`` -- what a landing there can live on."""
+    def _fuel_map(self, reach=10):
+        """:meth:`_fuel_near` for every tile at once: each absorbable object stamps its
+        own +-``reach`` box."""
         st = self.st
-        n = 0
+        cnt = np.zeros((mm.N, mm.N), dtype=np.int32)
         for slot in st.occupied_slots():
             if slot == st.player or st.obj_type[slot] in mm.ENEMY_TYPES:
                 continue
             if st.obj_type[slot] == mm.T_PLATFORM:
                 continue
-            ox, oy = st.tile_of(slot)
-            if abs(ox - tile[0]) <= reach and abs(oy - tile[1]) <= reach:
-                n += 1
-        return n
+            ox, oy = int(st.obj_x[slot]), int(st.obj_y[slot])
+            cnt[
+                max(0, ox - reach) : ox + reach + 1,
+                max(0, oy - reach) : oy + reach + 1,
+            ] += 1
+        return cnt
+
+    def _fuel_near(self, tile, reach=10):
+        """Absorbable objects lying near ``tile`` -- what a landing there can live on."""
+        return int(self._fuel_map(reach)[tile[0], tile[1]])
 
     def _climb_candidates(self, views, affordable):
         """[(score, tile, k, cost, gain)] for every climb the ROM's own gates allow.
 
-        Candidates rank by height per energy -- the purse is finite and only refills
-        by absorbing -- and ``affordable`` restricts to what is payable now, which is
-        how the caller tells establish (cannot pay) from breakout (can).
+        Rank is height per energy -- a finite purse refilled only by absorbing -- and
+        ``affordable`` restricts to what is payable now, which is how the caller tells
+        establish (cannot pay) from breakout (can).  The gates needing no visibility are
+        the filter ``band_ordered`` runs, so the down-look plane is asked per survivor.
         """
         st = self.st
         my_eye = st.eye_z()
-        out = []
-        for tile in views.band():  # candidates need the down-look plane
+        fuel_map = self._fuel_map()
+        keep = {}
+
+        def stance(tile):
             base = self._stance_base(tile)
             if base is None:
-                continue
+                return False
             k = max(0, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
             gain = base + BOULDER_H * k + ROBOT_EYE - my_eye
             if gain <= 0 or k > 3:
-                continue
+                return False
             cost = 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-            if affordable and cost > st.energy:
-                continue
-            fuel = self._fuel_near(tile)
+            fuel = int(fuel_map[tile])
             if affordable:
-                if st.energy - cost <= 0:
-                    continue  # $1A00: a drain arriving at zero energy KILLS
+                if cost > st.energy or st.energy - cost <= 0:
+                    return False  # $1A00: a drain arriving at zero energy KILLS
                 if st.energy - cost < mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] and not fuel:
-                    continue  # arriving broke with nothing to absorb is a dead end
-                if not self._landing_holds(tile, k):
-                    continue  # the destination's cone, not ours, decides this
-            score = (gain / cost, fuel)  # height per unit of a scarce, finite purse
-            out.append((score, tuple(tile), k, cost, gain))
+                    return False  # arriving broke with nothing to absorb is a dead end
+            keep[tile] = (k, cost, gain, fuel)
+            return True
+
+        out = []
+        for tile, _view in views.band_ordered(stance):
+            k, cost, gain, fuel = keep[tile]
+            if affordable and not self._landing_holds(tile, k):
+                continue  # the destination's cone, not ours, decides this
+            out.append(((gain / cost, fuel), tile, k, cost, gain))
         return out
 
     def _best_climb(self, views, affordable):
@@ -393,23 +408,26 @@ class PhasePlayer(BasePlayer):
         if self._refuel(views, price, bank=True):
             return True
         st = self.st
+        if mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] > st.energy:
+            return False
+        here = tuple(int(c) for c in st.player_xy())
+        fuel_map = self._fuel_map()
+        here_fuel = int(fuel_map[here])
+        fuels = {}
+
+        def denser(tile):
+            if tile == here or self._stance_base(tile) is None:
+                return False
+            fuels[tile] = int(fuel_map[tile])
+            return fuels[tile] > here_fuel
+
         best = None
-        for tile in views.band():
-            base = self._stance_base(tile)
-            if base is None or tuple(tile) == tuple(st.player_xy()):
-                continue
-            k = 0  # a supply hop buys reach, not height
-            cost = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
-            if cost > st.energy:
-                continue
-            fuel = self._fuel_near(tile)
-            if fuel <= self._fuel_near(tuple(st.player_xy())):
-                continue
-            if best is None or fuel > best[0]:
-                best = (fuel, tuple(tile), k, cost)
+        for tile, _view in views.band_ordered(denser):
+            if best is None or fuels[tile] > best[0]:
+                best = (fuels[tile], tile)
         if best is None:
             return False
-        return self._build_and_mount(views, best[1], best[2])
+        return self._build_and_mount(views, best[1], 0)  # reach, not height: k = 0
 
     def _breakout(self, views):
         """Phase 1b: spend the bank on the biggest climb available."""
@@ -474,24 +492,22 @@ class PhasePlayer(BasePlayer):
         """Whether NO action of any class exists from this stance -- gaps and timing aside.
 
         Every generator empty is a different state from every generator refused: the
-        second is a wait, the first cannot change by waiting.
+        second is a wait, the first cannot change by waiting.  Asked per tile and
+        short-circuiting, since this runs on every tick.
         """
         st = self.st
-        band = views.band()
-        if not band:
-            return True  # nothing landable on either lattice: no verb has a target
         for e in enemies.enemy_slots(st):
             tile = tuple(st.tile_of(e))
-            if tile in band and terrain.top_object(st, *tile) == e:
-                if actions.can_absorb(st, e):
+            if terrain.top_object(st, *tile) == e and actions.can_absorb(st, e):
+                if views.band_get(tile) is not None:
                     return False
         for _value, tile in self._reclaim_targets(st, True):
-            if tuple(tile) in band:
+            if views.band_get(tuple(tile)) is not None:
                 return False
         if self._climb_candidates(views, True):
             return False
         for slot, tile in self._robot_bodies():
-            if tuple(tile) in band and st.eye_z(slot) > st.eye_z():
+            if st.eye_z(slot) > st.eye_z() and views.band_get(tuple(tile)) is not None:
                 return False
         return True
 
