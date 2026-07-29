@@ -221,6 +221,24 @@ Three distinct failures sit underneath that, and they need different fixes:
 **Resolves.** The order is forced by the numbers: make a solve finish before judging
 whether it wins. Until the 84 are resolved the win rate is a floor, not a measurement.
 
+## 14. The planner's safety probes rest on an over-priced aim (ls373)
+
+**Wrong.** `_landing_holds`, `_mount_holds` and `_wait_for_gap` advance the world by exactly
+the span the step will take, so making the aim price *truer* makes them *weaker*. The margin
+they were carrying was the mispricing, not a modelled quantity.
+
+**Measured.** Pricing each tile's view at its true frame minimum (`playerbase._cheapest_ray`,
+mean 9 f and up to 141 f cheaper per action) moved the suite 4 boards better, 2 worse, and
+ls373 from a 65-action win to a loss in 13. On ls373 tick 1 the `_breakout` fork now climbs to
+eye 7.875 and dies inside `_arbitrate`'s four ticks (it stopped at 4.875, alive, before), so
+arbitration takes `_harvest`, and that line starves out. Restoring the old view choice or
+inflating a constant restores the win, which is exactly why neither is a fix.
+
+**Resolves.** The probes need a margin they can defend: survive the step *and* still be able
+to act after it, over a window the mechanism justifies rather than one an over-charge
+supplied. `_landing_holds` already gestures at this by adding one absorb span; the question is
+what the arrival stance owes, not what the departure cost.
+
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
@@ -246,7 +264,8 @@ Each is a hypothesis and the measurement that killed it.
   tens of MB per lattice, falls back on nearly every query and is no faster than the exact path,
   and a `K` large enough to decide the row would be terabytes. `crossing_mask` needs no storage.
 - **Score the phase player's tie instead of playing it.** Three scorings, each worse than
-  rollout's 8/8: absorb only when its value exceeds the drain over its own span (6/8, ls321 and
+  rollout's 7/8 (8/8 before the aim price was made exact): absorb only when its value exceeds
+  the drain over its own span (6/8, ls321 and
   ls373 lost); make `_supply`'s affordability test agree with `_best_climb`'s (6/8, ls42 and
   ls110 lost); route every climb over the board's exact stance geometry (5/8).
 - **`_refuel` harvests at a loss under a cone.** It cannot: idling through the same span costs

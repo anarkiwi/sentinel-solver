@@ -14,12 +14,20 @@ import statistics
 
 from sentinel import playerbase as pb
 
-FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "live_ls42_hops.json")
+FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
+FIXTURE = os.path.join(FIXTURES, "live_ls42_hops.json")
+UTURN_FIXTURE = os.path.join(FIXTURES, "live_ls335_uturns.json")
 
 
 def _data():
     with open(FIXTURE) as fh:
         return json.load(fh)
+
+
+def _uturns():
+    """Every live per-u-turn measurement on record: ls42 p1 plus the ls335 win's eight."""
+    with open(UTURN_FIXTURE) as fh:
+        return _data()["uturns"] + json.load(fh)["uturns"]
 
 
 def test_hop_frames_brackets_the_measured_hops():
@@ -59,10 +67,10 @@ def test_whole_step_books_are_unbiased_and_bounded():
 
 def test_uturn_is_charged_as_an_action_tap_not_a_keystroke():
     """A u-turn goes through tap_action (want-flag $23), so it costs the idle+press
-    scans and the action's own consumption -- not one keystroke. Charging TAP_FRAMES
-    left p1 mispriced by +64 f, the largest residual in the run."""
-    ut = _data()["uturns"]
-    assert ut, "no u-turn recorded to pin against"
-    for rec in ut:
-        assert pb.UTURN_FRAMES == rec["measured"], rec["step"]
+    scans and the action's own consumption -- not one keystroke. The constant is the
+    POOLED live mean over both fixtures (n=9); the per-sample spread is 33..180 f, so
+    only the mean is pinned, and nothing here claims a per-u-turn bound."""
+    ut = [rec["measured"] for rec in _uturns()]
+    assert len(ut) >= 9, "the pooled u-turn sample shrank"
+    assert abs(pb.UTURN_FRAMES - statistics.fmean(ut)) <= 1.0, statistics.fmean(ut)
     assert pb.UTURN_FRAMES > 10 * pb.TAP_FRAMES  # it is nothing like a bare tap

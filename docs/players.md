@@ -79,17 +79,26 @@ does not depend on host load.
 
 | board | enemies | result | actions | energy left |
 |---|---|---|---|---|
-| ls0 | 1 | won | 16 | 1 |
-| ls42 | 2 | won | 35 | 4 |
-| ls110 | 3 | won | 53 | 17 |
-| ls60 | 7 | won | 55 | 15 |
-| ls298 | 7 | won | 34 | 5 |
-| ls321 | 7 | won | 78 | 12 |
-| ls373 | 7 | won | 65 | 15 |
-| ls335 | 7 | won | 73 | 20 |
+| ls0 | 1 | won | 16 | 2 |
+| ls42 | 2 | won | 34 | 4 |
+| ls110 | 3 | won | 50 | 10 |
+| ls60 | 7 | won | 47 | 4 |
+| ls298 | 7 | won | 44 | 15 |
+| ls321 | 7 | won | 53 | 3 |
+| ls373 | 7 | **lost** | 13 | 0 |
+| ls335 | 7 | won | 75 | 19 |
 
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
+
+**ls373 regressed when the aim price stopped over-charging.** The safety probes
+(`_landing_holds`, `_mount_holds`, `_wait_for_gap`) advance the world by exactly the span
+the step will take, so a shorter, truer span is a WEAKER filter: hops the over-priced aim
+refused are now accepted. At tick 1 the `_breakout` fork climbs to eye 7.875 and dies
+inside `_arbitrate`'s four ticks (it survived at eye 4.875 before), arbitration takes
+`_harvest` instead, and that line starves 13 actions later. Nothing in the aim model is
+wrong — the planner's margin was an artifact of the mispricing, and buying it back with a
+constant would be fitting the board, not the mechanism.
 
 ### The tie that decided ls110
 

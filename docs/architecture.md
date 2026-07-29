@@ -684,9 +684,10 @@ Priced mechanism for mechanism against the executor's key sequence, over the aim
   `plot_world`: horizontal `$10EE` = 16 scroll steps per ±8 bearing notch, vertical `$1135` =
   8 steps per ±4 pitch notch. Notch counts from `aimcost.h_press_count` (u-turn-aware,
   returns `(n_uturn, n_step)`) and `aimcost.v_steps`.
-- **U-turn** = one action tap (`UTURN_FRAMES`, measured live on ls42), no scroll and no
-  redraw; taken only when it strictly lowers the keystroke count (crossover at `d >= 9`
-  lattice steps).
+- **U-turn** = one action tap (`UTURN_FRAMES`), no scroll and no redraw; taken only when it
+  strictly lowers the keystroke count (crossover at `d >= 9` lattice steps). Pooled live
+  n=9 (ls42 p1 plus the ls335 win's eight), mean 76.6 over samples spanning 33–180 f — a
+  central value, not a bound.
 - **Cursor is derived, not fitted.** `move_sights $9958` steps both axes in one call at 1 px
   per gated scan, so a drive costs `max(|Δcx|, |Δcy|)` scans plus `CURSOR_RAMP =
   popcount($6B) = 5` scans the `$0CC8` auto-repeat mask skips. Zero if the cursor is parked.
@@ -699,6 +700,18 @@ Priced mechanism for mechanism against the executor's key sequence, over the aim
 - `HOP_FRAMES` is the window a full hop (2 creates + transfer + aims) needs; `SAFE_FRAMES` is
   the window below which a tile is urgent. Both are pinned against the live ls42 whole-step
   hops in `live_ls42_hops.json` (`test_hop_budget.py`), and charge slightly under measured.
+
+**Which view a tile gets.** A tile is landed by tens of thousands of lattice rays and the
+players use exactly one, so the pick is part of the cost model, not a detail:
+`playerbase._cheapest_ray` returns the **frame-minimal** ray, proved. The price decomposes —
+the pan term depends only on `(h_angle, v_angle)`, the cursor term only on the cursor and
+monotonically in its drive distance — so one representative per `(h, v)` cell (the cursor
+nearest `SIGHTS_CENTRE`) attains the minimum, collapsing ~20k rays to ~10 groups. Groups are
+then priced with the real `aim_frames` in `_aim_bound` order (`aim_frames` with every notch's
+`render_cost` dropped: admissible, since a render is never negative), stopping at the first
+bound that reaches the best price — 4–32 exact evaluations per tile, measured on ls0/42/110/335.
+The predecessor was a `1000·bearing + 100·pitch + cursor` proxy whose argmin is not the
+argmin of frames: it left 2/50 tiles suboptimal on ls0 and 6/23 on ls42, by up to 141 f.
 
 ## The landability filter (`landtable.py`)
 
@@ -746,7 +759,9 @@ answer a **single** tile with one targeted march (`_cheap_view` over `landtable.
 narrowed by `crossing_mask`); the whole-lattice sweep `los._landable_batch` is built only when
 a caller reads the entire dict (`views.band()`). Each lattice is pinned to the board at its
 first query (`_Views._pinned`), so a caller that builds or transfers mid-tick keeps reading
-one consistent board. Which callers still buy the sweep is
+one consistent board. Both paths hand the tile's landing rays to the same `_cheapest_ray`
+(see [aim cost](#aim-cost-playerbase_aim_frames)), so they return the same view for the same
+tile by construction. Which callers still buy the sweep is
 [open item 1](open_items.md#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
 
 **Lattices.** `los._landable_sweep`'s plane and band (`landtable.MAX_STEPS = 6000`). Over

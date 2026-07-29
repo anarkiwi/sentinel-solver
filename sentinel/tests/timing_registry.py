@@ -277,8 +277,9 @@ REGISTRY = {
     "UTURN_FRAMES": entry(
         _PB,
         MEASURED,
-        "live ls42 p1 u-turn, n=1 (live_ls42_hops.json); a single sample, and "
-        "not yet derived from the tap_action scan/settle structure",
+        "pooled live n=9 (live_ls42_hops.json p1 + live_ls335_uturns.json), mean "
+        "76.6, samples 33..180; a central value over a wide spread, not a bound, "
+        "and not yet derived from the tap_action scan/settle structure",
         "test_uturn_is_charged_as_an_action_tap_not_a_keystroke",
     ),
     "UNIT_FRAMES": _d(_PB, "3 x 256 / COOLDOWN_BRESENHAM_STEP gate+Bresenham divider"),
