@@ -254,6 +254,23 @@ def _codes(args):
     return list(range(start, stop))
 
 
+def render_svg(codes, out_dir, regen=False):
+    """Render each board to ``out_dir/ls<code>_iso.svg`` off the cached state."""
+    from sentinel import isoview  # deferred: isoview imports the projector stack
+
+    os.makedirs(out_dir, exist_ok=True)
+    written = []
+    for code in codes:
+        state, _hit = statecache.state_for(code, regen=regen)
+        svg = isoview.diagram(
+            state,
+            f"ls{code} at entry",
+            [f"generate seed {landscape.seed_for(code)}"],
+        )
+        written.append(isoview.write(svg, os.path.join(out_dir, f"ls{code}_iso.svg")))
+    return written
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--start", type=int, help=f"first code (>= {statecache.MIN_CODE})")
@@ -264,6 +281,11 @@ def main(argv=None):
     ap.add_argument("--metrics", help=f"comma separated subset of: {','.join(METRICS)}")
     ap.add_argument("--regen", action="store_true", help="ignore the state cache")
     ap.add_argument("--format", choices=("table", "json", "jsonl"), default="table")
+    ap.add_argument(
+        "--svg",
+        metavar="DIR",
+        help="also render each selected board to DIR/ls<code>_iso.svg, from cache",
+    )
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--like", type=int, help="rank the range by likeness to this code")
     ap.add_argument("--top", type=int, default=8, help="rows to keep under --like")
@@ -293,6 +315,10 @@ def main(argv=None):
             r["distance"] = round(distance(ref, r), 4)
         rows.sort(key=lambda r: r["distance"])
         rows = [dict(ref, distance=0.0)] + rows[: args.top]
+
+    if args.svg:
+        for path in render_svg([r["code"] for r in rows], args.svg, args.regen):
+            print(f"wrote {path}")
 
     if args.format == "json":
         print(json.dumps({"signature": statecache.signature(), "rows": rows}))
