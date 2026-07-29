@@ -7,6 +7,8 @@ cached range never generates.
 
 import json
 
+import pathlib
+
 import pytest
 
 from sentinel import atlas, landscape, memmap as mm, statecache
@@ -102,6 +104,16 @@ def test_a_new_metric_needs_no_regeneration(monkeypatch):
     monkeypatch.setattr(statecache, "generate", lambda _c: pytest.fail("regenerated"))
     row = atlas.row_for(110, ["tallest_enemy"])
     assert row["tallest_enemy"] == int(board.oz.max())
+
+
+def test_svg_renders_off_the_cache(tmp_path, monkeypatch):
+    """A board already cached renders without touching the generator."""
+    atlas.board_for(42)
+    monkeypatch.setattr(statecache, "generate", lambda _c: pytest.fail("regenerated"))
+    written = atlas.render_svg([42], str(tmp_path))
+    assert len(written) == 1
+    body = pathlib.Path(written[0]).read_text()
+    assert body.lstrip().startswith("<svg") and "</svg>" in body
 
 
 @pytest.mark.parametrize("code,enemies", [(0, 1), (42, 2), (110, 3), (335, 7)])
