@@ -172,6 +172,35 @@ def _midgame(new_state, number=321):
     return st
 
 
+@pytest.mark.parametrize("number", [0, 42, 110, 321, 335])
+@pytest.mark.parametrize("kind", ["plane", "band"])
+def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
+    """``_cheap_views`` off :func:`landtable.landing_rays` IS the full lattice sweep.
+
+    Its dict is read whole and POSITIONALLY -- the climb tie-break takes the first of
+    several equal scorers -- so insertion order (by winning lattice index) is as
+    load-bearing as membership, and both are asserted against a sweep of every ray.
+    """
+    st = _midgame(new_state, number)
+    slot = st.player
+    grids = lt.lattice(kind == "plane")
+    aim_from = (st.obj_h_angle[slot], st.obj_v_angle[slot])
+    land = _landings(st, slot, grids)
+    kept = set(lt.landing_rays(st, slot, grids=grids).tolist())
+    assert kept.issuperset(int(r) for rays in land.values() for r in rays)
+    winner = {  # ascending rays: argmin takes the lowest index among min-cost ones
+        tile: int(rays[np.argmin(playerbase._aim_cost(rays, grids, aim_from))])
+        for tile, rays in land.items()
+    }
+    want = {
+        tile: playerbase._view_at(ray, grids)
+        for tile, ray in sorted(winner.items(), key=lambda kv: kv[1])
+    }
+    got = playerbase._cheap_views(st, kind == "plane", aim_from)
+    assert list(got) == list(want)
+    assert got == want
+
+
 @pytest.mark.parametrize("kind", ["plane", "band"])
 def test_landable_view_matches_sweep_every_tile_midgame(new_state, kind):
     """EVERY tile of a MID-GAME board agrees with that lattice's own full sweep.

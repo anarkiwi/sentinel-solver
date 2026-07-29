@@ -87,16 +87,25 @@ def _view_at(idx, grids):
 def _cheap_views(st, v_primary, aim_from):
     """Landable views choosing, per tile, the MIN-AIM-COST keyboard view from facing
     ``aim_from`` (:func:`_aim_cost`, ties broken by lattice index) -- same tile
-    membership as ``los.landable_sweep_with_centres``, cheapest representative view."""
+    membership as ``los.landable_sweep_with_centres``, cheapest representative view.
+
+    Only :func:`landtable.landing_rays` is marched, a proven superset of the rays that
+    land anywhere, so the dict (tiles, views AND insertion order, which is by winning
+    lattice index) is the full sweep's for ~15% of its rays."""
     if not los._HAVE_JIT:
         return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
     grids = landtable.lattice(v_primary=v_primary)
-    status, tx, ty, _, grids = los._landable_batch(st, st.player, None, 6000, *grids)
+    slot = st.player
+    idx = landtable.landing_rays(st, slot, None, grids, landtable.MAX_STEPS)
     views = {}
-    clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
-    if not clear.size:
+    if not idx.size:
         return views
-    key = (tx[clear].astype(np.int64) << 16) | ty[clear].astype(np.int64)
+    status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
+    hit = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
+    if not hit.size:
+        return views
+    clear = idx[hit]
+    key = (tx[hit].astype(np.int64) << 16) | ty[hit].astype(np.int64)
     cost = _aim_cost(clear, grids, aim_from)
     order = np.lexsort((clear, cost, key))
     ks = key[order]
