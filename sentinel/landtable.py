@@ -405,6 +405,37 @@ def landable_view(
     return None
 
 
+def _partition(state, slot, eye_z, grids, max_steps):
+    """:func:`stop_cells` over a whole lattice: ``(first candidate tile, count)`` per ray."""
+    lo, hi, slope = surface_maps(state)
+    return stop_cells(
+        *cached_components(grids),
+        lo,
+        hi,
+        slope,
+        int(state.obj_x[slot]),
+        int(state.obj_y[slot]),
+        seed_z(state, slot, eye_z),
+        max_steps,
+        RADIUS,
+    )
+
+
+def landing_rays(state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
+    """Ascending lattice indices holding EVERY ray that can land -- :func:`candidates`
+    for the whole board at once.
+
+    :func:`stop_cells` walks each ray's track closed-form against the real surfaces, so a
+    ray naming no candidate landing tile provably never lands and is dropped unmarched.
+    ~15% of the band lattice survives, and marching the survivors is the full sweep.
+    """
+    if slot is None:
+        slot = state.player
+    grids = lattice() if grids is None else grids
+    _first, ncand = _partition(state, slot, eye_z, grids, max_steps)
+    return np.flatnonzero(ncand > 0)
+
+
 def landable_set(
     state,
     slot=None,
@@ -425,21 +456,7 @@ def landable_set(
     grids = lattice(coarse=True) if grids is None else grids
     if not los._HAVE_JIT:  # pragma: no cover - numba absent
         return set(los.landable_views(state, slot, eye_z, max_steps))
-    vx, vy, vz = cached_components(grids)
-    lo, hi, slope = surface_maps(state)
-    first, ncand = stop_cells(
-        vx,
-        vy,
-        vz,
-        lo,
-        hi,
-        slope,
-        int(state.obj_x[slot]),
-        int(state.obj_y[slot]),
-        seed_z(state, slot, eye_z),
-        max_steps,
-        RADIUS,
-    )
+    first, ncand = _partition(state, slot, eye_z, grids, max_steps)
     todo = np.flatnonzero(ncand > 0)
     cell = first[todo]
     multi = ncand[todo] > 1
