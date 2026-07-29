@@ -164,6 +164,28 @@ body's energy alone, so the abandoned robot's downgrade is simulated and then di
 **Resolves.** A threat query over the abandoned stack's own exposure, so a hop out of a gaze is
 charged what it actually costs.
 
+## 12. An entry stance with no landable tile freezes the planner
+
+**Wrong.** Where the entry stance can land nothing, every generator returns empty and the
+planner takes no action at all — it is not beaten, it never starts.
+
+**Measured.** ls9795, the hardest of the 10000 by `sentinel.atlas` ranking (8 enemies,
+roughness 0.514, climb 8.125). The run ends on the action cap: **0 actions, 12000 frames,
+energy 10, alive**. From the entry tile `(9,18)` at eye 3.875 both landable sets are empty
+— band 0, `$F5` plane 0 — so `_climb_candidates` and `_establish` have nothing to iterate,
+no reclaim target is in view, and `_under_fire` is false, so the cornered fallback in
+`_tick` never fires either. The eight enemies stand at heights 7, 8, 9, 9, 9, 10, 10, 12.
+No board in the eight-board suite has an empty landable set at entry, so nothing exercises
+this path.
+
+**Resolves.** Hyperspace is the move class the planner lacks. `$216A` spends 3 and
+relocates the body without needing line of sight, and `phase_player` calls `_hyperspace()`
+from exactly one site — `_finish`, the win move. Jumping once from entry moves the body to
+`(3,1)` for 3 energy and raises the landable set from 0 to 1 — but still with no affordable
+climb, so the fix is not "hyperspace when stuck once". It is to treat relocation as a move
+the planner can choose and evaluate like any other: the landing is judged by what it can
+land and eat, and the purse bounds how many jumps are affordable ($2170 kills on underflow).
+
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
