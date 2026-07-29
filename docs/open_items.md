@@ -185,6 +185,42 @@ climb, so the fix is not "hyperspace when stuck once". It is to treat relocation
 the planner can choose and evaluate like any other: the landing is judged by what it can
 land and eat, and the purse bounds how many jumps are affordable ($2170 kills on underflow).
 
+## 13. The hardest boards are unsolved, and mostly unfinished
+
+**Wrong.** Against the 128 hardest landscapes of the 10000 the planner wins 3, and two
+thirds of the runs do not finish at all.
+
+**Measured.** `sentinel.atlas` ranked all 10000 by equal-weight percentile of enemy count,
+roughness, and climb (highest enemy z minus start eye); the top 128 are all 8-enemy boards,
+roughness 0.402-0.551, climb 5.12-9.12. Every one was solved with a 180 s cap, 32 at a
+time. Codes and per-board results are in `out/hardest_128.json` and
+`out/hardest128_results.jsonl`.
+
+| outcome | boards |
+|---|---|
+| won | 3 (ls8761 in 35 actions, ls7500 in 41, ls9544 in 48) |
+| lost | 41 |
+| did not finish in 180 s | 84 |
+
+For scale, the eight boards the suite validates against rank 487th (ls335) to 9874th
+(ls0), and none has 8 enemies.
+
+Three distinct failures sit underneath that, and they need different fixes:
+
+* **Runtime, 84 boards.** Two thirds never reach a verdict. This is not a strategy limit
+  and it dominates every other signal here; see [1](#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
+  82 of the 84 had climbs available at entry, so they were playing, not stuck.
+* **Paralysis, 18 boards.** The planner takes zero actions. 8 have no landable tile at
+  entry at all ([12](#12-an-entry-stance-with-no-landable-tile-freezes-the-planner)); the
+  other 10 *can* land somewhere but generate no climb candidate from it, so the same
+  missing move class -- relocation -- covers both, and the second group shows the trigger
+  is "no move I will commit to", not "nowhere to stand".
+* **Genuine loss, 23 boards.** Played and lost. Only these are strategy failures, and they
+  are the smallest class.
+
+**Resolves.** The order is forced by the numbers: make a solve finish before judging
+whether it wins. Until the 84 are resolved the win rate is a floor, not a measurement.
+
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
