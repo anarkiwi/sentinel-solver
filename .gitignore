@@ -21,6 +21,10 @@ __pycache__/
 /out/stancegraph/
 # landscape atlas state cache: generated boards, keyed by generator signature
 /out/atlas/
+# atlas ranking sweep parts and rendered boards: regenerated from the cache
+/out/atlas_scan/
+/out/atlas_svg/
+/out/*.svg
 
 # editor swap files
 *.swp
