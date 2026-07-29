@@ -99,7 +99,7 @@ class Player(BasePlayer):
             view = self._view_with_band(ptile, views.primary(), views.band_get)
             if view is not None:
                 return self._fire(verb, ptile, view)
-        return self._climb(views, urgent=False, need_progress=True)
+        return self._climb(views, urgent=False)
 
     def _meanie_faces_window(self, meanie):
         """Frames until the meanie rotates to face the player ($16F2 turns it
@@ -263,26 +263,22 @@ class Player(BasePlayer):
                 return True
         return False
 
-    def _climb(self, views, urgent=False, need_progress=True, only_tile=None):
+    def _climb(self, views, urgent=False, only_tile=None):
         """One hop step toward height: robot on a tall-enough pedestal, another
         boulder on a short one, or a new boulder on the best safe tile.
         `only_tile` restricts to the hop in progress (finish before roaming).
         A primary-plane scan with no candidate falls back to the full pitch
         band -- from a hollow every buildable tile needs a down-pitch aim."""
-        best_robot, best_boulder = self._climb_scan(
-            views.primary(), urgent, need_progress, only_tile
-        )
+        best_robot, best_boulder = self._climb_scan(views.primary(), urgent, only_tile)
+        if best_robot is None and best_boulder is None:
+            best_robot, best_boulder = self._climb_scan(views.band(), urgent, only_tile)
         if best_robot is None and best_boulder is None:
             best_robot, best_boulder = self._climb_scan(
-                views.band(), urgent, need_progress, only_tile
-            )
-        if best_robot is None and best_boulder is None:
-            best_robot, best_boulder = self._climb_scan(
-                views.band(), urgent, need_progress, only_tile, seen_tier=1
+                views.band(), urgent, only_tile, seen_tier=1
             )
         if best_robot is None and best_boulder is None and (urgent or self._frozen()):
             best_robot, best_boulder = self._climb_scan(
-                views.band(), urgent, need_progress, only_tile, seen_tier=2
+                views.band(), urgent, only_tile, seen_tier=2
             )
         if best_robot is not None and not self._no_strand(best_robot[1]):
             best_robot = None  # completing this pedestal would strand our reclaims
@@ -329,7 +325,7 @@ class Player(BasePlayer):
             return st.tile_of(actions.SENTINEL_SLOT)
         return st.platform_xy
 
-    def _climb_scan(self, cand_views, urgent, need_progress, only_tile, seen_tier=0):
+    def _climb_scan(self, cand_views, urgent, only_tile, seen_tier=0):
         """Scan `cand_views` for the best pedestal-robot and boulder builds.
         Progress = gaining LOS on the hunt target first, then eye height (an
         equal/lower hop is legal exactly when it buys the target sight line).
@@ -395,12 +391,7 @@ class Player(BasePlayer):
                 window = self._gaze_window(tile, exposed=exposed)
                 robot_eye = self._robot_eye_after_boulder(tile)
                 sees = self._tile_sees_target(tile, target)
-                if (
-                    need_progress
-                    and robot_eye <= my_eye + EYE_EPS
-                    and not sees
-                    and not urgent
-                ):
+                if robot_eye <= my_eye + EYE_EPS and not sees and not urgent:
                     continue
                 key = (sees, robot_eye, -aimf, window)
                 if best_boulder is None or key > best_boulder[0]:

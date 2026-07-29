@@ -41,7 +41,6 @@ holds ([the enemy ladder](architecture.md#the-enemy)).
 **Measured.** Waiting under a cone is non-terminating: one live ls110 run spent a long run of
 consecutive waits and took drains throughout. The error has both signs — a body under a busy
 cone is exposed *longer* than forecast, and tiles ahead of that arc become safe *later*.
-`_verify_starts` compensates downstream on a bit-exact clone; the forecast itself is wrong.
 
 **Resolves.** Modelling the stall inside `_cone_onset` and re-running the three live gates — it
 shortens every window, so the gates are the test. Price at the same time that an abandoned

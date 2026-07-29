@@ -17,9 +17,8 @@ Two concrete sources are provided:
                       live board against the generator.
   * ``ViceSource``  — reads from a live asid-vice binary monitor (``bm.mem_get``).
 
-``mem_image(source)`` returns a full 64 KB image (for wrapping in a
-:class:`sentinel.state.State`), and ``read_game_state`` returns the structured
-:class:`GameState` the live driver consumes.
+``read_game_state`` returns the structured :class:`GameState` the live driver
+consumes.
 """
 
 import sys
@@ -60,10 +59,6 @@ TYPES = {
     5: "SENTINEL",
     6: "PLATFORM",
 }
-
-# The live game keeps all its play state in the first 4 KB; a 64 KB image with
-# that page range populated is enough to wrap in a sentinel State.
-_LIVE_SNAPSHOT_END = 0x0FFF
 
 
 # ---- memory sources -------------------------------------------------------
@@ -112,19 +107,6 @@ class ViceSource(MemorySource):
         if length <= 0:
             return b""
         return bytes(self.bm.mem_get(addr, addr + length - 1))
-
-
-def mem_image(source: MemorySource, end: int = _LIVE_SNAPSHOT_END) -> bytearray:
-    """A 64 KB memory image with ``[0, end]`` filled from ``source`` — ready to
-    wrap in ``sentinel.state.State.from_mem``.
-
-    The live game state lives in the first 4 KB (objects, tiles, cooldowns and
-    the scalar play variables), which is all a resync needs."""
-    if hasattr(source, "mem") and len(source.mem) >= 0x10000:
-        return bytearray(source.mem)
-    buf = bytearray(0x10000)
-    buf[0 : end + 1] = source.read(0x0000, end + 1)
-    return buf
 
 
 # ---- parsed state ---------------------------------------------------------
@@ -307,14 +289,3 @@ def dump(state: GameState) -> str:
     out.append(f"== objects ({len(state.objects)}) ==")
     out.append("  " + "  ".join(f"{k.lower()}:{v}" for k, v in sorted(counts.items())))
     return "\n".join(out)
-
-
-def main():
-    for landscape in (0, 42, 9999):
-        state = read_game_state(Py65Source.from_landscape(landscape))
-        print(f"\n############ seed {landscape} ############")
-        print(dump(state))
-
-
-if __name__ == "__main__":
-    main()

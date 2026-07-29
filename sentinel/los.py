@@ -42,13 +42,9 @@ import numpy as np
 
 from sentinel.terrain import tile_byte
 
-try:
-    from sentinel import los_jit
+from sentinel import los_jit
 
-    _HAVE_JIT = True
-except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
-    los_jit = None
-    _HAVE_JIT = False
+_HAVE_JIT = True  # tests set this False to drive the pure-Python reference bodies
 
 
 # ============================================================================
@@ -923,6 +919,9 @@ def _slope_corner_z(state, x, y):
     return z & 0xFF
 
 
+_EDGES = (0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03)  # the $1DF1-$1DF8 ROM table
+
+
 def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     """$1D8A-$1DEE, literal instruction-faithful port (corner/quadrilateral slope).
     The 6502 control flow here is bit-intricate (the $1D8B BCC lands on $1D9C, an
@@ -958,8 +957,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         A = s78
         A = ((A << 1) | C) & 0xFF  # ROL A
         Y = A
-        edges = [0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03]  # $1DF1-$1DF8
-        A = edges[Y] if Y < len(edges) else 0
+        A = _EDGES[Y] if Y < len(_EDGES) else 0
     else:
         # $1D8D LSR A
         C = A & 1
@@ -981,8 +979,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
             C = 1 if A >= (vec.py_sub & 0xFF) else 0  # $1DA6 CMP $0039
             A = ((s78 << 1) | C) & 0xFF  # $1DA8 LDA $0078 ; $1DAA ROL A
             Y = A
-            edges = [0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03]
-            A = edges[Y] if Y < len(edges) else 0
+            A = _EDGES[Y] if Y < len(_EDGES) else 0
         else:
             # $1D90 AND #$1 ; $1D92 JMP use_edge_for_slope
             A = A & 1
@@ -1122,35 +1119,12 @@ def _lattice_vectors(hgrid, vgrid, cxs, cys):
     cached = _VEC_CACHE.get(key)
     if cached is not None:
         return cached
-    if _HAVE_JIT:
-        cached = los_jit.build_lattice(
-            np.asarray(hgrid, dtype=np.int16),
-            np.asarray(vgrid, dtype=np.int16),
-            np.asarray(cxs, dtype=np.int16),
-            np.asarray(cys, dtype=np.int16),
-        )
-    else:  # pragma: no cover - numba absent -> pure-Python builder
-        n = len(vgrid) * len(hgrid) * len(cxs) * len(cys)
-        arrs = [np.empty(n, dtype=np.int16) for _ in range(7)]
-        i = 0
-        for v in vgrid:
-            for h in hgrid:
-                for cx in cxs:
-                    for cy in cys:
-                        vec = prepare_vector_from_player_sights(None, h, v, cx, cy, 0)
-                        vals = (
-                            vec.vx_lo,
-                            vec.vx_hi,
-                            vec.vz_lo,
-                            vec.vz_hi,
-                            vec.vy_lo,
-                            vec.vy_hi,
-                            vec.s30,
-                        )
-                        for a, val in zip(arrs, vals):
-                            a[i] = val
-                        i += 1
-        cached = tuple(arrs)
+    cached = los_jit.build_lattice(
+        np.asarray(hgrid, dtype=np.int16),
+        np.asarray(vgrid, dtype=np.int16),
+        np.asarray(cxs, dtype=np.int16),
+        np.asarray(cys, dtype=np.int16),
+    )
     _VEC_CACHE[key] = cached
     return cached
 
@@ -1270,8 +1244,6 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
     window stays faithful either way (body-h step 8 fills the h-integer gaps).
     """
     grids = kbd_grids(v_primary=v_primary)
-    if not _HAVE_JIT:
-        return _landable_sweep_py(state, slot, eye_z, max_steps, *grids, want_centres)
     status, tx, ty, centre, grids = _landable_batch(
         state, slot, eye_z, max_steps, *grids
     )
@@ -1307,38 +1279,6 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
     return views, centres
 
 
-def _landable_sweep_py(
-    state, slot, eye_z, max_steps, hgrid, vgrid, cxs, cys, want_centres
-):
-    """Numba-absent fallback for :func:`_landable_sweep`: the same lattice via per-aim
-    :func:`aim_target` (bit-identical results, no batched march)."""
-    views = {}
-    centres = {}
-    for v in vgrid:
-        for h in hgrid:
-            for cx in cxs:
-                for cy in cys:
-                    tx, ty, los, centre = aim_target(
-                        state,
-                        h,
-                        v,
-                        cx,
-                        cy,
-                        slot,
-                        eye_z=eye_z,
-                        max_steps=max_steps,
-                        return_centre=True,
-                    )
-                    if not los:
-                        continue
-                    tile = (tx, ty)
-                    if tile not in views:
-                        views[tile] = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-                    if want_centres and (tile not in centres or centre < centres[tile]):
-                        centres[tile] = centre
-    return views, centres
-
-
 def landable_sweep_with_centres(
     state, slot=None, eye_z=None, max_steps=6000, v_primary=False
 ):
@@ -1361,33 +1301,29 @@ def landable_sweep_with_centres(
     )
 
 
-def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000, v_band=False):
+def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000):
     """The build view for a SINGLE `tile`, or None if no keyboard aim lands the sights on
     it with line of sight.  Returns ``{"h_angle","v_angle","cursor"}``.
 
     Targeted + cheap-first: the CHEAP primary ($F5) plane is swept first (one batched numba
     march, ~131k rays) and, on a hit, returned immediately -- most (up/level) climb builds
-    land here.  Only when the tile is NOT on the $F5 plane AND ``v_band`` is set does it fall
-    to the full pitch band (the player pitches the body DOWN to aim at near/below tiles -- the
-    ls335 v=225 (11,18) build, the endgame down-look).  So a per-tile query costs one cheap
-    march in the common case and is bounded by the full band otherwise -- no ~3.5M pure-Python
-    probe scan.  Bit-identical to membership in :func:`landable_views`.
+    land here.  Only a tile NOT on the $F5 plane falls to the full pitch band (the player
+    pitches the body DOWN to aim at near/below tiles -- the ls335 v=225 (11,18) build, the
+    endgame down-look).  Bit-identical to membership in :func:`landable_views`.
     """
     if slot is None:
         slot = state.player
     key = (tile[0], tile[1])
-    if _HAVE_JIT:
-        views, _ = _landable_sweep(
-            state, slot, eye_z, max_steps, want_centres=False, v_primary=True
-        )
-        view = views.get(key)
-        if view is not None or not v_band:
-            return view
-        views, _ = _landable_sweep(
-            state, slot, eye_z, max_steps, want_centres=False, v_primary=False
-        )
-        return views.get(key)
-    return _landable_view_py(state, key, slot, eye_z, max_steps, v_band)
+    views, _ = _landable_sweep(
+        state, slot, eye_z, max_steps, want_centres=False, v_primary=True
+    )
+    view = views.get(key)
+    if view is not None:
+        return view
+    views, _ = _landable_sweep(
+        state, slot, eye_z, max_steps, want_centres=False, v_primary=False
+    )
+    return views.get(key)
 
 
 _HEADING_CACHE = {}
@@ -1455,65 +1391,17 @@ def landable_view_targeted(
 
     Marches only the rays that can land there: the heading arc (:func:`_tile_arc_indices`)
     narrowed by the landability filter (:func:`sentinel.landtable.landable_view`, ~4x fewer
-    rays); pure-Python probe when numba is absent.  ``cxs``/``cys`` override the cursor grid
-    (1px window); ``v_primary`` = :func:`_landable_sweep`'s $F5 plane, cys CURSOR_CY_FULL.
+    rays).  ``cxs``/``cys`` override the cursor grid (1px window); ``v_primary`` =
+    :func:`_landable_sweep`'s $F5 plane, cys CURSOR_CY_FULL.
     """
     if slot is None:
         slot = state.player
     key = (tile[0], tile[1])
-    if not _HAVE_JIT:
-        return _landable_view_py(state, key, slot, eye_z, max_steps, not v_primary)
     from sentinel import landtable  # deferred: landtable imports los
 
     return landtable.landable_view(
         state, key, slot, eye_z, kbd_grids(cxs, cys, v_primary), max_steps
     )
-
-
-def _landable_view_py(state, key, slot, eye_z, max_steps, v_band):
-    """Numba-absent fallback for :func:`landable_view`: pure-Python probes ordered from the
-    analytic bearing / cursor centre outward, short-circuiting on the first LOS landing.
-    """
-    tx0, ty0 = key
-    ex, ey = state.obj_x[slot], state.obj_y[slot]
-    h0 = _bearing_notch(ex, ey, tx0, ty0)
-    hgrid = sorted(range(0, 256, AZIMUTH_STEP), key=lambda h: _angle_dist(h0, h))
-    cxs = sorted(CURSOR_CX, key=lambda c: abs(c - SIGHTS_CX))
-    # $F5-plane probes have no body-v gap-fill -> the cursor cy must span the full ROM range;
-    # the pitched band (v_band) refills the cy gaps, so the 64px window suffices there.
-    cy_src = CURSOR_CY if v_band else CURSOR_CY_FULL
-    cys = sorted(cy_src, key=lambda c: abs(c - SIGHTS_CY))
-    vgrid = (
-        sorted(PITCH_BAND, key=lambda v: _angle_dist(KBD_V_ANGLE, v))
-        if v_band
-        else [KBD_V_ANGLE]
-    )
-    for v in vgrid:
-        for h in hgrid:
-            for cx in cxs:
-                for cy in cys:
-                    tx, ty, los = aim_target(
-                        state, h, v, cx, cy, slot, eye_z=eye_z, max_steps=max_steps
-                    )
-                    if los and tx == tx0 and ty == ty0:
-                        return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-    return None
-
-
-def _bearing_notch(ex, ey, tx, ty):
-    """The body-angle notch (0..255, multiple of AZIMUTH_STEP) nearest the bearing from
-    (ex,ey) to (tx,ty); 0 when the target is the observer's own tile."""
-    dx, dy = tx - ex, ty - ey
-    if dx == 0 and dy == 0:
-        return 0
-    ang = int(round(math.atan2(dy, dx) * 128.0 / math.pi)) & 0xFF
-    return (ang + AZIMUTH_STEP // 2) // AZIMUTH_STEP * AZIMUTH_STEP & 0xFF
-
-
-def _angle_dist(a, b):
-    """Shortest angular distance (0..128) between two 8-bit angles."""
-    d = (a - b) & 0xFF
-    return min(d, 256 - d)
 
 
 def _prepare_vector(state, h_angle, v_angle, cur_x, cur_y, player_slot):

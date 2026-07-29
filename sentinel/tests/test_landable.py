@@ -103,7 +103,7 @@ def test_generated_landscape_oracle_invariants(new_state):
     # views/view agreement: every swept tile resolves via the single-tile query too,
     # and the sweep's recorded aim actually lands on its tile with LOS.
     for tile, view in list(views.items())[:8]:
-        assert los.landable_view(st, tile, st.player, v_band=True) is not None
+        assert los.landable_view(st, tile, st.player) is not None
         tx, ty, ok = los.aim_target(
             st,
             view["h_angle"],
@@ -175,7 +175,7 @@ def test_ls335_adjacent_build_now_landable():
     """The ls335 opening (11,17)->(11,18) is an ADJACENT (below) build the human fired with
     the body pitched DOWN (v=225). It is NOT landable with v fixed at $F5, but IS once
     landable_views sweeps the body v_angle DOF -- so the v-complete oracle now returns it
-    directly (it used to need the landable_view(..., v_band=True) fallback)."""
+    directly (it used to need the landable_view fallback)."""
     for frm, to, rec in tile_ladder(LS335):
         if (frm, to) != ((11, 17), (11, 18)):
             continue

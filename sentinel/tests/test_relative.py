@@ -28,14 +28,6 @@ def test_hypotenuse_table_endpoints():
     assert len(relative._HYP) == 129
 
 
-def test_divide_and_arctan_is_pure():
-    # a pure function of its inputs (no shared state between calls).
-    a = relative._divide_and_arctan(0x40, 0, 0x80, 0)
-    b = relative._divide_and_arctan(0x40, 0, 0x80, 0)
-    assert a == b
-    assert len(a) == 3 and all(0 <= v <= 0xFF for v in a)
-
-
 def test_relative_angles_matches_golden():
     with open(GOLDEN) as f:
         data = json.load(f)

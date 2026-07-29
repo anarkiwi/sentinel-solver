@@ -229,9 +229,8 @@ Sight alone costs nothing. `target_object $1825` merely arms `$0C20` to 120 roun
 stick value, and **returns before the rotate at `$17F9` whenever an earlier branch fires** —
 so a busy enemy stops sweeping. `playerbase._cone_onset` does not model that stall
 ([open item 3](open_items.md#3-the-gaze-forecast-assumes-rotation-never-stalls)); the two
-consumers work around it in opposite ways — `_verify_starts` re-checks each forecast onset on
-a bit-exact clone, and the phase player never forecasts at all (`_drained_over` advances a
-clone over the span and looks).
+the phase player works around it by never forecasting at all (`_drained_over` advances a clone
+over the span and looks).
 
 | # | state entered | trigger | ROM | effect / next |
 |:-:|---|---|---|---|
@@ -283,8 +282,7 @@ Implemented in `sentinel/enemies.py` with a bit-identical numba twin `enemies_ji
 
 An action is not an instant. `playerbase._fire(verb, tile, view)` runs it as an ordered
 sequence of `(frames, plotting)` segments so the world evolves underneath it exactly as the
-ROM's does, and search and executor share the one sequence (`_aim_head_tail` +
-`advance_phases`).
+ROM's does, and search and executor share the one sequence (`_aim_head_tail`).
 
 | segment | ROM | frames | runs `$16B5`? |
 |---|---|---|---|
@@ -923,7 +921,7 @@ inside Docker, headless, and verifies each result from the game's own memory. Im
 | `play_player.py` | runner → `out/play_player_<digits>.json` |
 | `clock.py` | machine-side clock: `frames` (wrap-free `$9630` checkpoint hits), `run_frames` |
 | `boot.py` | tape boot with load-signature polling, bridge-IP lookup, container reaping, snapshots |
-| `sentinel_state.py` | live memory → `GameState` (`ViceSource`/`Py65Source`), `verify_entry`, `mem_image` |
+| `sentinel_state.py` | live memory → `GameState` (`ViceSource`/`Py65Source`), `verify_entry` |
 | `dump_stage2.py` | regenerates `out/sentinel_stage2.bin` from the tape (the `oracle` fixture) |
 | `instrument.py` | the frame-locked divergence race |
 | `frozen_run.py` | RTS-stubs `update_enemies $16B5` live: isolates frame-cost fidelity |

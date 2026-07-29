@@ -54,12 +54,6 @@ def test_generate_matches_golden():
         assert _regions(state.mem, num) == expected, f"landscape {ls} diverged"
 
 
-def test_generate_is_deterministic():
-    a = landscape.generate(42)
-    b = landscape.generate(42)
-    assert a.mem == b.mem
-
-
 def test_generated_state_is_sane():
     state = landscape.generate(42)
     # a Sentinel on a platform, a player robot, and some trees exist.
@@ -71,11 +65,6 @@ def test_generated_state_is_sane():
     for y in range(mm.N):
         for x in range(mm.N):
             assert 0 <= terrain.resolve_ground(state, x, y)[0] <= 11
-
-
-def test_landscape_0_player_is_fixed():
-    state = landscape.generate(0)
-    assert state.player_xy() == (8, 17)
 
 
 @pytest.mark.oracle

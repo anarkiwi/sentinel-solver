@@ -60,7 +60,7 @@ ROTATION_COOLDOWN_RELOAD = 0xC8  # $1813: 200 rounds after a rotation
 DRAINING_COOLDOWN_RELOAD = 0x78  # $1835: 120 rounds when first targeting
 COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
 # update_enemies ($16B5) calls modelled per frame. The ROM's foreground loop makes only ~3 passes/frame (measured cursor $0090 decrements {2:27, 3:192, 4:79}), but each enemy's own $16E9 update_cd gate (reload 4) rate-limits it far harder than the cursor does, so considering every slot each frame reproduces the ROM's clock and facings exactly (400/400 frames) while a literal 3 does not.
-UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "8"))  # == CURSOR_SLOTS
+UPDATES_PER_FRAME = int(os.environ.get("UPDATES_PER_FRAME", "8"))  # one per object slot
 MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
 MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
@@ -551,7 +551,6 @@ def step(state):
 # ---------------------------------------------------------------------------
 # real-game frame cadence: update_game_loop $1289 + raster IRQ $9663 / scroll $3684
 # ---------------------------------------------------------------------------
-CURSOR_SLOTS = 8  # $0090 cycles 7->0: a full cursor sweep considers every slot once
 
 
 def cooldown_frame(state):

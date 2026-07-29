@@ -24,18 +24,10 @@ import os
 from sentinel import aimcost as ac
 from sentinel import memmap as mm
 
-# run_until_pc hang guards. MEASURED: VICE services the binary monitor once per
-# emulated frame while the CPU runs (halted 0.04 ms/cmd, warp ~1.4 ms, real-time
-# pace ~23.5 ms == one PAL frame, independent of read size -- the encoder/disk are
-# irrelevant; recording matters only because video_record forces warp off). A pan
-# checkpoint recurs every frame, so a timeout here means a WAIT ON A PC OR
-# CONDITION THAT CANNOT RECUR (clamped pan, left the play loop) -- a bug to fix,
-# not back-pressure to wait out. Generous values only cost time on such bugs.
-_RU_PAN = float(os.environ.get("KBD_PAN_TIMEOUT", "20"))
-_RU_STA = float(os.environ.get("KBD_STA_TIMEOUT", "8"))
+# run_until_pc hang guard: a commit checkpoint recurs every emulated frame, so a timeout here is a WAIT ON A PC OR CONDITION THAT CANNOT RECUR (clamped pan, left the play loop) -- a bug to fix, not back-pressure to wait out.
 _RU_COMMIT = float(
     os.environ.get("KBD_COMMIT_TIMEOUT", "4")
-)  # socket backstop, one frame
+)  # socket backstop, 1 frame
 _PAN_STALL_FRAMES = (
     24  # > one notch scroll (16 h / 8 v): no commit this long => clamped
 )
@@ -212,22 +204,22 @@ class KbdDriver:
                     raise
         return False
 
-    def _one_scan_press(self, key, timeout=10.0):
-        """Hold `key` for EXACTLY ONE gated full input scan ($9678->$967B), after ONE
+    def _one_scan_press(self):
+        """Hold SPACE for EXACTLY ONE gated full input scan ($9678->$967B), after ONE
         IDLE scan with the key released. check_for_full_player_input latches an EDGE:
         SPACE toggles only when the previous scan saw it up ($11B5 LDA $1236 / BNE
         skip_sights_toggle; $11D4 clears $1236 only on a scan with SPACE not pressed).
         Without the idle re-arm, two presses with no released-key scan between them --
         sights OFF then ON across coarse pans that are both no-ops, so nothing runs
         frames in between -- have the second swallowed and retried by `sights_set`."""
-        r, c = _k(key)
+        r, c = _k("SPACE")
         with self.bm.halted():
             try:
-                self._run_to_scan(timeout)
+                self._run_to_scan(10.0)
                 self.bm.advance_instructions(1)  # off the anchor, into the scan
-                self._run_to_scan(timeout)  # that idle scan re-armed the latch
+                self._run_to_scan(10.0)  # that idle scan re-armed the latch
                 self.bm.keymatrix_set([(r, c, 1)])  # press WHILE HALTED
-                self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=timeout)
+                self.bm.run_until_pc(self.PC_IRQ_SCAN_DONE, timeout=10.0)
             finally:
                 self.bm.keymatrix_release_all()
         self._resume()
@@ -239,13 +231,13 @@ class KbdDriver:
         for _ in range(6):
             if bool(self.rd(A_SFLAG) & 0x80) == on:
                 return True
-            self._one_scan_press("SPACE")
+            self._one_scan_press()
         return bool(self.rd(A_SFLAG) & 0x80) == on
 
     def sights_on(self):
         return self.sights_set(True)
 
-    def _uturn(self, max_passes=5):
+    def _uturn(self):
         """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F,
         objects_h_angle EOR $80) -- the fast way across half the compass.
 
@@ -256,7 +248,7 @@ class KbdDriver:
         EOR $80s cancels. Confirm only after tap_action has let the action be consumed.
         """
         addr = A_H + self.slot()
-        for _ in range(max_passes):
+        for _ in range(5):
             before = self.rd(addr)
             if not self.tap_action(K_UTURN):
                 continue
@@ -362,7 +354,7 @@ class KbdDriver:
         self._resume()
         return ok or (self.rd(A_CX) == cx and self.rd(A_CY) == cy)
 
-    def tap_action(self, name, max_passes=45, settle=True):
+    def tap_action(self, name, settle=True):
         """Fire an action key EXACTLY ONCE. One full IDLE scan first: update_game
         zeroes $0C51 ($1281) and only an idle full scan re-arms $40 ($11EA); without it
         a u-turn latch is DROPPED at $1B2F (ASL $0C51 / BPL). Anchor at the gated full-scan
@@ -375,7 +367,7 @@ class KbdDriver:
         latched = False
         with self.bm.halted():
             try:
-                for _ in range(max_passes):
+                for _ in range(45):
                     self._run_to_scan()
                     self.bm.advance_instructions(1)  # off the anchor
                     self._run_to_scan()  # idle scan ran

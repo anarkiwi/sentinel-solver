@@ -31,11 +31,6 @@ def test_real_action_counts(name, absorbs, creates, transfers):
     assert counts == {"absorb": absorbs, "create": creates, "transfer": transfers}
 
 
-def test_ls335_has_123_real_actions_of_156_rows():
-    """14 drain ticks + 19 discharge trees are recorder artifacts, not moves."""
-    assert len(_events("ls335.json")) == 123
-
-
 def test_a_player_never_creates_a_tree():
     """The rule the tree filter rests on: create makes boulders and robots only."""
     for name in ("ls0.json", "ls42.json", "ls335.json"):

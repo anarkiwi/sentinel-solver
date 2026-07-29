@@ -149,16 +149,11 @@ def test_render_cost_matches_golden():
     _check(data)
 
 
-def test_examine_count_is_exact_and_scene_dependent():
+def test_examine_count_is_scene_dependent():
+    """Exactness is pinned by ``_check``; this pins that the count actually varies."""
     with open(GOLDEN) as f:
         data = json.load(f)
-    counts = set()
-    for key, rec in data.items():
-        ls, h, v = (int(x) for x in key.split(","))
-        _tiles, n_examine = projector.project_scene(landscape.generate(ls), h, v)
-        assert n_examine == rec["n_examine"]
-        counts.add(rec["n_examine"])
-    assert len(counts) > 5  # examine count varies strongly with scene/view
+    assert len({rec["n_examine"] for rec in data.values()}) > 5
 
 
 def test_object_base_never_overshoots_and_is_present():

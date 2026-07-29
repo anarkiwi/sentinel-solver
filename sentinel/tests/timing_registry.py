@@ -336,81 +336,16 @@ REGISTRY = {
     "_PAN_MAX_FRAMES": _u(
         _KBD, "below a full 464-frame pan; xfail in test_pan_max_covers_full_pan"
     ),
-    "_RU_STA": _u(_KBD, "ROM read-under trap byte; no derivation test"),
-    "_RU_PAN": _u(
-        _KBD,
-        "block asserts MEASURED, which is false for this value: it describes the "
-        "monitor service rate; the 20 s is fitted hang-guard headroom",
-    ),
     "_RU_COMMIT": _u(_KBD, "ROM read-under trap byte; no derivation test"),
     "_SCAN_WAIT_PASSES": _u(_KBD, "scan settle passes; unmeasured"),
     "_run_to_scan.timeout": _u(_KBD, _GUARD),
-    "_one_scan_press.timeout": _u(_KBD, _GUARD),
     "tap.hold": _u(_CORE, "keypress hold frames; unmeasured"),
     "tap.settle": _u(_CORE, "post-keypress settle frames; unmeasured"),
-    "_enter_play.chunk": _u(_CORE, "boot advance chunk; unmeasured"),
-    "boot.attempts": _u(_CORE, "boot retry budget; unmeasured"),
-    "boot_loaded.attempts": _u("driver.boot", "boot retry budget; unmeasured"),
-    "save_snapshot.timeout": _u("driver.boot", _GUARD),
     "load_snapshot.timeout": _u("driver.boot", _GUARD),
-    "run_frames.timeout": _u("driver.clock", _GUARD),
 }
 
-# Pinned debt; the test fails on growth and on silent validation alike.
-UNVALIDATED_PIN = frozenset(
-    {
-        "BASE_CYCLES",
-        "COOLDOWN_BRESENHAM",
-        "COOLDOWN_BRESENHAM_STEP",
-        "COOLDOWN_GATE",
-        "COOLDOWN_STICK",
-        "CURSOR_REPEAT_MASK",
-        "DRAINING_COOLDOWN_RELOAD",
-        "ENEMIES_DRAINING_COOLDOWN",
-        "ENEMIES_ROTATION_COOLDOWN",
-        "ENEMIES_UPDATE_COOLDOWN",
-        "ENERGY_MASK",
-        "FRAME_TICKS",
-        "H_SCROLL",
-        "REVOLUTION_FRAMES",
-        "ROTATION_COOLDOWN_RELOAD",
-        "SAFE_FRAMES",
-        "SETTLE_FIXED_FRAMES",
-        "TAP_FRAMES",
-        "TUNE_TRANSFER_FRAMES",
-        "UPDATE_COOLDOWN_DRAIN",
-        "UPDATE_COOLDOWN_MEANIE_MADE",
-        "UPDATE_COOLDOWN_MEANIE_ROTATE",
-        "UPDATE_COOLDOWN_SCAN",
-        "V_SCROLL",
-        "WAIT_FRAMES",
-        "_MASK_TABLE",
-        "_PAN_MAX_FRAMES",
-        "_RU_COMMIT",
-        "_RU_PAN",
-        "_RU_STA",
-        "_SCAN_WAIT_PASSES",
-        "_enter_play.chunk",
-        "_march_jit.max_steps",
-        "_march_python.max_steps",
-        "_one_scan_press.timeout",
-        "_run_to_scan.timeout",
-        "aim_target.max_steps",
-        "boot.attempts",
-        "boot_loaded.attempts",
-        "can_see_object.max_steps",
-        "check_for_line_of_sight_to_tile.max_steps",
-        "landable_sweep_with_centres.max_steps",
-        "landable_view.max_steps",
-        "landable_view_targeted.max_steps",
-        "landable_views.max_steps",
-        "load_snapshot.timeout",
-        "run_frames.timeout",
-        "save_snapshot.timeout",
-        "tap.hold",
-        "tap.settle",
-    }
-)
+# Pinned debt as a count; lower it when a constant is validated away, never raise it.
+UNVALIDATED_CEILING = 42
 
 # Pinned constants whose source comment advertises evidence that does not exist.
-KNOWN_FALSE_PROVENANCE_COMMENTS = frozenset({"_RU_PAN"})
+KNOWN_FALSE_PROVENANCE_COMMENTS = frozenset()

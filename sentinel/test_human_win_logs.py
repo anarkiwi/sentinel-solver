@@ -189,14 +189,14 @@ def test_transfer_target_is_robot(name, idx):
 @pytest.mark.parametrize("name,idx", _landable_params())
 def test_build_tile_is_aim_landable(name, idx):
     """Every tile the human built/absorbed on must be reachable by SOME keyboard aim
-    (``landable_view(v_band=True)``, the targeted single-tile form -- it sweeps the cheap
+    (``landable_view``, the targeted single-tile form -- it sweeps the cheap
     $F5 plane first and only falls to the full pitch band when needed, so each event is one
     cheap march in the common case rather than a full-board sweep)."""
     ev = _load(name)["events"][idx]
     st = state_from_event(ev, _load(name)["landscape"])
     pl = ev["player"]
     target = tuple(ev["target"])
-    view = los.landable_view(st, target, pl["slot"], eye_z=pl["z"], v_band=True)
+    view = los.landable_view(st, target, pl["slot"], eye_z=pl["z"])
     assert view is not None, (
         f"{name} ev{idx} {ev['verb']} target {target} from ({pl['x']},{pl['y']}) "
         f"eye_z={pl['z']} is NOT aim-landable"

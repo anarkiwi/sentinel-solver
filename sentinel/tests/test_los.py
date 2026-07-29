@@ -14,9 +14,6 @@ from sentinel import los, terrain, memmap as mm
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_los.json")
 
-# every mem span the golden fixture stores (matches the LOS reads).
-_SPANS = None
-
 
 def _golden():
     with open(GOLDEN) as f:

@@ -23,41 +23,39 @@ otherwise rounded eye fabricates line of sight the real eye does not have.
 from sentinel import los
 
 
-def resolve(state, view, eye_z=None, player=None):
+def resolve(state, view, eye_z=None):
     """Raw ROM aim: march the sights ``view`` and return ``(tile, los)`` -- the tile
     the ray reaches and whether line of sight is clear -- at the player's true eye.
     ``los.aim_target``, the port of prepare_vector_from_player_sights $1C10 +
     check_for_line_of_sight_to_tile $1CDD ($1B40-$1B46)."""
-    p = state.player if player is None else player
     tx, ty, seen = los.aim_target(
         state,
         view["h_angle"],
         view["v_angle"],
         view["cursor"][0],
         view["cursor"][1],
-        p,
+        state.player,
         eye_z=eye_z,
     )
     return (tx, ty), bool(seen)
 
 
-def gate(state, view, tile, eye_z=None, player=None):
+def gate(state, view, tile):
     """True iff the sights ``view`` reaches ``tile`` with line of sight at the true
     eye -- the ROM's action-time LOS gate ($1B46).  A player create/absorb is valid
     only when this holds; ``view`` None (no aim resolved) is never valid."""
     if view is None:
         return False
-    hit, seen = resolve(state, view, eye_z=eye_z, player=player)
+    hit, seen = resolve(state, view)
     return seen and hit == tuple(tile)
 
 
-def propose(state, tile, eye_z=None, player=None, v_band=True):
+def propose(state, tile, eye_z=None):
     """A keyboard-lattice view whose :func:`gate` holds for ``tile`` at the true eye,
     or None when no keyboard aim lands on it.  ``los.landable_view`` (the sights-cursor
     sweep) is the single proposer for every consumer.  The returned cursor is a fresh
     list so callers may mutate it."""
-    p = state.player if player is None else player
-    view = los.landable_view(state, tuple(tile), p, eye_z=eye_z, v_band=v_band)
+    view = los.landable_view(state, tuple(tile), state.player, eye_z=eye_z)
     if view is not None:
         view = {**view, "cursor": list(view["cursor"])}
     return view

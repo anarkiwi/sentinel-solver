@@ -292,22 +292,9 @@ def audit_fixture(name):
     }
 
 
-def artifact_path(name):
-    return os.path.join(_FIX_DIR, name[:-5] + "_audit.json")
-
-
-def _default(o):
-    if o == math.inf:
-        return "inf"
-    raise TypeError(repr(o))
-
-
 def main():
     for name in FIXTURES:
-        audit = audit_fixture(name)
-        with open(artifact_path(name), "w", encoding="utf-8") as fh:
-            json.dump(audit, fh, indent=1, default=_default)
-        s = audit["summary"]
+        s = audit_fixture(name)["summary"]
         counts = {k: len(v) for k, v in s["disagreement_steps_by_code"].items()}
         print(
             f"{name}: energy {s['energy_model_agree']}/{s['n_steps']} "

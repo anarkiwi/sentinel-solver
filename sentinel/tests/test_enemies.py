@@ -99,9 +99,13 @@ def _drive_meanie_rom(ls, checkpoints):
     return out
 
 
-def _drive_meanie_golden():
-    """{landscape: {round: snap}} across every MEANIE_RUNS landscape (needs ROM)."""
-    return {str(ls): _drive_meanie_rom(ls, cps) for ls, cps in MEANIE_RUNS.items()}
+@pytest.mark.oracle
+def test_regenerate_meanie_golden():
+    """Rebuild ``golden_meanie.json`` from the real 6502 and replay it (needs ROM)."""
+    data = {str(ls): _drive_meanie_rom(ls, cps) for ls, cps in MEANIE_RUNS.items()}
+    with open(GOLDEN_MEANIE, "w") as f:
+        json.dump(data, f, indent=0)
+    test_meanie_lifecycle_matches_golden()
 
 
 def test_step_matches_golden():

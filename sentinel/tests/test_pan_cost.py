@@ -9,6 +9,7 @@ import json
 import math
 import os
 import statistics
+import tempfile
 
 import pytest
 
@@ -114,11 +115,16 @@ def _rows():
 @pytest.mark.oracle
 def test_regenerate_pan_cost_golden():
     """Cycle-count pan_viewpoint across the sweep in py65 and dump the golden.
-    Writes via rename so a concurrent xdist worker never reads a half-written file."""
-    tmp = f"{GOLDEN}.{os.getpid()}"
-    with open(tmp, "w") as fh:
-        json.dump(_build_golden(), fh, separators=(",", ":"), sort_keys=True)
-    os.replace(tmp, GOLDEN)
+    Writes via rename so a concurrent xdist worker never reads a half-written file;
+    the temp name is unlinked on any failure so an abort leaves nothing behind."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(GOLDEN), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(_build_golden(), fh, separators=(",", ":"), sort_keys=True)
+        os.replace(tmp, GOLDEN)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     test_pan_notch_selects_the_same_tiles_as_the_rom()
 
 
