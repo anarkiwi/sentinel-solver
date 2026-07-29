@@ -163,29 +163,7 @@ body's energy alone, so the abandoned robot's downgrade is simulated and then di
 **Resolves.** A threat query over the abandoned stack's own exposure, so a hop out of a gaze is
 charged what it actually costs.
 
-## 12. An entry stance with no landable tile freezes the planner
-
-**Wrong.** Where the entry stance can land nothing, every generator returns empty and the
-planner takes no action at all — it is not beaten, it never starts.
-
-**Measured.** ls9795, the hardest of the 10000 by `sentinel.atlas` ranking (8 enemies,
-roughness 0.514, climb 8.125). The run ends on the action cap: **0 actions, 12000 frames,
-energy 10, alive**. From the entry tile `(9,18)` at eye 3.875 both landable sets are empty
-— band 0, `$F5` plane 0 — so `_climb_candidates` and `_establish` have nothing to iterate,
-no reclaim target is in view, and `_under_fire` is false, so the cornered fallback in
-`_tick` never fires either. The eight enemies stand at heights 7, 8, 9, 9, 9, 10, 10, 12.
-No board in the eight-board suite has an empty landable set at entry, so nothing exercises
-this path.
-
-**Resolves.** Hyperspace is the move class the planner lacks. `$216A` spends 3 and
-relocates the body without needing line of sight, and `phase_player` calls `_hyperspace()`
-from exactly one site — `_finish`, the win move. Jumping once from entry moves the body to
-`(3,1)` for 3 energy and raises the landable set from 0 to 1 — but still with no affordable
-climb, so the fix is not "hyperspace when stuck once". It is to treat relocation as a move
-the planner can choose and evaluate like any other: the landing is judged by what it can
-land and eat, and the purse bounds how many jumps are affordable ($2170 kills on underflow).
-
-## 13. The hardest boards are unsolved, and mostly unfinished
+## 12. The hardest boards are unsolved, and mostly unfinished
 
 **Wrong.** Against the 128 hardest landscapes of the 10000 the planner wins 3, and two
 thirds of the runs do not finish at all.
@@ -203,25 +181,30 @@ time. Codes and per-board results are in `out/hardest_128.json` and
 | did not finish in 180 s | 84 |
 
 For scale, the eight boards the suite validates against rank 487th (ls335) to 9874th
-(ls0), and none has 8 enemies.
+(ls0), and none has 8 enemies. The table is that one sweep: only the 8 paralysed boards
+below have been re-run since, so the 84 unfinished and the 41 lost are **not** current
+measurements.
 
 Three distinct failures sit underneath that, and they need different fixes:
 
 * **Runtime, 84 boards.** Two thirds never reach a verdict. This is not a strategy limit
   and it dominates every other signal here; see [1](#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
   82 of the 84 had climbs available at entry, so they were playing, not stuck.
-* **Paralysis, 18 boards.** The planner takes zero actions. 8 have no landable tile at
-  entry at all ([12](#12-an-entry-stance-with-no-landable-tile-freezes-the-planner)); the
-  other 10 *can* land somewhere but generate no climb candidate from it, so the same
-  missing move class -- relocation -- covers both, and the second group shows the trigger
-  is "no move I will commit to", not "nowhere to stand".
+* **Paralysis, 10 boards, was 18.** The planner takes zero actions. The 8 with no landable
+  tile at entry at all now play: relocation is a move class
+  ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
+  they are **ls7414 won in 59, ls8589 won in 46**, ls9785 lost 28, ls9364 lost 14, ls9795
+  lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- 2 wins where there were 0
+  actions. The other 10 *can* land somewhere but generate no climb candidate from it and
+  are **not** re-measured here; that group shows the trigger is "no move I will commit to",
+  not "nowhere to stand", so `_barren` is the predicate to widen next.
 * **Genuine loss, 23 boards.** Played and lost. Only these are strategy failures, and they
   are the smallest class.
 
 **Resolves.** The order is forced by the numbers: make a solve finish before judging
 whether it wins. Until the 84 are resolved the win rate is a floor, not a measurement.
 
-## 14. Arbitration charges an option with its continuation's mistakes
+## 13. Arbitration charges an option with its continuation's mistakes
 
 **Wrong.** `_arbitrate` scores each option on a fork with `rollout=True` — the fixed
 breakout/supply/harvest/mount ladder — so an option is judged by a continuation the
@@ -288,6 +271,46 @@ to prevent (4 options × N ticks squared per decision), and which scoring instea
 disproved below. Until one exists `ARBITRATE_ACTIONS` bounds the damage and no probe change
 can be credited with the eight-board result.
 
+## 14. The stance-base convention double-counts a robot's eye
+
+**Wrong.** `actions.create` gives an object on bare terrain `z_frac = $E0` (`$1F66`), so a
+stored z **already** carries a robot's eye fraction. `phase_player._stance_base` returns a
+*foot* for a bare tile but `_base_z(top) + BOULDER_H` — already a robot eye — for a stacked
+one, and `_climb_candidates` adds `ROBOT_EYE` to both. So on any tile already carrying a
+boulder or platform the predicted eye is a whole eye high: `gain` is overstated, `k` is
+under-computed, and a climb that actually *descends* can rank first. `_mount` has the same
+bug on a robot's own z, so it can transfer downward — the overstatement, 0.875, exceeds
+`EYE_EPS` (0.1) by enough to select a body up to 0.775 *below* the current eye.
+`playerbase._robot_eye_after_boulder` gets the convention right, so two functions in tree
+disagree.
+
+**Measured.** Built and compared on ls42, tile `(4,4)`, terrain height 6: what the ranker
+predicts against the actual eye of a robot built there
+(`test_the_predicted_climb_eye_is_the_eye_a_robot_built_there_gets`, a strict xfail).
+
+| boulders already on tile | k | predicted | actual | error |
+|---|---|---|---|---|
+| 0 | 0 | 6.875 | 6.875 | 0 |
+| 0 | 1 | 7.375 | 7.375 | 0 |
+| 1 | 0 | 8.25 | 7.375 | **+0.875** |
+| 1 | 1 | 8.75 | 7.875 | **+0.875** |
+| 2 | 0 | 8.75 | 7.875 | **+0.875** |
+| 2 | 1 | 9.25 | 8.375 | **+0.875** |
+
+**Measured — why it is not simply fixed.** One convention (`_stance_base` returns the eye a
+robot built there would have now; `_climb_candidates` drops `ROBOT_EYE`; `_mount` reads the
+robot's own eye) **loses ls373** — 45-action win → dead in 17, E=0 — and that is the only
+suite board it loses: ls0 16, ls42 35, ls60 44, ls110 51, ls298 32, ls321 35, ls335 55 all
+still win. Off the suite it is an improvement: of the eight formerly paralysed boards
+(item 12) it takes ls9785 from lost in 28 to **won in 95** and ls7414 from 59 to 54 actions.
+Reverting the geometry alone, with the relocation, harvest and fork fixes left in place,
+restores ls373 exactly (45 actions, 17403 f) — so the arithmetic is the sole cause.
+
+**Resolves.** One convention across `_stance_base`, `_climb_candidates`, `_mount` and
+`_robot_eye_after_boulder`, with ls373 *diagnosed* rather than traded away. The fix changes
+which climb ranks first, and item 13 is why a different first climb can lose a board the
+planner otherwise wins — so that attribution is the blocker here too.
+
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
@@ -295,7 +318,12 @@ Each is a hypothesis and the measurement that killed it.
 - **ls373's lost win was a safety-probe margin the aim over-charge was supplying.** The one
   probe that decides the board accepts a landing that is genuinely survivable, six probe
   models leave it lost, and the verdict moves with `ARBITRATE_ACTIONS` alone
-  ([14](#14-ls373-turns-on-the-arbitration-horizon-not-on-the-safety-probes)).
+  ([13](#13-arbitration-charges-an-option-with-its-continuations-mistakes)).
+- **A relocation needs an energy floor above the ROM's own 3.** Floors of 5 and 8 leave every
+  board that matters bit-identical — ls7414 won in 59 and ls8589 won in 46 at 3, 5 and 8;
+  ls9364 lost 14 and ls6725 lost 6 at all three — and are strictly worse on two already-lost
+  boards: at floor 8 ls9795 and ls5916 cannot afford the jump, stop acting after 4 and 1
+  actions and idle to the cap alive, which is the paralysis the move exists to end.
 - **The transfer settle over-charges systematically.** The measurement was clipped by the 6 s
   wall-clock `run_until_pc` in `tap_action`, which caps a reading at ~300 frames.
 - **Correcting the settle's viewpoint reduces it.** It moves the settle **up**.

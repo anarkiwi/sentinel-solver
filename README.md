@@ -28,11 +28,11 @@ python -m driver.instrument 42          # race the model against the ROM, frame 
 |---|---|---|---|
 | 0 | 1 | 16 | — |
 | 42 | 2 | 35 | — |
-| 60 | 7 | 46 | — |
+| 60 | 7 | 41 | — |
 | 110 | 3 | 49 | — |
 | 298 | 7 | 32 | — |
 | 321 | 7 | 35 | — |
-| 335 | 7 | 58 | **66 actions** |
+| 335 | 7 | 55 | **66 actions** |
 | 373 | 7 | 45 | — |
 
 A landscape is identified by one number: the one a player types on the keypad. Every tool

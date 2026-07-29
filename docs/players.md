@@ -71,6 +71,23 @@ Each is a fact about the ROM, not a tuned quantity.
   unguarded climb will spend the hyperspace toll on height.
 * **A tie is settled by the outcome** — when the score cannot separate candidates it holds
   no information about them, so each is played to the end and one that wins is kept.
+* **A policy reports whether it MOVED**, not whether its goal was met — `_arbitrate` drops
+  every option whose policy returned False, so `_harvest` answering `_refuel`'s question
+  ("do I now hold `want`") discarded a taken absorb whenever one +1 tree was all there was.
+  Measuring the purse before and after instead shortened ls60 (46 → 41) and ls335 (58 → 55).
+* **A stance that offers nothing is left, not waited out** — `_barren` is every generator
+  *empty* (no landable tile at all, or nothing absorbable, reclaimable, climbable or
+  mountable in view), which is a different state from every generator *refusing*: the second
+  is a wait, the first cannot change by waiting. `_relocate` then fires `$216A`, the one move
+  that shifts the body with no sightline, for the 3-energy toll.
+
+**Relocation is taken, never scored.** The landing tile is PRNG-driven (`$2165 JSR $1238`)
+and this model treats it as unknowable, so there is nothing to rank: a barren stance has no
+income and no climb, so it loses whether or not a cone ever finds it, and any landing is
+weakly better. The purse is the entire gate — `$2170` kills on underflow, so 3 in hand is
+both necessary and sufficient. It is the *last* thing `_tick` tries, below the cornered
+robot-drop, so it can never pre-empt a move that exists. A floor above the ROM's own 3 is a
+dead lever, measured (see [open items, disproved](open_items.md#disproved--do-not-resurrect)).
 
 ### Results
 
@@ -82,14 +99,19 @@ does not depend on host load.
 | ls0 | 1 | won | 16 | 1 |
 | ls42 | 2 | won | 35 | 1 |
 | ls110 | 3 | won | 49 | 7 |
-| ls60 | 7 | won | 46 | 3 |
+| ls60 | 7 | won | 41 | 4 |
 | ls298 | 7 | won | 32 | 2 |
 | ls321 | 7 | won | 35 | 2 |
 | ls373 | 7 | won | 45 | 0 |
-| ls335 | 7 | won | 58 | 0 |
+| ls335 | 7 | won | 55 | 3 |
 
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
+
+Off the suite, relocation puts the eight hardest-128 boards that took **zero** actions into
+play: ls7414 won in 59, ls8589 won in 46, and the other six lose in 5-28 actions instead of
+idling to death
+([open item 12](open_items.md#12-the-hardest-boards-are-unsolved-and-mostly-unfinished)).
 
 **The arbitration horizon is a bound, not a depth.** `_arbitrate` scores each option on a fork
 that plays the FIXED rollout ladder, so when that continuation blunders the death is charged to
@@ -99,7 +121,7 @@ arbitrating player absorbs `(14,3)` and goes on to win. Deeper lookahead therefo
 of the ladder's errors: `ARBITRATE_ACTIONS` 3, 4, 5, 6 and 8 all lose ls373, and off the suite
 deeper search returns longer solutions. 2 bounds the damage and wins all eight; what needs
 fixing is the attribution, in
-[open item 14](open_items.md#14-arbitration-charges-an-option-with-its-continuations-mistakes).
+[open item 13](open_items.md#13-arbitration-charges-an-option-with-its-continuations-mistakes).
 
 ### The tie that decided ls110
 
