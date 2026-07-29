@@ -49,12 +49,18 @@ def notch_plots(h0, v0, h1, v1):
     return out
 
 
-def notch_frames(state, direction, plot_h, plot_v, observer=None):
+def notch_frames(state, direction, plot_h, plot_v, observer=None, skey=None):
     """Frames one pan notch costs: the strip clear plus the ONE plot_world it runs at
     the intermediate angle, through that direction's $2993 buffer mode. Excludes the
     queued scroll steps, which the caller charges as H_SCROLL/V_SCROLL."""
     obs = state.player if observer is None else observer
-    key = (projector.scene_key(state), obs, direction, plot_h, plot_v)
+    key = (
+        projector.scene_key(state) if skey is None else skey,
+        obs,
+        direction,
+        plot_h,
+        plot_v,
+    )
 
     def make():
         mode = PAN_MODE[direction]
@@ -68,8 +74,13 @@ def notch_frames(state, direction, plot_h, plot_v, observer=None):
 
 def pan_frames(state, h0, v0, h1, v1, scroll, observer=None):
     """Total frames a keyboard aim from (``h0``, ``v0``) to (``h1``, ``v1``) spends
-    panning: per notch, its own redraw plus ``scroll[axis]`` queued scroll steps."""
+    panning: per notch, its own redraw plus ``scroll[axis]`` queued scroll steps.  The
+    scene digest is taken once -- an aim prices up to 30 notches off one board."""
+    plots = notch_plots(h0, v0, h1, v1)
+    if not plots:
+        return 0
+    skey = projector.scene_key(state)
     return sum(
-        notch_frames(state, d, ph, pv, observer) + scroll[0 if d < V_UP else 1]
-        for d, ph, pv in notch_plots(h0, v0, h1, v1)
+        notch_frames(state, d, ph, pv, observer, skey) + scroll[0 if d < V_UP else 1]
+        for d, ph, pv in plots
     )

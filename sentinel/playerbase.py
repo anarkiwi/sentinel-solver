@@ -25,7 +25,7 @@ CURSOR_RAMP = float(
 SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
 TOGGLE_FRAMES = 12  # sights OFF (~0) + ON (~10: $134C recentre + plot_sights), measured
 TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
-UTURN_FRAMES = 74  # a u-turn is a full action tap (want-flag $23, kbd_aim._uturn), not a bare keystroke: idle+press scans plus the action's own consumption. Live ls42 p1, n=1.
+UTURN_FRAMES = 77  # a u-turn is a full action tap (want-flag $23, kbd_aim._uturn), not a bare keystroke: idle+press scans plus the action's own consumption. Pooled live n=9, mean 76.6 (ls42 p1 74, eight ls335 rows 33..180): the sample spread is 2.5x the mean, so this is a central value, not a bound.
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
 REVOLUTION_STEPS = 14  # rotations covering a full 256-bearing turn at the +-20 step
@@ -52,25 +52,97 @@ def _signed(b):
     return b - 256 if b >= 128 else b
 
 
-def _aim_cost(idx, grids, aim_from):
-    """Keyboard aim cost of lattice rays ``idx`` from facing ``aim_from``: u-turn-aware
-    bearing notches, then pitch notches, then cursor distance from the $134C recentre
-    point."""
+def aim_phases(st, view, aim_from, observer, cursor_from=None):
+    """A keyboard aim to ``view`` from facing ``aim_from``, as ordered
+    ``(frames, plotting)`` segments.  ``cursor_from`` is the live cursor of a
+    same-bearing REUSE, which keeps sights on; None toggles them and $134C re-centres.
+    Pure in ``st``: the executor and the view SELECTION price through this one call."""
+    h0, v0 = int(aim_from[0]), int(aim_from[1])
+    nu = aimcost.h_press_count(h0, view["h_angle"])[0]
+    toggles = 0 if cursor_from is not None else TOGGLE_FRAMES
+    cur_from = SIGHTS_CENTRE if cursor_from is None else cursor_from
+    # move_sights ($9958) steps cx and cy in ONE call: a diagonal drive costs max(|dx|,|dy|) gated scans, plus the $0CC8 ramp, and nothing at all when parked.
+    cur = max(
+        abs(view["cursor"][0] - cur_from[0]),
+        abs(view["cursor"][1] - cur_from[1]),
+    )
+    cur = cur + CURSOR_RAMP if cur else 0.0
+    # Each notch scrolls then replots the strip at its own intermediate angle; the u-turn ($1B2F EOR $80) is one keystroke with no scroll and no replot.
+    pan = pancost.pan_frames(
+        st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, observer
+    )
+    return (
+        (toggles, True),
+        (nu * UTURN_FRAMES, False),
+        (pan, True),
+        (cur + TAP_FRAMES, False),
+    )
+
+
+def aim_frames(st, view, aim_from, observer, cursor_from=None):
+    """Total frames :func:`aim_phases` costs."""
+    return sum(f for f, _ in aim_phases(st, view, aim_from, observer, cursor_from))
+
+
+def _lattice_terms(idx, grids, aim_from):
+    """Keyboard terms of lattice rays ``idx`` from facing ``aim_from``: ``(bearing/pitch
+    cell, u-turn presses, bearing notches, pitch notches, cursor drive)`` -- the pieces
+    :func:`aim_frames` is built from."""
     hgrid, vgrid, cxs, cys = grids
     per_h, per_v = len(cxs) * len(cys), len(hgrid) * len(cxs) * len(cys)
     vi, rem = np.divmod(idx, per_v)
     hi, rem2 = np.divmod(rem, per_h)
     cxi, cyi = np.divmod(rem2, len(cys))
     h0, v0 = aim_from
-    h = np.asarray(hgrid)[hi]
-    v = np.asarray(vgrid)[vi]
-    dh = np.abs(((h - h0) + 128) % 256 - 128) // aimcost.AZIMUTH_STEP
-    dv = np.abs(((v - v0) + 128) % 256 - 128) // aimcost.PITCH_STEP
-    cur = np.maximum(
-        np.abs(np.asarray(cxs)[cxi] - los.SIGHTS_CX),
-        np.abs(np.asarray(cys)[cyi] - los.SIGHTS_CY),
+    dh = (
+        np.abs(((np.asarray(hgrid)[hi] - h0) + 128) % 256 - 128) // aimcost.AZIMUTH_STEP
     )
-    return np.minimum(dh, 17 - dh) * 1000 + dv * 100 + cur
+    dv = np.abs(((np.asarray(vgrid)[vi] - v0) + 128) % 256 - 128) // aimcost.PITCH_STEP
+    nu = (1 + (aimcost.UTURN_STEP - dh) < dh).astype(np.int64)  # aimcost.h_press_count
+    ns = np.where(nu > 0, aimcost.UTURN_STEP - dh, dh)
+    cur = np.maximum(
+        np.abs(np.asarray(cxs)[cxi] - SIGHTS_CENTRE[0]),
+        np.abs(np.asarray(cys)[cyi] - SIGHTS_CENTRE[1]),
+    )
+    return vi.astype(np.int64) * len(hgrid) + hi, nu, ns, dv, cur
+
+
+def _aim_bound(nu, ns, dv, cur):
+    """:func:`aim_frames` with every notch's ``projector.render_cost`` dropped: a notch
+    costs at least its strip clear plus its queued scroll and a render is never negative,
+    so this is an ADMISSIBLE lower bound."""
+    drive = np.where(cur > 0, cur + CURSOR_RAMP, 0.0)
+    return (
+        TOGGLE_FRAMES
+        + TAP_FRAMES
+        + nu * UTURN_FRAMES
+        + ns * (pancost.CLEAR_FRAMES[0] + H_SCROLL)
+        + dv * (pancost.CLEAR_FRAMES[1] + V_SCROLL)
+        + drive
+    )
+
+
+def _cheapest_ray(st, rays, grids, aim_from, observer):
+    """The frame-cheapest of ``rays`` (ascending), proved rather than sampled:
+    :func:`aim_frames` pans by (h, v) alone and drives the cursor by the cursor alone,
+    so one representative per cell -- the cursor nearest :data:`SIGHTS_CENTRE` -- covers
+    the minimum, and pricing in :func:`_aim_bound` order stops at the first bound hit.
+    """
+    cell, nu, ns, dv, cur = _lattice_terms(rays, grids, aim_from)
+    order = np.lexsort((rays, cur, cell))
+    cs = cell[order]
+    head = order[np.concatenate(([True], cs[1:] != cs[:-1]))]
+    reps = rays[head]
+    bound = _aim_bound(nu[head], ns[head], dv[head], cur[head])
+    best_frames, best = math.inf, -1
+    for j in np.argsort(bound, kind="stable"):
+        if bound[j] > best_frames:  # ties still priced: the winner is the lowest ray
+            break
+        ray = int(reps[j])
+        frames = aim_frames(st, _view_at(ray, grids), aim_from, observer)
+        if frames < best_frames or (frames == best_frames and ray < best):
+            best_frames, best = frames, ray
+    return best
 
 
 def _view_at(idx, grids):
@@ -80,13 +152,10 @@ def _view_at(idx, grids):
 
 
 def _cheap_views(st, v_primary, aim_from):
-    """Landable views choosing, per tile, the MIN-AIM-COST keyboard view from facing
-    ``aim_from`` (:func:`_aim_cost`, ties broken by lattice index) -- same tile
-    membership as ``los.landable_sweep_with_centres``, cheapest representative view.
-
-    Only :func:`landtable.landing_rays` is marched, a proven superset of the rays that
-    land anywhere, so the dict (tiles, views AND insertion order, which is by winning
-    lattice index) is the full sweep's for ~15% of its rays."""
+    """Landable views choosing, per tile, the FRAME-CHEAPEST keyboard view from facing
+    ``aim_from`` (:func:`_cheapest_ray`) -- the tile membership of
+    ``los.landable_sweep_with_centres``, for ~15% of its rays.  Only
+    :func:`landtable.landing_rays` is marched; insertion order is by winning ray."""
     if not los._HAVE_JIT:
         return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
     grids = landtable.lattice(v_primary=v_primary)
@@ -101,12 +170,15 @@ def _cheap_views(st, v_primary, aim_from):
         return views
     clear = idx[hit]
     key = (tx[hit].astype(np.int64) << 16) | ty[hit].astype(np.int64)
-    cost = _aim_cost(clear, grids, aim_from)
-    order = np.lexsort((clear, cost, key))
+    order = np.argsort(key, kind="stable")  # rays stay ascending inside each tile
     ks = key[order]
-    head = order[np.concatenate(([True], ks[1:] != ks[:-1]))]
-    for i in head[np.argsort(clear[head], kind="stable")]:
-        views[(int(key[i] >> 16), int(key[i] & 0xFFFF))] = _view_at(clear[i], grids)
+    cuts = np.flatnonzero(np.concatenate(([True], ks[1:] != ks[:-1], [True])))
+    won = sorted(
+        (_cheapest_ray(st, clear[order[a:b]], grids, aim_from, slot), int(ks[a]))
+        for a, b in zip(cuts[:-1], cuts[1:])
+    )
+    for ray, tile in won:
+        views[(tile >> 16, tile & 0xFFFF)] = _view_at(ray, grids)
     return views
 
 
@@ -114,8 +186,8 @@ def _cheap_view(st, tile, v_primary, aim_from):
     """The :func:`_cheap_views` entry for ONE tile, bit-identical, without the sweep.
 
     Only :func:`landtable.candidates` is marched -- a proven superset of the rays that
-    can land ``tile`` -- and the same min-(cost, index) rule picks the winner, so a
-    candidate set that lands nothing is a proven "no view"."""
+    can land ``tile`` -- and :func:`_cheapest_ray` picks over the same landing rays, so
+    a candidate set that lands nothing is a proven "no view"."""
     tile = (int(tile[0]), int(tile[1]))
     slot = st.player
     if landtable.never_lands(st, tile, slot):
@@ -130,8 +202,7 @@ def _cheap_view(st, tile, v_primary, aim_from):
     )
     if not hit.size:
         return None
-    sel = idx[hit]  # ascending: argmin takes the lowest index among min-cost rays
-    return _view_at(sel[np.argmin(_aim_cost(sel, grids, aim_from))], grids)
+    return _view_at(_cheapest_ray(st, idx[hit], grids, aim_from, slot), grids)
 
 
 class _Views:
@@ -540,40 +611,18 @@ class BasePlayer:
 
     # ------------------------------------------------------------------- aim
     def _aim_phases(self, view):
-        """The aim as ordered ``(frames, plotting)`` segments, mechanism for mechanism.
-
-        A same-bearing REUSE keeps sights on and drives the cursor from where it is;
-        otherwise sights toggle off/on ($134C re-centres the cursor) before the coarse
-        pan and a from-centre drive.  The toggle's replot and the pan's per-notch
-        scroll+replot are foreground ($16B5 unreached); the u-turn taps, the cursor
-        drive and the firing tap are gated main-loop scans, where it runs.
-        """
+        """:func:`aim_phases` bound to this player's facing, committed bearing and live
+        cursor: a same-bearing REUSE keeps sights on and drives from where the cursor
+        is, otherwise they toggle and $134C re-centres."""
         st = self.st
         me = st.player
-        want = (view["h_angle"], view["v_angle"])
-        h0, v0 = int(st.obj_h_angle[me]), int(st.obj_v_angle[me])
-        nu = aimcost.h_press_count(h0, view["h_angle"])[0]
-        if self.last_bearing == want:
-            cur_from = self.cursor
-            toggles = 0
-        else:
-            cur_from = SIGHTS_CENTRE
-            toggles = TOGGLE_FRAMES
-        # move_sights ($9958) steps cx and cy in ONE call: a diagonal drive costs max(|dx|,|dy|) gated scans, plus the $0CC8 ramp, and nothing at all when parked.
-        cur = max(
-            abs(view["cursor"][0] - cur_from[0]),
-            abs(view["cursor"][1] - cur_from[1]),
-        )
-        cur = cur + CURSOR_RAMP if cur else 0.0
-        # Each notch scrolls then replots the strip at its own intermediate angle; the u-turn ($1B2F EOR $80) is one keystroke with no scroll and no replot.
-        pan = pancost.pan_frames(
-            st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, me
-        )
-        return (
-            (toggles, True),
-            (nu * UTURN_FRAMES, False),
-            (pan, True),
-            (cur + TAP_FRAMES, False),
+        reuse = self.last_bearing == (view["h_angle"], view["v_angle"])
+        return aim_phases(
+            st,
+            view,
+            (st.obj_h_angle[me], st.obj_v_angle[me]),
+            me,
+            cursor_from=self.cursor if reuse else None,
         )
 
     def _aim_frames(self, view):

@@ -1,0 +1,45 @@
+{
+ "source": "live VICE ls335 winning run (out/play_player_0335.json): the uturn column of the per-step aim_subframes books, from the $9630 frame counter. One sample per step that keyed a u-turn.",
+ "uturns": [
+  {
+   "step": "p4",
+   "verb": "create",
+   "measured": 61
+  },
+  {
+   "step": "p11",
+   "verb": "create",
+   "measured": 63
+  },
+  {
+   "step": "p20",
+   "verb": "absorb",
+   "measured": 108
+  },
+  {
+   "step": "p23",
+   "verb": "absorb",
+   "measured": 33
+  },
+  {
+   "step": "p24",
+   "verb": "absorb",
+   "measured": 180
+  },
+  {
+   "step": "p25",
+   "verb": "absorb",
+   "measured": 84
+  },
+  {
+   "step": "p53",
+   "verb": "absorb",
+   "measured": 49
+  },
+  {
+   "step": "p61",
+   "verb": "create",
+   "measured": 37
+  }
+ ]
+}

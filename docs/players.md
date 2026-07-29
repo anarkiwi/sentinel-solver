@@ -80,16 +80,26 @@ does not depend on host load.
 | board | enemies | result | actions | energy left |
 |---|---|---|---|---|
 | ls0 | 1 | won | 16 | 1 |
-| ls42 | 2 | won | 35 | 4 |
-| ls110 | 3 | won | 53 | 17 |
-| ls60 | 7 | won | 55 | 15 |
-| ls298 | 7 | won | 34 | 5 |
-| ls321 | 7 | won | 78 | 12 |
-| ls373 | 7 | won | 65 | 15 |
-| ls335 | 7 | won | 73 | 20 |
+| ls42 | 2 | won | 35 | 1 |
+| ls110 | 3 | won | 49 | 7 |
+| ls60 | 7 | won | 46 | 3 |
+| ls298 | 7 | won | 32 | 2 |
+| ls321 | 7 | won | 35 | 2 |
+| ls373 | 7 | won | 45 | 0 |
+| ls335 | 7 | won | 58 | 0 |
 
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
+
+**The arbitration horizon is a bound, not a depth.** `_arbitrate` scores each option on a fork
+that plays the FIXED rollout ladder, so when that continuation blunders the death is charged to
+the option under test. On ls373 the `_breakout` fork tracks the winning line node for node — eye
+5.875 E=7, 6.875 E=3, 7.875 E=1 — and then the ladder dies at the third node where the
+arbitrating player absorbs `(14,3)` and goes on to win. Deeper lookahead therefore imports more
+of the ladder's errors: `ARBITRATE_ACTIONS` 3, 4, 5, 6 and 8 all lose ls373, and off the suite
+deeper search returns longer solutions. 2 bounds the damage and wins all eight; what needs
+fixing is the attribution, in
+[open item 14](open_items.md#14-arbitration-charges-an-option-with-its-continuations-mistakes).
 
 ### The tie that decided ls110
 

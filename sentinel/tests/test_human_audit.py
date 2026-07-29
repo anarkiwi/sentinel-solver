@@ -11,7 +11,8 @@ from sentinel.tests import human_audit
 # the floor never let happen cannot leave a body in a cone.  On a WIN every placement
 # survived, so a breach here is a model false positive, same as the rejects.
 _BREACH335 = [23, 24, 28, 44, 45, 94, 137]  # 52 retired by the phase-split advance
-_GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
+# 18 joined when UTURN_FRAMES went 74 -> 77 (pooled n=9): its budget is aim + HOP_FRAMES and the extra 3 f crosses the drain window. A model false positive, like the rest.
+_GATE335 = [17, 18, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
 # was [30, 32, 34, 50, 51, 77, 84, 92, 94, 95] against the flat survival floor; pricing
 # exposure as the $0C20 RATE accepts seven of those human creates (docs/architecture.md)
 _FIRE335 = [32, 34, 77]

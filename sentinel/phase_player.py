@@ -16,7 +16,7 @@ WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
-ARBITRATE_ACTIONS = 4  # decision ticks each arbitrated option plays out on its fork
+ARBITRATE_ACTIONS = 2  # decision ticks each arbitrated option plays out on its fork: a BOUND on how much of the fixed ladder's own error the score absorbs (open item 14), not a derived depth -- deeper scores worse, on and off the suite
 
 
 class PhasePlayer(BasePlayer):

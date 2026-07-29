@@ -188,8 +188,8 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
     land = _landings(st, slot, grids)
     kept = set(lt.landing_rays(st, slot, grids=grids).tolist())
     assert kept.issuperset(int(r) for rays in land.values() for r in rays)
-    winner = {  # ascending rays: argmin takes the lowest index among min-cost ones
-        tile: int(rays[np.argmin(playerbase._aim_cost(rays, grids, aim_from))])
+    winner = {
+        tile: playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
         for tile, rays in land.items()
     }
     want = {
@@ -199,6 +199,39 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
     got = playerbase._cheap_views(st, kind == "plane", aim_from)
     assert list(got) == list(want)
     assert got == want
+
+
+def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
+    """The chosen view is the frame-cheapest landing ray, checked exhaustively.
+
+    ``_cheapest_ray`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
+    every ray is priced with no pruning at all, which is the same minimum only if the
+    bound is admissible and the per-group cursor representative is the right one."""
+    st = new_game(42).state
+    slot = st.player
+    grids = lt.lattice(False)
+    aim_from = (st.obj_h_angle[slot], st.obj_v_angle[slot])
+    land = _landings(st, slot, grids)
+    assert len(land) > 8
+    checked = 0
+    for tile, rays in sorted(land.items())[:6]:
+        got = playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
+        cell, _nu, _ns, _dv, cur = playerbase._lattice_terms(rays, grids, aim_from)
+        order = np.lexsort((rays, cur, cell))
+        cs = cell[order]
+        reps = rays[order[np.concatenate(([True], cs[1:] != cs[:-1]))]]
+        best = min(
+            playerbase.aim_frames(
+                st, playerbase._view_at(int(r), grids), aim_from, slot
+            )
+            for r in reps
+        )
+        chosen = playerbase.aim_frames(
+            st, playerbase._view_at(got, grids), aim_from, slot
+        )
+        assert chosen == best, f"{tile}: chose {chosen} f, {best} f was available"
+        checked += 1
+    assert checked == 6
 
 
 @pytest.mark.parametrize("kind", ["plane", "band"])
