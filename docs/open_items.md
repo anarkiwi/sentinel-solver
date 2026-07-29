@@ -221,28 +221,58 @@ Three distinct failures sit underneath that, and they need different fixes:
 **Resolves.** The order is forced by the numbers: make a solve finish before judging
 whether it wins. Until the 84 are resolved the win rate is a floor, not a measurement.
 
-## 14. The planner's safety probes rest on an over-priced aim (ls373)
+## 14. ls373 turns on the arbitration horizon, not on the safety probes
 
-**Wrong.** `_landing_holds`, `_mount_holds` and `_wait_for_gap` advance the world by exactly
-the span the step will take, so making the aim price *truer* makes them *weaker*. The margin
-they were carrying was the mispricing, not a modelled quantity.
+**Wrong.** `_arbitrate` scores each option on a fork with `rollout=True` — the fixed
+breakout/supply/harvest/mount ladder — so an option is judged by a continuation the
+arbitrating player will never take. `ARBITRATE_ACTIONS` (4) sets how far that continuation
+runs and has no derivation. It, not the aim price, decides ls373.
 
-**Measured.** Pricing each tile's view at its true frame minimum (`playerbase._cheapest_ray`,
-mean 9 f and up to 141 f cheaper per action) moved the suite 4 boards better, 2 worse, and
-ls373 from a 65-action win to a loss in 13. On ls373 tick 1 the `_breakout` fork now climbs to
-eye 7.875 and dies inside `_arbitrate`'s four ticks (it stopped at 4.875, alive, before), so
-arbitration takes `_harvest`, and that line starves out. Restoring the old view choice or
-inflating a constant restores the win, which is exactly why neither is a fix.
+**Measured.** This item previously read that the safety probes rest on an over-priced aim
+(`playerbase._cheapest_ray`, mean 9 f and up to 141 f cheaper per action, took ls373 from a
+65-action win to a loss in 13). That diagnosis does not survive measurement.
 
-**Resolves.** The probes need a margin they can defend: survive the step *and* still be able
-to act after it, over a window the mechanism justifies rather than one an over-charge
-supplied. `_landing_holds` already gestures at this by adding one absorb span; the question is
-what the arrival stance owes, not what the departure cost.
+* One probe carries the board: `_landing_holds((8,8), 0)` inside the tick-0 `_breakout` fork,
+  at stance (14,3), eye 6.875, energy 6. Forcing that single call to False and changing
+  nothing else wins ls373 in **63 actions**; banning the fork's other new landing, (14,3),
+  changes nothing at all.
+* That landing is sound and every accurate model accepts it. Run in ROM order the body
+  reaches (8,8) with energy 1, and (8,8) is unexposed — no drain lands after the transfer.
+  The fork dies twelve actions later, at a different stance.
+* The arrival stance owes *less*, and with mixed sign. Over the 14 climb candidates at the
+  ls373 entry stance, a fresh aim from the arrival body's `$1BE0` facing at the shell it
+  abandoned plus that absorb's settle is **176–627 f**, against the **268–682 f** `_hop_span`
+  charges from the departure stance. Substituting it exactly leaves ls373 bit-identical
+  (13 actions, 10706 frames).
+* Five further probe models, none recovering ls373: window = build plus the cheapest exit
+  priced from the arrival stance (20 actions); phase-ordered probe, source then destination
+  (5); ROM-ordered purse, each create paid out of a purse the step's own frames have already
+  drained (10); verdict "can still afford the exit" (13); verdict "did not bleed" (15).
+* `ARBITRATE_ACTIONS` alone moves the verdict. 1 and 2 win ls373 in 45 actions; 3, 4
+  (shipped), 5, 6 and 8 lose it in 13. At 2 the whole suite wins — ls0 16, ls42 35, ls60 46,
+  ls110 49, ls298 32, ls321 35, ls335 58, ls373 45 — and at 1 it is 6/8 (ls60 and ls298 lost).
+  The constant is not derived from anything, so this is a free parameter, not a fix.
+* Gating a climb's purse on `_affords(cost, _hop_span)` — the invariant `_affords` states it
+  holds ("executor and search both gate on this, at the same instant"), which
+  `_climb_candidates` does not — wins ls373 in 62 and loses ls110. It reaches (8,8) only by
+  billing the source tile's drain clock across the ~1700 f the body spends at the destination,
+  where nothing sees it. Billing each phase at its own clock instead wins ls110 in 49 and
+  loses ls373. The two differ in which board they lose, not in a number.
+
+**Resolves.** Scoring an option under the policy that will actually follow it. Nesting
+arbitration is what `rollout` exists to prevent (4 options × 4 ticks squared per decision) and
+scoring instead of playing is disproved below, so this needs a third construction. Until it
+exists `ARBITRATE_ACTIONS` carries the eight-board result and no probe change can be credited
+with it.
 
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
 
+- **ls373's lost win was a safety-probe margin the aim over-charge was supplying.** The one
+  probe that decides the board accepts a landing that is genuinely survivable, six probe
+  models leave it lost, and the verdict moves with `ARBITRATE_ACTIONS` alone
+  ([14](#14-ls373-turns-on-the-arbitration-horizon-not-on-the-safety-probes)).
 - **The transfer settle over-charges systematically.** The measurement was clipped by the 6 s
   wall-clock `run_until_pc` in `tap_action`, which caps a reading at ~300 frames.
 - **Correcting the settle's viewpoint reduces it.** It moves the settle **up**.

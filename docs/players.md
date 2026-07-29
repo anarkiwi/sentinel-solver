@@ -91,14 +91,15 @@ does not depend on host load.
 ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
 
-**ls373 regressed when the aim price stopped over-charging.** The safety probes
-(`_landing_holds`, `_mount_holds`, `_wait_for_gap`) advance the world by exactly the span
-the step will take, so a shorter, truer span is a WEAKER filter: hops the over-priced aim
-refused are now accepted. At tick 1 the `_breakout` fork climbs to eye 7.875 and dies
-inside `_arbitrate`'s four ticks (it survived at eye 4.875 before), arbitration takes
-`_harvest` instead, and that line starves 13 actions later. Nothing in the aim model is
-wrong — the planner's margin was an artifact of the mispricing, and buying it back with a
-constant would be fitting the board, not the mechanism.
+**ls373 is lost to the arbitration horizon, not to the aim price.** `_arbitrate` scores each
+option on a fork that plays the FIXED rollout ladder, so `_breakout` — the right move at tick
+0, and the opening of a 63-action win — is judged by a greedy continuation that climbs to eye
+7.875 and starves inside the four ticks. One probe carries the whole board: forcing
+`_landing_holds((8,8), 0)` in that fork to False wins ls373 in 63 actions, and that landing is
+survivable (the body arrives with energy 1 on an unexposed tile and dies twelve actions later
+elsewhere), so no accurate probe refuses it. `ARBITRATE_ACTIONS` 2 wins all eight boards and
+the shipped 4 wins seven; the constant is not derived, so it is not tuned. Measurements in
+[open item 14](open_items.md#14-ls373-turns-on-the-arbitration-horizon-not-on-the-safety-probes).
 
 ### The tie that decided ls110
 
