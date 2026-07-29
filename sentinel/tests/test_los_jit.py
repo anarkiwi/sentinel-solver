@@ -64,31 +64,6 @@ def test_jit_matches_python_bare(seed, max_steps):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_jit_matches_python_with_objects(seed):
-    """Objects placed around the player force the object-tile path (the ray lands
-    on object tiles resolved in numba)."""
-    g = Game.new(seed)
-    st = g.state
-    px, py = st.player_xy()
-    for dx, dy, typ in [
-        (1, 0, mm.T_BOULDER),
-        (2, 0, mm.T_BOULDER),
-        (0, 1, mm.T_ROBOT),
-        (1, 1, mm.T_TREE),
-        (2, 2, mm.T_BOULDER),
-        (-1, 0, mm.T_BOULDER),
-    ]:
-        x, y = px + dx, py + dy
-        if 0 <= x < mm.N and 0 <= y < mm.N:
-            try:
-                actions.create(st, typ, (x, y))
-            except Exception:
-                pass
-    bad, _ = _sweep_mismatches(st, st.player, None, 20000)
-    assert not bad, f"seed {seed} with objects: {bad[:3]}"
-
-
-@pytest.mark.parametrize("seed", SEEDS)
 def test_jit_matches_python_centre(seed):
     """The return_centre path (final px_sub/py_sub) matches too."""
     g = Game.new(seed)

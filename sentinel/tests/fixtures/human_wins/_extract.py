@@ -140,7 +140,6 @@ def _is_enemy_spawn(event, seed):
         tuple(event["target"]),
         pl["slot"],
         eye_z=pl["z"],
-        v_band=True,
     )
     return view is None
 

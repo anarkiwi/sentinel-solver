@@ -46,7 +46,7 @@ def frames(bm):
         return bm.checkpoint_get(frame_checkpoint(bm)).hit_count
 
 
-def run_frames(bm, n, timeout=6.0):
+def run_frames(bm, n):
     """Advance the running game EXACTLY ``n`` video frames, leaving the CPU HALTED.
 
     Steps the $9630 marker, which recurs every frame unconditionally, so a marker
@@ -64,7 +64,7 @@ def run_frames(bm, n, timeout=6.0):
             bm.advance_instructions(
                 1
             )  # step off the marker so the hit is the NEXT frame
-            bm.wait_for_checkpoint(cp, timeout=timeout)
+            bm.wait_for_checkpoint(cp, timeout=6.0)
         bm.checkpoint_toggle(cp, False)
         got = frames(bm) - f0
     if got < n:

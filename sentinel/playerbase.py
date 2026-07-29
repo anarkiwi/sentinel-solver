@@ -18,8 +18,6 @@ _VIEW_CACHE = {}
 _VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
 _TILE_VIEW_CACHE = {}  # per-(sweep key, tile) targeted views; entries are 1-tuples
 _TILE_VIEW_CACHE_MAX = 1 << 14
-_EPOCH_CACHE = {}  # measured first-rotation frames, keyed by the enemy clock
-_EPOCH_CACHE_MAX = 256
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -42,9 +40,6 @@ SAFE_FRAMES = 250  # window below which the current tile is "urgent"
 WAIT_FRAMES = 60  # idle advance when no action is available
 EYE_EPS = 0.1  # minimum eye-height progress for a climb move
 DRAIN_DELAY = 120.0 * UNIT_FRAMES  # $0C20: first-seen -> first drain countdown
-DRAIN_STEP = (
-    enemies.UPDATE_COOLDOWN_DRAIN * UNIT_FRAMES
-)  # $17F1 re-arm: gap between drains on a HELD target, measured 125 f
 MEANIE_SPAWN_FRAMES = enemies.UPDATE_COOLDOWN_MEANIE_MADE * UNIT_FRAMES  # $1869 hold
 MEANIE_ARM_FRAMES = (
     (128 // enemies.MEANIE_ROTATE_STEP)
@@ -122,8 +117,6 @@ def _cheap_view(st, tile, v_primary, aim_from):
     can land ``tile`` -- and the same min-(cost, index) rule picks the winner, so a
     candidate set that lands nothing is a proven "no view"."""
     tile = (int(tile[0]), int(tile[1]))
-    if not los._HAVE_JIT:  # pragma: no cover - numba absent -> the whole-board sweep
-        return _cheap_views(st, v_primary, aim_from).get(tile)
     slot = st.player
     if landtable.never_lands(st, tile, slot):
         return None
@@ -253,15 +246,6 @@ class BasePlayer:
         for frames, plotting in phases:
             if frames > 0:
                 self._advance(frames, plotting=plotting)
-
-    @staticmethod
-    def advance_phases(st, phases):
-        """Advance `st` through ``(frames, plotting)`` segments; the search prices a
-        step with this so it evolves the world exactly as ``_fire`` will."""
-        for frames, plotting in phases:
-            n = int(round(frames))
-            if n > 0:
-                enemies.advance_frames(st, n, plotting=plotting)
 
     # ------------------------------------------------------------- geometry
     def _my_eye(self):
@@ -399,17 +383,13 @@ class BasePlayer:
                 return True
         return False
 
-    def _seen_now(self, exposed, full_only=False):
+    def _seen_now(self, exposed):
         """Whether an exposing enemy has the spot in its live cone right now --
-        the never-place-in-enemy-view test.  `full_only` restricts to enemies
-        with FULL sight (the drainers): the middle relaxation tier when no
-        unseen tile exists at all (partial-without-tree cannot be damaged)."""
+        the never-place-in-enemy-view test."""
         st = self.st
         half = FOV_HALF + FOV_MARGIN
         return any(
-            self._in_cone(ah, st.obj_h_angle[e], half)
-            for e, ah, full in exposed
-            if full or not full_only
+            self._in_cone(ah, st.obj_h_angle[e], half) for e, ah, _full in exposed
         )
 
     def _cone_onset(self, e, angle_hi, half):
@@ -429,140 +409,6 @@ class BasePlayer:
             facing = (facing + step) & 0xFF
             if self._in_cone(angle_hi, facing, half):
                 return first + (k - 1) * ROT_PERIOD_FRAMES
-        return math.inf
-
-    def _rotation_epochs(self):
-        """Frame of each enemy's FIRST rotation, MEASURED on a clone of the live clock.
-
-        ``rotation_cooldown * UNIT_FRAMES`` is not that instant -- the $1335 bresenham
-        accumulator and the enemy's own $16E9 update gate both offset it, and a cd of 0
-        read as t=0 put every interval a rotation early (ls335 (13,27): predicted clear at
-        749, actually covered until ~800).  Every later gap is exactly one period."""
-        st = self.st
-        key = (
-            bytes(
-                st.mem[mm.ENEMIES_ROTATION_COOLDOWN : mm.ENEMIES_ROTATION_COOLDOWN + 8]
-            )
-            + bytes(st.mem[mm.ENEMIES_UPDATE_COOLDOWN : mm.ENEMIES_UPDATE_COOLDOWN + 8])
-            + bytes([st.mem[mm.COOLDOWN_BRESENHAM], st.mem[mm.COOLDOWN_GATE]])
-            + bytes(int(st.obj_h_angle[e]) for e in range(8))
-        )
-        got = _EPOCH_CACHE.get(key)
-        if got is not None:
-            return got
-        clone = st.clone()
-        clone.mem[mm.PLAYER_NOT_ACTED] = 0
-        slots = list(enemies.enemy_slots(clone))
-        was = {e: int(clone.obj_h_angle[e]) for e in slots}
-        seen = {e: [] for e in slots}
-        for frame in range(1, int(2.2 * ROT_PERIOD_FRAMES) + 2):
-            enemies.advance_frame(clone)
-            for e in slots:
-                now = int(clone.obj_h_angle[e])
-                if now != was[e]:
-                    if len(seen[e]) < 2:
-                        seen[e].append(float(frame))
-                    was[e] = now
-            if all(len(v) >= 2 for v in seen.values()):
-                break
-        epochs = {}
-        for e in slots:  # a stalled or non-rotating enemy never sets one
-            got = seen[e]
-            first = got[0] if got else ROT_PERIOD_FRAMES
-            period = got[1] - got[0] if len(got) > 1 else ROT_PERIOD_FRAMES
-            epochs[e] = (first, period)
-        if len(_EPOCH_CACHE) > _EPOCH_CACHE_MAX:
-            _EPOCH_CACHE.clear()
-        _EPOCH_CACHE[key] = epochs
-        return epochs
-
-    def _cover_intervals(self, e, angle_hi, half, horizon, epochs=None):
-        """``[start, end)`` frame spans inside ``horizon`` where ``e``'s cone holds
-        ``angle_hi``.  Facing only changes at a rotation boundary, so the calendar is a
-        step function: facing after ``n`` rotations is ``facing0 + n*step``."""
-        st = self.st
-        facing = int(st.obj_h_angle[e])
-        step = _signed(st.mem[mm.ROTATION_SPEED_TABLE + e])
-        if step == 0:  # never rotates: its bearing decides once, for all time
-            return [(0.0, horizon)] if self._in_cone(angle_hi, facing, half) else []
-        epochs = self._rotation_epochs() if epochs is None else epochs
-        first, period = epochs.get(e, (ROT_PERIOD_FRAMES, ROT_PERIOD_FRAMES))
-        out = []
-        n = 0
-        while True:
-            lo = 0.0 if n == 0 else first + (n - 1) * period
-            if lo >= horizon:
-                return out
-            hi = first if n == 0 else first + n * period
-            if self._in_cone(angle_hi, (facing + step * n) & 0xFF, half):
-                out.append((lo, min(hi, horizon)))
-            n += 1
-
-    def _busy_spans(self, exposed, horizon):
-        """The exposing enemies' cover intervals, unioned into disjoint busy spans."""
-        half = FOV_HALF + FOV_MARGIN
-        spans = []
-        for e, angle_hi, full in exposed:
-            if full:
-                spans.extend(self._cover_intervals(e, angle_hi, half, horizon))
-        if not spans:
-            return []
-        spans.sort(key=lambda s: (s[0], s[1]))
-        merged = [list(spans[0])]
-        for lo, hi in spans[1:]:
-            if lo <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], hi)
-            else:
-                merged.append([lo, hi])
-        return merged
-
-    def _earliest_start(self, tile, duration, exposed=None, horizon=None):
-        """Frames to wait before a body on ``tile`` gets ``duration`` clear of drains.
-
-        The scheduling primitive the gates lacked: a cone that cannot cover an action NOW
-        is a DELAY, not a refusal.  ls335 (13,27) offers 450 f at once and 3304 f after
-        ~1000 f of waiting, against a hop needing 1141 f.  ``inf`` if no phase ever fits.
-        """
-        return self._verify_starts(
-            tile, duration, self._gap_starts(tile, duration, exposed, horizon)
-        )
-
-    def _gap_starts(self, tile, duration, exposed=None, horizon=None):
-        """Candidate waits: the start of every calendar gap long enough to hold
-        ``duration``.  A gap is longest at its own start, so only starts can be answers.
-        """
-        if exposed is None:
-            exposed = self._exposing_enemies(tile)
-        horizon = REVOLUTION_FRAMES if horizon is None else horizon
-        out = []
-        at = 0.0
-        for lo, hi in self._busy_spans(exposed, horizon):
-            if lo - at + DRAIN_DELAY >= duration:
-                out.append(at)
-            at = hi
-        if horizon - at + DRAIN_DELAY >= duration:
-            out.append(at)
-        return out
-
-    def _verify_starts(self, tile, duration, cands):
-        """The first candidate the BIT-EXACT clock agrees on, else ``inf``.
-
-        The calendar proposes and the clock disposes: ``_cone_onset`` assumes
-        uninterrupted rotation, but a draining enemy stalls ($178C returns before the
-        $17F9 rotate) and its cone then holds, so an unverified gap reads far too long.
-        """
-        real = self.st
-        try:
-            for at in cands:
-                probe = real.clone()
-                probe.mem[mm.PLAYER_NOT_ACTED] = 0
-                if at:
-                    enemies.advance_frames(probe, int(at))
-                self.st = probe
-                if self._gaze_window(tile) >= duration:
-                    return at
-        finally:
-            self.st = real
         return math.inf
 
     def _drain_clock(self, e, angle_hi, half, target):
@@ -635,42 +481,6 @@ class BasePlayer:
             return 0
         return int(math.ceil((budget - window) / DRAIN_DELAY))
 
-    def _drain_units(self, budget, tile=None, exposed=None):
-        """Energy `budget` frames of exposure costs a body that STAYS there.
-
-        `DRAIN_DELAY` is only the FIRST drain.  A holder keeps its target while it stays
-        visible ($178C returns before the $17F9 rotate) and re-arms to
-        `UPDATE_COOLDOWN_DRAIN`, so the body is re-drained every `DRAIN_STEP` until it
-        leaves -- SEER-INDEPENDENT: one holder is enough and more do not speed it up.
-
-        Measured at the ls335 4-enemy stall, one seer and two seers alike: drains at
-        150, 275, 375, 500, 625, 750, 875 f, gap 125 against DRAIN_STEP 112.4, energy
-        13 -> 0 in 875 f.
-        """
-        if tile is None:
-            tile = self.st.player_xy()
-        if exposed is None:
-            exposed = self._exposing_enemies(tile)
-        window = self._gaze_window(tile, exposed=exposed)
-        meanie = self._drains_in(self._meanie_window(tile, exposed), budget)
-        if not any(full for _, _, full in exposed) or budget <= window:
-            return meanie
-        if window == math.inf:
-            return meanie
-        return max(meanie, int(math.floor((budget - window) / DRAIN_STEP)) + 1)
-
-    def _affords_drains(self, n_drains, cost=0):
-        """Whether the player can hand `n_drains` energy to the enemies on top of an
-        action costing `cost` and stay alive above the survival floor (`_reserve`).
-        `cost` is signed: an absorb RETURNS the object's energy ($1B9B), so it is
-        priced as a negative cost -- the refuelling reclaim is exactly the move a
-        drained body needs, and judging it on the energy it has not banked yet
-        refuses it at the moment it matters.  Unexposed steps (`n_drains` 0) are
-        never gated here."""
-        if not n_drains:
-            return True
-        return self.st.energy - cost - n_drains >= self._reserve()
-
     def _drain_gate(self, verb, tile, exposed=None, budget=0.0):
         """Whether placing `verb` on `tile` is drain-safe: its time-to-first-drain
         must outlast `budget` (the aim+settle the body stands exposed).  A boulder is
@@ -690,12 +500,6 @@ class BasePlayer:
         """World frozen until the player's first action ($0CE5 bit7, $3682)."""
         return bool(self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80)
 
-    def _margin(self, depth=None):  # pylint: disable=unused-argument
-        """Frames of enemy-phase uncertainty a gate holds back.  Zero for a player
-        that acts on the board in front of it; a lookahead planner overrides it with
-        the accumulated per-step error at its own plan depth."""
-        return 0.0
-
     def _reserve(self):
         """Energy the stance owes unconditionally -- 0 unless a meanie is ALIVE.
 
@@ -714,26 +518,22 @@ class BasePlayer:
             floor += mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         return floor
 
-    def _affords(self, cost, budget, window=None):
+    def _affords(self, cost, budget):
         """Whether spending `cost` energy survives the drains `budget` frames of
         exposure bill at the $0C20/$1A31 rate, over `_reserve`.
 
         `budget` is the span the body stands exposed for -- a create's settle, a hop's
         whole build.  Executor and search both gate on this, at the same instant, so a
         plan cannot carry a step the executor then refuses."""
-        if window is None:
-            window = self._player_window()
-        drains = self._drains_in(window, budget + self._margin())
+        drains = self._drains_in(self._player_window(), budget)
         return self.st.energy - cost - drains >= self._reserve()
 
-    def _player_window(self, exclude=None):
-        """Frames until the player's OWN body is drainable (inf if never; no
-        phantom), ignoring enemy `exclude` -- the one an absorb is about to
-        remove, so absorbing an attacker still counts safe."""
+    def _player_window(self):
+        """Frames until the player's OWN body is drainable (inf if never; no phantom)."""
         st = self.st
         if self._frozen():
             return math.inf  # no drain/meanie clock runs before the first action
-        exposed = [x for x in self._exposures(st, st.player) if x[0] != exclude]
+        exposed = self._exposures(st, st.player)
         if not exposed:
             return math.inf
         return self._gaze_window(st.player_xy(), exposed=exposed)
@@ -852,7 +652,7 @@ class BasePlayer:
         self.cursor = list(view["cursor"])
         self.last_bearing = (view["h_angle"], view["v_angle"])
         if not aim.gate(st, view, tile):
-            view = aim.propose(st, tile, v_band=True)
+            view = aim.propose(st, tile)
             if view is None or not aim.gate(st, view, tile):
                 self.fire_reason = "aim_gate"
                 return False

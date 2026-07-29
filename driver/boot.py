@@ -19,13 +19,14 @@ TAP = os.path.join(ROOT, "sentinel-gold.tap")
 # `A5 0B 85` (play_landscape: LDA player_object / STA) once loaded.
 SIG_ADDR = 0x35A4
 SIG_BYTES = bytes([0xA5, 0x0B, 0x85])
+_BOOT_ATTEMPTS = 4  # container relaunches offered before a load JAM is fatal
 
 
-def wait_for_load(bm, log=print, total=80.0, poll=2.0):
+def wait_for_load(bm, log=print):
     """Poll RAM until the game is resident (SIG_BYTES present at SIG_ADDR).
     The tape load is multi-stage and its timing under warp varies; polling a
     signature is more reliable than a fixed sleep. Returns True if loaded."""
-    deadline = time.time() + total
+    deadline = time.time() + 80.0
     while time.time() < deadline:
         try:
             if bytes(bm.mem_get(SIG_ADDR, SIG_ADDR + 2)) == SIG_BYTES:
@@ -33,7 +34,7 @@ def wait_for_load(bm, log=print, total=80.0, poll=2.0):
                 return True
         except Exception:
             pass
-        time.sleep(poll)  # sleep-ok: tape-loader poll interval, no game code resident
+        time.sleep(2.0)  # sleep-ok: tape-loader poll interval, no game code resident
     return False
 
 
@@ -47,16 +48,13 @@ SNAP_SAVE_OPCODE = 0x41  # body SR|SD|FL|FN
 SNAP_LOAD_OPCODE = 0x42  # body FL|FN -> response = restored PC (2 bytes LE)
 
 
-def save_snapshot(bm, container_path, save_roms=False, save_disks=False, timeout=30.0):
+def save_snapshot(bm, container_path):
     """Save a VICE machine snapshot via the monitor (MON_CMD_DUMP $41) to
     ``container_path`` -- a path INSIDE the emulator, so point it at the mounted
     /renders volume for it to land on the host. ROMs/disks are omitted (SR=SD=0):
     RAM+CPU+chip state is all that is needed to resume the title screen."""
     fn = container_path.encode()
-    body = (
-        struct.pack("<BBB", int(bool(save_roms)), int(bool(save_disks)), len(fn)) + fn
-    )
-    bm.call(SNAP_SAVE_OPCODE, body, timeout=timeout)
+    bm.call(SNAP_SAVE_OPCODE, struct.pack("<BBB", 0, 0, len(fn)) + fn, timeout=30.0)
 
 
 def load_snapshot(bm, container_path, timeout=30.0):
@@ -196,7 +194,7 @@ def bridge_ip(container_id, log=print):
         return None
 
 
-def boot_loaded(log=print, attempts=4, record_mount=None):
+def boot_loaded(log=print, record_mount=None):
     """Launch the container and wait for the loaded game. Retries on a load JAM.
     record_mount: optional host dir to mount at /renders (for AVI / snapshots).
     Returns (container, bm). Raises RuntimeError if all attempts fail."""
@@ -207,7 +205,7 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
     renders = record_mount or os.path.join(ROOT, "renders")
     last = None
     kill_stale()
-    for attempt in range(attempts):
+    for attempt in range(_BOOT_ATTEMPTS):
         container = ViceContainer(
             autostart="/work/sentinel.tap",
             mounts=[
@@ -233,7 +231,7 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
             bm.connect(timeout=20.0, attempts=200, retry_delay=0.5)
             bm.exit()
             log(f"[boot {attempt}] connected; waiting for tape load ...")
-            if wait_for_load(bm, log, total=80.0, poll=2.0):
+            if wait_for_load(bm, log):
                 # loaded to the title screen: cache a reusable boot snapshot if absent.
                 save_boot_snapshot_if_missing(bm, renders, log)
                 return container, bm
@@ -247,4 +245,6 @@ def boot_loaded(log=print, attempts=4, record_mount=None):
         except Exception:
             pass
         time.sleep(2)  # sleep-ok: container relaunch backoff, no machine to poll
-    raise RuntimeError(f"boot_loaded failed after {attempts} attempts (last={last})")
+    raise RuntimeError(
+        f"boot_loaded failed after {_BOOT_ATTEMPTS} attempts (last={last})"
+    )

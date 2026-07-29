@@ -35,6 +35,10 @@ A_CURSOR_Y = 0x0CC7  # sights cursor row (no memmap entry)
 A_ACTION_LATCH = 0x0CE4  # bit7 set mid-pan / queued-wrap (reject transient probes)
 
 MONITOR_DROP = (TimeoutError, OSError, ConnectionError)  # dropped-socket signatures
+_ENTER_CHUNK = 25  # emulated frames per landscape-entry poll
+_ENTER_POLLS = 160  # generation polls (entry takes ~600 frames)
+_ENTER_PLAY_POLLS = 40  # post-SPACE polls (~250 frames)
+_ENTER_TAPS = 6  # SPACE taps offered to dismiss the preview
 
 
 # ============================================================================
@@ -54,11 +58,11 @@ def reconnect(bm, log=print):
     log("   (reconnected monitor socket)")
 
 
-def robust(bm, log, fn, tries=4):
+def robust(bm, log, fn):
     """Run a monitor op, reconnecting + retrying on a dropped socket."""
     from vice_driver.binmon import BinmonError
 
-    for _ in range(tries):
+    for _ in range(4):
         try:
             return fn()
         except (BinmonError,) + MONITOR_DROP as e:
@@ -217,25 +221,25 @@ def _in_play(bm):
         return not bm.mem_get(A_ACTION_LATCH, A_ACTION_LATCH)[0] & 0x80
 
 
-def _enter_play(bm, tap, log, chunk=25, gen_chunks=160, play_chunks=40, taps=6):
+def _enter_play(bm, tap, log):
     """Land in the play loop after the secret-code RETURN, one leg per REAL predicate:
     generation installs the player object, then SPACE dismisses the isometric preview
     and the busy-plotting gate opens. Both legs are polled in EMULATED frames, so their
     length cannot depend on warp (measured: ~600 frames, then ~250 after SPACE)."""
-    for _ in range(gen_chunks):
+    for _ in range(_ENTER_POLLS):
         if _generated(bm):
             break
-        clock.run_frames(bm, chunk)
+        clock.run_frames(bm, _ENTER_CHUNK)
     else:
         raise RuntimeError("landscape entry: generation never installed a player")
     log(f"  landscape generated (player slot {bm.mem_get(A_SLOT, A_SLOT)[0]})")
-    for _ in range(taps):
+    for _ in range(_ENTER_TAPS):
         tap("SPACE", hold=25, settle=60)  # dismiss the isometric preview
-        for _ in range(play_chunks):
+        for _ in range(_ENTER_PLAY_POLLS):
             if _in_play(bm):
                 log("  in play loop ($0CE4 bit7 released)")
                 return
-            clock.run_frames(bm, chunk)
+            clock.run_frames(bm, _ENTER_CHUNK)
     raise RuntimeError("landscape entry: play never started ($0CE4 bit7 held set)")
 
 
@@ -492,12 +496,10 @@ class SentinelDriver:
         self.renders = renders or os.path.join(boot.ROOT, "renders")
 
     @classmethod
-    def boot(cls, log=print, attempts=4, record_mount=None):
+    def boot(cls, log=print, record_mount=None):
         """Launch asid-vice and boot the tape to the title screen (saving a reusable
         boot snapshot if none exists). Returns a ready driver; call :meth:`close`."""
-        container, bm = boot.boot_loaded(
-            log=log, attempts=attempts, record_mount=record_mount
-        )
+        container, bm = boot.boot_loaded(log=log, record_mount=record_mount)
         return cls(bm, container=container, log=log, renders=record_mount)
 
     def enter_landscape(self, landscape):
@@ -530,23 +532,3 @@ class SentinelDriver:
                 self.container.stop()
             except Exception:
                 pass
-
-
-def main(argv=None):
-    """Smoke demo: boot, enter a landscape (argv[1], default 0), print the live
-    state, then stop. Needs Docker + the tape image."""
-    argv = sys.argv if argv is None else argv
-    landscape = int(argv[1]) if len(argv) > 1 else 0
-    drv = SentinelDriver.boot()
-    try:
-        drv.enter_landscape(landscape)
-        px, py = drv.player_tile()
-        print(f"landscape {landscape}: player ({px},{py}) energy {drv.energy()}")
-        print(gs.dump(drv.state()))
-    finally:
-        drv.close()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

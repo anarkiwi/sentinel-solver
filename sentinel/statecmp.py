@@ -117,7 +117,7 @@ def by_tier(divs):
     return out
 
 
-def format_divergence(d, a_name="A", b_name="B"):
+def format_divergence(d, a_name, b_name):
     """A one-line ``label @ $addr: A=.. B=.. d=..`` rendering of one divergence."""
     delta = (d.b - d.a) & 0xFF
     return (

@@ -16,6 +16,7 @@ WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
+ARBITRATE_ACTIONS = 4  # decision ticks each arbitrated option plays out on its fork
 
 
 class PhasePlayer(BasePlayer):
@@ -122,7 +123,7 @@ class PhasePlayer(BasePlayer):
             st.energy,
         )
 
-    def _arbitrate(self, options, lookahead=4):
+    def _arbitrate(self, options):
         """Run each option on a fork for a few ticks and take the one that ends best.
 
         The right move at an ambiguous point is board- and position-dependent -- a
@@ -137,7 +138,7 @@ class PhasePlayer(BasePlayer):
             try:
                 if not getattr(twin, name)(_Views(twin.st)):
                     continue
-                for _ in range(lookahead):
+                for _ in range(ARBITRATE_ACTIONS):
                     if actions.player_dead(twin.st) or actions.won(twin.st):
                         break
                     twin._tick()

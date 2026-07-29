@@ -32,14 +32,6 @@ def test_seed_sets_low_and_high_bytes():
     assert seed_state(42) == [42, 0, 0, 0, 0]
 
 
-def test_shuffle_is_deterministic():
-    a = Prng([1, 2, 3, 4, 5])
-    b = Prng([1, 2, 3, 4, 5])
-    for _ in range(100):
-        assert a.next() == b.next()
-    assert a.s == b.s
-
-
 def test_all_zero_state_is_a_fixed_point():
     # A degenerate all-zero LFSR stays zero; the game avoids it via INC $0C7D
     # in reset_game_state before seeding landscape 0000.

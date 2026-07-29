@@ -26,9 +26,9 @@ FRAME_PC = (
 class SimClock:
     """The standalone sim as a one-frame-per-tick clock over a 64 KB image."""
 
-    def __init__(self, image, plotting=False):
+    def __init__(self, image):
         self.state = State.from_mem(image)
-        self.plotting = plotting
+        self.plotting = False
 
     def image(self):
         return self.state.mem

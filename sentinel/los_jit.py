@@ -8,13 +8,11 @@ raw ``numpy.uint8`` view of the 64 KB memory image.
 It reproduces exactly the pure-Python march in :mod:`sentinel.los` for every tile
 EXCEPT a *primary object tile* (the ray's current tile byte >= $C0): that case
 walks the recursive object stack (get_tile_z_from_object $1E3F), which stays in
-tested Python.  On such a tile :func:`march` returns status ``OBJECT`` with the
-full ray position so the caller can resolve it and resume the march.
+tested Python.
 
 Return status:
   * ``LOS_CLEAR`` (1) -- the ray reached a visible tile (ROM carry clear).
   * ``BLOCKED``   (0) -- tile above the ray / board edge / max_steps (no LOS).
-  * ``OBJECT``    (2) -- current tile is an object tile; resolve in Python.
 
 Every integer is kept in a Python-int-width (int64) register and masked with
 ``& 0xFF`` exactly where the 6502 truncates, so uint8 wrap never corrupts a byte.
@@ -25,7 +23,6 @@ from numba import njit, prange
 
 LOS_CLEAR = 1
 BLOCKED = 0
-OBJECT = 2
 
 # Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
 # code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,

@@ -5,8 +5,6 @@ ray's track of (tile offset, ray z) is a pure function of its aim; terrain only 
 where the march stops.  Derivation, soundness and sizing: docs/architecture.md.
 """
 
-import os
-
 import numpy as np
 
 from sentinel import los, memmap as mm, terrain
@@ -33,13 +31,10 @@ RADIUS = 30  # max in-board tile offset (LOS quits at coord $1F, so 0..30 is the
 # the landset grid (pinned by tests): CURSOR_CX/CY subsampled 2:1
 COARSE_CX = list(range(48, 112, 2))
 COARSE_CY = list(range(63, 127, 2))
-BUCKET_LO = -24  # census T buckets, whole z units; real play spans -5..+6
-BUCKET_HI = 23
 MAX_STEPS = 6000  # the los sweep's march cap
 MARCH_CHUNK = 1 << 13  # first early-exit march chunk: ~20us/call fixed cost, <1% here
 LAND_BAND = 0x80  # check_flat_tile $1D1C lands only for surface-z in [0, $80)
 WRAP_D = 0x10000 - LAND_BAND  # z distance at which the 8-bit high-byte compare aliases
-_WILD = -(1 << 40)  # zmin sentinel: unbounded (wrap-aliasing) candidate
 
 
 def lattice(v_primary=False, coarse=False):
@@ -49,13 +44,6 @@ def lattice(v_primary=False, coarse=False):
     if coarse:
         return los.kbd_grids(COARSE_CX, COARSE_CY)
     return los.kbd_grids(v_primary=v_primary)
-
-
-def _los_kwargs(grids):
-    """``(cxs, cys, v_primary)`` -- the same lattice expressed as
-    :func:`los.landable_view_targeted` arguments, for the numba-absent fallback."""
-    _hgrid, vgrid, cxs, cys = grids
-    return cxs, cys, list(vgrid) == [los.KBD_V_ANGLE]
 
 
 def components(grids):
@@ -138,78 +126,6 @@ def crossing_mask(vx, vy, vz, sel, dx, dy, tlo, thi, max_steps):
         else:
             out[e] = tlo - LAND_BAND < 0 <= thi
     return out
-
-
-@njit(cache=True)
-def _track(ax, ay, az, max_steps, radius, wrap_z, cells, zmins):
-    """One entry per distinct cell offset visited, with the min ray z over that cell.
-
-    Tile offsets are monotone in the sub-step, so each cell is one closed-form interval.
-    ``zmins`` is 1/256 height units relative to the seed z; :data:`_WILD` marks a visit
-    whose ray z could alias the ROM's 8-bit compare.  Returns the entry count.
-    """
-    span = 2 * radius + 1
-    n = 0
-    i0 = 1
-    while i0 <= max_steps:
-        cx = (0x8000 + i0 * ax) >> 16
-        cy = (0x8000 + i0 * ay) >> 16
-        if cx < -radius or cx > radius or cy < -radius or cy > radius:
-            break
-        _f, lx = _cell_span(ax, cx, max_steps)
-        _g, ly = _cell_span(ay, cy, max_steps)
-        i1 = min(lx, ly, max_steps)
-        if az > 0:  # z monotone: extremes at the interval ends
-            zlo = (i0 * az) >> 8
-            zhi = (i1 * az) >> 8
-        elif az < 0:
-            zlo = (i1 * az) >> 8
-            zhi = (i0 * az) >> 8
-        else:
-            zlo = 0
-            zhi = 0
-        cells[n] = (cx + radius) * span + (cy + radius)
-        zmins[n] = _WILD if zhi >= wrap_z else zlo
-        n += 1
-        i0 = i1 + 1
-    return n
-
-
-@njit(cache=True, parallel=True)
-def census(vx, vy, vz, max_steps, radius, blo, bhi, wrap_z, nthread):
-    """``(counts[ncell, nb], wild[ncell], cells_per_ray[n])``: candidates per cell per
-    EXACT T bucket (cumulate for a prefix), plus the unbounded-z wildcards per cell."""
-    n = vx.shape[0]
-    span = 2 * radius + 1
-    ncell = span * span
-    nb = bhi - blo + 1
-    part = np.zeros((nthread, ncell, nb), dtype=np.int32)
-    pwild = np.zeros((nthread, ncell), dtype=np.int32)
-    per_ray = np.zeros(n, dtype=np.int32)
-    for t in prange(nthread):  # pylint: disable=not-an-iterable
-        cells = np.empty(4 * radius + 8, dtype=np.int64)
-        zmins = np.empty(4 * radius + 8, dtype=np.int64)
-        for j in range(t, n, nthread):
-            m = _track(vx[j], vy[j], vz[j], max_steps, radius, wrap_z, cells, zmins)
-            per_ray[j] = m
-            for e in range(m):
-                c = cells[e]
-                z = zmins[e]
-                if z == _WILD:
-                    pwild[t, c] += 1
-                    continue
-                b = z >> 8
-                if b > bhi:
-                    continue
-                if b < blo:
-                    b = blo
-                part[t, c, b - blo] += 1
-    counts = np.zeros((ncell, nb), dtype=np.int64)
-    wild = np.zeros(ncell, dtype=np.int64)
-    for t in range(nthread):
-        counts += part[t]
-        wild += pwild[t]
-    return counts, wild, per_ray
 
 
 def surface_bounds(state, x, y):
@@ -361,9 +277,7 @@ def _march(state, slot, eye_z, grids, idx, max_steps):
     return status, tx, ty
 
 
-def landable_view(
-    state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS, stats=None
-):
+def landable_view(state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
     """The build view for ``tile``, identical to that lattice's full sweep entry.
 
     :func:`los.landable_view_targeted` delegates here.  Only :func:`candidates` is
@@ -371,26 +285,16 @@ def landable_view(
     proven "no view".  The answer is the LOWEST landing lattice index, so the ascending
     candidates are marched in doubling chunks and the first chunk that lands ends it:
     the same index, marching under 2x the prefix before it instead of the whole set.
-    ``stats`` counts the rays actually marched.
     """
     if slot is None:
         slot = state.player
     grids = lattice() if grids is None else grids
-    if stats is not None:
-        stats["queries"] = stats.get("queries", 0) + 1
-    if not los._HAVE_JIT:  # pragma: no cover - numba absent -> the pure-Python probe
-        cxs, cys, v_primary = _los_kwargs(grids)
-        return los.landable_view_targeted(
-            state, tile, slot, eye_z, max_steps, cxs=cxs, cys=cys, v_primary=v_primary
-        )
     if never_lands(state, tile, slot):
         return None
     idx = candidates(state, tile, slot, eye_z, grids, max_steps)
     lo, step = 0, MARCH_CHUNK
     while lo < idx.size:
         sel = idx[lo : lo + step]
-        if stats is not None:
-            stats["marched"] = stats.get("marched", 0) + int(sel.size)
         status, tx, ty = _march(state, slot, eye_z, grids, sel, max_steps)
         hit = np.flatnonzero(
             (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
@@ -400,8 +304,6 @@ def landable_view(
             return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
         lo += step
         step += step
-    if stats is not None:
-        stats["proven_none"] = stats.get("proven_none", 0) + 1
     return None
 
 
@@ -437,13 +339,7 @@ def landing_rays(state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
 
 
 def landable_set(
-    state,
-    slot=None,
-    eye_z=None,
-    grids=None,
-    max_steps=MAX_STEPS,
-    chunk=1 << 16,
-    stats=None,
+    state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS, chunk=1 << 16
 ):
     """The whole-board landable tile set, as ``_coarse_landable`` returns it (ring incl).
 
@@ -467,65 +363,9 @@ def landable_set(
         keep = sel[multi[s : s + chunk] | ~landed[cell[s : s + chunk]]]
         if keep.size == 0:
             continue
-        if stats is not None:
-            stats["marched"] = stats.get("marched", 0) + int(keep.size)
         status, tx, ty = _march(state, slot, eye_z, grids, keep, max_steps)
         clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
         if clear.size:
             landed[tx[clear] * mm.N + ty[clear]] = True
             out.update(zip(tx[clear].tolist(), ty[clear].tolist()))
     return out
-
-
-def main(argv=None):
-    """Print the per-lattice track census: candidates per cell per threshold bucket."""
-    import argparse
-
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.parse_args(argv)
-    nthread = max(1, min(32, os.cpu_count() or 1))
-    for name, grids in (
-        ("F5-plane", lattice(True)),
-        ("full-band", lattice()),
-        ("coarse", lattice(coarse=True)),
-    ):
-        vx, vy, vz = components(grids)
-        counts, wild, per_ray = census(
-            vx,
-            vy,
-            vz,
-            MAX_STEPS,
-            RADIUS,
-            BUCKET_LO,
-            BUCKET_HI,
-            WRAP_D + BUCKET_LO * 256,
-            nthread,
-        )
-        cum = np.cumsum(counts, axis=1)
-        print(
-            "lattice %s: rays %d cells/ray %.1f visits %d wildcards %d"
-            % (
-                name,
-                int(vx.size),
-                float(np.mean(per_ray)),
-                int(counts.sum() + wild.sum()),
-                int(wild.sum()),
-            )
-        )
-        for b in (-8, -4, -2, -1, 0, 1, 2, 4):
-            col = cum[:, b - BUCKET_LO] + wild
-            print(
-                "  candidates/cell at T<=%+d: mean %8.0f p50 %7d p90 %8d max %8d"
-                % (
-                    b,
-                    float(np.mean(col)),
-                    float(np.percentile(col, 50)),
-                    float(np.percentile(col, 90)),
-                    int(col.max()),
-                )
-            )
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
