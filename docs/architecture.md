@@ -611,7 +611,9 @@ boards, a stacked/raised-eye stance and an `eye_z` override, every ray the full 
 on a tile is in that tile's candidate set, on all three lattices including below-eye,
 object and outer-ring tiles. `test_landable.py` pins the same through
 `los.landable_view_targeted` for every tile of the band and coarse lattices, and through
-`_view_for` for the plane.
+`_view_for` for the plane. Start states alone do not exercise the object-stack surface
+bracket, so `test_landable_view_matches_sweep_every_tile_midgame` re-checks every tile of a
+board the player has already built and transferred on.
 
 ## Render cost (`projector.py`, `pancost.py`, `rendercost_py65.py`)
 

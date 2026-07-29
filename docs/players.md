@@ -158,9 +158,11 @@ and commits one action. `urgent` means the player's own tile window is at or bel
 `_climb_scan` ranks builds by `(gains LOS on the hunt target, robot eye height, cheaper
 aim, wider window)` over the primary-plane view dict, falling back to the full pitch band,
 then to graded relaxations: `seen_tier` 1 tolerates undrainable partial sight, 2 is
-least-exposed no-other-choice (urgent or frozen only). Landability queries use one cheap
-primary-plane sweep per tick (`_Views`), falling back to a full pitch-band sweep only for
-down-looks a single-ray visibility check first confirms plausible.
+least-exposed no-other-choice (urgent or frozen only). Landability queries go through
+`_Views`: a single tile is one targeted march (`_cheap_view`), a whole-dict read buys the
+lattice sweep, and either falls back to the full pitch band only for down-looks a single-ray
+visibility check first confirms plausible. Each lattice is pinned to the board at its first
+query, so a caller that builds or transfers mid-tick keeps reading one consistent board.
 
 ### Placement invariant
 

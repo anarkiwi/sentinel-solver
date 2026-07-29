@@ -12,11 +12,12 @@ that shows it, what would resolve it. Anything not here is either correct or out
 lattice is 3,538,944 rays. A tie multiplies that by the number of tied candidates, which is
 why a tie at the ls110 opening is the most expensive event in a solve.
 
-**Resolves.** The closed-form crossing filter (`landtable.crossing_mask`) already cuts
-targeted per-tile queries several-fold and answers a majority of ls42 queries as a proven
-"no view"; the whole-lattice sweep behind `_Views` is the path it is not in front of.
-Engineering, not strategy — but it is the enabling work for anything that wants to play more
-of the tree.
+**Partly resolved.** `_Views.get`/`band_get` now answer a single tile with one targeted
+march (`playerbase._cheap_view` over `landtable.candidates`, narrowed by the closed-form
+crossing filter `landtable.crossing_mask`) instead of a whole-lattice sweep, against the
+board pinned at that lattice's first query: ls335 93 s -> 66 s, all eight boards
+bit-identical. What still buys the sweep is the callers that iterate a whole view dict
+(`views.band()`), and the tie rollouts that multiply it.
 
 ## 2. Live frame accounting leaks across a tie
 

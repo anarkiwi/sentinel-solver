@@ -7,7 +7,8 @@ import os
 
 import numpy as np
 
-from sentinel import actioncost, actions, aim, aimcost, enemies, los, memmap as mm
+from sentinel import actioncost, actions, aim, aimcost, enemies, landtable, los
+from sentinel import memmap as mm
 from sentinel import pancost, projector, relative, terrain, threat
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
@@ -15,6 +16,8 @@ V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
 SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
 _VIEW_CACHE = {}
 _VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
+_TILE_VIEW_CACHE = {}  # per-(sweep key, tile) targeted views; entries are 1-tuples
+_TILE_VIEW_CACHE_MAX = 1 << 14
 _EPOCH_CACHE = {}  # measured first-rotation frames, keyed by the enemy clock
 _EPOCH_CACHE_MAX = 256
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
@@ -54,57 +57,87 @@ def _signed(b):
     return b - 256 if b >= 128 else b
 
 
+def _aim_cost(idx, grids, aim_from):
+    """Keyboard aim cost of lattice rays ``idx`` from facing ``aim_from``: u-turn-aware
+    bearing notches, then pitch notches, then cursor distance from the $134C recentre
+    point."""
+    hgrid, vgrid, cxs, cys = grids
+    per_h, per_v = len(cxs) * len(cys), len(hgrid) * len(cxs) * len(cys)
+    vi, rem = np.divmod(idx, per_v)
+    hi, rem2 = np.divmod(rem, per_h)
+    cxi, cyi = np.divmod(rem2, len(cys))
+    h0, v0 = aim_from
+    h = np.asarray(hgrid)[hi]
+    v = np.asarray(vgrid)[vi]
+    dh = np.abs(((h - h0) + 128) % 256 - 128) // aimcost.AZIMUTH_STEP
+    dv = np.abs(((v - v0) + 128) % 256 - 128) // aimcost.PITCH_STEP
+    cur = np.maximum(
+        np.abs(np.asarray(cxs)[cxi] - los.SIGHTS_CX),
+        np.abs(np.asarray(cys)[cyi] - los.SIGHTS_CY),
+    )
+    return np.minimum(dh, 17 - dh) * 1000 + dv * 100 + cur
+
+
+def _view_at(idx, grids):
+    """The build view dict for one flat lattice index."""
+    h, v, cx, cy = los._meta_at(int(idx), *grids)
+    return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
+
+
 def _cheap_views(st, v_primary, aim_from):
-    """Landable views choosing, per tile, the MIN-AIM-COST keyboard view from
-    facing ``aim_from`` (u-turn-aware bearing steps, then pitch steps, then
-    cursor distance from the $134C recentre point) -- same tile membership as
-    ``los.landable_sweep_with_centres``, cheapest representative view."""
+    """Landable views choosing, per tile, the MIN-AIM-COST keyboard view from facing
+    ``aim_from`` (:func:`_aim_cost`, ties broken by lattice index) -- same tile
+    membership as ``los.landable_sweep_with_centres``, cheapest representative view."""
     if not los._HAVE_JIT:
         return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
-    hgrid = list(range(0, 256, los.AZIMUTH_STEP))
-    vgrid = [los.KBD_V_ANGLE] if v_primary else los._V_PRIORITY
-    cxs = los.CURSOR_CX
-    cys = los.CURSOR_CY_FULL if v_primary else los.CURSOR_CY
-    status, tx, ty, _, grids = los._landable_batch(
-        st, st.player, None, 6000, hgrid, vgrid, cxs, cys
-    )
+    grids = landtable.lattice(v_primary=v_primary)
+    status, tx, ty, _, grids = los._landable_batch(st, st.player, None, 6000, *grids)
     views = {}
     clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
     if not clear.size:
         return views
     key = (tx[clear].astype(np.int64) << 16) | ty[clear].astype(np.int64)
-    per_h, per_v = len(cxs) * len(cys), len(hgrid) * len(cxs) * len(cys)
-    vi, rem = np.divmod(clear, per_v)
-    hi, rem2 = np.divmod(rem, per_h)
-    cxi, cyi = np.divmod(rem2, len(cys))
-    h = np.asarray(hgrid)[hi]
-    v = np.asarray(vgrid)[vi]
-    cx = np.asarray(cxs)[cxi]
-    cy = np.asarray(cys)[cyi]
-    h0, v0 = aim_from
-    dh = np.abs(((h - h0) + 128) % 256 - 128) // aimcost.AZIMUTH_STEP
-    dv = np.abs(((v - v0) + 128) % 256 - 128) // aimcost.PITCH_STEP
-    cur = np.maximum(np.abs(cx - los.SIGHTS_CX), np.abs(cy - los.SIGHTS_CY))
-    cost = np.minimum(dh, 17 - dh) * 1000 + dv * 100 + cur
+    cost = _aim_cost(clear, grids, aim_from)
     order = np.lexsort((clear, cost, key))
     ks = key[order]
     head = order[np.concatenate(([True], ks[1:] != ks[:-1]))]
     for i in head[np.argsort(clear[head], kind="stable")]:
-        hh, vv, cxx, cyy = los._meta_at(int(clear[i]), *grids)
-        views[(int(key[i] >> 16), int(key[i] & 0xFFFF))] = {
-            "h_angle": hh,
-            "v_angle": vv,
-            "cursor": [cxx, cyy],
-        }
+        views[(int(key[i] >> 16), int(key[i] & 0xFFFF))] = _view_at(clear[i], grids)
     return views
+
+
+def _cheap_view(st, tile, v_primary, aim_from):
+    """The :func:`_cheap_views` entry for ONE tile, bit-identical, without the sweep.
+
+    Only :func:`landtable.candidates` is marched -- a proven superset of the rays that
+    can land ``tile`` -- and the same min-(cost, index) rule picks the winner, so a
+    candidate set that lands nothing is a proven "no view"."""
+    tile = (int(tile[0]), int(tile[1]))
+    if not los._HAVE_JIT:  # pragma: no cover - numba absent -> the whole-board sweep
+        return _cheap_views(st, v_primary, aim_from).get(tile)
+    slot = st.player
+    if landtable.never_lands(st, tile, slot):
+        return None
+    grids = landtable.lattice(v_primary=v_primary)
+    idx = landtable.candidates(st, tile, slot, None, grids, landtable.MAX_STEPS)
+    if not idx.size:
+        return None
+    status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
+    hit = np.flatnonzero(
+        (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
+    )
+    if not hit.size:
+        return None
+    sel = idx[hit]  # ascending: argmin takes the lowest index among min-cost rays
+    return _view_at(sel[np.argmin(_aim_cost(sel, grids, aim_from))], grids)
 
 
 class _Views:
     """Per-tick lazy cache of the keyboard-aim landable views.
 
-    One primary ($F5-plane) sweep and at most one full pitch-band sweep per
-    tick, replacing a per-candidate ``aim.propose`` full sweep each; each
-    tile's view is the cheapest-to-aim one from the player's current facing.
+    A lattice is PINNED (board snapshot + memo key) at its first query and every later
+    answer read off that pin: the caller keeps acting -- builds, transfers, advanced
+    frames -- while holding the instance, and a built sweep dict froze that board too.
     """
 
     def __init__(self, st):
@@ -113,19 +146,46 @@ class _Views:
         self.aim_from = (st.obj_h_angle[me], st.obj_v_angle[me])
         self._primary = None
         self._full = None
+        self._pin = {}
+
+    def _pinned(self, v_primary):
+        """``(state, memo key)`` for one lattice, fixed at its first query."""
+        got = self._pin.get(v_primary)
+        if got is None:
+            st = self.st
+            key = (projector.scene_key(st), st.player, self.aim_from, v_primary)
+            got = self._pin[v_primary] = (st.clone(), key)
+        return got
 
     def _sweep(self, v_primary):
         """The lattice sweep, memoized across ticks: it is a pure function of the board
         and the facing it costs aims from, and a tick that gates out (a wait, a rejected
         step) re-enters with both unchanged -- the sweep is ~90% of a player's runtime.
         """
-        st = self.st
+        st, key = self._pinned(v_primary)
         return projector.memo(
             _VIEW_CACHE,
-            (projector.scene_key(st), st.player, self.aim_from, v_primary),
+            key,
             _VIEW_CACHE_MAX,
             lambda: _cheap_views(st, v_primary, self.aim_from),
         )
+
+    def _one(self, tile, v_primary):
+        """One tile's sweep entry: read off a sweep already in hand, else marched
+        targeted (:func:`_cheap_view`) -- the same answer for a fraction of the rays."""
+        built = self._primary if v_primary else self._full
+        if built is not None:
+            return built.get(tuple(tile))
+        st, key = self._pinned(v_primary)
+        built = _VIEW_CACHE.get(key)
+        if built is not None:
+            return built.get(tuple(tile))
+        return projector.memo(
+            _TILE_VIEW_CACHE,
+            key + (tuple(tile),),
+            _TILE_VIEW_CACHE_MAX,
+            lambda: (_cheap_view(st, tile, v_primary, self.aim_from),),
+        )[0]
 
     def primary(self):
         if self._primary is None:
@@ -141,15 +201,15 @@ class _Views:
     def get(self, tile, band=False):
         """The landable view for `tile`, or None; `band` falls back to the
         full pitch-band sweep (down-looks at reclaim/endgame targets)."""
-        view = self.primary().get(tuple(tile))
+        view = self._one(tile, True)
         if view is not None or not band:
             return view
-        return self.band().get(tuple(tile))
+        return self._one(tile, False)
 
     def band_get(self, tile):
         """The full pitch-band view for `tile`; the lazy fallback lookup passed
         to :meth:`BasePlayer._view_with_band`."""
-        return self.band().get(tuple(tile))
+        return self._one(tile, False)
 
 
 class BasePlayer:
