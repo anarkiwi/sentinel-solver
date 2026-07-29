@@ -239,3 +239,8 @@ class LiveGreedy(LiveMixin, sim_player.Player):
 class LivePhase(LiveMixin, phase_player.PhasePlayer):
     """The phase player over live VICE memory; its tie rollouts run on simulator
     clones, so only the move it settles on reaches the real keyboard."""
+
+    def _twin_class(self):
+        """A fork is a SIMULATOR player: this class takes a live session, not a Game,
+        and its executor drives a real keyboard."""
+        return phase_player.PhasePlayer

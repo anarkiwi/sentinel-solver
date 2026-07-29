@@ -330,6 +330,17 @@ Standing on the platform is not a win; hyperspacing from it is. Live, the driver
 `$0CDE` bit 6 straight out of the machine, and `LivePlayer._dead` additionally treats a
 re-frozen `$0CE5` after the player has acted as an observed landscape reset.
 
+`$216A` is also the only move that changes position with **no line of sight**: it takes no
+aim and no target, so it is the one action still available from a stance that can land
+nothing. That makes relocation a move class, not just the win move — `phase_player._barren`
+detects a stance where every generator is empty (no landable tile at all, or nothing
+absorbable, reclaimable, climbable or mountable in view) and `_relocate` jumps out of it for
+the 3-energy toll. Such a stance has no income and no climb, so it loses whether or not a
+cone ever finds it, and waiting cannot change it — before this the planner idled 60 frames a
+tick until a cone drained it to death. The landing tile is PRNG-driven (`$2165 JSR $1238`)
+and treated as unknowable, so a relocation is never *scored*, only taken; the purse is the
+whole gate, since `$2170` kills on underflow.
+
 ### The driver: boot → enter → play
 
 `driver/boot.py` and `driver/core.py` walk a fixed stage sequence, every transition gated on

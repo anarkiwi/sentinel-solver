@@ -16,7 +16,7 @@ WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
-ARBITRATE_ACTIONS = 2  # decision ticks each arbitrated option plays out on its fork: a BOUND on how much of the fixed ladder's own error the score absorbs (open item 14), not a derived depth -- deeper scores worse, on and off the suite
+ARBITRATE_ACTIONS = 2  # decision ticks each arbitrated option plays out on its fork: a BOUND on how much of the fixed ladder's own error the score absorbs (open item 13), not a derived depth -- deeper scores worse, on and off the suite
 
 
 class PhasePlayer(BasePlayer):
@@ -102,9 +102,16 @@ class PhasePlayer(BasePlayer):
                 return False  # no gap and no pressure: this action is not worth it
         return self._fire(verb, tile, view)
 
+    def _twin_class(self):
+        """The class a fork is built from: THIS one, so the policies arbitration
+        searches are the policies that will actually be played.  Naming the base here
+        made every option on a subclass be evaluated by the base's own generators.
+        A player whose constructor or executor is not the simulator's overrides it."""
+        return type(self)
+
     def _fork(self):
         """A copy of this player on a copy of the world, for trying a policy out."""
-        twin = PhasePlayer(
+        twin = self._twin_class()(
             Game(self.st.clone()), verbose=False, horizon=self.horizon, rollout=True
         )
         twin.cursor = list(self.cursor)
@@ -152,8 +159,16 @@ class PhasePlayer(BasePlayer):
         return bool(getattr(self, best[1])(_Views(self.st)))
 
     def _harvest(self, views):
-        """Top up from whatever is reachable."""
-        return self._refuel(views, self.st.energy + 2)
+        """Top up from whatever is reachable; True when the purse actually rose.
+
+        A policy reports whether it MOVED, and `_arbitrate` drops every option whose
+        policy returned False.  `_refuel` answers a different question -- "do I now hold
+        `want`", which `_strike`/`_finish` need -- and answers it False when one +1 tree
+        is all there is, throwing away the only action on the board.
+        """
+        before = self.st.energy
+        self._refuel(views, before + 2)
+        return self.st.energy > before
 
     def _supply(self, views):
         """Phase 1a as a policy: bank, or move to where the fuel is."""
@@ -208,7 +223,12 @@ class PhasePlayer(BasePlayer):
         return took if bank else self.st.energy >= want
 
     def _stance_base(self, tile):
-        """Foot height a stack on ``tile`` builds from, or None if not stackable."""
+        """Foot height a stack on ``tile`` builds from, or None if not stackable.
+
+        Bare tile: a foot.  Stacked: already a robot eye, since $1F66 gives every
+        create `z_frac = $E0` -- two conventions in one function, and the callers add
+        `ROBOT_EYE` to both -- open item 14.
+        """
         top = self._top(tile)
         if top is None:
             return terrain.tile_byte(self.st, *tile) >> 4
@@ -322,6 +342,9 @@ class PhasePlayer(BasePlayer):
         A transfer costs nothing, and a robot left behind by a build whose transfer
         failed is otherwise dead weight: ``_stance_base`` will not stack on a robot, so
         nothing else can ever use that tile again.
+
+        The candidate's eye is over-stated by a whole `ROBOT_EYE` -- a robot's stored z
+        IS its eye -- so this can transfer DOWNWARD (open item 14).
         """
         st = self.st
         best = None
@@ -331,7 +354,7 @@ class PhasePlayer(BasePlayer):
             top = terrain.top_object(st, *st.tile_of(slot))
             if top != slot:
                 continue
-            eye = st.obj_z_height[slot] + st.obj_z_frac[slot] / 256.0 + ROBOT_EYE
+            eye = st.eye_z(slot) + ROBOT_EYE
             if eye <= st.eye_z() + EYE_EPS:
                 continue
             if not self._mount_holds(slot):
@@ -447,6 +470,47 @@ class PhasePlayer(BasePlayer):
                 return False
         return self._do("transfer", ptile, _Views(st), band=True)
 
+    def _barren(self, views):
+        """Whether NO action of any class exists from this stance -- gaps and timing aside.
+
+        Every generator empty is a different state from every generator refused: the
+        second is a wait, the first cannot change by waiting.
+        """
+        st = self.st
+        band = views.band()
+        if not band:
+            return True  # nothing landable on either lattice: no verb has a target
+        for e in enemies.enemy_slots(st):
+            tile = tuple(st.tile_of(e))
+            if tile in band and terrain.top_object(st, *tile) == e:
+                if actions.can_absorb(st, e):
+                    return False
+        for _value, tile in self._reclaim_targets(st, True):
+            if tuple(tile) in band:
+                return False
+        if self._climb_candidates(views, True):
+            return False
+        for slot, tile in self._robot_bodies():
+            if tuple(tile) in band and st.eye_z(slot) > st.eye_z():
+                return False
+        return True
+
+    def _relocate(self, views):
+        """Leave a stance that offers nothing: $216A moves the body with no sightline.
+
+        A barren stance has no income and no climb, so it loses whether or not a cone
+        ever finds it -- waiting cannot change it and only position can.  The toll is 3
+        ($216A) and $2170 kills on underflow, so that is the whole affordability test.
+        The landing is PRNG-driven and deliberately unknowable here, so a relocation is
+        never SCORED, only taken.
+        """
+        if self.st.energy < mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]:
+            return False
+        if not self._barren(views):
+            return False
+        self._hyperspace()
+        return True
+
     def _tick(self):
         views = _Views(self.st)
         if self.st.is_empty(actions.SENTINEL_SLOT):
@@ -471,6 +535,8 @@ class PhasePlayer(BasePlayer):
             for tile in list(views.primary())[:24]:
                 if self._do("robot", tile, views, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]):
                     return
+        if self._relocate(views):  # nothing here to do at all: move, do not idle
+            return
         enemies.advance_frames(self.st, WAIT_QUANTUM)
         self.frames += WAIT_QUANTUM
 
