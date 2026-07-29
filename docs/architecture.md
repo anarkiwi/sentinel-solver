@@ -227,8 +227,11 @@ Sight alone costs nothing. `target_object $1825` merely arms `$0C20` to 120 roun
 
 **The ladder.** `consider_enemy_state $16E6` runs only when the update cooldown is below the
 stick value, and **returns before the rotate at `$17F9` whenever an earlier branch fires** —
-so a busy enemy stops sweeping (that stall is
-[open item 3](open_items.md#3-the-gaze-forecast-assumes-rotation-never-stalls)).
+so a busy enemy stops sweeping. `playerbase._cone_onset` does not model that stall
+([open item 3](open_items.md#3-the-gaze-forecast-assumes-rotation-never-stalls)); the two
+consumers work around it in opposite ways — `_verify_starts` re-checks each forecast onset on
+a bit-exact clone, and the phase player never forecasts at all (`_drained_over` advances a
+clone over the span and looks).
 
 | # | state entered | trigger | ROM | effect / next |
 |:-:|---|---|---|---|
@@ -442,6 +445,7 @@ foreground work folded into a settle constant.
 | `$178C` | (in `consider_enemy_state`) | still sees its held target — returns before the rotate | `enemies._consider_enemy_state` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$17B2` | `find_drainable_robot_loop` | scans all 64 slots for a visible type-0 robot | `enemies._consider_enemy_state` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$17F9` | (in `consider_enemy_state`) | the rotate branch, reached only when nothing else fired | `enemies._consider_enemy_state`; forecast `playerbase._cone_onset` | `golden_enemies`, `oracle.step_enemy_round`; the rotation stall is unmodelled [3](open_items.md#3-the-gaze-forecast-assumes-rotation-never-stalls) |
+| `$17FB` | (in `consider_enemy_state`) | `LDA $0C28,X / CMP #$02 / BCC $1805` — the rotate fires only while the rotation cooldown is below the stick value; otherwise `JMP $16D6`, the round tail | `enemies._rotate_enemy`, `COOLDOWN_STICK` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$1805` | `rotate_enemy` | one fixed ±20-unit step | `enemies._rotate_enemy` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$1813` | (in `rotate_enemy`) | reloads the rotation cooldown to 200 | `enemies.ROTATION_COOLDOWN_RELOAD` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$1825` | `target_object` | records the target and ARMS `$0C20` to 120 rounds | `enemies._target_object`, `DRAINING_COOLDOWN_RELOAD` | `golden_enemies`, `oracle.step_enemy_round` |
@@ -466,7 +470,7 @@ foreground work folded into a settle constant.
 | `$1A5D` | `consider_discharging_enemy_energy` | re-emits banked energy as a tree in a random low tile | `enemies._consider_discharging_enemy_energy` | `golden_enemies`, `oracle.step_enemy_round`; relocation tile unread |
 | `$1A97` | play setup | the play-mode entry sequence | `landscape.generate` | `golden_landscape` |
 | `$1AB0` | `find_drainable_boulder_or_tree_on_stack` | dismantles anything standing on a stack (`flags >= $40`) | `enemies._find_drainable_boulder_or_tree` | `golden_enemies`, `oracle.step_enemy_round` |
-| `$1B00` | (in `consider_enemy_state`) | `SEC / BIT $0C1F / BPL` — a no-op on the common path |  | no-op on the common path ([8](open_items.md#8-the-ls335-facing-gap-a-seven-enemy-board-diverges)) |
+| `$1B00` | (in `consider_enemy_state`) | `SEC / BIT $0C1F / BPL $1B17` — returns carry set without doing anything unless the plot flag `$0C1F` bit 7 is set |  | deliberately unmodelled: a no-op on the common path |
 | `$1B18` | `handle_player_actions` | dispatch; builds the aim vector for every code `< $22` | `aim.resolve` | `golden_actions` |
 | `$1B1F` | `handle_hyperspace` | the hyperspace action | `actions.hyperspace` | `golden_actions` |
 | `$1B2F` | `handle_uturn` | `objects_h_angle ⊕ $80` — free instant 180° flip | `aimcost.h_press_count`, `kbd_aim._uturn` | `test_aimcost.py`, `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
@@ -558,6 +562,7 @@ foreground work folded into a settle constant.
 | `$2D6C` | `prepare_polygon` | per-polygon edge setup, run twice per wide-buffer section | `projector._terrain_poly_base` | `golden_projector`; per-call floor only ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
 | `$2D93`/`$2DCF` | `convert_angles_into_screen_coordinates` | vertex angles → `$A7A0`/`$0B40` screen coordinates | `projector` conv term | `golden_render_cost` |
 | `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00` | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
+| `$2EB2`/`$2EB7` | (in `process_line`) | `STA $AD00,Y` / `STA $AE00,Y` — the only writes to the left/right edge tables, one row at a time | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
 | `$2F58` | (in `process_line`) | the steep inner loop | `projector` steep inner loop | `golden_render_cost` |
 | `$31CA` | `prnd` | 40-bit LFSR over `$0C7B-$0C7F`, 8 shuffles per call | `prng.Prng` | `golden_prng` |
 | `$339A` | `get_random_two_digit_bcd_number` | one `prnd` draw per call | `landscape._initialise_player_and_trees` | `golden_landscape` |
@@ -597,7 +602,7 @@ foreground work folded into a settle constant.
 | `$9965`/`$9994` | (in `move_sights`) | ±1 px per gated scan; clamps cx `$10-$8F`, cy `$20-$9F` | `los.CURSOR_CX`/`CURSOR_CY` | `test_landable.py`, `test_landtable.py`; [10](open_items.md#10-landability-filter-unproven-corners) |
 | `$9CA0`/`$9CA1` | object vertex counts | per model type | `projector._OBJECT_MODEL` | `golden_render_cost` |
 | `$9CAB`/`$9CAC` | object polygon counts | per model type | `projector._OBJECT_MODEL` | `golden_render_cost` |
-| `$9D37` | rotation speed table | the per-enemy ±20 step, in RAM | `memmap.ROTATION_SPEED_TABLE` | `golden_enemies`, `oracle.step_enemy_round`; overlaid from the live image by the instrument |
+| `$9D37` | rotation speed table | the per-enemy ±20 step, in RAM — inside a ROM `LOADED` region, so `oracle.machine_from_image` overwrites it ([the 6502 oracle](#the-6502-oracle-sentineltestsoraclepy)) | `memmap.ROTATION_SPEED_TABLE` | `golden_enemies`, `oracle.step_enemy_round`; seeded from the live image by the instrument |
 
 ---
 ## The model (`sentinel/`)
@@ -737,9 +742,17 @@ or blocks).
 branch), at a small cost per arc-narrowed query, so the answer stays sound either way — see
 [open item 10](open_items.md#10-landability-filter-unproven-corners).
 
-**Lattices.** `los._landable_sweep`'s plane and band (`max_steps = 6000`). Over targeted
-queries from real solves (ls0/42/335), arc bisection alone marches a large fraction of the
-arc; adding `crossing_mask` (`landable_view`) cuts the rays marched several-fold and answers a
+**Callers.** `playerbase._Views` is the one entry point the players use. `get`/`band_get`
+answer a **single** tile with one targeted march (`_cheap_view` over `landtable.candidates`,
+narrowed by `crossing_mask`); the whole-lattice sweep `los._landable_batch` is built only when
+a caller reads the entire dict (`views.band()`). Each lattice is pinned to the board at its
+first query (`_Views._pinned`), so a caller that builds or transfers mid-tick keeps reading
+one consistent board. Which callers still buy the sweep is
+[open item 1](open_items.md#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
+
+**Lattices.** `los._landable_sweep`'s plane and band (`landtable.MAX_STEPS = 6000`). Over
+targeted queries from real solves (ls0/42/335), arc bisection alone marches a large fraction of
+the arc; adding `crossing_mask` (`landable_view`) cuts the rays marched several-fold and answers a
 majority of ls42 queries as a *proven* "no view" without marching at all. The expensive
 residual is an **adjacent** cell: its arc is huge and a ray dwells long enough inside it to
 cross almost any surface height, so most of the arc survives the filter.
@@ -821,7 +834,16 @@ off-band `prepare_polygon` ~600 cyc/call (`C_PREP_CALL`). The fill is **prepare-
 some golden views fill zero pixels yet spend most of their terrain budget tracing edges for
 polygons that clip out of the band — because `prepare_polygon` runs per polygon × 2
 wide-buffer sections and a plotted tile is one quad or two triangles (`plot_two_triangles
-$2A8A`). Why the per-tile residual cannot close:
+$2A8A`).
+
+**The edge tables carry state across polygons.** `polygon_left_edge_table $AD00` and
+`polygon_right_edge_table $AE00` are **never cleared**: a linear scan of the image finds no
+clear loop over those pages, and the only writes are `process_line`'s own per-row
+`$2EB2 STA $AD00,Y` / `$2EB7 STA $AE00,Y`. A polygon clipping to a sliver therefore writes
+only some of the `[$0004,$0006]` rows, and `span_fill $22AA` — whose middle-fill length is
+`right_col − left_col` (`$22B7 LDA $AE00,X / $22BA CMP $AD00,X`) — reads columns a *previous*
+polygon left behind. So the fill is a cross-polygon stateful sequence, not a per-tile
+function, which is why the area proxy's residual cannot close:
 [open item 5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile).
 
 **Object term.** `plot_object $8533` → transform loop `$8475`: per vertex `transform_vertex`
@@ -913,7 +935,9 @@ host delay is warp-dependent (warp on under `NO_RECORD=1`, off while recording),
 make measured frame counts differ between modes. `test_no_sleep.py` is an AST guard; waits
 outside the emulated machine carry an inline `# sleep-ok: <reason>`. In play,
 `bm.auto_resume = False`, so the world moves only in deliberate `run_frames`/checkpoint windows
-and think time is free. The residual host clocks are the `kbd_aim` timeouts
+and think time is free. The pan cycle is machine-clocked frame by frame off `PC_PAN_DONE`,
+terminating on `_PAN_STALL_FRAMES`/`_PAN_MAX_FRAMES` rather than elapsed time; the residual host
+clocks are the remaining `kbd_aim` socket timeouts
 ([open item 7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity)).
 
 **Aim → fire → verify.** A view is a bearing (8-unit lattice), a pitch (4-unit lattice, band
@@ -994,6 +1018,23 @@ is 0% correct on the outcome it decides, because one rotation step of drift puts
 the planner modelled empty.
 
 ## Measurement and iteration tools
+
+### The 6502 oracle (`sentinel/tests/oracle.py`)
+
+Runs the real ROM under py65 so a model routine can be diffed against it. Two setup steps
+mutate state the caller usually means to control, and either one makes a comparison read as a
+model defect:
+
+- **`machine_from_image` overlays the ROM `LOADED` regions on top of the caller's image.**
+  The board is in low RAM and survives, but per-enemy state *inside* a loaded region does not:
+  `ROTATION_SPEED_TABLE $9D37` and the cooldown Bresenham accumulator `$1335` are replaced by
+  the image's. A caller seeding a recorded clock must rewrite both afterwards, or the ROM
+  rotates by the wrong step. (`test_human_clock.py` does this; `driver/instrument.py` seeds
+  from the live image, so it gets the real table.)
+- **`prime_enemy_driver` resets the round-robin cursor `$0090` to 7 and the cooldown gate
+  `$0C50` to 0**, on top of RTS-stubbing the render/sound routines and clearing
+  `WORLD_BUSY_PLOTTING $0C1F`. That is what makes `update_enemies` steppable one round at a
+  time to match `enemies.step`, but it discards any recorded phase in those two bytes.
 
 ### The recorded clock (`sentinel/tests/human_clock.py`)
 
