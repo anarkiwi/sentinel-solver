@@ -632,7 +632,8 @@ foreground work folded into a settle constant.
 | `game.py` | `Game`, the facade |
 | `playerbase.py` | shared player machinery: world clock, geometry, gaze windows, aim cost, firing, run loop |
 | `phase_player.py`, `player.py` | the two players ([players.md](players.md)) |
-| `landscan.py`, `isoview.py` | per-landscape enemy/terrain census; isometric SVG of any `State` |
+| `statecache.py`, `atlas.py` | the landscape atlas: cached board images, and the metrics measured off them |
+| `isoview.py` | isometric SVG of any `State` |
 
 `State` is a mutable `bytearray` image; `Game.clone()` deep-copies it so a search branches
 without side effects.
@@ -1142,3 +1143,51 @@ bugs above first presented as `identical: true` over an empty tail.
 **Determinism contract.** Anything whose result is compared must be bounded by node budget only,
 never a wall clock: a wall-clock cut makes the search a function of host load, and with the clock
 out of the loop parallelism changes wall time and never a verdict.
+
+### The landscape atlas (`sentinel/atlas.py`, `sentinel/statecache.py`)
+
+Per-landscape metrics over every board, in two layers that are versioned independently.
+
+**Layer 1 — the state cache (`statecache.py`).** Generating a board is the whole cost
+(~17 ms); its entire result is one 64 KB image, so an entry is that image zlib-compressed
+(~1.1 KB) at `out/atlas/<signature>/ls<code>.z`, loaded in ~0.3 ms. The signature is 12 hex
+chars of sha256 over `CACHE_VERSION` plus the sources of `landscape.py`, `prng.py`,
+`state.py`, `memmap.py`, `game.py` — the generator and nothing else. Editing the generator
+selects a new directory, so stale entries are never read; editing a metric cannot change the
+key. `$SENTINEL_ATLAS_CACHE` overrides the root. `out/atlas/` is gitignored.
+
+**Layer 2 — the metrics (`atlas.py`).** A `Board` wraps a cached `State` with the arrays
+metrics read: the 32×32 resolved `heights`/`slopes` fields (object tiles resolved to their
+stack floor, as `terrain.resolve_ground` defines them), the object arrays, and the live and
+enemy slot indices — all numpy, no per-tile Python. A metric is one function registered by
+`@metric("name")` taking that `Board`. Adding one is adding that function: re-running
+recomputes over the cached images with zero generation.
+
+| metric | value |
+|---|---|
+| `seed` | the ROM PRNG seed the typed code maps to |
+| `enemies` | occupied enemy slots (Sentinel + sentries) |
+| `enemy_list` | per enemy: slot, type name, tile, height |
+| `landscape_energy` | `ENERGY_IN_OBJECTS` summed over every occupied slot but the player's own robot; **excludes** the player's 10 starting energy |
+| `roughness` | mean absolute height step between neighbouring tiles, both axes |
+| `relief`, `mean_z` | height span and mean over the 32×32 ground field |
+| `flat_tiles` | tiles of slope 0 — the only standable ones |
+| `start_tile`, `start_z`, `start_eye`, `start_energy` | where the player robot begins |
+
+**Range.** A landscape code is the four digits a player types, `0000`–`9999`;
+`landscape.seed_for` reads them as hex (`f"{code:04d}"` parsed base 16), so 10000 and above
+are not codes at all. `statecache.valid_code` enforces it.
+
+```bash
+python -m sentinel.atlas --start 0 --stop 500              # readable table
+python -m sentinel.atlas --codes 0,42,335 --format json    # machine-readable
+python -m sentinel.atlas --start 0 --stop 400 --like 335   # nearest boards (absorbed landscan)
+python -m sentinel.atlas --codes 335 --regen               # ignore the cache
+```
+
+Chunked and parallel (`--jobs`, default one worker per core) and resumable, because the
+cache *is* the resume point — a chunk is a plain re-run of the same command over a
+sub-range. Measured on 24 cores: 2000 codes cold 2.0 s wall / 33 s CPU, warm 0.5 s wall /
+4.2 s CPU. The whole range is ~178 s CPU, so build it in five 2000-code chunks to stay
+inside the 60 s-per-script budget; all 10000 warm then cost 2.8 s wall / 21 s CPU and
+generate nothing. Cache: ~1.06 KB per landscape, 10.6 MB for all 10000.
