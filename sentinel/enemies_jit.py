@@ -161,6 +161,18 @@ _COOLDOWN_TICK_WALK = passcost.COOLDOWN_TICK_WALK
 _COOLDOWN_TICK_BYTE_STICK = passcost.COOLDOWN_TICK_BYTE_STICK
 _COOLDOWN_TICK_BYTE_DEC = passcost.COOLDOWN_TICK_BYTE_DEC
 
+_BODY_ENTRY = 0  # resume points inside $16E6, mirroring sentinel.enemies.BODY_*
+_BODY_MEANIE = 1
+_BODY_DISCHARGE = 2
+_BODY_HUNT = 3
+_BODY_HELD = 4
+_BODY_SCAN = 5
+_BODY_PARTIAL = 6
+_BODY_TREE = 7
+_BODY_ROTATE = 8
+_BODY_MAKE_MEANIE = 9
+_BODY_DONE = -1
+
 _MAX_STEPS = 20000  # can_see_object's march bound (the ROM's board-edge exit)
 ZP_LO = 0x50  # the zero-page window the geometry touches ($0050..$008B)
 ZP_HI = 0x8C
@@ -789,41 +801,62 @@ def _do_hyperspace(mem):
 
 
 @njit(cache=True)
-def _find_drainable_boulder_or_tree(mem, zp, enemy):
-    """find_drainable_boulder_or_tree_on_stack $1AB0; (-1, cycles) when nothing is
-    drainable."""
-    cost = np.int64(_TILE_SCAN_FIXED)
-    for x in range(_NUM_SLOTS - 1, -1, -1):
+def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
+    """find_drainable_boulder_or_tree_on_stack $1AB0, resumable, one slot per unit.
+
+    Returns (budget, index, drained slot / -1 exhausted / -2 suspended)."""
+    while True:
+        if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
+            x = -2 - index
+            tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
+            y = tb & 0x3F
+            index = x - 1
+            _i, _f, _e, full, _t, _c = _can_see_object(
+                mem, zp, enemy, y, _rd(mem, _OTYPE + y), _FOV_SCAN
+            )
+            if full:
+                _wr(mem, _TARGETED_SLOT, y)
+                return budget - np.int64(_TILE_SCAN_HIT), index, y
+            budget -= np.int64(_TILE_SCAN_NEXT)
+            continue
+        if index < 0:  # $1AF2: the whole scan came up empty
+            return budget, index, -1
+        if budget <= 0:
+            return budget, index, -2
+        x = index
+        index -= 1
         flags = _rd(mem, _OFLAGS + x)
         if flags & 0x80:  # empty slot
-            cost += np.int64(_TILE_SCAN_EMPTY)
+            budget -= np.int64(_TILE_SCAN_EMPTY)
             continue
         if not (flags >= 0x40 or _rd(mem, _OTYPE + x) == _T_BOULDER):
-            cost += np.int64(_TILE_SCAN_OTHER)
+            budget -= np.int64(_TILE_SCAN_OTHER)
             continue
-        cost += np.int64(
+        budget -= np.int64(
             (_TILE_SCAN_STACKED if flags >= 0x40 else _TILE_SCAN_LOOSE)
             + _TILE_SCAN_TILE
         )
         tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
         if tb < _OBJECT_TILE:
-            cost += np.int64(_TILE_SCAN_NO_TILE)
+            budget -= np.int64(_TILE_SCAN_NO_TILE)
             continue
         y = tb & 0x3F  # topmost object of the tile
         otype = _rd(mem, _OTYPE + y)
-        cost += np.int64(_TILE_SCAN_TOP)
+        budget -= np.int64(_TILE_SCAN_TOP)
         if otype != _T_TREE and otype != _T_BOULDER:
-            cost += np.int64(_TILE_SCAN_WRONG_TOP)
+            budget -= np.int64(_TILE_SCAN_WRONG_TOP)
             continue
         _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
             mem, zp, enemy, y, otype, _FOV_SCAN
         )
-        cost += np.int64(_TILE_SCAN_SEE) + scost
-        if full:
-            _wr(mem, _TARGETED_SLOT, y)
-            return y, cost + np.int64(_TILE_SCAN_HIT)
-        cost += np.int64(_TILE_SCAN_NEXT)
-    return -1, cost
+        budget -= np.int64(_TILE_SCAN_SEE) + scost
+        if not full:
+            budget -= np.int64(_TILE_SCAN_NEXT)
+            continue
+        if budget <= 0:  # the ROM has not reached $1AEA yet
+            return budget, -2 - x, -2
+        _wr(mem, _TARGETED_SLOT, y)
+        return budget - np.int64(_TILE_SCAN_HIT), index, y
 
 
 @njit(cache=True)
@@ -836,33 +869,51 @@ def _initialise_enemy_meanie_variables(mem, enemy):
 
 
 @njit(cache=True)
-def _consider_creating_meanie(mem, zp, enemy):
-    """consider_creating_meanie $197D: the first fully-visible tree within 10 tiles
-    of the targeted player, in both axes, becomes a meanie owned by `enemy`.
-    Returns (created, cycles)."""
+def _consider_creating_meanie(mem, zp, enemy, budget, index):
+    """consider_creating_meanie $197D plus target_object's $1852 tail, resumable.
+
+    One search-counter step is one unit.  Returns (budget, stage, index)."""
     player = _rd(mem, _TARGET + enemy)
-    cost = np.int64(0)
     while True:
+        if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
+            slot = _rd(mem, _M_SEARCH + enemy)
+            index = 0
+            _i, _f, _e, full, _t, _c = _can_see_object(
+                mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
+            )
+            if full:
+                _wr(mem, _M_OBJECT + enemy, slot)  # $19E1
+                _wr(mem, _OTYPE + slot, _T_MEANIE)
+                _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_MADE)
+                return budget, _BODY_DONE, 0
+            continue
+        if budget <= 0:
+            return budget, _BODY_MAKE_MEANIE, index
         sc = _rd(mem, _M_SEARCH + enemy)
         if sc == 0:  # $198D: scanned everything -> no meanie this pass
+            budget -= np.int64(_MEANIE_SCAN_DONE)
             _wr(mem, _M_SCANS + enemy, _rd(mem, _M_SCANS + enemy) + 1)
             _wr(mem, _M_FAILED + enemy, player)
-            return False, cost + np.int64(_MEANIE_SCAN_DONE)
+            if _rd(mem, _M_SCANS + enemy) >= _MEANIE_MAX_ATTEMPTS:
+                _wr(mem, _DRAIN_CD + enemy, 0)  # give up on this player
+            else:
+                _wr(mem, _CONSIDERING + enemy, 0x80)  # keep trying next time
+            return budget, _BODY_DONE, 0
         _wr(mem, _M_SEARCH + enemy, sc - 1)
         slot = sc - 1  # $199B DEY
         if mem[_OFLAGS + slot] & 0x80:
-            cost += np.int64(_MEANIE_SCAN_SLOT)
+            budget -= np.int64(_MEANIE_SCAN_SLOT)
             continue
         if mem[_OTYPE + slot] != _T_TREE:
-            cost += np.int64(_MEANIE_SCAN_OTHER)
+            budget -= np.int64(_MEANIE_SCAN_OTHER)
             continue
-        cost += np.int64(_MEANIE_SCAN_OTHER + _MEANIE_SCAN_DX)
+        budget -= np.int64(_MEANIE_SCAN_OTHER + _MEANIE_SCAN_DX)
         dx = (_rd(mem, _OX + player) - _rd(mem, _OX + slot)) & 0xFF
         if dx >= 0x80:
             dx = 0x100 - dx  # $19B5 abs
         if dx >= 0x0A:
             continue
-        cost += np.int64(_MEANIE_SCAN_DY)
+        budget -= np.int64(_MEANIE_SCAN_DY)
         dy = (_rd(mem, _OY + player) - _rd(mem, _OY + slot)) & 0xFF
         if dy >= 0x80:
             dy = 0x100 - dy
@@ -871,12 +922,15 @@ def _consider_creating_meanie(mem, zp, enemy):
         _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
             mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
         )
-        cost += np.int64(_MEANIE_SCAN_SEE) + scost
+        budget -= np.int64(_MEANIE_SCAN_SEE) + scost
         if not full:
             continue
+        if budget <= 0:  # the ROM has not reached $19E1 yet
+            return budget, _BODY_MAKE_MEANIE, -2 - slot
         _wr(mem, _M_OBJECT + enemy, slot)  # $19E1
         _wr(mem, _OTYPE + slot, _T_MEANIE)
-        return True, cost
+        _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_MADE)
+        return budget, _BODY_DONE, 0
 
 
 @njit(cache=True)
@@ -895,17 +949,22 @@ def _remove_meanie_and_reset_enemy(mem, enemy):
 
 
 @njit(cache=True)
-def _update_meanie(mem, zp, enemy):
-    """update_meanie $16F2: rotate toward the player, then force a hyperspace.
-    Returns its cycles."""
+def _update_meanie(mem, zp, enemy, budget, index):
+    """update_meanie $16F2, resumable: rotate toward the player, then hyperspace it.
+
+    Its one $1887 call is the unit.  Returns (budget, stage, index)."""
     meanie = _rd(mem, _M_OBJECT + enemy)
     target = _rd(mem, _TARGET + enemy)
     if mem[_OFLAGS + target] & 0x80:  # $16F7: the object the player was in is gone
         _remove_meanie_and_reset_enemy(mem, enemy)
-        return np.int64(0)
+        return budget, _BODY_DONE, 0
     in_slot, in_fov, exposure, _full, _th, cost = _can_see_object(
         mem, zp, meanie, target, _T_ROBOT, _FOV_SCAN
     )
+    if index >= 0:  # not yet charged
+        budget -= cost
+        if budget <= 0:
+            return budget, _BODY_MEANIE, -2
     if in_fov == 0:  # $1706: not yet looking at the player -> rotate
         c57 = _relative_angles(mem, zp, meanie, target)[0]
         step = _MEANIE_ROTATE_STEP
@@ -914,46 +973,38 @@ def _update_meanie(mem, zp, enemy):
         _wr(mem, _OHANG + meanie, _rd(mem, _OHANG + meanie) + step)
         _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_ROTATE)
         # $1755 JMP $187B: a meanie's turn redraws it too
-        return cost + np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW)
+        return budget - np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW), _BODY_DONE, 0
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(mem, enemy)
-        return cost
+        return budget, _BODY_DONE, 0
     if _exposure_byte(in_slot, in_fov, exposure) == 0:  # $170E
         _remove_meanie(mem, enemy)
-        return cost
+        return budget, _BODY_DONE, 0
     _do_hyperspace(mem)  # $1710: forced hyperspace
-    return cost
+    return budget, _BODY_DONE, 0
 
 
 @njit(cache=True)
-def _target_object(mem, zp, enemy, target, exposure):
-    """target_object $1825: record the target and drain it when the timer expires.
-    Returns its cycles."""
+def _target_object(mem, enemy, target, exposure):
+    """target_object $1825 up to its $184D branch: record the target, drain it when
+    the timer expires.  Returns the next stage (BODY_MAKE_MEANIE or BODY_DONE)."""
     _wr(mem, _TARGET + enemy, target)
     _wr(mem, _TARGET_EXP + enemy, exposure)
     cd = _rd(mem, _DRAIN_CD + enemy)
     if cd < 0x01:  # first sight -> arm the drain timer
         _wr(mem, _DRAIN_CD + enemy, _DRAIN_CD_RELOAD)
-        return np.int64(0)
+        return _BODY_DONE
     if cd != 0x01:  # still counting down
-        return np.int64(0)
+        return _BODY_DONE
     if exposure & 0x80:  # fully visible -> drain
         _wr(mem, _TARGETED_SLOT, target)
         killed = target == _rd(mem, _PLAYER) and _rd(mem, _ENERGY) == 0
         _reduce_object_energy(mem, target, enemy)
         if killed:  # kill_player $1A00 unwinds the stack
-            return np.int64(0)
+            return _BODY_DONE
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-        return np.int64(0)
-    made, cost = _consider_creating_meanie(mem, zp, enemy)  # $184D
-    if made:
-        _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_MADE)
-        return cost
-    if _rd(mem, _M_SCANS + enemy) >= _MEANIE_MAX_ATTEMPTS:
-        _wr(mem, _DRAIN_CD + enemy, 0)  # give up on this player
-    else:
-        _wr(mem, _CONSIDERING + enemy, 0x80)  # keep trying next time
-    return cost
+        return _BODY_DONE
+    return _BODY_MAKE_MEANIE  # $184D: only the head -> hunt a tree to convert
 
 
 @njit(cache=True)
@@ -965,80 +1016,176 @@ def _rotate_enemy(mem, enemy):
 
 
 @njit(cache=True)
-def _consider_enemy_state(mem, zp, enemy):
-    """consider_enemy_state $16E6: the meanie/discharge/drain/rotate decision.
-    Returns its cycles, the $16E9 gate closing for the cheap one."""
-    if mem[_UPD_CD + enemy] >= _COOLDOWN_STICK:
-        return np.int64(_UPDATE_GATE_CLOSED)
-    cost = np.int64(_CONSIDER_ENTRY)
-    _wr(mem, _UPD_CD + enemy, _UPD_CD_SCAN)
-    _wr(mem, _FOV_WIDTH, _FOV_SCAN)
-
-    if not (mem[_M_OBJECT + enemy] & 0x80):  # $16EA: already owns a meanie
-        return cost + _update_meanie(mem, zp, enemy)
-
-    cost += np.int64(_CONSIDER_PREAMBLE)  # $1773
-    discharged, dcost = _consider_discharging_enemy_energy(mem, enemy)
-    cost += dcost
-    if discharged:
-        return cost
-
-    if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
-        tb, tcost = _find_drainable_boulder_or_tree(mem, zp, enemy)
-        cost += tcost
-        if tb >= 0:
-            _wr(mem, _M_SEARCH + enemy, 0x40)  # $178B
-            _reduce_object_energy(mem, tb, enemy)
-            _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-            return cost
-        _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
-
-    if mem[_DRAIN_CD + enemy] != 0:  # $178C: re-check a held target
-        held = _rd(mem, _TARGET + enemy)
-        in_slot, in_fov, exp_raw, _full, _th, scost = _can_see_object(
-            mem, zp, enemy, held, _T_ROBOT, _FOV_SCAN
-        )
-        cost += scost
-        exposure = _exposure_byte(in_slot, in_fov, exp_raw)
-        if exposure != 0:
-            return cost + _target_object(mem, zp, enemy, held, exposure)
-        _wr(mem, _DRAIN_CD + enemy, 0)  # target lost
-
-    player = _rd(mem, _PLAYER)  # find_drainable_robot_loop $17B2
-    partial_player = -1
-    cost += np.int64(_SCAN_FIXED)
-    for y in range(_NUM_SLOTS - 1, -1, -1):
+def _scan_for_robot(mem, zp, enemy, budget, index, partial):
+    """find_drainable_robot_loop $17B2, resumable, one slot per unit."""
+    player = _rd(mem, _PLAYER)
+    while True:
+        if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
+            y = -2 - index
+            in_slot, in_fov, exp_raw, _f, _t, _c = _can_see_object(
+                mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
+            )
+            stage = _target_object(
+                mem, enemy, y, _exposure_byte(in_slot, in_fov, exp_raw)
+            )
+            return budget, stage, 0, -1
+        if index < 0:  # $17CB: the scan is exhausted
+            if partial >= 0:
+                return budget, _BODY_PARTIAL, 0, partial
+            _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
+            budget -= np.int64(_TILE_SCAN_FIXED)
+            return budget, _BODY_TREE, _NUM_SLOTS - 1, -1
+        if budget <= 0:
+            return budget, _BODY_SCAN, index, partial
+        y = index
+        index -= 1
         in_slot, in_fov, exp_raw, _full, tree_head, scost = _can_see_object(
             mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
         )
-        cost += np.int64(_SCAN_SLOT) + scost
+        budget -= np.int64(_SCAN_SLOT) + scost
         if tree_head:  # $17B7: a tree hides this robot's head
             continue
         exposure = _exposure_byte(in_slot, in_fov, exp_raw)
         if exposure == 0:  # $17BE: not visible at all
             continue
         if exposure & 0x80:  # $17BA: fully visible -> drain target
-            return cost + _target_object(mem, zp, enemy, y, exposure)
+            if budget <= 0:  # the ROM has not reached $1825 yet
+                return budget, _BODY_SCAN, -2 - y, partial
+            return budget, _target_object(mem, enemy, y, exposure), 0, -1
         if y == player:  # $17C0: head only -> meanie candidate
-            partial_player = y
-    if partial_player >= 0 and partial_player != _rd(mem, _M_FAILED + enemy):  # $17C4
-        _initialise_enemy_meanie_variables(mem, enemy)
-        return cost + _target_object(mem, zp, enemy, partial_player, 0x40)
+            partial = y
 
-    _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
-    tb, tcost = _find_drainable_boulder_or_tree(mem, zp, enemy)
-    cost += tcost
-    if tb >= 0:
-        _wr(mem, _TARGETED_SLOT, tb)
-        _reduce_object_energy(mem, tb, enemy)
-        _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-        return cost
 
-    cost += np.int64(_ROTATE_GATE)
-    if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
-        _rotate_enemy(mem, enemy)
-        cost += np.int64(_ROTATE + _ROTATE_REDRAW)
-    return cost
+@njit(cache=True)
+def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
+    """consider_enemy_state $16E6, resumable at its own write points.
+
+    Returns (budget, stage, index, partial); stage BODY_DONE means it reached RTS."""
+    while True:
+        if stage == _BODY_DONE:
+            return budget, _BODY_DONE, 0, -1
+        if stage == _BODY_ENTRY:
+            if mem[_UPD_CD + enemy] >= _COOLDOWN_STICK:
+                return budget - np.int64(_UPDATE_GATE_CLOSED), _BODY_DONE, 0, -1
+            budget -= np.int64(_CONSIDER_ENTRY)
+            _wr(mem, _UPD_CD + enemy, _UPD_CD_SCAN)  # $16ED
+            _wr(mem, _FOV_WIDTH, _FOV_SCAN)  # $16F0
+            if not (mem[_M_OBJECT + enemy] & 0x80):  # $16EA: already owns a meanie
+                stage = _BODY_MEANIE
+                index = 0
+                continue
+            budget -= np.int64(_CONSIDER_PREAMBLE)  # $1773
+            stage = _BODY_DISCHARGE
+            index = 0
+            continue
+
+        if index > -1 and budget < 1:  # nothing charged is awaiting its write
+            return budget, stage, index, partial
+
+        if stage == _BODY_MEANIE:
+            budget, stage, index = _update_meanie(mem, zp, enemy, budget, index)
+            continue
+
+        if stage == _BODY_DISCHARGE:
+            discharged, dcost = _consider_discharging_enemy_energy(mem, enemy)
+            budget -= dcost
+            if discharged:
+                return budget, _BODY_DONE, 0, -1
+            if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
+                budget -= np.int64(_TILE_SCAN_FIXED)
+                stage = _BODY_HUNT
+                index = _NUM_SLOTS - 1
+                continue
+            stage = _BODY_HELD
+            index = 0
+            continue
+
+        if stage == _BODY_HUNT:
+            budget, index, tb = _find_drainable_boulder_or_tree(
+                mem, zp, enemy, budget, index
+            )
+            if tb == -2:  # suspended mid-scan
+                return budget, stage, index, partial
+            if tb >= 0:
+                _wr(mem, _M_SEARCH + enemy, 0x40)  # $178B
+                _reduce_object_energy(mem, tb, enemy)
+                _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
+                return budget, _BODY_DONE, 0, -1
+            _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
+            stage = _BODY_HELD
+            index = 0
+            continue
+
+        if stage == _BODY_HELD:
+            if mem[_DRAIN_CD + enemy] == 0:
+                budget -= np.int64(_SCAN_FIXED)
+                stage = _BODY_SCAN
+                index = _NUM_SLOTS - 1
+                partial = -1
+                continue
+            held = _rd(mem, _TARGET + enemy)  # $178C: re-check a held target
+            in_slot, in_fov, exp_raw, _full, _th, scost = _can_see_object(
+                mem, zp, enemy, held, _T_ROBOT, _FOV_SCAN
+            )
+            if index >= 0:
+                budget -= scost
+                if budget <= 0:
+                    return budget, stage, -2, partial
+            exposure = _exposure_byte(in_slot, in_fov, exp_raw)
+            if exposure != 0:
+                stage = _target_object(mem, enemy, held, exposure)
+                index = 0
+                continue
+            _wr(mem, _DRAIN_CD + enemy, 0)  # target lost
+            budget -= np.int64(_SCAN_FIXED)
+            stage = _BODY_SCAN
+            index = _NUM_SLOTS - 1
+            partial = -1
+            continue
+
+        if stage == _BODY_SCAN:
+            budget, stage, index, partial = _scan_for_robot(
+                mem, zp, enemy, budget, index, partial
+            )
+            continue
+
+        if stage == _BODY_PARTIAL:
+            if partial != _rd(mem, _M_FAILED + enemy):  # $17C4
+                _initialise_enemy_meanie_variables(mem, enemy)
+                stage = _target_object(mem, enemy, partial, 0x40)
+                index = 0
+                partial = -1
+                continue
+            _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
+            budget -= np.int64(_TILE_SCAN_FIXED)
+            stage = _BODY_TREE
+            index = _NUM_SLOTS - 1
+            partial = -1
+            continue
+
+        if stage == _BODY_TREE:
+            budget, index, tb = _find_drainable_boulder_or_tree(
+                mem, zp, enemy, budget, index
+            )
+            if tb == -2:
+                return budget, stage, index, partial
+            if tb >= 0:
+                _wr(mem, _TARGETED_SLOT, tb)
+                _reduce_object_energy(mem, tb, enemy)
+                _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
+                return budget, _BODY_DONE, 0, -1
+            stage = _BODY_ROTATE
+            index = 0
+            continue
+
+        if stage == _BODY_ROTATE:
+            budget -= np.int64(_ROTATE_GATE)
+            if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
+                _rotate_enemy(mem, enemy)
+                budget -= np.int64(_ROTATE + _ROTATE_REDRAW)
+            return budget, _BODY_DONE, 0, -1
+
+        budget, stage, index = _consider_creating_meanie(mem, zp, enemy, budget, index)
 
 
 @njit(cache=True)
@@ -1072,16 +1219,21 @@ def _dispatch_cycles(mem):
 
 
 @njit(cache=True)
-def _update_body(mem, zp):
-    """$16E6..$16D6: every state write $16B5 makes before the prnd."""
+def _update_body(mem, zp, budget, stage, index, partial):
+    """$16E6..$16D6: every state write $16B5 makes before the prnd, resumable."""
     x = _rd(mem, _CURSOR)
     otype = _rd(mem, _OTYPE + x)
     if otype != _T_SENTRY and otype != _T_SENTINEL:  # $16BB
-        return np.int64(0)
-    if not (mem[_OFLAGS + x] & 0x80):  # $16CC: not absorbed
-        return _consider_enemy_state(mem, zp, x)
-    # $16CE: an absorbed slot still discharges its bank
-    return np.int64(_UPDATE_ABSORBED) + _consider_discharging_enemy_energy(mem, x)[1]
+        return budget, _BODY_DONE, 0, -1
+    if mem[_OFLAGS + x] & 0x80:  # $16CE: an absorbed slot discharges its bank only
+        budget -= np.int64(_UPDATE_ABSORBED)
+        return (
+            budget - _consider_discharging_enemy_energy(mem, x)[1],
+            _BODY_DONE,
+            0,
+            -1,
+        )
+    return _consider_enemy_state(mem, zp, x, budget, stage, index, partial)
 
 
 @njit(cache=True)
@@ -1093,11 +1245,15 @@ def _update_cursor(mem):
     return np.int64(_UPDATE_CURSOR_WRAP) if x == 0 else np.int64(_UPDATE_CURSOR)
 
 
+_UNBOUNDED = np.int64(1) << 40  # a budget no single $16E6 can outrun
+
+
 @njit(cache=True)
 def _update_enemies(mem, zp):
     """update_enemies $16B5 whole: dispatch, body, prnd and cursor."""
     cost = _dispatch_cycles(mem)
-    cost += _update_body(mem, zp)
+    left = _update_body(mem, zp, _UNBOUNDED, _BODY_ENTRY, 0, -1)[0]
+    cost += _UNBOUNDED - left
     return cost + np.int64(_UPDATE_PRND) + _update_cursor(mem)
 
 
@@ -1114,11 +1270,11 @@ def _cooldown_frame(mem):
 
 
 @njit(cache=True)
-def _advance(mem, zp, n_frames, plotting, residual, phase):
+def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
     Returns the sub-pass resume point the last frame stopped at: the cycles it
-    overspent, owed to the next frame, and which segment of the pass owes them."""
+    overspent, which segment of the pass owes them, and where inside $16E6."""
     for _ in range(n_frames):
         irq = _cooldown_frame(mem)
         if plotting:
@@ -1131,7 +1287,13 @@ def _advance(mem, zp, n_frames, plotting, residual, phase):
                 if budget <= 0:
                     break
             if phase == 1:
-                budget -= _update_body(mem, zp) + np.int64(_UPDATE_PRND)
+                budget, stage, index, partial = _update_body(
+                    mem, zp, budget, stage, index, partial
+                )
+                if stage != _BODY_DONE:  # the frame ran out INSIDE $16E6
+                    break
+                stage, index, partial = _BODY_ENTRY, 0, -1
+                budget -= np.int64(_UPDATE_PRND)
                 phase = 2
                 if budget <= 0:
                     break
@@ -1139,18 +1301,26 @@ def _advance(mem, zp, n_frames, plotting, residual, phase):
             budget -= _exposure_cycles(mem)
             phase = 0
         residual = budget
-    return residual, phase
+    return residual, phase, stage, index, partial
 
 
-def advance_frames(mem, n_frames, plotting, residual, phase):
+def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, partial):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
-    the sub-pass resume point (cycle residual + phase) in and returning it out.
+    the sub-pass resume point (cycle residual, phase, $16E6 stage) in and out.
 
     The numpy view shares the caller's buffer, so every mutation lands in the state
     the caller holds -- exactly as :func:`sentinel.los._march_jit` does."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_HI, dtype=np.int64)
-    res, ph = _advance(
-        view, zp, int(n_frames), bool(plotting), int(residual), int(phase)
+    res, ph, st, ix, pa = _advance(
+        view,
+        zp,
+        int(n_frames),
+        bool(plotting),
+        int(residual),
+        int(phase),
+        int(stage),
+        int(index),
+        int(partial),
     )
-    return int(res), int(ph)
+    return int(res), int(ph), int(st), int(ix), int(pa)

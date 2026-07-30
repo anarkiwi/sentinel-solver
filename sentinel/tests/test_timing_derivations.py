@@ -319,9 +319,12 @@ def test_the_split_loop_charges_every_segment_exactly_once():
     counts = dict.fromkeys(real, 0)
 
     def wrap(name):
-        def call(st):
-            counts[name] += 1
-            return real[name](st)
+        def call(*args):
+            out = real[name](*args)
+            # update_body is re-entered once per suspension; count only completions
+            if name != "update_body" or out[1]:
+                counts[name] += 1
+            return out
 
         return call
 
@@ -340,3 +343,39 @@ def test_the_split_loop_charges_every_segment_exactly_once():
         enemies.PHASE_BODY,
         enemies.PHASE_CURSOR,
     )
+
+
+@pytest.mark.oracle
+def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count():
+    """$16E6 priced by passcost against the real 6502 running $16E6, round for round.
+
+    The ROM falls through $16E6 into $16D6, so its call costs UPDATE_TAIL more than the
+    model's body.  A gated body is exact; a marching one is 0.97..1.00, the residual of
+    open_items 8.  Rotating bodies are skipped: prime_enemy_driver stubs $1F9F/$3470."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.generate_machine(0x9795)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+    gated, marching = [], []
+    for _ in range(60):
+        state["stop"] = False
+        oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=state)
+        x = mem[mm.CURSOR]
+        st = State.from_mem(bytes(mem))
+        model = enemies.UNBOUNDED - enemies.update_body(st, enemies.UNBOUNDED)[0]
+        rotated = st.mem[mm.ENEMIES_ROTATION_COOLDOWN + x] == (
+            enemies.ROTATION_COOLDOWN_RELOAD
+        )
+        c0 = cpu.processorCycles
+        state["stop"] = False
+        oracle.call(cpu, mem, 0x16E6, x=x, state=state)
+        tail = passcost.UPDATE_TAIL_WRAP if x == 0 else passcost.UPDATE_TAIL
+        rom = cpu.processorCycles - c0 - tail
+        mem[mm.CURSOR] = (mem[mm.CURSOR] - 1) & 7
+        if not rotated:
+            (gated if rom < 1000 else marching).append((model, rom))
+    assert gated and marching
+    assert all(m == r for m, r in gated)
+    assert all(0.97 <= m / r <= 1.0 for m, r in marching)

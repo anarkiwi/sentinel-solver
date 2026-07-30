@@ -34,7 +34,8 @@ BLOCKED = 0
 # Per-sub-step 6502 cost, bound as njit-visible globals (sentinel.passcost).
 _MARCH_STEP = passcost.MARCH_STEP
 _MARCH_OBJECT = passcost.MARCH_OBJECT
-_MARCH_SLOPE = passcost.MARCH_SLOPE
+_MARCH_SLOPE_EDGE = passcost.MARCH_SLOPE_EDGE
+_MARCH_SLOPE_QUAD = passcost.MARCH_SLOPE_QUAD
 
 # Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
 # code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
@@ -340,7 +341,7 @@ def march(
          py_frac, py_sub, py_whole, c56, cdd, steps_used, cycles)
 
     ``cycles`` is the march's 6502 cost: ``MARCH_STEP`` per sub-step plus
-    ``MARCH_OBJECT``/``MARCH_SLOPE`` for the sub-steps taking those branches.
+    ``MARCH_OBJECT``/``MARCH_SLOPE_EDGE``/``MARCH_SLOPE_QUAD`` for the branch taken.
 
     ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
     do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.
@@ -549,13 +550,14 @@ def march(
             break
         else:
             # check_sloping_tile $1D46, corner heights hoisted out of the sub-step loop
-            cycles += _MARCH_SLOPE
             if cnib == 0x04 or cnib == 0x0C:
+                cycles += _MARCH_SLOPE_EDGE
                 b8 = pz_whole & 0xFF
                 if b8 >= cp73 or b8 >= cp74 or b8 >= cp75 or b8 >= cp76:
                     continue  # ray above the slope -> keep marching
                 status = BLOCKED
                 break
+            cycles += _MARCH_SLOPE_QUAD
             if (
                 _slope_quad(
                     cnib, cp73, cp74, cp75, cp76, px_sub, py_sub, pz_sub, pz_whole
