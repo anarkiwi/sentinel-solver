@@ -147,19 +147,40 @@ and ls335 (304). ls42 is clean: **0 CORE divergences over 3000 frames**.
 
 **Measured, live, to the cycle.** `registers_get` exposes the raster line and the cycle within
 it, and PAL is 312 x 63 = 19656, so `line * 63 + cyc` timestamps a checkpoint hit exactly.
-Over 1122 consecutive `$16B5` hits on ls9795 with the clock unfrozen:
+Over 900 consecutive `$16B5` hits on ls9795 with the clock unfrozen (783 usable deltas):
 
 - the **modal** pass costs **925 cycles, exactly what the model charges**;
-- the **mean** is **1014.7**, with a spread to 1180;
-- **31% of passes cost exactly 925** -- and 112 of the 312 raster lines (36%) are border,
-  where the VIC-II steals nothing. The rest pay about 43 cycles per badline crossed.
+- the **mean** is **1014.7**, with a spread to 1180.
 
-So the residue is the **VIC-II badline DMA steal, per pass**. `IRQ_CYCLES` carries it as a
-per-frame constant, which is right on average -- that is why the idle cadence brackets hold on
-all five boards -- but wrong for any individual pass, so a pass lands on the wrong side of a
-frame boundary and the stall it starts is a frame out. This is hardware: no disassembly
-produces it. Modelling it means tracking the raster position through the budget and charging
-each pass the badlines it crosses, which the accumulator already has the information to do.
+The VIC state is constant across every sample and was read rather than assumed:
+`$D011 & $7F = 27` (YSCROLL **3**, DEN set), `$D016 & $18 = 24`, and **`$D015 = 0` -- no
+sprite is ever enabled**, so there is no sprite-DMA term at all. The steal is badlines only.
+
+Charging each pass the badlines it crosses -- a display-window line (`$30..$F7`) whose low
+three bits equal YSCROLL, at **42 cycles** each -- collapses the residual onto 925:
+
+| | within +-3 of the 925 mode |
+|---|---|
+| no badline term (today) | 242 / 783 |
+| badlines charged per pass | **500 / 783** |
+
+A sweep over YSCROLL 0..7 and steal 40..43 picks `yscroll=3, steal=42` on the timing alone,
+independently recovering the value in `$D011`. So the term is deterministic arithmetic, not
+hardware lore, and the accumulator already holds the frame position it needs.
+
+**A fourth mechanism, not yet identified.** Badline arithmetic does not close it. A residual
+cluster of **197 of 785 passes sits at +121 cycles** above the 925 mode, and it is not spread
+at random: those passes start at raster lines **37..52**, straddling the top edge of the
+display window at `$30`, whereas the passes that land exactly on 925 start anywhere. Something
+at the display-window boundary costs ~121 cycles that neither the counted foreground nor
+`42 * badlines` accounts for. Until that is named, charging badlines explicitly would move
+every pass boundary while still leaving a quarter of passes mispriced, which is why the term is
+measured here but **not implemented**.
+
+One caveat on the sample: the `$9630` frame checkpoint's hit count did not advance between
+`$16B5` stops, so the timestamps span a single raster sweep and passes that wrap line 311 were
+dropped. The IRQ handler's own wall cost therefore does not appear in this data and
+`IRQ_CYCLES` cannot yet be re-derived as handler-only.
 
 **It is NOT the sound engine.** An earlier revision of this item blamed the tune player. Live,
 across those same 1122 passes, `$0CEB` never leaves `$80` and `$0C73` never leaves 0, so
