@@ -140,59 +140,72 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock is one pass out of phase at the frame checkpoint
+## 8. The enemy clock applies a whole `consider_enemy_state` at its first cycle
 
-**Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795
-and ls335. ls42 is clean: **0 CORE divergences over 3000 frames**.
+**Wrong.** `driver.instrument --frames 3000 --follow` reports **414** CORE divergences on
+ls9795 and **284** on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
+enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload —
+and on ls335 the rotation that follows from it.
 
-**Measured, cycle-exact.** VICE's `cpuhistory` stamps every executed instruction with an
-absolute cycle, so a whole pass can be priced by JSR/RTS attribution with the badline
-steal and the interrupt handlers subtracted out. Over 300 live frames per board
-(ls9795 8 enemies, ls335 7, ls42 2) the play loop's idle pass measures **925** cycles on
-ls9795 — exactly what `passcost.idle_pass_cycles` charges — and the model reproduces the
-machine pass for pass until an enemy's `$16E9` gate opens. Four terms were then wrong,
-all four now counted off the image and checked against the trace
-([architecture.md](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy)):
+**Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
+raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
+frame, so halting at `$9630` and reading `SP+4/5` gives the ROM's sub-pass position
+directly. Over **1500 live frames a board**:
 
-| term | was | is | why |
+| segment the IRQ interrupted | ls0042 | ls0335 | ls9795 |
 |---|---|---|---|
-| the `$1805` rotation | 0 | 454 + `$1F9F` 1723 | a turn redraws the enemy (`$1881`) |
-| `SCAN_SLOT` | 22 | 27 | the `$17B4 JSR $1887` was not counted |
-| `find_drainable_boulder_or_tree` | `$17B2`'s loop | its own `$1AB0` loop | 12/24 a slot, not 22 |
-| `$130C` | inside a constant `IRQ_CYCLES` | 21 / 33 / 33 + 24 bytes | the walk is 6 dearer per byte that decrements |
+| `$1289..$16D8` head and `$16B5` dispatch | 6.9% | 2.6% | 1.7% |
+| `$16E6 consider_enemy_state` | **2.4%** | **48.5%** | **65.0%** |
+| `$16D6 JSR $31CA` prnd | 52.3% | 26.8% | 17.4% |
+| `$16D9..$12C7` cursor, loop tail and `$191F` | 38.4% | 22.1% | 15.9% |
 
-The first of those is the largest single error in the model: one rotation is 2177 cycles,
-2.4 passes, and it was free. The last is a 398-cycle swing on **every** frame, which is why
-`IRQ_CYCLES` is now only the fixed part and `cooldown_frame` returns the rest.
+That column orders the three boards exactly as the divergence count does. Only
+`consider_enemy_state` writes a CORE field; the head, the dispatch, `$191F`, the loop tail
+and the `$34xx` sound calls write nothing the schema carries, and the prnd/cursor are SWEEP.
 
-**What that fixed, and what it did not.** The pass whose scan was mispriced went from
-7785 charged against 10106 measured to 10112 — a +2321 error to −6. The instrument moved
-ls9795 **515 -> 415** and ls335 **304 -> 285**, and left ls42 at **0**. The gate did
-**not** close.
+**What the sub-pass split fixed.** A pass is now spent in four segments with `pass_phase`
+naming the resume point ([architecture.md](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy)),
+each segment's writes applied where the ROM makes them. Every term is measured live over
+632 passes: head **25** (631 of 632), tail less `$191F` **117** (620), `$16D6..$16E5`
+**453**/**457**, whole pass **925** — `fixtures/live_pass_cycles.json`. The cursor
+`$0090` now agrees at frame 1 on all three boards, where before it diverged immediately
+and was thought unrecoverable from a RAM image. It moved the CORE gate by **one event**
+(415 -> 414 on ls9795, 285 -> 284 on ls335, 0 -> 0 on ls42), because the segments it
+separates are the ones that write nothing. It is not inert on the board suite: deferring
+the prnd result and the cursor by 433 cycles moves three boards, ls7414 **lost in 70 ->
+won in 63**, ls60 44 -> 45 and ls373 55 -> 88, so the suite is 10/10 where it was 9/10.
 
-**Where it stops, exactly.** Fed the machine's own per-pass costs, the model's frame budget
-puts the frame boundary in the right place on 55 of 68 fully-covered ls9795 frames, 61 of
-123 on ls335 and 213 of 279 on ls42, and within **one pass** on nearly all the rest. The
-residue is per-pass: 87% of passes are priced to the cycle and 12% are one cycle out. The
-two measured sources are `$191F` (292, or 291 in 42 of 595 samples) and `$31CA` (427, or 426
-in 16 of 558), each one data-dependent branch — and the `+1` instructions are spread
-uniformly with respect to the badline raster phase, so they are ordinary 6502 branch
-lengths, not VIC alignment. The instrument halts at `$9630`, mid pass sequence, and on an
-8-enemy board each slot is visited only 2.1 times a frame, so being one pass early makes
-`enemy[n].update_cd` read 4 where the machine reads 1 — which is the first divergence on
-ls9795, at frame 77 (and `enemy[6]` at frame 103 on ls335), and the shape of most of
-the 415 and 285.
+**Where it stops, exactly.** `update_body` — the whole of `consider_enemy_state` — is still
+atomic, and it is both the expensive segment and the only one holding CORE writes. When a
+64-slot scan outruns the frame the model applies the entire scan's outcome at its FIRST
+cycle and then carries the debt; the ROM is somewhere inside it and has done only the
+`$16ED` reload. At the first ls9795 divergence (frame 77) the sim enters the frame owing
+3836 cycles at `PHASE_CURSOR`, has considered slot 1 and the machine has not; every other
+CORE field, the cooldown gate and the Bresenham accumulator agree.
 
-**Resolves.** Pricing the `$1933`/`$193A` branches in `$191F` and the `$31E9` branch in
-`$31CA` by the data the model already holds, then re-running the three-board gate.
+The scan's cost is dominated by `$1887` calls that write only SCRATCH, so the split needed
+is coarse: apply the `$16ED`/`$16F0` entry writes at the body's start, charge the scan, and
+apply its outcome (drain, target, rotation, discharge) only once those cycles are paid.
+That is a resumable `consider_enemy_state` — an explicit stage plus a scan index carried in
+`State` and mirrored in the numba twin. A crude approximation of it (price the body on a
+clone, defer the whole outcome) makes ls9795 **worse**, 241 -> 642 over 1500 frames, so the
+entry/outcome split has to be at the ROM's own write points, not at the body's edges.
 
-**Not the ray march.** Over those 900 board-frames **no** visibility query reached a march:
-every `$1887` exited on slot type (40/49 cycles) or on the `$18CA` FOV compare (1130). So
-`MARCH_SLOPE`'s corner/quad split (332 on the `$1D5A` four-corner path, 579 on the quad) has
-no leverage on this gate, and it remains unlanded for the reason it always was: pricing them
-apart makes `relative.can_see_object` and `enemies_jit._can_see_object` disagree by 104
-cycles on one long march (ls335, frame 32, observer 4, target 62), which must be reconciled
-first.
+**Not the pass cost.** Fed the ROM itself — `sentinel.tests.oracle` running the real
+`$1289` loop under an injected raster budget, 400 frames a board — the model's pass rate is
+the machine's: ls42 17.8 model against 17.8 ROM, ls335 8.6 against 7.6, ls9795 5.9 against
+3.9, and the ROM's own `$1887` census is `SEE_SLOT_EMPTY` 40, `SEE_SLOT_WRONG_TYPE` 49 and
+`SEE_GEOMETRY` 1128 to the cycle. The ROM **does** reach the ray march — 35 marches in 400
+ls9795 frames at 64-277k cycles each, 0 on ls42 — so the 60-70k passes the model produces
+are real, and `MARCH_STEP`/`MARCH_SLOPE` price the ROM's 674 cycles a step on average.
+
+**Not the resync.** Carrying the sim's clock across a follow-mode resync instead of
+resetting it moves ls9795 415 -> 397 only.
+
+**Not the ray march's corner/quad split.** `MARCH_SLOPE`'s split (332 on the `$1D5A`
+four-corner path, 579 on the quad) remains unlanded for the reason it always was: pricing
+them apart makes `relative.can_see_object` and `enemies_jit._can_see_object` disagree by
+104 cycles on one long march (ls335, frame 32, observer 4, target 62).
 
 **It is NOT the sound engine.** An earlier revision blamed the tune player. Live, `$0CEB`
 never leaves `$80` and `$0C73` never leaves 0, so `$34BA`/`$352C`/`$347D` are constant at
@@ -201,24 +214,22 @@ which does vary, is not the tune: it is the rotation's own effect, 323 cycles, a
 charged inside `ROTATE`. The SID is in any case a pure cycle sink: there is **no read of
 `$D400-$D41C` anywhere in the image**, by any addressing mode.
 
-**Inert by tier.** The SWEEP and SCRATCH divergences that remain on the clean board (ls42)
-are not the same kind of thing:
+**Inert by tier.** `prng[0..4] $0C7B..$0C7F` (SWEEP) still diverges at frame 1 on every
+board: the prnd result is stored 433 cycles into `$16B5` and the model applies it at the
+same point in the *sequence*, so every consumer draws the same values, but a RAM snapshot
+taken mid-prnd lags by one step and no RAM image can seed that. They are **not**
+unconditionally inert: the PRNG feeds `put_object_in_random_tile_below_z $1238`, so a
+discharge or hyperspace drawn on a drifted stream lands on a different tile. On ls42 no
+such draw fires in 3000 frames, which is why it stays clean.
+`fov_relative_h $0C57` (SCRATCH) is written at exactly one site, `$8425`, inside
+`calculate_relative_angles`, which every visibility query runs. Four of its six readers are
+inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie rotation,
+`$84ED`); the other two, `$20C6` and `$20E6`, are in `update_object_on_screen $1F9F` and
+compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
+rewritten it, and the plotting readers touch no field the schema carries.
 
-- `cursor $0090` and `prng[0..4] $0C7B..$0C7F` (SWEEP) diverge at frame 1 on every board and
-  cannot be seeded away: the instrument halts at `$9630`, mid-pass, so the ROM's sub-pass
-  phase is CPU state — a program counter and a cycle position — that no RAM image carries.
-  They are **not** unconditionally inert: the PRNG feeds
-  `put_object_in_random_tile_below_z $1238`, so a discharge or hyperspace drawn on a drifted
-  stream lands on a different tile, and that surfaces as a CORE `tile[x,y]`/`obj[].x` event.
-  On ls42 no such draw fires in 3000 frames, which is why it stays clean.
-- `fov_relative_h $0C57` (SCRATCH) is written at exactly one site, `$8425`, inside
-  `calculate_relative_angles`, which every visibility query runs. Four of its six readers are
-  inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie rotation,
-  `$84ED`); the other two, `$20C6` and `$20E6`, are in `update_object_on_screen $1F9F` and
-  compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
-  rewritten it, and the plotting readers touch no field the schema carries. The model treats
-  visibility as a query and so leaves its last value in the image where the ROM leaves its
-  own; both are overwritten before use.
+**Resolves.** A resumable `consider_enemy_state` that suspends between its own write points,
+then the three-board gate.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -300,8 +311,10 @@ Three distinct failures sit underneath that, and they need different fixes:
   ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
   they are **ls8589 won in 86**, **ls7414 won in 63**, ls9785 lost 28, ls9364 lost 14,
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
-  actions. ls7414 and ls8589 were 59 and 46 before the enemy-clock cost terms of
-  [8](#8-the-enemy-clock-is-one-pass-out-of-phase-at-the-frame-checkpoint) landed; every
+  actions. ls7414 was lost in 70 before the sub-pass split of
+  [8](#8-the-enemy-clock-applies-a-whole-consider_enemy_state-at-its-first-cycle), and
+  ls7414/ls8589 were 59 and 46 before the enemy-clock cost terms of
+  [8](#8-the-enemy-clock-applies-a-whole-consider_enemy_state-at-its-first-cycle) landed; every
   action count on this page that predates them is a different world model, not a different
   policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
