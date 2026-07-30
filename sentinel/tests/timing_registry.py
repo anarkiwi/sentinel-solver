@@ -309,8 +309,9 @@ REGISTRY = {
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,
-        "$9630 + VIC-II DMA steal; not countable off the image ($963A/$963D reach "
-        "RAM under the KERNAL). Taken as the complement of the counted foreground; "
+        "$9630 + VIC-II DMA steal. The handler IS in the fixture (KERNAL banked out, "
+        "$FFC2/$FFC5 are the game's own RAM) but the DMA steal is hardware, so the "
+        "budget is measured, not counted: the complement of the counted foreground; "
         "the modelled idle cadence lands inside the live bracket on all 5 boards of "
         "fixtures/live_pass_rate.json (spanning 1..8 enemies)",
         "test_irq_cycles_matches_the_live_pass_rate",

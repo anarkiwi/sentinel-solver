@@ -140,30 +140,54 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The ls335 facing gap: a seven-enemy board diverges
+## 8. The enemy clock still diverges on many-enemy boards; the residue is the sound engine
 
-**Wrong.** Replayed against the recorded clock, ls335 enemy facings run ahead of the ROM's.
+**Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795 (515)
+and ls335 (304). ls42 is clean: **0 CORE divergences over 3000 frames**.
 
-**Measured.** 90 of the 117 exact spans match. The 27 that miss are 40 enemy-facings, and every
-one is **exactly one extra rotation step**, never an under-rotation
-(`test_every_facing_error_is_exactly_one_extra_rotation`, so an over-correcting fix shows up as
-−1). One- and two-enemy boards are clean (ls0 16/16, ls42 10/10 live) and the gap survives
-re-recording by the checkpoint method, so it is not a recorder artifact.
+**Measured.** Running the real `$1289` loop in the jennings oracle beside the model, pass for
+pass from the same state, the model now accounts for **86.6%** of the ROM's loop cycles over
+2500 passes on ls9795 (it was 57% before the march was priced per step kind). The residue is
+two things, neither of them the enemy machine:
 
-**Narrowed, not closed.** Deriving passes per frame as a cycle budget
-([architecture](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy))
-took the flat idle advance from 89/117 to 90/117 and the facing errors from 43 to 40, and it
-retired the phase split as the best scorer (88/117): the split was standing in for a rate the
-model now prices. Live against the ROM it takes ls42 to **zero** CORE divergences over 3000
-frames, but ls335 still shows 395 and ls9795 521 (down from 1198).
+- **The tune player.** The modal idle pass is exact — 925 modelled against 925 measured — but
+  the *mean* idle pass is 975, because roughly 5% of passes carry a 1000-2000 cycle excursion
+  into `$34DE play_music`, reached from `$352C` when `$0CDF` has counted down to 0, and
+  `$347D` spins outright (`$34A0 BCS $347D`) while `$0CDF >= 2` and a tune is live. Those
+  three bytes -- `$0CDF` (decremented once per frame by `$9630`, reloaded to 12 by `$34AD`),
+  `$0CEB` (tune state) and `$0C73` -- are driven by the SID engine at `$8ED1`/`$8F0C`, which
+  the model does not carry at all. Under-charging every pass by ~5% means ~5% too many passes
+  per frame, and the ls9795 first divergence is exactly that shape: `update_cd` 1 vs 4, the
+  model having already considered the enemy the ROM has not reached yet.
+- **Long ray-marches, ~13% under.** A march that runs to the board edge measures 70917 cycles
+  and is charged 61440. The three step kinds are priced from the ROM (`MARCH_STEP` 314 flat,
+  `+MARCH_OBJECT` 24, `+MARCH_SLOPE` 581, each reproduced exactly by the oracle) but
+  `check_sloping_tile $1D46` alone spans 646..1384 cycles depending on which corner/quad split
+  it takes, and the model charges its mean.
 
-**Resolves.** The residue is the cost of one ray-march step. `SEE_STEP` is a single mean: the
-`$1CE8` loop costs 306 cycles on a flat empty tile and roughly twice that through the `$1D46`
-slope path or the `$1E00` object-stack walk, and `los_jit.march` reports only how many steps it
-took, not what kind. A 64-slot scan whose march runs to the board edge is 60-70k cycles — three
-whole frames — so mispricing its steps moves a multi-frame stall by a frame or two, and that is
-exactly the shape of what is left (`update_cd` at 1 vs 4, `rotation_cd` at 0 vs 200). Closing it
-means having the march return its flat/slope/object step split, not a better mean.
+**Resolves.** Closing it means pricing the sound engine's foreground time — porting `$34DE`
+and the `$0CDF`/`$0CEB` tune state — and splitting `MARCH_SLOPE` by the `$1D46` sub-path.
+The first is a different subsystem from the enemy clock; it steals foreground cycles and so
+moves the clock, but nothing in it is enemy state.
+
+**Inert by tier.** The SWEEP and SCRATCH divergences that remain on the clean board (ls42)
+are not the same kind of thing:
+
+- `cursor $0090` and `prng[0..4] $0C7B..$0C7F` (SWEEP) diverge at frame 1 on every board and
+  cannot be seeded away: the instrument halts at `$9630`, mid-pass, so the ROM's sub-pass
+  phase is CPU state — a program counter and a cycle position — that no RAM image carries.
+  They are **not** unconditionally inert: the PRNG feeds
+  `put_object_in_random_tile_below_z $1238`, so a discharge or hyperspace drawn on a drifted
+  stream lands on a different tile, and that surfaces as a CORE `tile[x,y]`/`obj[].x` event.
+  On ls42 no such draw fires in 3000 frames, which is why it stays clean.
+- `fov_relative_h $0C57` (SCRATCH) is written at exactly one site, `$8425`, inside
+  `calculate_relative_angles`, which every visibility query runs. Four of its six readers are
+  inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie rotation,
+  `$84ED`); the other two, `$20C6` and `$20E6`, are in `update_object_on_screen $1F9F` and
+  compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
+  rewritten it, and the plotting readers touch no field the schema carries. The model treats
+  visibility as a query and so leaves its last value in the image where the ROM leaves its
+  own; both are overwritten before use.
 
 ## 9. The human line does not replay to a win through the live executor
 

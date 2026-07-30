@@ -31,10 +31,10 @@ DIVERGENT_SPANS = (10, 15, 17, 18, 33)  # spans whose facings we get wrong
 ROM_ROUNDS = 60  # rounds of byte-exact agreement demanded on each  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
 OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed time
-CADENCE = {False: 90, True: 64}  # plotting -> facings reproduced, vs recorded
-SPLIT_CADENCE = 88  # the executor's phase split, scored the same way
+CADENCE = {False: 91, True: 64}  # plotting -> facings reproduced, vs recorded
+SPLIT_CADENCE = 89  # the executor's phase split, scored the same way
 # Live replay_human captures carrying $1335/$0C50: fixture -> (spans, facings).
-LIVE_CLOCKS = {"ls0": (16, 16), "ls42": (10, 10), "ls335": (18, 11)}
+LIVE_CLOCKS = {"ls0": (16, 16), "ls42": (10, 10), "ls335": (18, 13)}
 LS42_CLOCK = "ls42_clock.json"
 ENERGY_EXACT = 83  # exact-span actions whose next energy we reproduce
 ENERGY_MISSES = 8  # the rest, all off by one in both directions (drain timing)

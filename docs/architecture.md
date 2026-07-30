@@ -226,7 +226,9 @@ in the jennings oracle:
 | `EXPOSURE_*` | `$191F` per enemy slot: empty / other type / sentry / Sentinel | 12 / 24 / 30 / 33 |
 | `SEE_SLOT_EMPTY`, `SEE_SLOT_WRONG_TYPE` | `$1887` exits at `$1893` / `$189D` | 40 / 49 |
 | `SEE_GEOMETRY` | the `$8401` bearing chain and the `$18CA` FOV compare | 1128 |
-| `SEE_STEP` | one `$1CE8` tile step: 306 flat, more through the `$1D46` slope/object sub-path | 700 |
+| `MARCH_STEP` | one `$1CE8` sub-step: `$1CBB` + edge tests + `$1CFB` + `$1DF9` + the flat check | 314 |
+| `MARCH_OBJECT` | `$1E00 BCS`: the `$1E3F` object-stack surface, on top of the flat check | +24 |
+| `MARCH_SLOPE` | `$1D0B BCS $1D46`: `check_sloping_tile` instead of `check_flat_tile` | +581 |
 
 `$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
 pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
@@ -236,10 +238,19 @@ constant 8 could not span. The idle brackets are pinned in
 `tests/fixtures/live_pass_rate.json` and the model must land inside every one
 (`test_irq_cycles_matches_the_live_pass_rate`).
 
-`IRQ_CYCLES` is the one term not countable off the image: the handler's `$963A`/`$963D`
-calls reach `$FFC5`/`$FFC2`, RAM under the banked-out KERNAL that the stage-2 dump does not
-carry, and the VIC-II badline/sprite DMA steal is hardware, not code. It is taken as the
-complement of the counted foreground, and the five boards agree to ±0.5% (4126..4165).
+The march is charged **per sub-step by the branch its tile takes**, not by a mean:
+`los.check_for_line_of_sight_to_tile` returns the cycles it cost and
+`relative.can_see_object` sums them, so a 64-slot scan whose ray walks off the board is
+priced as the 60-70k cycles it really is. `sentinel/tests/ckpt.py` carries
+`cycle_residual` through a checkpoint for the same reason: it is state the image does not hold.
+
+`IRQ_CYCLES` is the one term measured rather than counted. The handler itself *is* in the
+fixture — the game runs with `$01 = $25`, KERNAL banked out, so `$FFC2`/`$FFC5` are its own
+RAM (`JMP $8ED1`/`JMP $8F0C`, the sound engine) and `$FFFE` vectors to `$95E9`, all carried
+by the 64 KB dump. What is not in any listing is the VIC-II badline and sprite DMA steal,
+which is hardware, so the per-frame interrupt budget cannot be closed by disassembly. It is
+taken as the complement of the counted foreground, measured on boards from 1 to 8 enemies,
+which agree to ±0.5% (4126..4165) — `test_irq_cycles_matches_the_live_pass_rate`.
 
 ### The enemy
 

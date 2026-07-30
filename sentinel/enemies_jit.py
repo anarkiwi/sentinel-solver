@@ -119,7 +119,6 @@ _SEE_SLOT_EMPTY = passcost.SEE_SLOT_EMPTY
 _SEE_SLOT_WRONG_TYPE = passcost.SEE_SLOT_WRONG_TYPE
 _SEE_GEOMETRY = passcost.SEE_GEOMETRY
 _SEE_PROBE = passcost.SEE_PROBE
-_SEE_STEP = passcost.SEE_STEP
 
 _SCAN_SLOT = passcost.SCAN_SLOT
 _SCAN_FIXED = passcost.SCAN_FIXED
@@ -495,7 +494,7 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     obs_zf = _rd(mem, _OZF + observer)
     obs_zh = _rd(mem, _OZH + observer)
     n_probes = 2 if expected_type == _T_ROBOT else 1
-    total_steps = np.int64(0)
+    total_march_cycles = np.int64(0)
     for probe in range(n_probes):
         if n_probes == 2 and probe == 0:
             plo = z_lo
@@ -541,7 +540,7 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
             _MAX_STEPS,
         )
         los_ok = res[0] == LOS_CLEAR
-        total_steps += np.int64(res[14])
+        total_march_cycles += np.int64(res[15])
         mem[0x0C56] = np.uint8(res[12] & 0xFF)
         mem[0x0CDD] = np.uint8(res[13] & 0xFF)
         # $18F9-$1901: the four-rotate chained-carry cascade.
@@ -562,7 +561,7 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     cost = (
         np.int64(_SEE_GEOMETRY)
         + np.int64(n_probes) * np.int64(_SEE_PROBE)
-        + total_steps * np.int64(_SEE_STEP)
+        + total_march_cycles
     )
     return 1, 1, exposure, full, tree_head, cost
 
