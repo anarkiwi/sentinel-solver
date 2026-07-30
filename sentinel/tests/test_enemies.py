@@ -181,7 +181,7 @@ def test_consider_discharging_scatters_tree():
     enemy = enemies.enemy_slots(state)[0]
     # nothing banked -> no discharge.
     state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 0
-    assert enemies._consider_discharging_enemy_energy(state, enemy) is False
+    assert enemies._consider_discharging_enemy_energy(state, enemy)[0] is False
     # one unit banked -> one new tree placed, bank decremented.
     trees0 = sum(
         1
@@ -189,7 +189,7 @@ def test_consider_discharging_scatters_tree():
         if not state.is_empty(s) and state.obj_type[s] == mm.T_TREE
     )
     state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 1
-    assert enemies._consider_discharging_enemy_energy(state, enemy) is True
+    assert enemies._consider_discharging_enemy_energy(state, enemy)[0] is True
     trees1 = sum(
         1
         for s in range(mm.NUM_SLOTS)

@@ -663,7 +663,10 @@ def _get_height_of_lowest_object(vec, state, Y, s60, s79, c0c, c67, c56, cdd, c5
 def check_for_line_of_sight_to_tile(
     vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
 ):
-    """$1CDD: march the ray; return (tx, ty, los_ok). los_ok True == carry clear.
+    """$1CDD: march the ray; return (tx, ty, los_ok, steps). los_ok True == carry clear.
+
+    ``steps`` is the sub-step count the march consumed -- the ROM's loop trip count,
+    which is what the $1887 caller's cycle cost is linear in (:mod:`sentinel.passcost`).
 
     Dispatches to the numba fast-march (:func:`_march_jit`) when numba is present,
     else the reference pure-Python march (:func:`_march_python`).  The two are
@@ -713,10 +716,10 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         # $1CEB LDA $003A -> $0024 ; CMP #$1f ; BCS leave_with_carry_set
         tx = vec.px_whole
         if tx >= 0x1F:
-            return tx, ty, False
+            return tx, ty, False, _step + 1
         ty = vec.py_whole  # $003C -> $0026
         if ty >= 0x1F:
-            return tx, ty, False
+            return tx, ty, False, _step + 1
         # $1CFB LDA #$80 ; STA $0060 ; STA $000C ; $1D01 LDA #0 ; STA $0079 ;
         # $1D05 STA $0C67 (clear boulder-consider flag).
         s60 = 0x80
@@ -756,18 +759,18 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
                 continue
             if d != 0:
                 # BNE leave_with_carry_set: tile above position
-                return tx, ty, False
+                return tx, ty, False, _step + 1
             # equal high byte: $1D1C LDA $0079 ; CMP $000C; BCS leave_set
             # ($000C defaults to $80 but the object path lowers it to $10 for a
             # near-centre platform -- a tight vertical tolerance.)
             if (s79 & 0xFF) >= c0c_var:
-                return tx, ty, False
+                return tx, ty, False, _step + 1
             # $1D22 BIT $0060 ; $1D24 BVS leave_set -- $0060 bit6 ($40) is set if a
             # SLOPE or an OBJECT has been checked (partial-obscure rejection). Note
             # this is the LOCAL $0060 (set $C0 by the object path / $40 by a slope),
             # NOT $0C6E.
             if s60 & 0x40:
-                return tx, ty, False
+                return tx, ty, False, _step + 1
             # $1D26 LDA $0C6E ; $1D29 ORA $0C67 ; $1D2C BMI skip_angle_check
             # ($0C67 top bit = a boulder on this tile is TARGETABLE -> SKIP the
             # looking-up rejection, so a centre-aimed boulder above the eye is
@@ -777,23 +780,23 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
             else:
                 # LDA $0030 (vector_z high = vec.s30) ; BPL leave_set (looking up)
                 if not (vec.s30 & 0x80):
-                    return tx, ty, False
+                    return tx, ty, False, _step + 1
             # skip_angle_check $1D32: same tile as observer? keep marching, else clear
             ox = state.obj_x[slot]
             oy = state.obj_y[slot]
             if (tx & 0xFF) == (ox & 0xFF) and (ty & 0xFF) == (oy & 0xFF):
                 continue  # same tile as observer -> keep going
-            return tx, ty, True  # leave_with_carry_clear (LOS!)
+            return tx, ty, True, _step + 1  # leave_with_carry_clear (LOS!)
         else:
             # check_sloping_tile $1D46
             res = _check_sloping_tile(vec, state, tx, ty, z, slope)
             if res == "loop":
                 continue
             if res == "blocked":
-                return tx, ty, False
+                return tx, ty, False, _step + 1
             # res == "clear" doesn't happen from slope (it only loops or blocks)
-            return tx, ty, False
-    return tx, ty, False
+            return tx, ty, False, _step + 1
+    return tx, ty, False, max_steps
 
 
 def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000):
@@ -863,7 +866,7 @@ def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
     if writable:
         state.mem[0x0C56] = c56 & 0xFF
         state.mem[0x0CDD] = cdd & 0xFF
-    return tx, ty, status == los_jit.LOS_CLEAR
+    return tx, ty, status == los_jit.LOS_CLEAR, _used
 
 
 def _check_sloping_tile(vec, state, x, y, z00, slope):
@@ -1451,7 +1454,7 @@ def aim_target(
     # do_line_of_sight_checks $0C6E: the player aim path clears its top bit ($1B40
     # LSR $0C6E). Read it from live memory and mask, matching the ROM exactly.
     do_los = state.mem[0x0C6E] & 0x7F
-    tx, ty, los = check_for_line_of_sight_to_tile(
+    tx, ty, los, _steps = check_for_line_of_sight_to_tile(
         vec, state, player_slot, do_los_checks=do_los, eye_z=eye_z, max_steps=max_steps
     )
     if return_centre:

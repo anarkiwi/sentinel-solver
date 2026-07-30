@@ -196,13 +196,50 @@ arrays only on every third carry, gated by `$0C50`. One cooldown "unit" is there
 `3 · 256 / $CD` frames (`playerbase.UNIT_FRAMES`), and a byte only decrements while
 `>= COOLDOWN_STICK` (2), sticking at 1 until reset.
 
-`enemies.advance_frame(state, plotting=False)` is one frame: `cooldown_frame` (`$9663`/`$130C`)
-**first**, so an enemy the tick makes due acts in the same frame, then `UPDATES_PER_FRAME`
-(8, `= CURSOR_SLOTS`) `update_enemies` passes — one full `$0090` sweep, so every slot is
-considered. `plotting=True` suppresses the sweep, modelling the spans in which the foreground
-never reaches `$16B5`; only the cooldown clock advances. Eight is not the foreground's pass
-rate (2-4): an enemy is rate-limited by its own `$16E9` gate, which is tighter, and sweeping
-every slot reproduces the ROM clock where a literal 3 does not.
+### Passes per frame is a cycle budget, not a constant (`passcost.py`)
+
+The loop never counts frames. The raster IRQ pre-empts it, takes a fixed slice of the PAL
+frame, and the foreground spends what is left, so
+
+    passes in a frame = (PAL_FRAME_CYCLES − IRQ_CYCLES) ÷ pass cost in the current state
+
+`enemies.advance_frame(state, plotting=False)` is one frame: `cooldown_frame`
+(`$9663`/`$130C`) **first**, so an enemy the tick makes due acts in the same frame; then
+`FOREGROUND_CYCLES` is added to a carried budget and `update_enemies` runs, each pass
+charged its own cycles, until the budget goes negative. The negative remainder
+(`State.cycle_residual`) is the next frame's debt, so a pass that outruns a frame — a
+64-slot scan whose ray-march walks off the board costs 60-70k cycles, three whole frames —
+leaves the following frames with **no** `$16B5` at all, which is what the ROM does.
+`plotting=True` suppresses the sweep and leaves the residual alone, modelling the spans in
+which the foreground never reaches `$16B5`.
+
+Every term is an instruction count off the disassembly, reproduced by running the real code
+in the jennings oracle:
+
+| term | ROM | cycles |
+|---|---|---|
+| `LOOP_PASS` | `$1289..$12C7` in-play straight line, less the `$16B5`/`$191F` bodies | 142 |
+| `PRND` | `$31CA`, 8 rounds of the 40-bit LFSR at 51 each | 427 |
+| `UPDATE_TAIL` | `$16D6` JSR + `PRND` + cursor decrement + RTS (+4 on the 7→0 wrap) | 453 |
+| `UPDATE_*` | `$16B5` type dispatch: not an enemy / sentry / Sentinel / absorbed | 22 / 29 / 32 / +8 |
+| `UPDATE_GATE_CLOSED` | `$16E6` `LDA $0C30,X` + `CMP #2` + `BCS` | 9 |
+| `EXPOSURE_*` | `$191F` per enemy slot: empty / other type / sentry / Sentinel | 12 / 24 / 30 / 33 |
+| `SEE_SLOT_EMPTY`, `SEE_SLOT_WRONG_TYPE` | `$1887` exits at `$1893` / `$189D` | 40 / 49 |
+| `SEE_GEOMETRY` | the `$8401` bearing chain and the `$18CA` FOV compare | 1128 |
+| `SEE_STEP` | one `$1CE8` tile step: 306 flat, more through the `$1D46` slope/object sub-path | 700 |
+
+`$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
+pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
+rate falls from 19.7 to 16.8 passes per frame. Live, over 200 frames with the clock unfrozen:
+ls0 19.09 mean, ls42 18.15, ls373 12.60, ls335 9.74, ls9795 7.22 — a range the retired
+constant 8 could not span. The idle brackets are pinned in
+`tests/fixtures/live_pass_rate.json` and the model must land inside every one
+(`test_irq_cycles_matches_the_live_pass_rate`).
+
+`IRQ_CYCLES` is the one term not countable off the image: the handler's `$963A`/`$963D`
+calls reach `$FFC5`/`$FFC2`, RAM under the banked-out KERNAL that the stage-2 dump does not
+carry, and the VIC-II badline/sprite DMA steal is hardware, not code. It is taken as the
+complement of the counted foreground, and the five boards agree to ±0.5% (4126..4165).
 
 ### The enemy
 
@@ -637,6 +674,7 @@ foreground work folded into a settle constant.
 | `landscape.py` | `generate(landscape) -> State`, the board generator |
 | `relative.py` | object-relative bearing/distance/vertical angle, enemy FOV and visibility |
 | `enemies.py`, `enemies_jit.py` | the enemy machine and the frame clock (`advance_frame`/`advance_frames`) |
+| `passcost.py` | cycle cost of one `$1289` play-loop pass, counted from the ROM: the enemy clock's cadence |
 | `threat.py` | any-rotation tile exposure, gaze distance, ticks-until-seen, meanie safety, drain-over-window |
 | `game.py` | `Game`, the facade |
 | `playerbase.py` | shared player machinery: world clock, geometry, gaze windows, aim cost, firing, run loop |
@@ -667,7 +705,8 @@ results are worth stating on their own:
   and 400 enemy rounds hits none of the 105 illegal opcodes.
 
 The frame clock is the one mechanic with no golden: it is gated by
-[the instrument](#the-divergence-instrument-driverinstrumentpy) instead.
+[the instrument](#the-divergence-instrument-driverinstrumentpy) and by
+`test_irq_cycles_matches_the_live_pass_rate` instead.
 
 ### Not modelled (deliberate scope)
 

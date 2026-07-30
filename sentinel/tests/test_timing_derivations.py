@@ -1,11 +1,14 @@
 """Every DERIVED timing constant recomputed from the ROM primitive its comment
 cites.  Each case names the primitive symbols, not the derived literal."""
 
+import json
+import os
+
 import pytest
 
 from driver import kbd_aim
 from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
-from sentinel import pancost, playerbase, projector
+from sentinel import pancost, passcost, playerbase, projector
 from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -168,3 +171,23 @@ def test_revolution_frames_is_a_full_cone_revolution():
     for landscape in (0, 42, 110, 335):
         turned = _units_turned(landscape)
         assert all(t >= 256 for t in turned.values()), (landscape, turned)
+
+
+_LIVE_PASS_RATE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "live_pass_rate.json"
+)
+
+
+def test_irq_cycles_matches_the_live_pass_rate():
+    """IRQ_CYCLES is the complement of the counted foreground: on every board the
+    modelled idle cadence must land inside the live-measured pass-count bracket."""
+    with open(_LIVE_PASS_RATE, encoding="utf-8") as fh:
+        boards = json.load(fh)["boards"]
+    for digits, rec in boards.items():
+        st = Game.typed(int(digits)).state
+        counts = [int(k) for k in rec["idle_passes_per_frame"]]
+        modelled = passcost.FOREGROUND_CYCLES / passcost.idle_pass_cycles(st.mem)
+        assert min(counts) <= modelled <= max(counts), (
+            f"ls{digits}: modelled {modelled:.2f} passes/frame outside the live "
+            f"bracket {min(counts)}..{max(counts)}"
+        )

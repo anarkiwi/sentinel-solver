@@ -230,6 +230,7 @@ _PR = "sentinel.projector"
 _PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
 _ENJ = "sentinel.enemies_jit"
+_PC = "sentinel.passcost"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
@@ -304,6 +305,18 @@ REGISTRY = {
     ),
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
+    "PAL_FRAME_CYCLES": _d(_PC, "PAL 6569: 312 raster lines x 63 cycles"),
+    "IRQ_CYCLES": entry(
+        _PC,
+        MEASURED,
+        "$9630 + VIC-II DMA steal; not countable off the image ($963A/$963D reach "
+        "RAM under the KERNAL). Taken as the complement of the counted foreground; "
+        "the modelled idle cadence lands inside the live bracket on all 5 boards of "
+        "fixtures/live_pass_rate.json (spanning 1..8 enemies)",
+        "test_irq_cycles_matches_the_live_pass_rate",
+    ),
+    "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
+    "_FOREGROUND_CYCLES": _d(_ENJ, "jit alias of passcost.FOREGROUND_CYCLES"),
     "BASE_CYCLES": _u(_PR, "plot_world base cycles; no fixture"),
     "SETTLE_FIXED_FRAMES": _u(_PR, "fixed settle base; no fixture"),
     "TUNE_TRANSFER_FRAMES": _u(_PR, "transfer tune wait; unmeasured"),

@@ -405,6 +405,8 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         "exposure": 0,
         "tree_in_los_head": False,
         "probes": [],
+        "steps": 0,
+        "wrong_type": False,
     }
     # $188F LDA #0 ; $1891 STA $0014 -- object_exposure is cleared before any early
     # exit, so even a rejected slot leaves $0014 == 0 (the robot scan then skips it).
@@ -412,6 +414,7 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     if state.obj_flags[target] & 0x80:  # empty slot
         return out
     if state.obj_type[target] != expected_type:  # wrong type
+        out["wrong_type"] = True
         return out
     out["in_slot"] = True
 
@@ -458,9 +461,10 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         _vertical_angle(zp, phi, v_angle_obs)  # sets zp[$8A]/zp[$8B] = vertical bearing
         v_lo, v_hi = zp[0x8A], zp[0x8B]
         vec = los.prepare_vector_from_angle(h_hi, h_lo, v_hi, v_lo, v_lo)
-        _tx, _ty, los_ok = los.check_for_line_of_sight_to_tile(
+        _tx, _ty, los_ok, used = los.check_for_line_of_sight_to_tile(
             vec, state, observer, do_los_checks=do_los, max_steps=max_steps
         )
+        out["steps"] += used
         # The march writes the marched-out $0C56/$0CDD trackers back to memory, so read
         # them here exactly as the cascade does.
         c56 = state.mem[0x0C56]  # $18F9 ROL $0C56

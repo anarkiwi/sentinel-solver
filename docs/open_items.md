@@ -144,20 +144,26 @@ raise, do not retry — plus deleting the two dead constants.
 
 **Wrong.** Replayed against the recorded clock, ls335 enemy facings run ahead of the ROM's.
 
-**Measured.** 89 of the 117 exact spans match. The 28 that miss are 43 enemy-facings, and every
+**Measured.** 90 of the 117 exact spans match. The 27 that miss are 40 enemy-facings, and every
 one is **exactly one extra rotation step**, never an under-rotation
 (`test_every_facing_error_is_exactly_one_extra_rotation`, so an over-correcting fix shows up as
 −1). One- and two-enemy boards are clean (ls0 16/16, ls42 10/10 live) and the gap survives
-re-recording by the checkpoint method, so it is not a recorder artifact. No *constant* cadence
-covers it: `UPDATES_PER_FRAME` swept over 1..8 leaves facings at 89/117 throughout, driving
-below one pass per frame reaches only 92/117 at K=16, and over a uniform updates-per-round `U`
-in 1..40, `U = 1` fixes 10 of the 28 bad spans and no `U` fixes the other 18.
+re-recording by the checkpoint method, so it is not a recorder artifact.
 
-**Resolves.** The cadence must vary *within* a span — `$1289` calls `$16B5` once per main-loop
-pass, so cadence is passes per frame and a foreground `plot_world`/dither/scroll stretch reaches
-no `$16B5` at all. Closing the gap means pricing those stretches better, not picking a better
-number. The phase split scores 90/117 against idle-only 89 and plotting-only 64 — a one-span
-margin, so it rests on the replay floors and action counts, not on facings.
+**Narrowed, not closed.** Deriving passes per frame as a cycle budget
+([architecture](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy))
+took the flat idle advance from 89/117 to 90/117 and the facing errors from 43 to 40, and it
+retired the phase split as the best scorer (88/117): the split was standing in for a rate the
+model now prices. Live against the ROM it takes ls42 to **zero** CORE divergences over 3000
+frames, but ls335 still shows 395 and ls9795 521 (down from 1198).
+
+**Resolves.** The residue is the cost of one ray-march step. `SEE_STEP` is a single mean: the
+`$1CE8` loop costs 306 cycles on a flat empty tile and roughly twice that through the `$1D46`
+slope path or the `$1E00` object-stack walk, and `los_jit.march` reports only how many steps it
+took, not what kind. A 64-slot scan whose march runs to the board edge is 60-70k cycles — three
+whole frames — so mispricing its steps moves a multi-frame stall by a frame or two, and that is
+exactly the shape of what is left (`update_cd` at 1 vs 4, `rotation_cd` at 0 vs 200). Closing it
+means having the march return its flat/slope/object step split, not a better mean.
 
 ## 9. The human line does not replay to a win through the live executor
 

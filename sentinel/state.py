@@ -45,10 +45,12 @@ class State:
         "obj_v_angle",
         "obj_flags",
         "obj_type",
+        "cycle_residual",
     )
 
-    def __init__(self, mem):
+    def __init__(self, mem, cycle_residual=0):
         self.mem = mem
+        self.cycle_residual = cycle_residual  # play-loop cycles owed to the next frame
         self._bind()
 
     def _bind(self):
@@ -70,7 +72,7 @@ class State:
     def clone(self):
         """A deep copy for branching search: duplicate ``mem`` and rebind the
         views onto it."""
-        return State(bytearray(self.mem))
+        return State(bytearray(self.mem), self.cycle_residual)
 
     # ---- scalars --------------------------------------------------------
     @property

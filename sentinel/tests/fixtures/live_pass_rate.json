@@ -1,0 +1,10 @@
+{
+  "_source": "driver/clock.run_frames over 200 video frames per board with the enemy clock unfrozen ($0CE5 cleared), counting hits of a silent VICE checkpoint at update_enemies $16B5. Only the frames in which every enemy's $16E9 gate was closed are kept: those are the frames whose pass count is FOREGROUND_CYCLES / passcost.idle_pass_cycles.",
+  "boards": {
+    "0000": {"enemy_slots": 1, "idle_passes_per_frame": {"19": 49, "20": 137}},
+    "0042": {"enemy_slots": 2, "idle_passes_per_frame": {"19": 127, "20": 46}},
+    "0335": {"enemy_slots": 7, "idle_passes_per_frame": {"16": 8, "17": 75, "18": 18}},
+    "0373": {"enemy_slots": 7, "idle_passes_per_frame": {"16": 5, "17": 111, "18": 22}},
+    "9795": {"enemy_slots": 8, "idle_passes_per_frame": {"16": 17, "17": 58}}
+  }
+}
