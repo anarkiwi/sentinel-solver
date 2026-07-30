@@ -733,7 +733,15 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         cycles += (
             passcost.MARCH_OBJECT
             if is_obj
-            else passcost.MARCH_SLOPE if carry_set else 0
+            else (
+                (
+                    passcost.MARCH_SLOPE_EDGE
+                    if slope in (0x04, 0x0C)
+                    else passcost.MARCH_SLOPE_QUAD
+                )
+                if carry_set
+                else 0
+            )
         )
         if is_obj:
             # $1E00 BCS get_tile_z_from_object: faithfully walk the object stack. This

@@ -28,7 +28,10 @@ def _bait_board(otype=mm.T_BOULDER):
             if slot is None:
                 continue
             st.obj_flags[st.player] = 0x80  # body off the board: only the bait remains
-            if enemies._find_drainable_boulder_or_tree(st, enemy)[0] == slot:
+            scan = enemies._find_drainable_boulder_or_tree(
+                st, enemy, enemies.UNBOUNDED, mm.NUM_SLOTS - 1
+            )
+            if scan[2] == slot:
                 return game, enemy, (x, y)
     return None, None, None
 

@@ -57,14 +57,13 @@ DISCHARGE_TRY = 966  # $1238 loop body 76..98 + two $1272 draws (445 + 440n each
 SEE_SLOT_EMPTY = 40  # $1887 exit at $1893
 SEE_SLOT_WRONG_TYPE = 49  # $1887 exit at $189D
 SEE_GEOMETRY = 1128  # $1887 prologue 37 + $8401 + the $18CA FOV compare/exit 85
-SEE_PROBE = 210  # $18E6 body 82 + $1CDD/$1ECC march entry 74 + $933D/$1C54
+# MEASURED (4456..4903 over 12 boards), not counted: $1C54's sin/cos interpolations
+SEE_PROBE = 4589  # $18E6 82 + $933D 627 + $1C54 3870 + the $1CDD/$1ECC entry 59
 
 MARCH_STEP = 314  # $1CE8..$1D18: JSR $1CBB 6 + edge tests 20 + $1CFB 17 + $1DF9 + 23
-MARCH_OBJECT = 24  # $1E00 BCS: the $1E3F object-stack surface above the flat check
-MARCH_SLOPE = 581  # $1D0B BCS $1D46: check_sloping_tile instead of check_flat_tile
-# Measured, NOT split: the $1D46 corner path (nibble 4/12) is 332 and the quad path 579,
-# but pricing them apart makes relative.can_see_object and enemies_jit._can_see_object
-# disagree by 104 cycles on one long march -- see docs/open_items.md item 8.
+MARCH_OBJECT = 28  # $1E00 BCS: one $1E3F object-stack level above the flat check
+MARCH_SLOPE_EDGE = 335  # $1D46 nibble 4/12: the four-corner compare, no interpolation
+MARCH_SLOPE_QUAD = 573  # $1D8A corner/quadrilateral: + the $0D03 edge interpolation
 
 SCAN_SLOT = 27  # $17B2 LDA 2 + JSR 6 + the $17B7 gates 11 + $17CA DEY/BPL 5
 SCAN_FIXED = 12  # a 64-slot scan's entry/exit
