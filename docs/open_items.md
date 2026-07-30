@@ -5,18 +5,53 @@ shows it, what would resolve it. Anything not here is either correct or out of s
 ([architecture.md](architecture.md), "Not modelled"); a mechanism once understood moves there
 and stops being an open item.
 
-## 1. Whole-view-dict reads and tie rollouts still buy the lattice sweep
+## 1. A per-tile candidate generator only pays once the eye is up
 
-**Wrong.** Reading a whole view dict builds the full pitch-band lattice — 3,538,944 rays — and
-a tie multiplies that by the number of tied candidates.
+**Wrong.** The phase player's candidate generators now ask per tile
+([candidate generators](architecture.md#the-landability-filter-landtablepy)) instead of reading
+the whole pitch-band dict, but that is cheaper only while the cheap filter prunes. Early, with
+a low eye, it prunes nothing and the sweep is still the better answer, so `BAND_SWEEP_TILES`
+buys one — an unresolved cost, not an unresolved decision.
 
-**Measured.** The sweep is the great majority of ls335 run time. Making the per-tile path
-targeted ([the landability filter](architecture.md#the-landability-filter-landtablepy)) took
-ls335 93 s → 66 s with all eight boards bit-identical. `los._landable_batch` survives in the
-`views.band()` calls in `phase_player._climb_candidates` and its supply hop and in
-`player._climb_scan`, and in `_settle_tie`, which builds a fresh `_Views` per forked candidate.
+**Measured — the change.** `_climb_candidates`, `_establish`'s supply hop and `_barren` ask
+`_Views.band_ordered`; `_barren` short-circuits on the first available action and reads no
+whole dict on a tick. Bit-identical on all eight suite boards and on the two relocation wins
+(ls7414 59, ls8589 46). Solo, one numba thread, idle host:
 
-**Resolves.** Candidate generators that ask per tile, and one sweep shared across a tie's forks.
+| board | before | after |
+|---|---|---|
+| ls42 | 180.9 s | 157.4 s |
+| ls335 | 78.8 s | 60.5 s |
+| ls373 | 85.5 s | 69.2 s |
+| ls7545 (dies in 17) | 37.0 s | 42.9 s |
+| ls8271 (dies in 13) | 48.3 s | 53.2 s |
+| ls9090 (dies in 13) | 23.4 s | 24.2 s |
+
+Boards that climb get faster and boards that die in their first twenty actions get slower, and
+those are the same regime split: a climb candidate needs `base >= my_eye - 2.275`, so at entry
+`gain > 0` holds for ~930 of the ~950 stackable tiles and nothing is pruned. On the 24-board
+sample of [12](#12-the-hardest-boards-are-unsolved-and-mostly-unfinished) the net is 1-2 more
+boards reaching a verdict, both of them wins.
+
+**Measured — why batching does not rescue the entry state.** At the ls42/ls335 entry the union
+of the asked tiles' candidate ray sets is 721,275 / 495,372 rays against the 696,699 / 765,328
+the whole sweep marches, so one batched multi-tile march is not cheaper than the sweep. The
+per-tile path is linear and clean (3.7-4.4 ms/tile over 25..200 tiles on ls42/ls335/ls8644)
+against 0.83-1.08 s/sweep, hence the 205-260-tile crossover `BAND_SWEEP_TILES` = 200 sits
+under.
+
+**Measured — `_settle_tie` does not re-sweep.** The allegation that a tie buys a sweep per fork
+is false: `_VIEW_CACHE` keys on `projector.scene_key`, so a fresh clone of an unchanged board
+hits the memo. Over a full ls110 solve, 6 ties and 22 forks, 45 sweeps are built and **0** of
+them at a tie's own entry scene key.
+
+**Measured — `player._climb_scan` is genuinely whole-set.** It ranks on each candidate's
+`_aim_frames`, so every candidate needs its view, and its visibility-free gates leave 946
+(ls42) and 932 (ls335) tiles — ~6 s of targeted marches against a 1.2-1.4 s sweep. Per tile is
+4-5x *worse* there, so it keeps the sweep.
+
+**Resolves.** A cheap sound prune that survives a low eye, which the gain test is not. Then
+`BAND_SWEEP_TILES` and the sweep path go away.
 
 ## 2. Live frame accounting leaks across a tie
 
@@ -188,8 +223,17 @@ measurements.
 Three distinct failures sit underneath that, and they need different fixes:
 
 * **Runtime, 84 boards.** Two thirds never reach a verdict. This is not a strategy limit
-  and it dominates every other signal here; see [1](#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
-  82 of the 84 had climbs available at entry, so they were playing, not stuck.
+  and it dominates every other signal here; see
+  [1](#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up). 82 of the 84 had
+  climbs available at entry, so they were playing, not stuck. A 24-board **sample** —
+  every 5th code of `out/hardest_128.txt`, indices 0..115 — re-run at the same 180 s cap,
+  24 at a time, went from **10 finished / 0 won** to **11-12 finished / 1-2 won** on the
+  per-tile generators: ls9856 wins in 34 actions on both of two runs of the identical
+  code, ls8926 wins in 57 on one of them and hits the cap on the other, having finished at
+  152.7 s. Every board that finished on both sides took the identical action count. 24 of
+  128 is not the 128, it was run 24 at a time against the table's 32, and a board landing
+  within 30 s of the cap is a coin toss under that contention — the 84/44 split above
+  stands as the only whole-set measurement.
 * **Paralysis, 10 boards, was 18.** The planner takes zero actions. The 8 with no landable
   tile at entry at all now play: relocation is a move class
   ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
@@ -340,6 +384,13 @@ Each is a hypothesis and the measurement that killed it.
   TILE, routinely *below* the eye even when the robot on it is not.
 - **Meanie spawn location is PRNG-driven.** `$197D` never touches the PRNG.
 - **Enemy freeze under `plotting=True` is a fidelity knob.** It freezes enemies outright.
+- **Asking only the best-scoring climb group.** `_best_climb` reads one score group, so the
+  generator could stop at the leading landable one; the tallest tiles are the least landable,
+  so it walks 46-98 of the 66-99 groups and 596-930 of the tiles anyway (ls42/110/335/373/9717
+  entry states).
+- **A `_settle_tie` fork re-sweeps the board it forked from.** `_VIEW_CACHE` keys on
+  `projector.scene_key`, so a clone of an unchanged board hits the memo: 0 of 45 sweeps over an
+  ls110 solve are at a tie's entry key ([1](#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up)).
 - **A K-pruned landability table.** The first landing hit sits deep inside a candidate row, so a
   stored-first-`K` row decides almost no landing query at any affordable `K`: at K=64 it costs
   tens of MB per lattice, falls back on nearly every query and is no faster than the exact path,

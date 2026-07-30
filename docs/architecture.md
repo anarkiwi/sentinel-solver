@@ -772,8 +772,20 @@ a caller reads the entire dict (`views.band()`). Each lattice is pinned to the b
 first query (`_Views._pinned`), so a caller that builds or transfers mid-tick keeps reading
 one consistent board. Both paths hand the tile's landing rays to the same `_cheapest_ray`
 (see [aim cost](#aim-cost-playerbase_aim_frames)), so they return the same view for the same
-tile by construction. Which callers still buy the sweep is
-[open item 1](open_items.md#1-whole-view-dict-reads-and-tie-rollouts-still-buy-the-lattice-sweep).
+tile by construction.
+
+**Candidate generators.** A generator that wants *which of these tiles land* asks
+`_Views.band_ordered(pick)`, never the whole dict: `pick` is the caller's visibility-free
+filter (terrain, the object table, the purse), and the survivors are answered per tile. The
+answer must be in the sweep's own **order**, because the climb tie-break reads it
+positionally (`docs/players.md`, "The tie that decided ls110"); the sweep inserts by winning
+lattice ray and `_cheap_view` returns that ray, so sorting on it reproduces the order exactly
+(`test_band_ordered_is_the_sweep_order_without_buying_it`). Which side gets scanned is a cost
+decision only, since both return the same views: with a sweep in hand the landable set is
+filtered, and an ask of `BAND_SWEEP_TILES` marchable tiles or more buys a sweep instead —
+measured 3.7-4.4 ms per targeted band march against 0.83-1.08 s per band sweep, so the
+crossover is 205-260 tiles. What remains sweep-bound is
+[open item 1](open_items.md#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up).
 
 **Lattices.** `los._landable_sweep`'s plane and band (`landtable.MAX_STEPS = 6000`). Over
 targeted queries from real solves (ls0/42/335), arc bisection alone marches a large fraction of

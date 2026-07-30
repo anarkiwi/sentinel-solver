@@ -276,6 +276,23 @@ def test_views_answer_from_the_board_pinned_at_the_first_query(new_state):
     assert {t: plane.get(t, band.get(t)) for t in tiles} == before
 
 
+def test_band_ordered_is_the_sweep_order_without_buying_it(new_state):
+    """``band_ordered`` reproduces the band sweep's ORDER, not merely its membership.
+
+    The climb tie-break reads the sweep positionally, so a per-tile generator is only
+    substitutable if its order is the sweep's own -- asserted here against a sweep built
+    afterwards, with the sweep cache empty while the targeted path answers."""
+    st = _midgame(new_state)
+    step = 3  # a sparse ask stays under BAND_SWEEP_TILES, so the targeted path answers
+    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, step) for y in range(0, 31, step)}
+    playerbase._VIEW_CACHE.clear()
+    got = playerbase._Views(st).band_ordered(tiles.__contains__)
+    assert not playerbase._VIEW_CACHE  # answered per tile: no lattice was swept
+    assert len(got) > 4
+    want = [(t, v) for t, v in playerbase._Views(st).band().items() if t in tiles]
+    assert got == want
+
+
 def test_coarse_lattice_is_the_landset_lattice():
     """The coarse grid's rays are a subset of the full band lattice's -- one candidate
     rule serves both paths."""

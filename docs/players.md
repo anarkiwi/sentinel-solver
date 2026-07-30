@@ -76,10 +76,11 @@ Each is a fact about the ROM, not a tuned quantity.
   ("do I now hold `want`") discarded a taken absorb whenever one +1 tree was all there was.
   Measuring the purse before and after instead shortened ls60 (46 → 41) and ls335 (58 → 55).
 * **A stance that offers nothing is left, not waited out** — `_barren` is every generator
-  *empty* (no landable tile at all, or nothing absorbable, reclaimable, climbable or
-  mountable in view), which is a different state from every generator *refusing*: the second
-  is a wait, the first cannot change by waiting. `_relocate` then fires `$216A`, the one move
-  that shifts the body with no sightline, for the 3-energy toll.
+  *empty* (nothing absorbable, reclaimable, climbable or mountable in view), which is a
+  different state from every generator *refusing*: the second is a wait, the first cannot
+  change by waiting. `_relocate` then fires `$216A`, the one move that shifts the body with no
+  sightline, for the 3-energy toll. It runs on every tick, so it asks per tile and stops at
+  the first available action rather than reading a whole lattice.
 
 **Relocation is taken, never scored.** The landing tile is PRNG-driven (`$2165 JSR $1238`)
 and this model treats it as unknowable, so there is nothing to rank: a barren stance has no
@@ -127,8 +128,9 @@ fixing is the attribution, in
 
 Ties are settled by rollout because no measurement available at the tie separates the
 candidates. At eye 6.375 with E=10, **nine candidates scored identically** —
-`(gain/cost, fuel_near) = (0.1667, 5)` for every one — so `_best_climb` returned whichever
-`views.band()` yielded first, and the run died 4 ticks later at 17 actions, eye 7.375, E=0
+`(gain/cost, fuel_near) = (0.1667, 5)` for every one — so `_best_climb` returned whichever the
+band lattice yielded first (by winning ray: `_Views.band_ordered` preserves exactly that
+order), and the run died 4 ticks later at 17 actions, eye 7.375, E=0
 (that stall was forced: 11 of its 12 candidates failed the arrival probe and the survivor
 was the tile it died on). Forcing each of the nine and playing on, the planner otherwise
 untouched:
@@ -190,9 +192,12 @@ and commits one action. `urgent` means the player's own tile window is at or bel
 `_climb_scan` ranks builds by `(gains LOS on the hunt target, robot eye height, cheaper
 aim, wider window)` over the primary-plane view dict, falling back to the full pitch band,
 then to graded relaxations: `seen_tier` 1 tolerates undrainable partial sight, 2 is
-least-exposed no-other-choice (urgent or frozen only). Landability queries go through
-`_Views`: a single tile is one targeted march (`_cheap_view`), a whole-dict read buys the
-lattice sweep, and either falls back to the full pitch band only for down-looks a single-ray
+least-exposed no-other-choice (urgent or frozen only). It prices every candidate off its own
+view, so it reads the whole dict and keeps the sweep; the phase player's generators ask
+`band_ordered` per tile instead
+([open item 1](open_items.md#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up)).
+Landability queries go through `_Views`: a single tile is one targeted march (`_cheap_view`),
+and either lattice falls back to the full pitch band only for down-looks a single-ray
 visibility check first confirms plausible. Each lattice is pinned to the board at its first
 query, so a caller that builds or transfers mid-tick keeps reading one consistent board.
 

@@ -16,8 +16,10 @@ V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
 SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
 _VIEW_CACHE = {}
 _VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
-_TILE_VIEW_CACHE = {}  # per-(sweep key, tile) targeted views; entries are 1-tuples
-_TILE_VIEW_CACHE_MAX = 1 << 14
+_TILE_VIEW_CACHE = {}  # per-(sweep key, tile) targeted (view, winning ray) pairs
+_TILE_VIEW_CACHE_MAX = (
+    1 << 16
+)  # a per-tile candidate generator asks hundreds per tick, and every fork of one tick re-asks the same keys
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -32,6 +34,11 @@ REVOLUTION_STEPS = 14  # rotations covering a full 256-bearing turn at the +-20 
 REVOLUTION_FRAMES = REVOLUTION_STEPS * ROT_PERIOD_FRAMES  # the threat calendar's period
 FOV_HALF = enemies.FOV_SCAN // 2  # +-10 units of the enemy scan cone
 FOV_MARGIN = 4  # safety margin on top of the cone half-width
+EDGE = (
+    landtable.RADIUS
+)  # highest in-board tile coord: LOS quits at $1F, so 31 never lands
+BOARD_TILES = [(x, y) for x in range(EDGE + 1) for y in range(EDGE + 1)]
+BAND_SWEEP_TILES = 200  # targeted marches at which a board has paid a whole-lattice sweep's price, so one sweep answers every remaining tile of it: measured 3.7-4.4 ms/march (linear in tiles) against 0.83-1.08 s/band sweep over ls42/ls335/ls8644, crossover 205-260. Both paths return the same views, so this trades no decision.
 ROBOT_EYE = 0.875  # a robot's eye above its foot tile ($E0 fraction)
 BOULDER_H = 0.5  # a boulder raises a stack half a unit
 HOP_COST = 5  # boulder (2) + robot (3)
@@ -183,26 +190,27 @@ def _cheap_views(st, v_primary, aim_from):
 
 
 def _cheap_view(st, tile, v_primary, aim_from):
-    """The :func:`_cheap_views` entry for ONE tile, bit-identical, without the sweep.
+    """``(view, winning ray)`` for ONE tile -- the :func:`_cheap_views` entry, no sweep.
 
-    Only :func:`landtable.candidates` is marched -- a proven superset of the rays that
-    can land ``tile`` -- and :func:`_cheapest_ray` picks over the same landing rays, so
-    a candidate set that lands nothing is a proven "no view"."""
+    Only :func:`landtable.candidates` is marched, a proven superset, so a set landing
+    nothing is a proven "no view" (``(None, -1)``).  The sweep inserts BY winning ray,
+    so sorting per-tile answers on it reproduces the order a positional reader sees."""
     tile = (int(tile[0]), int(tile[1]))
     slot = st.player
     if landtable.never_lands(st, tile, slot):
-        return None
+        return None, -1
     grids = landtable.lattice(v_primary=v_primary)
     idx = landtable.candidates(st, tile, slot, None, grids, landtable.MAX_STEPS)
     if not idx.size:
-        return None
+        return None, -1
     status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
     hit = np.flatnonzero(
         (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
     )
     if not hit.size:
-        return None
-    return _view_at(_cheapest_ray(st, idx[hit], grids, aim_from, slot), grids)
+        return None, -1
+    ray = _cheapest_ray(st, idx[hit], grids, aim_from, slot)
+    return _view_at(ray, grids), ray
 
 
 class _Views:
@@ -243,22 +251,56 @@ class _Views:
             lambda: _cheap_views(st, v_primary, self.aim_from),
         )
 
+    def _built(self, v_primary):
+        """A whole sweep for this lattice if one is already in hand, else None."""
+        built = self._primary if v_primary else self._full
+        if built is not None:
+            return built
+        return _VIEW_CACHE.get(self._pinned(v_primary)[1])
+
     def _one(self, tile, v_primary):
         """One tile's sweep entry: read off a sweep already in hand, else marched
         targeted (:func:`_cheap_view`) -- the same answer for a fraction of the rays."""
-        built = self._primary if v_primary else self._full
+        built = self._built(v_primary)
         if built is not None:
             return built.get(tuple(tile))
+        return self._targeted(tile, v_primary)[0]
+
+    def _targeted(self, tile, v_primary):
+        """``(view, winning ray)`` marched for one tile, memoized on (sweep key, tile)."""
         st, key = self._pinned(v_primary)
-        built = _VIEW_CACHE.get(key)
-        if built is not None:
-            return built.get(tuple(tile))
         return projector.memo(
             _TILE_VIEW_CACHE,
             key + (tuple(tile),),
             _TILE_VIEW_CACHE_MAX,
-            lambda: (_cheap_view(st, tile, v_primary, self.aim_from),),
-        )[0]
+            lambda: _cheap_view(st, tile, v_primary, self.aim_from),
+        )
+
+    def band_ordered(self, pick):
+        """``[(tile, view)]`` in the band sweep's OWN order for every tile ``pick`` takes.
+
+        A sweep inserts by winning lattice ray and a targeted march knows that ray, so
+        sorting on it IS that order -- what a positional reader of :meth:`band` sees.
+        Whichever side is smaller is the one scanned: a sweep in hand is filtered, an ask
+        worth a sweep (:data:`BAND_SWEEP_TILES`) buys one, a smaller ask marches."""
+        built = self._built(False)
+        if built is not None:
+            return [(t, v) for t, v in built.items() if pick(t)]
+        st, _key = self._pinned(False)
+        slot = st.player
+        todo = [
+            t for t in BOARD_TILES if not landtable.never_lands(st, t, slot) and pick(t)
+        ]
+        if len(todo) >= BAND_SWEEP_TILES:
+            want = set(todo)
+            return [(t, v) for t, v in self.band().items() if t in want]
+        got = []
+        for tile in todo:
+            view, ray = self._targeted(tile, False)
+            if view is not None:
+                got.append((ray, tile, view))
+        got.sort()
+        return [(t, v) for _ray, t, v in got]
 
     def primary(self):
         if self._primary is None:
