@@ -140,35 +140,45 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock still diverges on many-enemy boards; the residue is the sound engine
+## 8. The enemy clock still diverges on many-enemy boards; the residue is the VIC-II
 
 **Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795 (515)
 and ls335 (304). ls42 is clean: **0 CORE divergences over 3000 frames**.
 
-**Measured.** Running the real `$1289` loop in the jennings oracle beside the model, pass for
-pass from the same state, the model now accounts for **86.6%** of the ROM's loop cycles over
-2500 passes on ls9795 (it was 57% before the march was priced per step kind). The residue is
-two things, neither of them the enemy machine:
+**Measured, live, to the cycle.** `registers_get` exposes the raster line and the cycle within
+it, and PAL is 312 x 63 = 19656, so `line * 63 + cyc` timestamps a checkpoint hit exactly.
+Over 1122 consecutive `$16B5` hits on ls9795 with the clock unfrozen:
 
-- **The tune player.** The modal idle pass is exact — 925 modelled against 925 measured — but
-  the *mean* idle pass is 975, because roughly 5% of passes carry a 1000-2000 cycle excursion
-  into `$34DE play_music`, reached from `$352C` when `$0CDF` has counted down to 0, and
-  `$347D` spins outright (`$34A0 BCS $347D`) while `$0CDF >= 2` and a tune is live. Those
-  three bytes -- `$0CDF` (decremented once per frame by `$9630`, reloaded to 12 by `$34AD`),
-  `$0CEB` (tune state) and `$0C73` -- are driven by the SID engine at `$8ED1`/`$8F0C`, which
-  the model does not carry at all. Under-charging every pass by ~5% means ~5% too many passes
-  per frame, and the ls9795 first divergence is exactly that shape: `update_cd` 1 vs 4, the
-  model having already considered the enemy the ROM has not reached yet.
-- **Long ray-marches, ~13% under.** A march that runs to the board edge measures 70917 cycles
-  and is charged 61440. The three step kinds are priced from the ROM (`MARCH_STEP` 314 flat,
-  `+MARCH_OBJECT` 24, `+MARCH_SLOPE` 581, each reproduced exactly by the oracle) but
-  `check_sloping_tile $1D46` alone spans 646..1384 cycles depending on which corner/quad split
-  it takes, and the model charges its mean.
+- the **modal** pass costs **925 cycles, exactly what the model charges**;
+- the **mean** is **1014.7**, with a spread to 1180;
+- **31% of passes cost exactly 925** -- and 112 of the 312 raster lines (36%) are border,
+  where the VIC-II steals nothing. The rest pay about 43 cycles per badline crossed.
 
-**Resolves.** Closing it means pricing the sound engine's foreground time — porting `$34DE`
-and the `$0CDF`/`$0CEB` tune state — and splitting `MARCH_SLOPE` by the `$1D46` sub-path.
-The first is a different subsystem from the enemy clock; it steals foreground cycles and so
-moves the clock, but nothing in it is enemy state.
+So the residue is the **VIC-II badline DMA steal, per pass**. `IRQ_CYCLES` carries it as a
+per-frame constant, which is right on average -- that is why the idle cadence brackets hold on
+all five boards -- but wrong for any individual pass, so a pass lands on the wrong side of a
+frame boundary and the stall it starts is a frame out. This is hardware: no disassembly
+produces it. Modelling it means tracking the raster position through the budget and charging
+each pass the badlines it crosses, which the accumulator already has the information to do.
+
+**It is NOT the sound engine.** An earlier revision of this item blamed the tune player. Live,
+across those same 1122 passes, `$0CEB` never leaves `$80` and `$0C73` never leaves 0, so
+`$34BA`/`$352C`/`$347D` are constant at 13/29/27 -- exactly what the model charges -- and
+`$34DE play_music` never runs. The excursions that suggested otherwise were an artifact of the
+jennings harness, which injects only `$130C`/`$1635` for the IRQ and so never runs
+`$9630 DEC $0CDF`. The SID is in any case a pure cycle sink: there is **no read of
+`$D400-$D41C` anywhere in the image**, by any addressing mode, so nothing it writes re-enters
+the model.
+
+**A second, smaller term, and a latent twin bug behind it.** `check_sloping_tile $1D46` spans
+646..1384 cycles and is charged its mean. Measured, the corner path (slope nibble 4 or 12, the
+`$1D5A` four-corner compare) is 332 and the quad path 579. Pricing them apart is a one-line
+change and it is **not landed**: it makes `relative.can_see_object` and
+`enemies_jit._can_see_object` disagree by 104 cycles on one long march (ls335, frame 32,
+observer 4, target 62). Replayed in isolation the two agree on all 64 slots of that scan, so
+the difference is in a call the two implementations make differently *inside* the scan, not in
+the march. The byte-identity test could not see this before -- both reach the same LOS verdict
+-- and sees it now only because cost is part of the state. Reconcile that first.
 
 **Inert by tier.** The SWEEP and SCRATCH divergences that remain on the clean board (ls42)
 are not the same kind of thing:

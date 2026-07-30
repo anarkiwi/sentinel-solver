@@ -46,6 +46,9 @@ SEE_PROBE = 210  # $18E6 body 82 + $1CDD/$1ECC march entry 74 + $933D/$1C54
 MARCH_STEP = 314  # $1CE8..$1D18: JSR $1CBB 6 + edge tests 20 + $1CFB 17 + $1DF9 + 23
 MARCH_OBJECT = 24  # $1E00 BCS: the $1E3F object-stack surface above the flat check
 MARCH_SLOPE = 581  # $1D0B BCS $1D46: check_sloping_tile instead of check_flat_tile
+# Measured, NOT split: the $1D46 corner path (nibble 4/12) is 332 and the quad path 579,
+# but pricing them apart makes relative.can_see_object and enemies_jit._can_see_object
+# disagree by 104 cycles on one long march -- see docs/open_items.md item 8.
 
 SCAN_SLOT = 22  # $17BA the per-slot loop body around a visibility call
 SCAN_FIXED = 12  # a 64-slot scan's entry/exit
