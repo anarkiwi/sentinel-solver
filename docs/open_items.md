@@ -140,7 +140,7 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock still diverges on many-enemy boards; the residue is the VIC-II
+## 8. The enemy clock still diverges on many-enemy boards; the residue is per-pass
 
 **Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795 (515)
 and ls335 (304). ls42 is clean: **0 CORE divergences over 3000 frames**.
@@ -168,14 +168,41 @@ A sweep over YSCROLL 0..7 and steal 40..43 picks `yscroll=3, steal=42` on the ti
 independently recovering the value in `$D011`. So the term is deterministic arithmetic, not
 hardware lore, and the accumulator already holds the frame position it needs.
 
-**A fourth mechanism, not yet identified.** Badline arithmetic does not close it. A residual
-cluster of **197 of 785 passes sits at +121 cycles** above the 925 mode, and it is not spread
-at random: those passes start at raster lines **37..52**, straddling the top edge of the
-display window at `$30`, whereas the passes that land exactly on 925 start anywhere. Something
-at the display-window boundary costs ~121 cycles that neither the counted foreground nor
-`42 * badlines` accounts for. Until that is named, charging badlines explicitly would move
-every pass boundary while still leaving a quarter of passes mispriced, which is why the term is
-measured here but **not implemented**.
+**The fourth mechanism: five raster interrupts per frame, not one.** `$95FA LDA $9AF6 /
+BEQ $9630` gates a split-raster chain that is live in play. `$95FF..$961D` walks an index
+`$9588` down 4->0 (wrapping), programs `$D012` from the table at **`$9589 = 35 D5 AD 85 5D`**
+-- raster lines **53, 213, 173, 133, 93** -- and `$D018` from `$958E`; then `$961E CPX $9593`
+takes the full `$9630` body only for `X == $9593` (0 in the image), which is the entry whose
+line was programmed one step earlier: **line 213**. So four *short* interrupts fire at lines
+53, 93, 133, 173 and one full one at 213. The `$9630` marker the driver frame-steps on is only
+the last of the five, which is exactly why frame-anchored sampling never showed the other four.
+
+The short path is countable: 7 (IRQ) + `$95E9..$9621` + `$9623 LDA $0C4D / BPL` +
+`$962D JMP $969A` + `PLA/TAY/PLA/TAX/PLA/RTI` = **119 cycles**. Line 53 sits inside the 37..52
+start-line band where the 197 unexplained passes were: they straddle it and pay it. Charging
+badlines *and* short interrupts against the captured samples:
+
+| terms charged | within +-3 of the mode |
+|---|---|
+| none (today) | 242 / 841 |
+| badlines only | 500 / 841 |
+| badlines + short IRQ at 119 | 673 / 841 |
+| badlines + short IRQ at 121 | **673 / 841** |
+
+The 2-cycle gap between the counted 119 and the measured optimum is the interrupted
+instruction finishing before the interrupt is taken.
+
+**What this makes `IRQ_CYCLES`.** It stops being a per-frame lump. Per frame the machine spends
+4 x 119 on short interrupts, 25 x 42 on badlines, and the rest of the non-foreground time in
+the full `$9630` body; against today's calibrated foreground of 15514 that leaves
+**`IRQ_FULL` ~ 2608** as the only remaining per-frame constant, with the other ~1534 charged
+per pass by where it sits in the frame. Both terms are deterministic given the frame position
+the accumulator already tracks, and both come off the image -- the split table, the selector
+and the handler are all in `out/sentinel_stage2.bin`.
+
+**Not implemented.** The measurement and the arithmetic are here; the accumulator change (both
+twins), the removal of `IRQ_CYCLES`, and the re-derivation of the five-board bracket are not
+done.
 
 One caveat on the sample: the `$9630` frame checkpoint's hit count did not advance between
 `$16B5` stops, so the timestamps span a single raster sweep and passes that wrap line 311 were
