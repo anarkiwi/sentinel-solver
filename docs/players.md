@@ -110,7 +110,7 @@ ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
 landscape-complete flag `$0CDE` bit 6.
 
 Off the suite, relocation puts the eight hardest-128 boards that took **zero** actions into
-play: ls8589 won in 86, ls7414 lost in 70, and the other six lose in 5-28 actions instead of
+play: ls8589 won in 86, ls7414 won in 63, and the other six lose in 5-28 actions instead of
 idling to death
 ([open item 12](open_items.md#12-the-hardest-boards-are-unsolved-and-mostly-unfinished)).
 

@@ -298,7 +298,7 @@ Three distinct failures sit underneath that, and they need different fixes:
 * **Paralysis, 10 boards, was 18.** The planner takes zero actions. The 8 with no landable
   tile at entry at all now play: relocation is a move class
   ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
-  they are **ls8589 won in 86**, **ls7414 lost in 70**, ls9785 lost 28, ls9364 lost 14,
+  they are **ls8589 won in 86**, **ls7414 won in 63**, ls9785 lost 28, ls9364 lost 14,
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. ls7414 and ls8589 were 59 and 46 before the enemy-clock cost terms of
   [8](#8-the-enemy-clock-is-one-pass-out-of-phase-at-the-frame-checkpoint) landed; every
