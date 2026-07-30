@@ -60,6 +60,10 @@ COOLDOWN_STICK = 0x02  # thresholds compare against 2 ($16E9/$17FE/$1321)
 MEANIE_ROTATE_STEP = 0x08  # $171B: meanie turns +/-8 units/update toward the player
 MEANIE_MAX_ATTEMPTS = 0x02  # $1857: stop hunting a tree after two failed full scans
 
+PHASE_HEAD = 0  # sub-pass resume at $1289: head and $16B5 dispatch unspent
+PHASE_BODY = 1  # sub-pass resume at $16E6: consider_enemy_state has not run
+PHASE_CURSOR = 2  # sub-pass resume at $16D9: the prnd ran, its result is not stored
+
 
 def enemy_slots(state):
     """The occupied sentry/Sentinel slots."""
@@ -565,33 +569,51 @@ def _dec_cursor(state):
     mem[mm.CURSOR] = (c - 1) if c > 0 else 7
 
 
-def update_enemies(state):
-    """$16B5: consider the enemy at the cursor, advance the PRNG ($16D6) and the
-    cursor ($16D9, 7->0 wrap).  Returns the cycles the call cost the ROM."""
+def dispatch_cycles(state):
+    """$16B5..$16E6: the type dispatch and the $16CC absorbed test, which write
+    nothing, so a frame boundary inside them leaves no trace."""
+    otype = state.obj_type[state.mem[mm.CURSOR]]
+    if otype == mm.T_SENTINEL:
+        return passcost.UPDATE_DISPATCH_SENTINEL
+    if otype == mm.T_SENTRY:
+        return passcost.UPDATE_DISPATCH_SENTRY
+    return passcost.UPDATE_NOT_ENEMY
+
+
+def update_body(state):
+    """$16E6..$16D6: consider the enemy at the cursor, or discharge an absorbed one.
+
+    Every state write $16B5 makes before the prnd is made here; a non-enemy slot
+    makes none.  Returns the cycles, the $16B5 dispatch excluded."""
     mem = state.mem
     x = mem[mm.CURSOR]
-    otype = state.obj_type[x]
-    if otype in mm.ENEMY_TYPES:  # $16BB type == sentry(1) or Sentinel(5)
-        cost = (
-            passcost.UPDATE_DISPATCH_SENTINEL
-            if otype == mm.T_SENTINEL
-            else passcost.UPDATE_DISPATCH_SENTRY
-        )
-        if not (state.obj_flags[x] & 0x80):  # $16CC BPL: not absorbed -> normal update
-            cost += _consider_enemy_state(state, x)
-        else:
-            # $16CE: a slot still typed as an enemy but flagged absorbed (SLOT_EMPTY)
-            # still returns any residual banked energy to the landscape as a tree.
-            cost += passcost.UPDATE_ABSORBED
-            cost += _consider_discharging_enemy_energy(state, x)[1]
-    else:
-        cost = passcost.UPDATE_NOT_ENEMY
-    prng = Prng().load(mem)  # $16D6 JSR prnd (advances the stream)
+    if state.obj_type[x] not in mm.ENEMY_TYPES:  # $16BB sentry(1)/Sentinel(5) only
+        return 0
+    if not (state.obj_flags[x] & 0x80):  # $16CC BPL: not absorbed -> normal update
+        return _consider_enemy_state(state, x)
+    # $16CE: an absorbed slot still returns its banked energy to the landscape.
+    return passcost.UPDATE_ABSORBED + _consider_discharging_enemy_energy(state, x)[1]
+
+
+def update_cursor(state):
+    """$16D9: store the advanced $16D6 prnd stream and decrement the cursor (7->0
+    wrap).  Returns the cycles after the prnd, which UPDATE_PRND already charged."""
+    mem = state.mem
+    x = mem[mm.CURSOR]
+    prng = Prng().load(mem)
     prng.next()
     prng.store(mem)
-    cost += passcost.UPDATE_TAIL_WRAP if x == 0 else passcost.UPDATE_TAIL
     _dec_cursor(state)
-    return cost
+    return passcost.UPDATE_CURSOR_WRAP if x == 0 else passcost.UPDATE_CURSOR
+
+
+def update_enemies(state):
+    """$16B5 whole: dispatch, body, prnd and cursor, for the isolated round.
+
+    The frame loop runs the three parts apart -- see :func:`advance_frame_python`."""
+    cost = dispatch_cycles(state)
+    cost += update_body(state)
+    return cost + passcost.UPDATE_PRND + update_cursor(state)
 
 
 def step(state):
@@ -639,10 +661,23 @@ def advance_frame_python(state, plotting=False):
     if plotting:
         return
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
+    phase = state.pass_phase
     while budget > 0:
-        budget -= update_enemies(state) + passcost.LOOP_PASS
+        if phase == PHASE_HEAD:
+            budget -= passcost.PASS_HEAD + dispatch_cycles(state)
+            phase = PHASE_BODY
+            if budget <= 0:
+                break
+        if phase == PHASE_BODY:
+            budget -= update_body(state) + passcost.UPDATE_PRND
+            phase = PHASE_CURSOR
+            if budget <= 0:
+                break
+        budget -= update_cursor(state) + passcost.PASS_TAIL
         budget -= passcost.exposure_cycles(state.mem)
+        phase = PHASE_HEAD
     state.cycle_residual = budget
+    state.pass_phase = phase
 
 
 def advance_frames_python(state, n_frames, plotting=False):
@@ -663,8 +698,12 @@ def advance_frames(state, n_frames, plotting=False):
     Dispatches to the numba twin (:mod:`sentinel.enemies_jit`) when numba is present,
     else to :func:`advance_frames_python`; the two are byte-identical."""
     if _jit_usable(state):
-        state.cycle_residual = enemies_jit.advance_frames(
-            state.mem, int(n_frames), plotting, state.cycle_residual
+        state.cycle_residual, state.pass_phase = enemies_jit.advance_frames(
+            state.mem,
+            int(n_frames),
+            plotting,
+            state.cycle_residual,
+            state.pass_phase,
         )
         return
     advance_frames_python(state, n_frames, plotting=plotting)

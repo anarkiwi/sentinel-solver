@@ -23,7 +23,9 @@ COOLDOWN_TICK_WALK = 33  # the $131C walk's own entry 22 + $132B reload 6 + RTS 
 COOLDOWN_TICK_BYTE_STICK = 14  # $131E LDA 4 + CMP 2 + BCC taken 3 + DEX 2 + BPL 3
 COOLDOWN_TICK_BYTE_DEC = 20  # + $1325 DEC 7, less the taken BCC 1
 
-LOOP_PASS = 142  # $1289..$12C7 in-play straight line, less the $16B5/$191F bodies
+PASS_HEAD = 25  # $1289..$129F: LDA 4 + BMI 2 + LSR 6 + LDA 4 + BPL 3 + the JSR 6
+PASS_TAIL = 117  # $12A2..$12C7 48 + the $34BA/$352C/$347D bodies 13 + 29 + 27
+LOOP_PASS = PASS_HEAD + PASS_TAIL  # 142: the whole straight line, for the idle rate
 
 EXPOSURE_FIXED = 50  # $191F prologue 7 + epilogue 37 + RTS 6
 EXPOSURE_EMPTY = 12  # $1925 LDA 4 + BMI 3 + DEX 2 + BPL 3
@@ -40,8 +42,11 @@ UPDATE_DISPATCH_SENTINEL = 32  # ... with the longer type compare chain
 UPDATE_GATE_CLOSED = 9  # $16E6 LDA $0C30,X 4 + CMP 2 + BCS 3
 UPDATE_ABSORBED = 8  # $16CC BMI 2 for BPL 3 + JSR $1A5D 6 + BCS 3
 PRND = 427  # $31CA: 8 rounds of the 40-bit LFSR, 51 each
-UPDATE_TAIL = 453  # $16D6 JSR 6 + prnd + DEC 5 + BPL 3 + LDA 3 + STA 3 + RTS 6
-UPDATE_TAIL_WRAP = 457  # cursor 0: BPL not taken 2 + LDA 2 + STA 3
+UPDATE_PRND = 433  # $16D6 JSR 6 + prnd: spent BEFORE the stream advances
+UPDATE_CURSOR = 20  # $16D9 DEC 5 + BPL 3 + $16E1 LDA/STA 6 + RTS 6
+UPDATE_CURSOR_WRAP = 24  # cursor 0: BPL not taken 2 + LDA 2 + STA 3
+UPDATE_TAIL = UPDATE_PRND + UPDATE_CURSOR  # 453, the whole $16D6..$16E5
+UPDATE_TAIL_WRAP = UPDATE_PRND + UPDATE_CURSOR_WRAP  # 457
 CONSIDER_ENTRY = 30  # $16E6..$16F6 gate open 21 + $16F7 LDA 4 + BPL 2 + JMP 3
 CONSIDER_PREAMBLE = 36  # $1773..$17B2 around the discharge and considering flags
 

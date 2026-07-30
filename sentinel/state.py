@@ -46,11 +46,13 @@ class State:
         "obj_flags",
         "obj_type",
         "cycle_residual",
+        "pass_phase",
     )
 
-    def __init__(self, mem, cycle_residual=0):
+    def __init__(self, mem, cycle_residual=0, pass_phase=0):
         self.mem = mem
-        self.cycle_residual = cycle_residual  # play-loop cycles owed to the next frame
+        self.cycle_residual = cycle_residual  # cycles owed at the sub-pass resume point
+        self.pass_phase = pass_phase  # WHICH resume point: enemies.PHASE_*
         self._bind()
 
     def _bind(self):
@@ -72,7 +74,7 @@ class State:
     def clone(self):
         """A deep copy for branching search: duplicate ``mem`` and rebind the
         views onto it."""
-        return State(bytearray(self.mem), self.cycle_residual)
+        return State(bytearray(self.mem), self.cycle_residual, self.pass_phase)
 
     # ---- scalars --------------------------------------------------------
     @property

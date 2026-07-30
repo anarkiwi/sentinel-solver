@@ -94,7 +94,6 @@ _MEANIE_ROTATE_STEP = 0x08
 _MEANIE_MAX_ATTEMPTS = 0x02
 
 # Cycle costs, shared with the reference so the two clocks cannot drift.
-_LOOP_PASS = passcost.LOOP_PASS
 _FOREGROUND_CYCLES = passcost.FOREGROUND_CYCLES
 
 _EXPOSURE_FIXED = passcost.EXPOSURE_FIXED
@@ -111,8 +110,11 @@ _UPDATE_DISPATCH_SENTRY = passcost.UPDATE_DISPATCH_SENTRY
 _UPDATE_DISPATCH_SENTINEL = passcost.UPDATE_DISPATCH_SENTINEL
 _UPDATE_GATE_CLOSED = passcost.UPDATE_GATE_CLOSED
 _UPDATE_ABSORBED = passcost.UPDATE_ABSORBED
-_UPDATE_TAIL = passcost.UPDATE_TAIL
-_UPDATE_TAIL_WRAP = passcost.UPDATE_TAIL_WRAP
+_UPDATE_PRND = passcost.UPDATE_PRND
+_UPDATE_CURSOR = passcost.UPDATE_CURSOR
+_UPDATE_CURSOR_WRAP = passcost.UPDATE_CURSOR_WRAP
+_PASS_HEAD = passcost.PASS_HEAD
+_PASS_TAIL = passcost.PASS_TAIL
 _CONSIDER_ENTRY = passcost.CONSIDER_ENTRY
 _CONSIDER_PREAMBLE = passcost.CONSIDER_PREAMBLE
 
@@ -1059,28 +1061,44 @@ def _tick_cooldowns(mem):
 
 
 @njit(cache=True)
-def _update_enemies(mem, zp):
-    """update_enemies $16B5: consider the enemy at the cursor, advance prnd and the
-    cursor (7->0 wrap).  Returns the cycles the call cost the ROM."""
+def _dispatch_cycles(mem):
+    """$16B5..$16E6: the type dispatch and the $16CC absorbed test, which write nothing."""
+    otype = _rd(mem, _OTYPE + _rd(mem, _CURSOR))
+    if otype == _T_SENTINEL:
+        return np.int64(_UPDATE_DISPATCH_SENTINEL)
+    if otype == _T_SENTRY:
+        return np.int64(_UPDATE_DISPATCH_SENTRY)
+    return np.int64(_UPDATE_NOT_ENEMY)
+
+
+@njit(cache=True)
+def _update_body(mem, zp):
+    """$16E6..$16D6: every state write $16B5 makes before the prnd."""
     x = _rd(mem, _CURSOR)
     otype = _rd(mem, _OTYPE + x)
-    if otype == _T_SENTRY or otype == _T_SENTINEL:  # $16BB
-        if otype == _T_SENTINEL:
-            cost = np.int64(_UPDATE_DISPATCH_SENTINEL)
-        else:
-            cost = np.int64(_UPDATE_DISPATCH_SENTRY)
-        if not (mem[_OFLAGS + x] & 0x80):  # $16CC: not absorbed
-            cost += _consider_enemy_state(mem, zp, x)
-        else:  # $16CE: an absorbed slot still discharges its bank
-            cost += np.int64(_UPDATE_ABSORBED)
-            cost += _consider_discharging_enemy_energy(mem, x)[1]
-    else:
-        cost = np.int64(_UPDATE_NOT_ENEMY)
-    _prng_next(mem)  # $16D6
-    cost += np.int64(_UPDATE_TAIL_WRAP) if x == 0 else np.int64(_UPDATE_TAIL)
-    c = _rd(mem, _CURSOR)  # $16D9
-    _wr(mem, _CURSOR, (c - 1) if c > 0 else 7)
-    return cost
+    if otype != _T_SENTRY and otype != _T_SENTINEL:  # $16BB
+        return np.int64(0)
+    if not (mem[_OFLAGS + x] & 0x80):  # $16CC: not absorbed
+        return _consider_enemy_state(mem, zp, x)
+    # $16CE: an absorbed slot still discharges its bank
+    return np.int64(_UPDATE_ABSORBED) + _consider_discharging_enemy_energy(mem, x)[1]
+
+
+@njit(cache=True)
+def _update_cursor(mem):
+    """$16D9: store the advanced prnd stream and decrement the cursor (7->0 wrap)."""
+    x = _rd(mem, _CURSOR)
+    _prng_next(mem)
+    _wr(mem, _CURSOR, (x - 1) if x > 0 else 7)
+    return np.int64(_UPDATE_CURSOR_WRAP) if x == 0 else np.int64(_UPDATE_CURSOR)
+
+
+@njit(cache=True)
+def _update_enemies(mem, zp):
+    """update_enemies $16B5 whole: dispatch, body, prnd and cursor."""
+    cost = _dispatch_cycles(mem)
+    cost += _update_body(mem, zp)
+    return cost + np.int64(_UPDATE_PRND) + _update_cursor(mem)
 
 
 @njit(cache=True)
@@ -1096,28 +1114,43 @@ def _cooldown_frame(mem):
 
 
 @njit(cache=True)
-def _advance(mem, zp, n_frames, plotting, residual):
+def _advance(mem, zp, n_frames, plotting, residual, phase):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
-    Returns the cycles the last frame overspent, owed to the next one."""
+    Returns the sub-pass resume point the last frame stopped at: the cycles it
+    overspent, owed to the next frame, and which segment of the pass owes them."""
     for _ in range(n_frames):
         irq = _cooldown_frame(mem)
         if plotting:
             continue
         budget = residual + np.int64(_FOREGROUND_CYCLES) - irq
         while budget > 0:
-            budget -= _update_enemies(mem, zp) + np.int64(_LOOP_PASS)
+            if phase == 0:
+                budget -= np.int64(_PASS_HEAD) + _dispatch_cycles(mem)
+                phase = 1
+                if budget <= 0:
+                    break
+            if phase == 1:
+                budget -= _update_body(mem, zp) + np.int64(_UPDATE_PRND)
+                phase = 2
+                if budget <= 0:
+                    break
+            budget -= _update_cursor(mem) + np.int64(_PASS_TAIL)
             budget -= _exposure_cycles(mem)
+            phase = 0
         residual = budget
-    return residual
+    return residual, phase
 
 
-def advance_frames(mem, n_frames, plotting, residual):
+def advance_frames(mem, n_frames, plotting, residual, phase):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
-    the play-loop cycle residual in and returning it out.
+    the sub-pass resume point (cycle residual + phase) in and returning it out.
 
     The numpy view shares the caller's buffer, so every mutation lands in the state
     the caller holds -- exactly as :func:`sentinel.los._march_jit` does."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_HI, dtype=np.int64)
-    return int(_advance(view, zp, int(n_frames), bool(plotting), int(residual)))
+    res, ph = _advance(
+        view, zp, int(n_frames), bool(plotting), int(residual), int(phase)
+    )
+    return int(res), int(ph)

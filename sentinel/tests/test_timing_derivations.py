@@ -268,3 +268,75 @@ def test_the_cooldown_tick_prices_every_live_130c_sample():
                 + (loops - decs) * passcost.COOLDOWN_TICK_BYTE_STICK
             )
         assert abs(want - cyc) <= 1, (cyc, decs, loops, want)
+
+
+def _mode_int(hist):
+    """The most common key of a {value: count} histogram, as an int."""
+    return int(max(hist.items(), key=lambda kv: kv[1])[0])
+
+
+def test_the_sub_pass_segments_are_the_measured_split_of_one_pass():
+    """A pass is charged in four segments; each is the mode of its live measurement."""
+    seg = _live_cycles()["pass_segments"]["9795"]
+    assert passcost.PASS_HEAD == _mode_int(seg["head_1289"])
+    assert passcost.PASS_TAIL == _mode_int(seg["tail_12a2_less_191f"])
+    assert passcost.LOOP_PASS == passcost.PASS_HEAD + passcost.PASS_TAIL
+    prnd_cursor = _mode_int(seg["prnd_cursor_16d6"])
+    assert passcost.UPDATE_PRND + passcost.UPDATE_CURSOR == prnd_cursor
+    assert passcost.UPDATE_TAIL == prnd_cursor
+    assert (
+        passcost.UPDATE_TAIL_WRAP == passcost.UPDATE_PRND + passcost.UPDATE_CURSOR_WRAP
+    )
+
+
+def test_the_frame_boundary_lands_inside_the_pass_it_is_charged_against():
+    """The raster IRQ interrupts a pass mid-body far more often than at its edge, so
+    the loop cannot spend a pass atomically."""
+    census = _live_cycles()["frame_boundary_segment"]
+    for board in ("9795", "0335", "0042"):
+        counts = census[board]
+        total = sum(counts.values())
+        assert total >= 1000
+        at_edge = (counts.get("head_1289", 0) + counts.get("dispatch_16b5", 0)) / total
+        assert at_edge < 0.10, (board, at_edge)
+    frac = {
+        b: census[b].get("consider_16e6", 0) / sum(census[b].values())
+        for b in ("9795", "0335", "0042")
+    }
+    assert frac["9795"] > frac["0335"] > frac["0042"]
+    assert frac["0042"] < 0.05
+
+
+def test_the_split_loop_charges_every_segment_exactly_once():
+    """Resuming mid pass must neither re-charge a segment nor skip one: over 400 frames
+    the three segments are entered the same number of times, bar the one in flight."""
+    state = Game.typed(335).state
+    state.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    real = {
+        n: getattr(enemies, n)
+        for n in ("dispatch_cycles", "update_body", "update_cursor")
+    }
+    counts = dict.fromkeys(real, 0)
+
+    def wrap(name):
+        def call(st):
+            counts[name] += 1
+            return real[name](st)
+
+        return call
+
+    for name in real:
+        setattr(enemies, name, wrap(name))
+    try:
+        enemies.advance_frames_python(state, 400)
+    finally:
+        for name, fn in real.items():
+            setattr(enemies, name, fn)
+    assert counts["dispatch_cycles"] > 400
+    assert counts["dispatch_cycles"] - counts["update_body"] in (0, 1)
+    assert counts["update_body"] - counts["update_cursor"] in (0, 1)
+    assert state.pass_phase in (
+        enemies.PHASE_HEAD,
+        enemies.PHASE_BODY,
+        enemies.PHASE_CURSOR,
+    )
