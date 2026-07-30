@@ -140,24 +140,85 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The ls335 facing gap: a seven-enemy board diverges
+## 8. The enemy clock is one pass out of phase at the frame checkpoint
 
-**Wrong.** Replayed against the recorded clock, ls335 enemy facings run ahead of the ROM's.
+**Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795
+and ls335. ls42 is clean: **0 CORE divergences over 3000 frames**.
 
-**Measured.** 89 of the 117 exact spans match. The 28 that miss are 43 enemy-facings, and every
-one is **exactly one extra rotation step**, never an under-rotation
-(`test_every_facing_error_is_exactly_one_extra_rotation`, so an over-correcting fix shows up as
-−1). One- and two-enemy boards are clean (ls0 16/16, ls42 10/10 live) and the gap survives
-re-recording by the checkpoint method, so it is not a recorder artifact. No *constant* cadence
-covers it: `UPDATES_PER_FRAME` swept over 1..8 leaves facings at 89/117 throughout, driving
-below one pass per frame reaches only 92/117 at K=16, and over a uniform updates-per-round `U`
-in 1..40, `U = 1` fixes 10 of the 28 bad spans and no `U` fixes the other 18.
+**Measured, cycle-exact.** VICE's `cpuhistory` stamps every executed instruction with an
+absolute cycle, so a whole pass can be priced by JSR/RTS attribution with the badline
+steal and the interrupt handlers subtracted out. Over 300 live frames per board
+(ls9795 8 enemies, ls335 7, ls42 2) the play loop's idle pass measures **925** cycles on
+ls9795 — exactly what `passcost.idle_pass_cycles` charges — and the model reproduces the
+machine pass for pass until an enemy's `$16E9` gate opens. Four terms were then wrong,
+all four now counted off the image and checked against the trace
+([architecture.md](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy)):
 
-**Resolves.** The cadence must vary *within* a span — `$1289` calls `$16B5` once per main-loop
-pass, so cadence is passes per frame and a foreground `plot_world`/dither/scroll stretch reaches
-no `$16B5` at all. Closing the gap means pricing those stretches better, not picking a better
-number. The phase split scores 90/117 against idle-only 89 and plotting-only 64 — a one-span
-margin, so it rests on the replay floors and action counts, not on facings.
+| term | was | is | why |
+|---|---|---|---|
+| the `$1805` rotation | 0 | 454 + `$1F9F` 1723 | a turn redraws the enemy (`$1881`) |
+| `SCAN_SLOT` | 22 | 27 | the `$17B4 JSR $1887` was not counted |
+| `find_drainable_boulder_or_tree` | `$17B2`'s loop | its own `$1AB0` loop | 12/24 a slot, not 22 |
+| `$130C` | inside a constant `IRQ_CYCLES` | 21 / 33 / 33 + 24 bytes | the walk is 6 dearer per byte that decrements |
+
+The first of those is the largest single error in the model: one rotation is 2177 cycles,
+2.4 passes, and it was free. The last is a 398-cycle swing on **every** frame, which is why
+`IRQ_CYCLES` is now only the fixed part and `cooldown_frame` returns the rest.
+
+**What that fixed, and what it did not.** The pass whose scan was mispriced went from
+7785 charged against 10106 measured to 10112 — a +2321 error to −6. The instrument moved
+ls9795 **515 -> 415** and ls335 **304 -> 285**, and left ls42 at **0**. The gate did
+**not** close.
+
+**Where it stops, exactly.** Fed the machine's own per-pass costs, the model's frame budget
+puts the frame boundary in the right place on 55 of 68 fully-covered ls9795 frames, 61 of
+123 on ls335 and 213 of 279 on ls42, and within **one pass** on nearly all the rest. The
+residue is per-pass: 87% of passes are priced to the cycle and 12% are one cycle out. The
+two measured sources are `$191F` (292, or 291 in 42 of 595 samples) and `$31CA` (427, or 426
+in 16 of 558), each one data-dependent branch — and the `+1` instructions are spread
+uniformly with respect to the badline raster phase, so they are ordinary 6502 branch
+lengths, not VIC alignment. The instrument halts at `$9630`, mid pass sequence, and on an
+8-enemy board each slot is visited only 2.1 times a frame, so being one pass early makes
+`enemy[n].update_cd` read 4 where the machine reads 1 — which is the first divergence on
+ls9795, at frame 77 (and `enemy[6]` at frame 103 on ls335), and the shape of most of
+the 415 and 285.
+
+**Resolves.** Pricing the `$1933`/`$193A` branches in `$191F` and the `$31E9` branch in
+`$31CA` by the data the model already holds, then re-running the three-board gate.
+
+**Not the ray march.** Over those 900 board-frames **no** visibility query reached a march:
+every `$1887` exited on slot type (40/49 cycles) or on the `$18CA` FOV compare (1130). So
+`MARCH_SLOPE`'s corner/quad split (332 on the `$1D5A` four-corner path, 579 on the quad) has
+no leverage on this gate, and it remains unlanded for the reason it always was: pricing them
+apart makes `relative.can_see_object` and `enemies_jit._can_see_object` disagree by 104
+cycles on one long march (ls335, frame 32, observer 4, target 62), which must be reconciled
+first.
+
+**It is NOT the sound engine.** An earlier revision blamed the tune player. Live, `$0CEB`
+never leaves `$80` and `$0C73` never leaves 0, so `$34BA`/`$352C`/`$347D` are constant at
+13/29/27 -- exactly what the model charges -- and `$34DE play_music` never runs. `$3470`,
+which does vary, is not the tune: it is the rotation's own effect, 323 cycles, and it is now
+charged inside `ROTATE`. The SID is in any case a pure cycle sink: there is **no read of
+`$D400-$D41C` anywhere in the image**, by any addressing mode.
+
+**Inert by tier.** The SWEEP and SCRATCH divergences that remain on the clean board (ls42)
+are not the same kind of thing:
+
+- `cursor $0090` and `prng[0..4] $0C7B..$0C7F` (SWEEP) diverge at frame 1 on every board and
+  cannot be seeded away: the instrument halts at `$9630`, mid-pass, so the ROM's sub-pass
+  phase is CPU state — a program counter and a cycle position — that no RAM image carries.
+  They are **not** unconditionally inert: the PRNG feeds
+  `put_object_in_random_tile_below_z $1238`, so a discharge or hyperspace drawn on a drifted
+  stream lands on a different tile, and that surfaces as a CORE `tile[x,y]`/`obj[].x` event.
+  On ls42 no such draw fires in 3000 frames, which is why it stays clean.
+- `fov_relative_h $0C57` (SCRATCH) is written at exactly one site, `$8425`, inside
+  `calculate_relative_angles`, which every visibility query runs. Four of its six readers are
+  inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie rotation,
+  `$84ED`); the other two, `$20C6` and `$20E6`, are in `update_object_on_screen $1F9F` and
+  compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
+  rewritten it, and the plotting readers touch no field the schema carries. The model treats
+  visibility as a query and so leaves its last value in the image where the ROM leaves its
+  own; both are overwritten before use.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -237,9 +298,12 @@ Three distinct failures sit underneath that, and they need different fixes:
 * **Paralysis, 10 boards, was 18.** The planner takes zero actions. The 8 with no landable
   tile at entry at all now play: relocation is a move class
   ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
-  they are **ls7414 won in 59, ls8589 won in 46**, ls9785 lost 28, ls9364 lost 14, ls9795
-  lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- 2 wins where there were 0
-  actions. The other 10 *can* land somewhere but generate no climb candidate from it and
+  they are **ls8589 won in 86**, **ls7414 lost in 70**, ls9785 lost 28, ls9364 lost 14,
+  ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
+  actions. ls7414 and ls8589 were 59 and 46 before the enemy-clock cost terms of
+  [8](#8-the-enemy-clock-is-one-pass-out-of-phase-at-the-frame-checkpoint) landed; every
+  action count on this page that predates them is a different world model, not a different
+  policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
 * **Genuine loss, 23 boards.** Played and lost. Only these are strategy failures, and they

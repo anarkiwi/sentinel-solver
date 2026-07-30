@@ -230,10 +230,19 @@ _PR = "sentinel.projector"
 _PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
 _ENJ = "sentinel.enemies_jit"
+_PC = "sentinel.passcost"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
 _CORE = "driver.core"
+_TICK_EVIDENCE = "test_the_cooldown_tick_prices_every_live_130c_sample"
+
+
+def _tick(note):
+    """A counted $130C branch, checked against the live cycle-exact samples."""
+    return entry(_PC, DERIVED, note, _TICK_EVIDENCE)
+
+
 _ROW = "ray-march/sweep iteration cap; unmeasured"
 _RELOAD = "ROM cooldown reload value; no derivation test"
 _GUARD = "wall-clock guard; unmeasured"
@@ -304,6 +313,39 @@ REGISTRY = {
     ),
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
+    "PAL_FRAME_CYCLES": _d(_PC, "PAL 6569: 312 raster lines x 63 cycles"),
+    "IRQ_CYCLES": entry(
+        _PC,
+        MEASURED,
+        "$9630 + VIC-II DMA steal. The handler IS in the fixture (KERNAL banked out, "
+        "$FFC2/$FFC5 are the game's own RAM) but the DMA steal is hardware, so the "
+        "budget is measured, not counted: the complement of the counted foreground; "
+        "the modelled idle cadence lands inside the live bracket on all 5 boards of "
+        "fixtures/live_pass_rate.json (spanning 1..8 enemies)",
+        "test_irq_cycles_matches_the_live_pass_rate",
+    ),
+    "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
+    "ROTATE_REDRAW": entry(
+        _PC,
+        MEASURED,
+        "$1F9F update_object_on_screen, the redraw a $1805 rotation forces; the mean "
+        "of the 16 live rotations in fixtures/live_pass_cycles.json (1576..1843, 3 "
+        "boards). It varies with the enemy's screen geometry, so the mean is a "
+        "central value, not a bound",
+        "test_rotate_redraw_matches_the_live_object_redraw",
+    ),
+    "_ROTATE_REDRAW": _d(_ENJ, "jit alias of passcost.ROTATE_REDRAW"),
+    "COOLDOWN_TICK_NO_CARRY": _tick("$130C to the $1315 BCC and RTS"),
+    "COOLDOWN_TICK_GATE": _tick("+ the $1317 read and the $1331 $0C50 decrement"),
+    "COOLDOWN_TICK_WALK": _tick("$131C entry + the $132B reload + RTS"),
+    "COOLDOWN_TICK_BYTE_STICK": _tick("$131E LDA/CMP/BCC + $1328 DEX/BPL"),
+    "COOLDOWN_TICK_BYTE_DEC": _tick("+ the $1325 DEC, less the taken BCC"),
+    "_COOLDOWN_TICK_NO_CARRY": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_NO_CARRY"),
+    "_COOLDOWN_TICK_GATE": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_GATE"),
+    "_COOLDOWN_TICK_WALK": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_WALK"),
+    "_COOLDOWN_TICK_BYTE_STICK": _d(_ENJ, "jit alias of COOLDOWN_TICK_BYTE_STICK"),
+    "_COOLDOWN_TICK_BYTE_DEC": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_BYTE_DEC"),
+    "_FOREGROUND_CYCLES": _d(_ENJ, "jit alias of passcost.FOREGROUND_CYCLES"),
     "BASE_CYCLES": _u(_PR, "plot_world base cycles; no fixture"),
     "SETTLE_FIXED_FRAMES": _u(_PR, "fixed settle base; no fixture"),
     "TUNE_TRANSFER_FRAMES": _u(_PR, "transfer tune wait; unmeasured"),

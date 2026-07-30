@@ -19,10 +19,22 @@ Every integer is kept in a Python-int-width (int64) register and masked with
 """
 
 import numpy as np
-from numba import njit, prange
+
+from sentinel import jitcache
+
+jitcache.install()  # must precede numba: the cache key carries the cost constants
+
+from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
+
+from sentinel import passcost  # noqa: E402
 
 LOS_CLEAR = 1
 BLOCKED = 0
+
+# Per-sub-step 6502 cost, bound as njit-visible globals (sentinel.passcost).
+_MARCH_STEP = passcost.MARCH_STEP
+_MARCH_OBJECT = passcost.MARCH_OBJECT
+_MARCH_SLOPE = passcost.MARCH_SLOPE
 
 # Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
 # code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
@@ -321,11 +333,14 @@ def march(
     """March the ray from the given position for at most ``max_steps`` sub-steps.
 
     Fully self-contained: flat, sloping AND object tiles are resolved in numba, so
-    the march never bails back to Python.  Returns the 15-tuple::
+    the march never bails back to Python.  Returns the 16-tuple::
 
         (status, tx, ty,
          px_frac, px_sub, px_whole, pz_frac, pz_sub, pz_whole,
-         py_frac, py_sub, py_whole, c56, cdd, steps_used)
+         py_frac, py_sub, py_whole, c56, cdd, steps_used, cycles)
+
+    ``cycles`` is the march's 6502 cost: ``MARCH_STEP`` per sub-step plus
+    ``MARCH_OBJECT``/``MARCH_SLOPE`` for the sub-steps taking those branches.
 
     ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
     do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.
@@ -334,6 +349,7 @@ def march(
     ty = 0
     tx = 0
     steps = 0
+    cycles = np.int64(0)
     status = BLOCKED
     # Signed 16-bit per-axis vectors: each march sub-step adds this (sign-extended)
     # to the 24-bit (whole:sub:frac) position accumulator.  Used by the flat-tile
@@ -361,6 +377,7 @@ def march(
     cp76 = 0
     while steps < max_steps:
         steps += 1
+        cycles += _MARCH_STEP  # $1CE8: every sub-step pays the fixed body
         # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
         # the axes are independent).
         t = (px_frac & 0xFF) + (ax_lo & 0xFF)
@@ -409,8 +426,8 @@ def march(
                 cp74 = _corner_z(mem, tx, ty + 1)
         b = cb
         if b >= 0xC0:
-            # object tile: resolve the stack surface ($1E3F) then the general
-            # (object-aware) check_flat_tile $1D0D.
+            # object tile: stack surface $1E3F, then object-aware check_flat_tile $1D0D
+            cycles += _MARCH_OBJECT
             z, s79, c0c, c67, c56, cdd, s60 = _object_surface(
                 mem, b, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd
             )
@@ -487,6 +504,7 @@ def march(
                     hit = 1
                     break
                 steps += m
+                cycles += m * _MARCH_STEP  # replayed sub-steps are all flat
                 xacc = (xacc + m * vx16) & 0xFFFF
                 yacc = (yacc + m * vy16) & 0xFFFF
                 px_frac = xacc & 0xFF
@@ -530,8 +548,8 @@ def march(
             status = LOS_CLEAR
             break
         else:
-            # check_sloping_tile $1D46 with the tile's four corner heights hoisted
-            # out of the per-sub-step loop (they are constant for the tile).
+            # check_sloping_tile $1D46, corner heights hoisted out of the sub-step loop
+            cycles += _MARCH_SLOPE
             if cnib == 0x04 or cnib == 0x0C:
                 b8 = pz_whole & 0xFF
                 if b8 >= cp73 or b8 >= cp74 or b8 >= cp75 or b8 >= cp76:
@@ -563,6 +581,7 @@ def march(
         c56,
         cdd,
         steps,
+        cycles,
     )
 
 
@@ -648,6 +667,7 @@ def march_batch(
             _c56,
             _cdd,
             _steps,
+            _cycles,
         ) = march(
             mem,
             ax_lo[i],
