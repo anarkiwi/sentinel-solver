@@ -271,7 +271,7 @@ def _calc_hypotenuse(zp):
     ratio = zp[0x7E]
     y = (ratio >> 1) + (ratio & 1)  # LSR A ; ADC #$0  -> round(ratio/2)
     f = _HYP[y]
-    res_lo, res_hi = los.multiply_double_by_byte(zp[0x5C], f, zp[0x5D])
+    res_lo, res_hi, _c = los.multiply_double_by_byte(zp[0x5C], f, zp[0x5D])
     # LSR $0075 ; ROR $0074  -> halve the 16-bit result
     new_hi = res_hi >> 1
     new_lo = ((res_hi & 1) << 7) | (res_lo >> 1)
@@ -461,6 +461,7 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         _vertical_angle(zp, phi, v_angle_obs)  # sets zp[$8A]/zp[$8B] = vertical bearing
         v_lo, v_hi = zp[0x8A], zp[0x8B]
         vec = los.prepare_vector_from_angle(h_hi, h_lo, v_hi, v_lo, v_lo)
+        out["march_cycles"] += vec.cycles  # $1C54, priced from its own shift-adds
         _tx, _ty, los_ok, march_cycles = los.check_for_line_of_sight_to_tile(
             vec, state, observer, do_los_checks=do_los, max_steps=max_steps
         )

@@ -15,7 +15,7 @@ from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import memmap as mm, passcost  # noqa: E402
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
-from sentinel.los_jit import (
+from sentinel.los_jit import (  # noqa: E402
     march,
     LOS_CLEAR,
     _vsin_cos,
@@ -126,6 +126,7 @@ _SEE_SLOT_EMPTY = passcost.SEE_SLOT_EMPTY
 _SEE_SLOT_WRONG_TYPE = passcost.SEE_SLOT_WRONG_TYPE
 _SEE_GEOMETRY = passcost.SEE_GEOMETRY
 _SEE_PROBE = passcost.SEE_PROBE
+_PREP_VEC = passcost.PREP_VEC
 
 _SCAN_SLOT = passcost.SCAN_SLOT
 _SCAN_FIXED = passcost.SCAN_FIXED
@@ -438,7 +439,7 @@ def _calc_hypotenuse(zp):
     """calculate_hypotenuse $937F: distance = max + f*min/512."""
     ratio = zp[0x7E]
     f = HYP[(ratio >> 1) + (ratio & 1)]
-    res_lo, res_hi = _vmul_dbl_by_byte(zp[0x5C], f, zp[0x5D])
+    res_lo, res_hi, _c = _vmul_dbl_by_byte(zp[0x5C], f, zp[0x5D])
     new_hi = res_hi >> 1
     new_lo = ((res_hi & 1) << 7) | (res_lo >> 1)
     s = new_lo + zp[0x7A]
@@ -509,14 +510,20 @@ def _relative_angles(mem, zp, observer, target):
 def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     """prepare_vector_from_angle $1C54, the standalone entry the enemy probes use.
 
-    Returns (vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30)."""
-    sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v = _vsin_cos(v_angle, v_frac)
-    s33, s32 = _vproc_sc(cos_lo_v, cos_hi_v)
-    s30, s2d = _vproc_sc(sin_lo_v, sin_hi_v)
-    h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi = _vsin_cos(h_angle, h_frac)
-    vy_hi, vy_lo = _vmul_dbl_dbl(h_cos_lo, h_cos_hi, s32, s33)
-    vx_hi, vx_lo = _vmul_dbl_dbl(h_sin_lo, h_sin_hi, s32, s33)
-    return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30
+    Returns (vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30, cycles)."""
+    sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v, cyc = _vsin_cos(v_angle, v_frac)
+    cyc += _PREP_VEC
+    s33, s32, c = _vproc_sc(cos_lo_v, cos_hi_v)
+    cyc += c
+    s30, s2d, c = _vproc_sc(sin_lo_v, sin_hi_v)
+    cyc += c
+    h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi, c = _vsin_cos(h_angle, h_frac)
+    cyc += c
+    vy_hi, vy_lo, c = _vmul_dbl_dbl(h_cos_lo, h_cos_hi, s32, s33)
+    cyc += c
+    vx_hi, vx_lo, c = _vmul_dbl_dbl(h_sin_lo, h_sin_hi, s32, s33)
+    cyc += c
+    return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30, cyc
 
 
 @njit(cache=True)
@@ -556,9 +563,10 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
             do_los = 0x00
         zp[0x80] = plo
         _vertical_angle(zp, phi, v_angle_obs)
-        vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30 = _prep_vec_angle(
+        vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30, pcyc = _prep_vec_angle(
             angle_hi, angle_lo, zp[0x8B], zp[0x8A]
         )
+        total_march_cycles += pcyc  # $1C54, priced from its own shift-adds
         c56 = (_rd(mem, 0x0C56) >> 1) & 0xFF  # $1CDF LSR $0C56
         cdd = (_rd(mem, 0x0CDD) >> 1) & 0xFF  # $1CE2 LSR $0CDD
         mem[0x0C56] = np.uint8(c56)
