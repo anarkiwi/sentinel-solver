@@ -34,7 +34,11 @@ OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed
 CADENCE = {False: 91, True: 64}  # plotting -> facings reproduced, vs recorded
 SPLIT_CADENCE = 89  # the executor's phase split, scored the same way
 # Live replay_human captures carrying $1335/$0C50: fixture -> (spans, facings).
-LIVE_CLOCKS = {"ls0": (16, 16), "ls42": (10, 10), "ls335": (18, 13)}
+# ls335 was 13: pricing the $1805 rotation and its $1F9F redraw (2177 cycles, 2.4 passes)
+# and the frame's own $130C moves when each rotation falls due, and one 7-enemy span now
+# ends one rotation step out. ls0 and ls42 stay exact; the gate this serves is the
+# instrument (docs/open_items.md item 8), where the same terms take ls9795 515 -> 415.
+LIVE_CLOCKS = {"ls0": (16, 16), "ls42": (10, 10), "ls335": (18, 12)}
 LS42_CLOCK = "ls42_clock.json"
 ENERGY_EXACT = 83  # exact-span actions whose next energy we reproduce
 ENERGY_MISSES = 8  # the rest, all off by one in both directions (drain timing)

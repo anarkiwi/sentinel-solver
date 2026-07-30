@@ -6,9 +6,14 @@ asserts byte-identical 64 KB images between the two over hundreds of frames.
 """
 
 import numpy as np
-from numba import njit
 
-from sentinel import memmap as mm, passcost
+from sentinel import jitcache
+
+jitcache.install()  # must precede numba: the cache key carries the cost constants
+
+from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
+
+from sentinel import memmap as mm, passcost  # noqa: E402
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
 from sentinel.los_jit import (
     march,
@@ -122,6 +127,37 @@ _SEE_PROBE = passcost.SEE_PROBE
 
 _SCAN_SLOT = passcost.SCAN_SLOT
 _SCAN_FIXED = passcost.SCAN_FIXED
+
+_TILE_SCAN_FIXED = passcost.TILE_SCAN_FIXED
+_TILE_SCAN_EMPTY = passcost.TILE_SCAN_EMPTY
+_TILE_SCAN_OTHER = passcost.TILE_SCAN_OTHER
+_TILE_SCAN_STACKED = passcost.TILE_SCAN_STACKED
+_TILE_SCAN_LOOSE = passcost.TILE_SCAN_LOOSE
+_TILE_SCAN_TILE = passcost.TILE_SCAN_TILE
+_TILE_SCAN_NO_TILE = passcost.TILE_SCAN_NO_TILE
+_TILE_SCAN_TOP = passcost.TILE_SCAN_TOP
+_TILE_SCAN_WRONG_TOP = passcost.TILE_SCAN_WRONG_TOP
+_TILE_SCAN_SEE = passcost.TILE_SCAN_SEE
+_TILE_SCAN_NEXT = passcost.TILE_SCAN_NEXT
+_TILE_SCAN_HIT = passcost.TILE_SCAN_HIT
+
+_MEANIE_SCAN_SLOT = passcost.MEANIE_SCAN_SLOT
+_MEANIE_SCAN_OTHER = passcost.MEANIE_SCAN_OTHER
+_MEANIE_SCAN_DX = passcost.MEANIE_SCAN_DX
+_MEANIE_SCAN_DY = passcost.MEANIE_SCAN_DY
+_MEANIE_SCAN_SEE = passcost.MEANIE_SCAN_SEE
+_MEANIE_SCAN_DONE = passcost.MEANIE_SCAN_DONE
+
+_ROTATE_GATE = passcost.ROTATE_GATE
+_ROTATE = passcost.ROTATE
+_ROTATE_REDRAW = passcost.ROTATE_REDRAW
+_MEANIE_ROTATE = passcost.MEANIE_ROTATE
+
+_COOLDOWN_TICK_NO_CARRY = passcost.COOLDOWN_TICK_NO_CARRY
+_COOLDOWN_TICK_GATE = passcost.COOLDOWN_TICK_GATE
+_COOLDOWN_TICK_WALK = passcost.COOLDOWN_TICK_WALK
+_COOLDOWN_TICK_BYTE_STICK = passcost.COOLDOWN_TICK_BYTE_STICK
+_COOLDOWN_TICK_BYTE_DEC = passcost.COOLDOWN_TICK_BYTE_DEC
 
 _MAX_STEPS = 20000  # can_see_object's march bound (the ROM's board-edge exit)
 ZP_LO = 0x50  # the zero-page window the geometry touches ($0050..$008B)
@@ -754,28 +790,37 @@ def _do_hyperspace(mem):
 def _find_drainable_boulder_or_tree(mem, zp, enemy):
     """find_drainable_boulder_or_tree_on_stack $1AB0; (-1, cycles) when nothing is
     drainable."""
-    cost = np.int64(_SCAN_FIXED)
+    cost = np.int64(_TILE_SCAN_FIXED)
     for x in range(_NUM_SLOTS - 1, -1, -1):
-        cost += np.int64(_SCAN_SLOT)
         flags = _rd(mem, _OFLAGS + x)
         if flags & 0x80:  # empty slot
+            cost += np.int64(_TILE_SCAN_EMPTY)
             continue
         if not (flags >= 0x40 or _rd(mem, _OTYPE + x) == _T_BOULDER):
+            cost += np.int64(_TILE_SCAN_OTHER)
             continue
+        cost += np.int64(
+            (_TILE_SCAN_STACKED if flags >= 0x40 else _TILE_SCAN_LOOSE)
+            + _TILE_SCAN_TILE
+        )
         tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
         if tb < _OBJECT_TILE:
+            cost += np.int64(_TILE_SCAN_NO_TILE)
             continue
         y = tb & 0x3F  # topmost object of the tile
         otype = _rd(mem, _OTYPE + y)
+        cost += np.int64(_TILE_SCAN_TOP)
         if otype != _T_TREE and otype != _T_BOULDER:
+            cost += np.int64(_TILE_SCAN_WRONG_TOP)
             continue
         _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
             mem, zp, enemy, y, otype, _FOV_SCAN
         )
-        cost += scost
+        cost += np.int64(_TILE_SCAN_SEE) + scost
         if full:
             _wr(mem, _TARGETED_SLOT, y)
-            return y, cost
+            return y, cost + np.int64(_TILE_SCAN_HIT)
+        cost += np.int64(_TILE_SCAN_NEXT)
     return -1, cost
 
 
@@ -794,25 +839,28 @@ def _consider_creating_meanie(mem, zp, enemy):
     of the targeted player, in both axes, becomes a meanie owned by `enemy`.
     Returns (created, cycles)."""
     player = _rd(mem, _TARGET + enemy)
-    cost = np.int64(_SCAN_FIXED)
+    cost = np.int64(0)
     while True:
-        cost += np.int64(_SCAN_SLOT)
         sc = _rd(mem, _M_SEARCH + enemy)
         if sc == 0:  # $198D: scanned everything -> no meanie this pass
             _wr(mem, _M_SCANS + enemy, _rd(mem, _M_SCANS + enemy) + 1)
             _wr(mem, _M_FAILED + enemy, player)
-            return False, cost
+            return False, cost + np.int64(_MEANIE_SCAN_DONE)
         _wr(mem, _M_SEARCH + enemy, sc - 1)
         slot = sc - 1  # $199B DEY
         if mem[_OFLAGS + slot] & 0x80:
+            cost += np.int64(_MEANIE_SCAN_SLOT)
             continue
         if mem[_OTYPE + slot] != _T_TREE:
+            cost += np.int64(_MEANIE_SCAN_OTHER)
             continue
+        cost += np.int64(_MEANIE_SCAN_OTHER + _MEANIE_SCAN_DX)
         dx = (_rd(mem, _OX + player) - _rd(mem, _OX + slot)) & 0xFF
         if dx >= 0x80:
             dx = 0x100 - dx  # $19B5 abs
         if dx >= 0x0A:
             continue
+        cost += np.int64(_MEANIE_SCAN_DY)
         dy = (_rd(mem, _OY + player) - _rd(mem, _OY + slot)) & 0xFF
         if dy >= 0x80:
             dy = 0x100 - dy
@@ -821,7 +869,7 @@ def _consider_creating_meanie(mem, zp, enemy):
         _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
             mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
         )
-        cost += scost
+        cost += np.int64(_MEANIE_SCAN_SEE) + scost
         if not full:
             continue
         _wr(mem, _M_OBJECT + enemy, slot)  # $19E1
@@ -863,7 +911,8 @@ def _update_meanie(mem, zp, enemy):
             step = 0x100 - _MEANIE_ROTATE_STEP
         _wr(mem, _OHANG + meanie, _rd(mem, _OHANG + meanie) + step)
         _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_ROTATE)
-        return cost
+        # $1755 JMP $187B: a meanie's turn redraws it too
+        return cost + np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW)
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(mem, enemy)
         return cost
@@ -983,21 +1032,30 @@ def _consider_enemy_state(mem, zp, enemy):
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
         return cost
 
+    cost += np.int64(_ROTATE_GATE)
     if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
         _rotate_enemy(mem, enemy)
+        cost += np.int64(_ROTATE + _ROTATE_REDRAW)
     return cost
 
 
 @njit(cache=True)
 def _tick_cooldowns(mem):
-    """update_enemy_cooldowns $1317: the 1-in-3 gate, then every cooldown >= 2."""
+    """update_enemy_cooldowns $1317: the 1-in-3 gate, then every cooldown >= 2.
+
+    Returns its cycles; the 24-byte walk is 6 dearer per byte that decrements."""
     if mem[_GATE] != 0:
         _wr(mem, _GATE, _rd(mem, _GATE) - 1)
-        return
+        return np.int64(_COOLDOWN_TICK_GATE)
+    cost = np.int64(_COOLDOWN_TICK_WALK)
     for addr in range(_DRAIN_CD, _UPD_CD + 8):
         if mem[addr] >= _COOLDOWN_STICK:
             mem[addr] = np.uint8(mem[addr] - 1)
+            cost += np.int64(_COOLDOWN_TICK_BYTE_DEC)
+        else:
+            cost += np.int64(_COOLDOWN_TICK_BYTE_STICK)
     _wr(mem, _GATE, 2)
+    return cost
 
 
 @njit(cache=True)
@@ -1027,13 +1085,14 @@ def _update_enemies(mem, zp):
 
 @njit(cache=True)
 def _cooldown_frame(mem):
-    """$130C: the per-frame Bresenham gate on update_enemy_cooldowns."""
+    """$130C: the per-frame Bresenham gate on update_enemy_cooldowns, and its cycles."""
     if mem[_NOT_ACTED] & 0x80:  # player has not yet acted
-        return
+        return np.int64(0)
     acc = _rd(mem, _BRESENHAM) + _BRESENHAM_STEP
     _wr(mem, _BRESENHAM, acc)
     if acc > 0xFF:  # $1315 BCC skip
-        _tick_cooldowns(mem)
+        return _tick_cooldowns(mem)
+    return np.int64(_COOLDOWN_TICK_NO_CARRY)
 
 
 @njit(cache=True)
@@ -1042,10 +1101,10 @@ def _advance(mem, zp, n_frames, plotting, residual):
 
     Returns the cycles the last frame overspent, owed to the next one."""
     for _ in range(n_frames):
-        _cooldown_frame(mem)
+        irq = _cooldown_frame(mem)
         if plotting:
             continue
-        budget = residual + np.int64(_FOREGROUND_CYCLES)
+        budget = residual + np.int64(_FOREGROUND_CYCLES) - irq
         while budget > 0:
             budget -= _update_enemies(mem, zp) + np.int64(_LOOP_PASS)
             budget -= _exposure_cycles(mem)

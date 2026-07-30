@@ -140,93 +140,66 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock still diverges on many-enemy boards; the residue is per-pass
+## 8. The enemy clock is one pass out of phase at the frame checkpoint
 
-**Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795 (515)
-and ls335 (304). ls42 is clean: **0 CORE divergences over 3000 frames**.
+**Wrong.** `driver.instrument --frames 3000 --follow` reports CORE divergences on ls9795
+and ls335. ls42 is clean: **0 CORE divergences over 3000 frames**.
 
-**Measured, live, to the cycle.** `registers_get` exposes the raster line and the cycle within
-it, and PAL is 312 x 63 = 19656, so `line * 63 + cyc` timestamps a checkpoint hit exactly.
-Over 900 consecutive `$16B5` hits on ls9795 with the clock unfrozen (783 usable deltas):
+**Measured, cycle-exact.** VICE's `cpuhistory` stamps every executed instruction with an
+absolute cycle, so a whole pass can be priced by JSR/RTS attribution with the badline
+steal and the interrupt handlers subtracted out. Over 300 live frames per board
+(ls9795 8 enemies, ls335 7, ls42 2) the play loop's idle pass measures **925** cycles on
+ls9795 — exactly what `passcost.idle_pass_cycles` charges — and the model reproduces the
+machine pass for pass until an enemy's `$16E9` gate opens. Four terms were then wrong,
+all four now counted off the image and checked against the trace
+([architecture.md](architecture.md#passes-per-frame-is-a-cycle-budget-not-a-constant-passcostpy)):
 
-- the **modal** pass costs **925 cycles, exactly what the model charges**;
-- the **mean** is **1014.7**, with a spread to 1180.
+| term | was | is | why |
+|---|---|---|---|
+| the `$1805` rotation | 0 | 454 + `$1F9F` 1723 | a turn redraws the enemy (`$1881`) |
+| `SCAN_SLOT` | 22 | 27 | the `$17B4 JSR $1887` was not counted |
+| `find_drainable_boulder_or_tree` | `$17B2`'s loop | its own `$1AB0` loop | 12/24 a slot, not 22 |
+| `$130C` | inside a constant `IRQ_CYCLES` | 21 / 33 / 33 + 24 bytes | the walk is 6 dearer per byte that decrements |
 
-The VIC state is constant across every sample and was read rather than assumed:
-`$D011 & $7F = 27` (YSCROLL **3**, DEN set), `$D016 & $18 = 24`, and **`$D015 = 0` -- no
-sprite is ever enabled**, so there is no sprite-DMA term at all. The steal is badlines only.
+The first of those is the largest single error in the model: one rotation is 2177 cycles,
+2.4 passes, and it was free. The last is a 398-cycle swing on **every** frame, which is why
+`IRQ_CYCLES` is now only the fixed part and `cooldown_frame` returns the rest.
 
-Charging each pass the badlines it crosses -- a display-window line (`$30..$F7`) whose low
-three bits equal YSCROLL, at **42 cycles** each -- collapses the residual onto 925:
+**What that fixed, and what it did not.** The pass whose scan was mispriced went from
+7785 charged against 10106 measured to 10112 — a +2321 error to −6. The instrument moved
+ls9795 **515 -> 415** and ls335 **304 -> 285**, and left ls42 at **0**. The gate did
+**not** close.
 
-| | within +-3 of the 925 mode |
-|---|---|
-| no badline term (today) | 242 / 783 |
-| badlines charged per pass | **500 / 783** |
+**Where it stops, exactly.** Fed the machine's own per-pass costs, the model's frame budget
+puts the frame boundary in the right place on 55 of 68 fully-covered ls9795 frames, 61 of
+123 on ls335 and 213 of 279 on ls42, and within **one pass** on nearly all the rest. The
+residue is per-pass: 87% of passes are priced to the cycle and 12% are one cycle out. The
+two measured sources are `$191F` (292, or 291 in 42 of 595 samples) and `$31CA` (427, or 426
+in 16 of 558), each one data-dependent branch — and the `+1` instructions are spread
+uniformly with respect to the badline raster phase, so they are ordinary 6502 branch
+lengths, not VIC alignment. The instrument halts at `$9630`, mid pass sequence, and on an
+8-enemy board each slot is visited only 2.1 times a frame, so being one pass early makes
+`enemy[n].update_cd` read 4 where the machine reads 1 — which is the first divergence on
+ls9795, at frame 77 (and `enemy[6]` at frame 103 on ls335), and the shape of most of
+the 415 and 285.
 
-A sweep over YSCROLL 0..7 and steal 40..43 picks `yscroll=3, steal=42` on the timing alone,
-independently recovering the value in `$D011`. So the term is deterministic arithmetic, not
-hardware lore, and the accumulator already holds the frame position it needs.
+**Resolves.** Pricing the `$1933`/`$193A` branches in `$191F` and the `$31E9` branch in
+`$31CA` by the data the model already holds, then re-running the three-board gate.
 
-**The fourth mechanism: five raster interrupts per frame, not one.** `$95FA LDA $9AF6 /
-BEQ $9630` gates a split-raster chain that is live in play. `$95FF..$961D` walks an index
-`$9588` down 4->0 (wrapping), programs `$D012` from the table at **`$9589 = 35 D5 AD 85 5D`**
--- raster lines **53, 213, 173, 133, 93** -- and `$D018` from `$958E`; then `$961E CPX $9593`
-takes the full `$9630` body only for `X == $9593` (0 in the image), which is the entry whose
-line was programmed one step earlier: **line 213**. So four *short* interrupts fire at lines
-53, 93, 133, 173 and one full one at 213. The `$9630` marker the driver frame-steps on is only
-the last of the five, which is exactly why frame-anchored sampling never showed the other four.
+**Not the ray march.** Over those 900 board-frames **no** visibility query reached a march:
+every `$1887` exited on slot type (40/49 cycles) or on the `$18CA` FOV compare (1130). So
+`MARCH_SLOPE`'s corner/quad split (332 on the `$1D5A` four-corner path, 579 on the quad) has
+no leverage on this gate, and it remains unlanded for the reason it always was: pricing them
+apart makes `relative.can_see_object` and `enemies_jit._can_see_object` disagree by 104
+cycles on one long march (ls335, frame 32, observer 4, target 62), which must be reconciled
+first.
 
-The short path is countable: 7 (IRQ) + `$95E9..$9621` + `$9623 LDA $0C4D / BPL` +
-`$962D JMP $969A` + `PLA/TAY/PLA/TAX/PLA/RTI` = **119 cycles**. Line 53 sits inside the 37..52
-start-line band where the 197 unexplained passes were: they straddle it and pay it. Charging
-badlines *and* short interrupts against the captured samples:
-
-| terms charged | within +-3 of the mode |
-|---|---|
-| none (today) | 242 / 841 |
-| badlines only | 500 / 841 |
-| badlines + short IRQ at 119 | 673 / 841 |
-| badlines + short IRQ at 121 | **673 / 841** |
-
-The 2-cycle gap between the counted 119 and the measured optimum is the interrupted
-instruction finishing before the interrupt is taken.
-
-**What this makes `IRQ_CYCLES`.** It stops being a per-frame lump. Per frame the machine spends
-4 x 119 on short interrupts, 25 x 42 on badlines, and the rest of the non-foreground time in
-the full `$9630` body; against today's calibrated foreground of 15514 that leaves
-**`IRQ_FULL` ~ 2608** as the only remaining per-frame constant, with the other ~1534 charged
-per pass by where it sits in the frame. Both terms are deterministic given the frame position
-the accumulator already tracks, and both come off the image -- the split table, the selector
-and the handler are all in `out/sentinel_stage2.bin`.
-
-**Not implemented.** The measurement and the arithmetic are here; the accumulator change (both
-twins), the removal of `IRQ_CYCLES`, and the re-derivation of the five-board bracket are not
-done.
-
-One caveat on the sample: the `$9630` frame checkpoint's hit count did not advance between
-`$16B5` stops, so the timestamps span a single raster sweep and passes that wrap line 311 were
-dropped. The IRQ handler's own wall cost therefore does not appear in this data and
-`IRQ_CYCLES` cannot yet be re-derived as handler-only.
-
-**It is NOT the sound engine.** An earlier revision of this item blamed the tune player. Live,
-across those same 1122 passes, `$0CEB` never leaves `$80` and `$0C73` never leaves 0, so
-`$34BA`/`$352C`/`$347D` are constant at 13/29/27 -- exactly what the model charges -- and
-`$34DE play_music` never runs. The excursions that suggested otherwise were an artifact of the
-jennings harness, which injects only `$130C`/`$1635` for the IRQ and so never runs
-`$9630 DEC $0CDF`. The SID is in any case a pure cycle sink: there is **no read of
-`$D400-$D41C` anywhere in the image**, by any addressing mode, so nothing it writes re-enters
-the model.
-
-**A second, smaller term, and a latent twin bug behind it.** `check_sloping_tile $1D46` spans
-646..1384 cycles and is charged its mean. Measured, the corner path (slope nibble 4 or 12, the
-`$1D5A` four-corner compare) is 332 and the quad path 579. Pricing them apart is a one-line
-change and it is **not landed**: it makes `relative.can_see_object` and
-`enemies_jit._can_see_object` disagree by 104 cycles on one long march (ls335, frame 32,
-observer 4, target 62). Replayed in isolation the two agree on all 64 slots of that scan, so
-the difference is in a call the two implementations make differently *inside* the scan, not in
-the march. The byte-identity test could not see this before -- both reach the same LOS verdict
--- and sees it now only because cost is part of the state. Reconcile that first.
+**It is NOT the sound engine.** An earlier revision blamed the tune player. Live, `$0CEB`
+never leaves `$80` and `$0C73` never leaves 0, so `$34BA`/`$352C`/`$347D` are constant at
+13/29/27 -- exactly what the model charges -- and `$34DE play_music` never runs. `$3470`,
+which does vary, is not the tune: it is the rotation's own effect, 323 cycles, and it is now
+charged inside `ROTATE`. The SID is in any case a pure cycle sink: there is **no read of
+`$D400-$D41C` anywhere in the image**, by any addressing mode.
 
 **Inert by tier.** The SWEEP and SCRATCH divergences that remain on the clean board (ls42)
 are not the same kind of thing:
@@ -325,9 +298,12 @@ Three distinct failures sit underneath that, and they need different fixes:
 * **Paralysis, 10 boards, was 18.** The planner takes zero actions. The 8 with no landable
   tile at entry at all now play: relocation is a move class
   ([architecture.md](architecture.md#hyperspace-death-and-the-win)), and re-run uncapped
-  they are **ls7414 won in 59, ls8589 won in 46**, ls9785 lost 28, ls9364 lost 14, ls9795
-  lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- 2 wins where there were 0
-  actions. The other 10 *can* land somewhere but generate no climb candidate from it and
+  they are **ls8589 won in 86**, **ls7414 lost in 70**, ls9785 lost 28, ls9364 lost 14,
+  ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
+  actions. ls7414 and ls8589 were 59 and 46 before the enemy-clock cost terms of
+  [8](#8-the-enemy-clock-is-one-pass-out-of-phase-at-the-frame-checkpoint) landed; every
+  action count on this page that predates them is a different world model, not a different
+  policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
 * **Genuine loss, 23 boards.** Played and lost. Only these are strategy failures, and they

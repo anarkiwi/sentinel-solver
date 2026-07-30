@@ -75,15 +75,23 @@ def enemy_slots(state):
 # ---------------------------------------------------------------------------
 def tick_cooldowns(state):
     """$1317: on 2-of-3 rounds decrement the $0C50 gate; on the third, decrement
-    every draining/rotation/update cooldown that is >= 2 (they stick at 1)."""
+    every draining/rotation/update cooldown that is >= 2 (they stick at 1).
+
+    Returns its cycles: the 24-byte walk is 6 dearer per byte that actually decrements,
+    so the raster IRQ's own length is a property of the board's cooldown state."""
     mem = state.mem
     if mem[mm.COOLDOWN_GATE] != 0:
         mem[mm.COOLDOWN_GATE] = (mem[mm.COOLDOWN_GATE] - 1) & 0xFF
-        return
+        return passcost.COOLDOWN_TICK_GATE
+    cost = passcost.COOLDOWN_TICK_WALK
     for addr in range(mm.ENEMIES_DRAINING_COOLDOWN, mm.ENEMIES_UPDATE_COOLDOWN + 8):
         if mem[addr] >= COOLDOWN_STICK:
             mem[addr] -= 1
+            cost += passcost.COOLDOWN_TICK_BYTE_DEC
+        else:
+            cost += passcost.COOLDOWN_TICK_BYTE_STICK
     mem[mm.COOLDOWN_GATE] = 2
+    return cost
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +287,11 @@ def _consider_enemy_state(state, enemy):
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         return cost
 
-    # no_drain ($17F9): rotate if the rotation cooldown is low.
+    # no_drain ($17F9): rotate if the cooldown is low; the turn redraws the enemy
+    cost += passcost.ROTATE_GATE
     if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
         _rotate_enemy(state, enemy)
+        cost += passcost.ROTATE + passcost.ROTATE_REDRAW
     return cost
 
 
@@ -306,34 +316,37 @@ def _consider_creating_meanie(state, enemy):
     (created, cycles); created is False when the whole scan came up empty."""
     mem = state.mem
     player = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
-    cost = passcost.SCAN_FIXED
+    cost = 0
     while True:
-        cost += passcost.SCAN_SLOT
         sc = mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy]
         if sc == 0:  # $198D: scanned everything -> no meanie this pass
             mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = (
                 mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] + 1
             ) & 0xFF
             mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy] = player
-            return False, cost
+            return False, cost + passcost.MEANIE_SCAN_DONE
         mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = sc - 1
         slot = sc - 1  # $199B DEY: the object index this iteration tests
         if state.obj_flags[slot] & 0x80:  # empty slot
+            cost += passcost.MEANIE_SCAN_SLOT
             continue
         if state.obj_type[slot] != mm.T_TREE:  # not a tree
+            cost += passcost.MEANIE_SCAN_OTHER
             continue
+        cost += passcost.MEANIE_SCAN_OTHER + passcost.MEANIE_SCAN_DX
         dx = (state.obj_x[player] - state.obj_x[slot]) & 0xFF
         if dx >= 0x80:
             dx = 0x100 - dx  # $19B5 abs
         if dx >= 0x0A:  # more than 10 tiles away in x
             continue
+        cost += passcost.MEANIE_SCAN_DY
         dy = (state.obj_y[player] - state.obj_y[slot]) & 0xFF
         if dy >= 0x80:
             dy = 0x100 - dy
         if dy >= 0x0A:  # more than 10 tiles away in y
             continue
         see = relative.can_see_object(state, enemy, slot, mm.T_TREE, FOV_CREATE_MEANIE)
-        cost += _see_cost(see)
+        cost += passcost.MEANIE_SCAN_SEE + _see_cost(see)
         if not see["full"]:  # enemy hasn't a clear sight of the tree
             continue
         # $19E1: convert the tree into a meanie owned by this enemy.
@@ -374,7 +387,8 @@ def _update_meanie(state, enemy):
         step = MEANIE_ROTATE_STEP if not (c57 & 0x80) else (0x100 - MEANIE_ROTATE_STEP)
         state.obj_h_angle[meanie] = (state.obj_h_angle[meanie] + step) & 0xFF
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_ROTATE
-        return cost
+        # $1755 JMP $187B: a meanie's turn redraws it too
+        return cost + passcost.MEANIE_ROTATE + passcost.ROTATE_REDRAW
     if target != mem[mm.PLAYER_OBJECT]:  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(state, enemy)
         return cost
@@ -511,26 +525,34 @@ def _find_drainable_boulder_or_tree(state, enemy):
     boulder or a stacked object (flags >= $40) marks a candidate tile; the tile's
     topmost object -- if a tree or boulder the enemy can fully see -- is drained.
     Lone ground trees are not drainable this way.  Returns (slot or None, cycles)."""
-    cost = passcost.SCAN_FIXED
+    cost = passcost.TILE_SCAN_FIXED
     for x in range(mm.NUM_SLOTS - 1, -1, -1):
-        cost += passcost.SCAN_SLOT
         flags = state.obj_flags[x]
         if flags & 0x80:  # empty slot
+            cost += passcost.TILE_SCAN_EMPTY
             continue
         if not (flags >= 0x40 or state.obj_type[x] == mm.T_BOULDER):
+            cost += passcost.TILE_SCAN_OTHER
             continue
+        cost += (
+            passcost.TILE_SCAN_STACKED if flags >= 0x40 else passcost.TILE_SCAN_LOOSE
+        ) + passcost.TILE_SCAN_TILE
         tb = terrain.tile_byte(state, state.obj_x[x], state.obj_y[x])
         if tb < mm.OBJECT_TILE:  # no object on the tile (shouldn't happen)
+            cost += passcost.TILE_SCAN_NO_TILE
             continue
         y = tb & 0x3F  # topmost object of the tile
         otype = state.obj_type[y]
+        cost += passcost.TILE_SCAN_TOP
         if otype not in (mm.T_TREE, mm.T_BOULDER):
+            cost += passcost.TILE_SCAN_WRONG_TOP
             continue
         see = relative.can_see_object(state, enemy, y, otype, FOV_SCAN)
-        cost += _see_cost(see)
+        cost += passcost.TILE_SCAN_SEE + _see_cost(see)
         if see["full"]:
             state.mem[mm.TARGETED_OBJECT_SLOT] = y
-            return y, cost
+            return y, cost + passcost.TILE_SCAN_HIT
+        cost += passcost.TILE_SCAN_NEXT
     return None, cost
 
 
@@ -594,14 +616,16 @@ def cooldown_frame(state):
     $0CD8, so exactly one $130C per frame).  Advance the integer Bresenham accumulator
     $1335 += $CD and, only on carry (205/256), run update_enemy_cooldowns ($1317, itself
     1-in-3 via the $0C50 gate).  Suppressed until the player's first action ($0CE5,
-    $9659/$367f).  All integer -- no rounding to drift."""
+    $9659/$367f).  All integer -- no rounding to drift.  Returns its cycles, which the
+    foreground loses from that frame's budget."""
     mem = state.mem
     if mem[mm.PLAYER_NOT_ACTED] & 0x80:  # player has not yet acted -> no cooldown ticks
-        return
+        return 0
     acc = mem[mm.COOLDOWN_BRESENHAM] + mm.COOLDOWN_BRESENHAM_STEP
     mem[mm.COOLDOWN_BRESENHAM] = acc & 0xFF
     if acc > 0xFF:  # $1315 BCC skip -> only the carry runs the cooldown decrement
-        tick_cooldowns(state)
+        return tick_cooldowns(state)
+    return passcost.COOLDOWN_TICK_NO_CARRY
 
 
 def advance_frame_python(state, plotting=False):
@@ -611,10 +635,10 @@ def advance_frame_python(state, plotting=False):
     so an enemy the tick makes due rotates in the SAME frame, not the next one. Ticking
     after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
     """
-    cooldown_frame(state)
+    irq = cooldown_frame(state)
     if plotting:
         return
-    budget = state.cycle_residual + passcost.FOREGROUND_CYCLES
+    budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
     while budget > 0:
         budget -= update_enemies(state) + passcost.LOOP_PASS
         budget -= passcost.exposure_cycles(state.mem)

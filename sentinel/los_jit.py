@@ -19,9 +19,14 @@ Every integer is kept in a Python-int-width (int64) register and masked with
 """
 
 import numpy as np
-from numba import njit, prange
 
-from sentinel import passcost
+from sentinel import jitcache
+
+jitcache.install()  # must precede numba: the cache key carries the cost constants
+
+from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
+
+from sentinel import passcost  # noqa: E402
 
 LOS_CLEAR = 1
 BLOCKED = 0

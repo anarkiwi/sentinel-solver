@@ -191,3 +191,80 @@ def test_irq_cycles_matches_the_live_pass_rate():
             f"ls{digits}: modelled {modelled:.2f} passes/frame outside the live "
             f"bracket {min(counts)}..{max(counts)}"
         )
+
+
+_LIVE_PASS_CYCLES = os.path.join(
+    os.path.dirname(__file__), "fixtures", "live_pass_cycles.json"
+)
+
+
+def _live_cycles():
+    with open(_LIVE_PASS_CYCLES, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _mode(hist):
+    return int(max(hist.items(), key=lambda kv: kv[1])[0])
+
+
+def test_rotate_redraw_matches_the_live_object_redraw():
+    """ROTATE_REDRAW is the mean $1F9F a rotation forces, over every live rotation."""
+    samples = [
+        c
+        for board, vals in _live_cycles()["rotation_redraw_1f9f"].items()
+        if not board.startswith("_")
+        for c in vals
+    ]
+    assert len(samples) >= 16
+    assert min(samples) <= passcost.ROTATE_REDRAW <= max(samples)
+    assert abs(passcost.ROTATE_REDRAW - sum(samples) / len(samples)) <= 1.0
+
+
+def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
+    """$1805..$1884 counted off the image, its three fixed callees measured live."""
+    parts = _live_cycles()["rotate_parts"]
+    straight = 32 + 12  # $1805..$1822 and $187B..$1884, the four JSR opcodes apart
+    jsrs = 4 * 6  # $1AF4, $1973, $3470 and the $1881 JSR $1F9F charged separately
+    assert (
+        passcost.ROTATE
+        == straight + jsrs + parts["1af4"] + parts["1973"] + parts["3470"]
+    )
+
+
+def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
+    """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: 25 badlines, four
+    short raster interrupts and the $9630 body, each measured on the machine."""
+    irq = _live_cycles()["irq"]
+    assert passcost.BADLINE_STEAL == _mode(irq["badline_steal"])
+    assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
+    assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
+    steal = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
+    shorts = passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ
+    assert passcost.IRQ_CYCLES == steal + shorts + passcost.IRQ_BODY
+    fg = irq["foreground_cpu_per_frame"]
+    cheap = passcost.FOREGROUND_CYCLES - passcost.COOLDOWN_TICK_NO_CARRY
+    dear = (
+        passcost.FOREGROUND_CYCLES
+        - passcost.COOLDOWN_TICK_WALK
+        - 24 * passcost.COOLDOWN_TICK_BYTE_DEC
+    )
+    assert cheap == fg["max"]  # the frame whose $130C does not carry
+    assert dear <= fg["min"]  # every cooldown byte decrementing
+
+
+def test_the_cooldown_tick_prices_every_live_130c_sample():
+    """Each live $130C is its counted branch: no carry, gate decrement, or the walk."""
+    for cyc, decs, loops, _n in _live_cycles()["irq"]["cooldown_130c"]["samples"]:
+        if loops == 0:
+            want = (
+                passcost.COOLDOWN_TICK_NO_CARRY
+                if cyc < passcost.COOLDOWN_TICK_GATE
+                else passcost.COOLDOWN_TICK_GATE
+            )
+        else:
+            want = (
+                passcost.COOLDOWN_TICK_WALK
+                + decs * passcost.COOLDOWN_TICK_BYTE_DEC
+                + (loops - decs) * passcost.COOLDOWN_TICK_BYTE_STICK
+            )
+        assert abs(want - cyc) <= 1, (cyc, decs, loops, want)

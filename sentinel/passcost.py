@@ -8,9 +8,20 @@ pass cost is a property of the state.  Per-term arithmetic: docs/architecture.md
 from sentinel import memmap as mm
 
 PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
-IRQ_CYCLES = 4142  # $9630 + VIC-II DMA steal; measured against the machine
+BADLINE_STEAL = 43  # a $30..$F7 line whose low 3 bits are YSCROLL ($D011 & 7 = 3)
+BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
+SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
+SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
+IRQ_BODY = 2491  # the $9630 body: $95E9 202 + $119F 2156 + $1635/$FFC2/$FFC5 126 + 7
+IRQ_CYCLES = 4042  # 1075 + 476 + 2491: every FIXED cycle a frame denies the play loop
 IRQ_SPRITES = 1490  # $1635 loses its $963A fast exit once $0C04 != 0
-FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES
+FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less this frame's own $130C
+
+COOLDOWN_TICK_NO_CARRY = 21  # $130C LDA/CLC/ADC/STA 12 + $1315 BCC taken 3 + RTS 6
+COOLDOWN_TICK_GATE = 33  # + $1317 LDA 4 + BNE 3 + $1331 DEC 6 + RTS 6 - the taken BCC 1
+COOLDOWN_TICK_WALK = 33  # the $131C walk's own entry 22 + $132B reload 6 + RTS 6 - 1
+COOLDOWN_TICK_BYTE_STICK = 14  # $131E LDA 4 + CMP 2 + BCC taken 3 + DEX 2 + BPL 3
+COOLDOWN_TICK_BYTE_DEC = 20  # + $1325 DEC 7, less the taken BCC 1
 
 LOOP_PASS = 142  # $1289..$12C7 in-play straight line, less the $16B5/$191F bodies
 
@@ -50,8 +61,37 @@ MARCH_SLOPE = 581  # $1D0B BCS $1D46: check_sloping_tile instead of check_flat_t
 # but pricing them apart makes relative.can_see_object and enemies_jit._can_see_object
 # disagree by 104 cycles on one long march -- see docs/open_items.md item 8.
 
-SCAN_SLOT = 22  # $17BA the per-slot loop body around a visibility call
+SCAN_SLOT = 27  # $17B2 LDA 2 + JSR 6 + the $17B7 gates 11 + $17CA DEY/BPL 5
 SCAN_FIXED = 12  # a 64-slot scan's entry/exit
+
+# find_drainable_boulder_or_tree $1AB0 walks its own loop, not $17B2's.
+TILE_SCAN_FIXED = 10  # $1AB0 LDX 2 + $1AF2 SEC/RTS 8
+TILE_SCAN_EMPTY = 12  # $1AB2 LDA 4 + BMI 3 + $1AEF DEX/BPL 5
+TILE_SCAN_OTHER = 24  # + the $1AB7 flag and $1ABB type compares 12
+TILE_SCAN_STACKED = 11  # flags >= $40 leaves at $1AB9 BCS
+TILE_SCAN_LOOSE = 18  # a lone boulder falls through the $1ABE type compare instead
+TILE_SCAN_TILE = 61  # $1AC2..$1AD1 the tile fetch, its $2BA8 lookup 34 included
+TILE_SCAN_NO_TILE = 8  # $1AD3 BCC taken + $1AEF DEX/BPL
+TILE_SCAN_TOP = 12  # $1AD3 BCC 2 + $1AD5..$1ADB the top object's type read 10
+TILE_SCAN_WRONG_TOP = 12  # $1ADD..$1AE1 the two compares 7 + $1AEF DEX/BPL 5
+TILE_SCAN_SEE = 9  # $1AE1 BEQ 3 + the $1AE3 JSR 6 (a boulder top pays 3 more)
+TILE_SCAN_NEXT = 11  # $1AE6 LDA/BPL 6 + $1AEF DEX/BPL 5 when the see was not full
+TILE_SCAN_HIT = 8  # $1AE8 BPL not taken 2 + $1AEA STY/CLC 6
+
+# consider_creating_meanie $197D walks the search counter, not a slot index.
+MEANIE_SCAN_SLOT = (
+    26  # $198F LDX 3 + LDY 4 + BNE 3 + $19A1 DEC 7 + DEY 2 + LDA 4 + BMI 3
+)
+MEANIE_SCAN_OTHER = 34  # + the $19AA tree-type compare 9 - the taken BMI 1
+MEANIE_SCAN_DX = 24  # $19B1..$19C5 the 10-tile x test, its $19BE sign fixup included
+MEANIE_SCAN_DY = 18  # $19C7..$19D7 the same in y, off the already-loaded index
+MEANIE_SCAN_SEE = 8  # $19D9 LDA 2 + the $19DB JSR 6
+MEANIE_SCAN_DONE = 33  # $198F..$1994 9 + $1996 INC/LDA/STA 16 + SEC/RTS 8
+
+ROTATE_GATE = 12  # $17F9 LDX 3 + LDA 4 + CMP 2 + BCC 3; 14 when the gate holds
+ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 straight
+ROTATE_REDRAW = 1723  # $1F9F update_object_on_screen; MEASURED 1576..1843, 16 rotations
+MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
 
 def exposure_cycles(mem):

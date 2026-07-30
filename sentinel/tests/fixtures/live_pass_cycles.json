@@ -1,0 +1,36 @@
+{
+  "_source": "VICE binary-monitor cpuhistory (an absolute cycle stamp per instruction) over 300 live frames per board with the enemy clock unfrozen ($0CE5 cleared). Each pass is attributed by JSR/RTS depth; a delta above the opcode's own minimum by 20 or more is a VIC badline steal and is removed, as are the interrupt handlers, so every figure below is play-loop CPU cycles unless named _wall. Boards ls9795 (8 enemies), ls0335 (7), ls0042 (2).",
+  "rotation_redraw_1f9f": {
+    "_what": "update_object_on_screen $1F9F, inclusive, the redraw a $1805 rotation forces",
+    "9795": [1632, 1640, 1672, 1692, 1743, 1758, 1785],
+    "0335": [1576, 1610, 1702, 1721, 1753, 1801, 1831],
+    "0042": [1812, 1843]
+  },
+  "rotate_parts": {
+    "_what": "the fixed callees of $1805, inclusive; constant across all 16 rotations",
+    "1af4": 31,
+    "1973": 32,
+    "3470": 323
+  },
+  "tile_scan_1ab0": {
+    "_what": "find_drainable_boulder_or_tree $1AB0, inclusive, one whole 64-slot walk",
+    "9795": {"1255": 8, "1256": 15, "1257": 42},
+    "0335": {"1207": 10, "1208": 19, "1209": 48},
+    "0042": {"1039": 13, "1040": 19, "1041": 10}
+  },
+  "irq": {
+    "_what": "wall cycles, the 7-cycle interrupt entry included, measured on ls9795",
+    "cooldown_130c": {
+      "_what": "$130C inclusive, (cycles, bytes that decremented, loop iterations); 21 is the no-carry frame, 33 the $0C50 gate decrement, the rest the 24-byte walk",
+      "samples": [[21, 0, 0, 6], [33, 0, 0, 17], [416, 8, 24, 2], [417, 8, 24, 3], [423, 9, 24, 3]]
+    },
+    "badline_steal": {"41": 44, "42": 51, "43": 793, "44": 112},
+    "badlines_per_frame": 25,
+    "short_wall": {"119": 93, "120": 31},
+    "full_9630_wall": {
+      "2683": 1, "2684": 2, "2692": 1, "2693": 2, "2696": 8, "2699": 1,
+      "2701": 1, "2705": 6, "3079": 3, "3080": 2, "3093": 1, "3095": 1, "3153": 1
+    },
+    "foreground_cpu_per_frame": {"n": 20, "min": 15124, "median": 15575, "mean": 15460.2, "max": 15593}
+  }
+}
