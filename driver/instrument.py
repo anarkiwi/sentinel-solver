@@ -79,6 +79,7 @@ class SimClock:
             self.state.body_index,
             self.state.body_partial,
             residual,
+            self.state.body_paid,
         ) = resume
         self.state.cycle_residual = residual or 0
 
@@ -166,7 +167,7 @@ def _replot_resume(state, emu):
     debt = replot_debt(state, emu.frames_on_stack())
     if not debt:
         return None, 0
-    resume = (enemies.PHASE_BODY, enemies.BODY_DONE, 0, -1, -int(round(debt)))
+    resume = (enemies.PHASE_BODY, enemies.BODY_DONE, 0, -1, -int(round(debt)), 0)
     state.camera_shift = projector.held_strip(state)
     return resume, debt
 

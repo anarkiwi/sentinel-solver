@@ -239,6 +239,12 @@ _KBD = "driver.kbd_aim"
 _CORE = "driver.core"
 _TICK_EVIDENCE = "test_the_cooldown_tick_prices_every_live_130c_sample"
 _BODY_ORACLE = "test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count"
+_WRITE_CYCLE_ORACLE = "test_the_body_commits_its_core_writes_at_the_roms_own_cycle"
+
+
+def _write_cycle(module, note):
+    """A sub-segment length that puts a CORE write on the ROM's own cycle."""
+    return entry(module, DERIVED, note, _WRITE_CYCLE_ORACLE)
 
 
 def _tick(note):
@@ -406,6 +412,27 @@ REGISTRY = {
         "player, counted instruction by instruction against the per-round $16E6 oracle",
         _BODY_ORACLE,
     ),
+    "TARGET_ARM": _write_cycle(
+        _PC, "$1833 BCS nt 2 + $1835 LDA #$78 2 + $1837 STA $0C20,X 5"
+    ),
+    "TARGET_ARM_TAIL": _write_cycle(_PC, "$183A JMP $16D6"),
+    "ROTATE_ARM": _write_cycle(
+        _PC, "$1818 JSR $1973 6 + $1973 LDA #$80 2 + $1975 STA $0CA0,X 5"
+    ),
+    "PARTIAL_ARM_MEANIE": _write_cycle(
+        _PC, "$17D5 BEQ nt 2 + $17D7 JSR 6 + $1973 LDA 2 + $1975 STA $0CA0,X 5"
+    ),
+    "PARTIAL_ARM_TAIL": _write_cycle(
+        _PC, "$17DA LDA #$40 2 + $17DC STA $14 3 + $17DE BNE $1825 4"
+    ),
+    "AT_TARGET_ARM": _write_cycle(
+        _EN, "TARGET_HEAD + TARGET_ARM: $1837 STA $0C20,X, from $1825"
+    ),
+    "AT_TARGET_ARM_END": _write_cycle(
+        _EN, "+ TARGET_ARM_TAIL: $183A JMP $16D6, from $1825"
+    ),
+    "_TGT_ARM": _d(_ENJ, "jit alias of enemies.AT_TARGET_ARM"),
+    "_TGT_ARM_END": _d(_ENJ, "jit alias of enemies.AT_TARGET_ARM_END"),
     "TARGET_WAIT": entry(
         _PC,
         DERIVED,

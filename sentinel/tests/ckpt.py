@@ -44,6 +44,7 @@ def snapshot(player, tick=0):
         "body_stage": player.st.body_stage,
         "body_index": player.st.body_index,
         "body_partial": player.st.body_partial,
+        "body_paid": player.st.body_paid,
         "fields": {
             name: copy.deepcopy(getattr(player, name))
             for name in FIELDS
@@ -65,6 +66,7 @@ def restore(snap, cls=PhasePlayer, **kwargs):
     player.st.body_stage = snap.get("body_stage", 0)
     player.st.body_index = snap.get("body_index", 0)
     player.st.body_partial = snap.get("body_partial", -1)
+    player.st.body_paid = snap.get("body_paid", 0)
     for name, value in snap["fields"].items():
         setattr(player, name, copy.deepcopy(value))
     return player

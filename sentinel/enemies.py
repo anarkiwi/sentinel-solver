@@ -82,8 +82,40 @@ BODY_PARTIAL = 6  # $17C4: the partially-visible player branch
 BODY_TREE = 7  # $17E0: find_drainable_boulder_or_tree $1AB0
 BODY_ROTATE = 8  # $17F9: the rotation gate
 BODY_MAKE_MEANIE = 9  # $197D consider_creating_meanie, reached from $184D
+BODY_TARGET = 10  # $1825 target_object, reached from $17A6, $17C2 and $17DE
 BODY_DONE = -1  # the body reached its RTS; the pass may go on to $16D6
 
+# Each CORE write's own cycle in its stage: committed on the frame that pays that far.
+AT_ENTRY_CD = passcost.ENTRY_UPDATE_CD  # $16ED STA $0C30,X
+AT_ENTRY_END = AT_ENTRY_CD + passcost.ENTRY_FOV  # $16F4 STA $0C68 == CONSIDER_ENTRY
+AT_ROTATE_ANGLE = passcost.ROTATE_GATE + passcost.ROTATE_TURN  # $1810 STA $09C0,X
+AT_ROTATE_CD = AT_ROTATE_ANGLE + passcost.ROTATE_RELOAD  # $1815 STA $0C28,X
+AT_ROTATE_MEANIE = AT_ROTATE_CD + passcost.ROTATE_ARM  # $1975 STA $0CA0,X
+AT_ROTATE_MEMORY = AT_ROTATE_MEANIE + passcost.MEANIE_INIT_MEMORY  # $1978 STA $0C90,X
+AT_ROTATE_SCANS = AT_ROTATE_MEMORY + passcost.MEANIE_INIT_SCANS  # $197D STA $0C98,X
+AT_ROTATE_SEARCH = AT_ROTATE_SCANS + passcost.MEANIE_INIT_SEARCH  # $1982 STA $0C80,X
+AT_ROTATE_RTS = AT_ROTATE_SEARCH + passcost.MEANIE_INIT_RTS  # $1985 RTS, back to $181B
+AT_ROTATE_END = AT_ROTATE_RTS + passcost.ROTATE_TAIL  # == ROTATE_GATE + ROTATE
+AT_TARGET_SLOT = passcost.TARGET_SLOT  # $1826 STA $0CA8,X
+AT_TARGET_EXPOSURE = AT_TARGET_SLOT + passcost.TARGET_EXPOSURE  # $182B STA $0CB0,X
+AT_TARGET_TIMER = (
+    AT_TARGET_EXPOSURE + passcost.TARGET_TIMER
+)  # $1831 CMP #1 == TARGET_HEAD
+AT_TARGET_ARM = AT_TARGET_TIMER + passcost.TARGET_ARM  # $1837 STA $0C20,X
+AT_TARGET_ARM_END = AT_TARGET_ARM + passcost.TARGET_ARM_TAIL  # $183A JMP $16D6
+AT_PARTIAL_HEAD = passcost.SCAN_END_PARTIAL  # $17D2 CMP $0C90,X: the head-only branch
+AT_PARTIAL_MEANIE = AT_PARTIAL_HEAD + passcost.PARTIAL_ARM_MEANIE  # $1975 STA $0CA0,X
+AT_PARTIAL_MEMORY = AT_PARTIAL_MEANIE + passcost.MEANIE_INIT_MEMORY  # $1978 STA $0C90,X
+AT_PARTIAL_SCANS = AT_PARTIAL_MEMORY + passcost.MEANIE_INIT_SCANS  # $197D STA $0C98,X
+AT_PARTIAL_SEARCH = AT_PARTIAL_SCANS + passcost.MEANIE_INIT_SEARCH  # $1982 STA $0C80,X
+AT_PARTIAL_RTS = (
+    AT_PARTIAL_SEARCH + passcost.MEANIE_INIT_RTS
+)  # $1985 RTS, back to $17DA
+AT_PARTIAL_END = AT_PARTIAL_RTS + passcost.PARTIAL_ARM_TAIL  # $17DE BNE $1825
+AT_TREE_GONE = passcost.SCAN_END  # $17CF BMI $17E0 taken: no head-only player at all
+AT_TREE_KNOWN = AT_PARTIAL_HEAD + passcost.PARTIAL_KNOWN  # $17D5 BEQ $17E0 taken
+
+_WAIT, _COMMIT, _SKIP = 0, 1, 2  # what :func:`_reach` found at a write's own cycle
 
 # Where a raster interrupt can catch the play loop, as the resume points above name it.
 LOOP_HEAD = (0x1289, 0x12A2)  # the pass head, before its JSR $16B5
@@ -101,10 +133,69 @@ _BODY_LADDER = (  # the first address of each stage, in ROM order
     (0x17CD, BODY_PARTIAL),
     (0x17E0, BODY_TREE),
     (0x17F9, BODY_ROTATE),
-    (0x1825, BODY_DONE),
+    (0x1825, BODY_TARGET),
     (0x1852, BODY_MAKE_MEANIE),
     (0x1876, BODY_DONE),
 )
+_STAGE_SPENT = {  # cycles a stage has already paid when the IRQ caught it at this PC
+    BODY_ENTRY: {0x16E6: 0, 0x16E9: 4, 0x16EB: 6, 0x16ED: 8, 0x16EF: 10, 0x16F2: 15},
+    BODY_ROTATE: {
+        0x17F9: 0,
+        0x17FB: 3,
+        0x17FE: 7,
+        0x1800: 9,
+        0x1805: 12,
+        0x1806: 14,
+        0x1809: AT_ROTATE_ANGLE - 15,
+        0x180C: AT_ROTATE_ANGLE - 11,
+        0x180D: AT_ROTATE_ANGLE - 9,
+        0x1810: AT_ROTATE_ANGLE - 5,
+        0x1813: AT_ROTATE_ANGLE,
+        0x1815: AT_ROTATE_ANGLE + 2,
+        0x1818: AT_ROTATE_CD,
+        0x181B: AT_ROTATE_RTS,
+        0x181D: AT_ROTATE_RTS + 2,
+        0x1820: AT_ROTATE_RTS + 331,
+        0x1822: AT_ROTATE_RTS + 334,
+    },
+    BODY_PARTIAL: {
+        0x17CD: 0,
+        0x17CF: 3,
+        0x17D1: 5,
+        0x17D2: 7,
+        0x17D5: AT_PARTIAL_HEAD,
+        0x17D7: AT_PARTIAL_HEAD + 2,
+        0x17DA: AT_PARTIAL_RTS,
+        0x17DC: AT_PARTIAL_RTS + 2,
+        0x17DE: AT_PARTIAL_END - 4,
+    },
+    BODY_TARGET: {
+        0x1825: 0,
+        0x1826: 2,
+        0x1829: AT_TARGET_SLOT,
+        0x182B: AT_TARGET_SLOT + 3,
+        0x182E: AT_TARGET_EXPOSURE,
+        0x1831: AT_TARGET_EXPOSURE + 4,
+        0x1833: AT_TARGET_TIMER,
+        0x1835: AT_TARGET_TIMER + 2,
+        0x1837: AT_TARGET_TIMER + 4,
+        0x183A: AT_TARGET_ARM,
+    },
+}
+_MEANIE_INIT_SPENT = {  # $1973's own boundaries, counted from the JSR that called it
+    0x1973: 6,
+    0x1975: 8,
+    0x1978: 13,
+    0x197B: 18,
+    0x197D: 20,
+    0x1980: 25,
+    0x1982: 27,
+    0x1985: 32,
+}
+_MEANIE_INIT_BASE = {  # where that JSR sits inside its own stage
+    BODY_ROTATE: AT_ROTATE_CD,
+    BODY_PARTIAL: AT_PARTIAL_HEAD + 2,
+}
 SAVED_X = 0x191E  # $1889 STX $191E: $1887 saves its caller's X here
 SAVED_Y = mm.TARGETED_OBJECT_SLOT  # $188C STY $0C58: ... and its caller's Y here
 PARTIAL_SLOT = 0x000F  # $17AE/$17C8: the head-only player the robot scan remembers
@@ -230,13 +321,22 @@ def _innermost_loop_address(pc, sp, page):
     return pc, False
 
 
-def resume_from_stack(mem, sp, page):
-    """The sub-pass position a $9630 halt exposes: (phase, stage, index, partial, cycles).
+def _stage_paid(stage, addr, pc):
+    """Cycles the interrupted stage has already paid, so its resume repeats no write.
 
-    The $95E9 frame holds Y, X, A, P, PCL, PCH from SP+1, and under it the foreground's
-    own return addresses; $1887 saves its caller's X and Y at $191E and $0C58, so the
-    scan indices survive a call as well.  The fifth value is the cycle offset between
-    the machine's position and that resume point, where a straight line can count it."""
+    ``addr`` is the play-loop address the interrupt maps to; ``pc`` the PC itself, so a
+    $1973 the $1818 rotate called is countable where the return address alone is not."""
+    if pc in _MEANIE_INIT_SPENT and stage in _MEANIE_INIT_BASE:
+        return _MEANIE_INIT_BASE[stage] + _MEANIE_INIT_SPENT[pc]
+    return _STAGE_SPENT.get(stage, {}).get(addr, 0)
+
+
+def resume_from_stack(mem, sp, page):
+    """The sub-pass position a $9630 halt exposes, six deep.
+
+    ``(phase, stage, index, partial, cycles, paid)``: the $95E9 frame holds Y, X, A, P,
+    PCL, PCH from SP+1 over the foreground's own return addresses, and $1887 saves its
+    caller's X and Y at $191E/$0C58, so the scan indices survive a call too."""
     y = page[(sp + 1) & 0xFF]
     x = page[(sp + 2) & 0xFF]
     pc = page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)
@@ -244,12 +344,12 @@ def resume_from_stack(mem, sp, page):
     offset = _segment_offset(mem, pc, y)  # None where no straight line counts it
     if not LOOP_BODY[0] <= addr < LOOP_BODY[1]:
         if LOOP_DISPATCH[0] <= addr < LOOP_DISPATCH[1]:
-            return PHASE_HEAD, BODY_ENTRY, 0, -1, offset
+            return PHASE_HEAD, BODY_ENTRY, 0, -1, offset, 0
         if LOOP_PRND[0] <= addr < LOOP_PRND[1]:
-            return PHASE_CURSOR, BODY_ENTRY, 0, -1, offset
+            return PHASE_CURSOR, BODY_ENTRY, 0, -1, offset, 0
         if 0x16D6 <= addr < LOOP_PRND[0]:  # the JSR $31CA: the prnd is still owed
-            return PHASE_BODY, BODY_DONE, 0, -1, offset
-        return PHASE_HEAD, BODY_ENTRY, 0, -1, offset  # head, tail, or off the loop
+            return PHASE_BODY, BODY_DONE, 0, -1, offset, 0
+        return PHASE_HEAD, BODY_ENTRY, 0, -1, offset, 0  # head, tail, or off the loop
     stage = BODY_ENTRY
     for first, st in _BODY_LADDER:
         if addr >= first:
@@ -260,9 +360,11 @@ def resume_from_stack(mem, sp, page):
     elif stage in (BODY_HUNT, BODY_TREE):
         first_call = 0x1784 if stage == BODY_HUNT else 0x17E5
         index = (x if live else mem[SAVED_X]) if addr > first_call else mm.NUM_SLOTS - 1
+    elif stage == BODY_TARGET:
+        index = y if live else mem[SAVED_Y]
     if stage in (BODY_SCAN, BODY_PARTIAL, BODY_TREE, BODY_ROTATE):
         partial = -1 if mem[PARTIAL_SLOT] & 0x80 else mem[PARTIAL_SLOT]
-    return PHASE_BODY, stage, index, partial, None
+    return PHASE_BODY, stage, index, partial, None, _stage_paid(stage, addr, pc)
 
 
 def stack_position(mem, sp, page):
@@ -282,6 +384,19 @@ def paid(slot):
     The field is a scan position: >= 0 the next slot to query, -1 exhausted,
     <= -2 a charged-but-uncommitted slot."""
     return -2 - slot
+
+
+def _reach(budget, spent, offset, clk, anchor):
+    """Charge a body stage forward to ``offset``, the ROM's own cycle for a write.
+
+    ``(budget, spent, what)``: _SKIP where an earlier frame already paid past it,
+    _COMMIT where this frame reaches it, _WAIT where the budget stops short of it."""
+    if offset <= spent:
+        return budget, spent, _SKIP
+    owed = offset - spent
+    if budget < owed:
+        return budget, spent, _WAIT
+    return budget - badline.charge(clk, anchor, owed), offset, _COMMIT
 
 
 def enemy_slots(state):
@@ -424,74 +539,137 @@ def _exposure_byte(see):
 # ---------------------------------------------------------------------------
 # target_object $1825
 # ---------------------------------------------------------------------------
-def _target_object(state, enemy, target, exposure, clk):
-    """$1825 up to its $184D branch: record the target and, once the draining
-    cooldown counts down to 1, drain it if fully visible ($1838).  Returns the next
-    stage -- BODY_MAKE_MEANIE when only the player's head is visible, else DONE --
-    and the cycles $1825's own line spent reaching it."""
+def _target_object(state, enemy, target, budget, spent, clk):
+    """$1825 up to its $184D branch, resumable at each of its three CORE writes.
+
+    Records the target and, once the draining cooldown counts down to 1, drains it if
+    fully visible ($1838).  Returns (budget, stage, spent): stage BODY_TARGET means the
+    frame ran out inside the line and ``spent`` says how far into it the ROM had got."""
     mem = state.mem
-    mem[mm.ENEMIES_TARGETED_OBJECT + enemy] = target
-    mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + enemy] = exposure
-    cost = badline.charge(clk, 0x1825, passcost.TARGET_HEAD)
+    exposure = mem[mm.OBJECT_EXPOSURE]  # $1829 reads what the last $1887 left
+    budget, spent, what = _reach(budget, spent, AT_TARGET_SLOT, clk, 0x1825)
+    if what == _WAIT:
+        return budget, BODY_TARGET, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_TARGETED_OBJECT + enemy] = target  # $1826
+    budget, spent, what = _reach(budget, spent, AT_TARGET_EXPOSURE, clk, 0x1829)
+    if what == _WAIT:
+        return budget, BODY_TARGET, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + enemy] = exposure  # $182B
+    budget, spent, what = _reach(budget, spent, AT_TARGET_TIMER, clk, 0x182E)
+    if what == _WAIT:
+        return budget, BODY_TARGET, spent
     cd = mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy]
-    if cd < 0x01:  # first sight -> arm the drain timer
-        mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = DRAINING_COOLDOWN_RELOAD
-        return BODY_DONE, cost + badline.charge(clk, 0x1833, passcost.TARGET_FIRST)
+    if spent > AT_TARGET_TIMER or cd < 0x01:  # first sight -> arm the drain timer
+        budget, spent, what = _reach(budget, spent, AT_TARGET_ARM, clk, 0x1833)
+        if what == _WAIT:
+            return budget, BODY_TARGET, spent
+        mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = DRAINING_COOLDOWN_RELOAD  # $1837
+        budget, spent, what = _reach(budget, spent, AT_TARGET_ARM_END, clk, 0x183A)
+        if what == _WAIT:
+            return budget, BODY_TARGET, spent
+        return budget, BODY_DONE, 0
     if cd != 0x01:  # still counting down
-        return BODY_DONE, cost + badline.charge(clk, 0x1833, passcost.TARGET_WAIT)
-    cost += badline.charge(clk, 0x183D, passcost.TARGET_DUE)
+        cost = badline.charge(clk, 0x1833, passcost.TARGET_WAIT)
+        return budget - cost, BODY_DONE, 0
+    cost = badline.charge(clk, 0x183D, passcost.TARGET_DUE)
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
         killed = target == mem[mm.PLAYER_OBJECT] and state.energy == 0
         cost += badline.charge(clk, 0x1843, passcost.TARGET_DRAIN)
         cost += _reduce_object_energy(state, target, enemy, clk)[1]
         if killed:  # kill_player $1A00 unwinds the stack -> no update-cooldown reload
-            return BODY_DONE, cost
+            return budget - cost, BODY_DONE, 0
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         if target == mem[mm.PLAYER_OBJECT]:  # $184D: a drained player skips the redraw
-            return BODY_DONE, cost + badline.charge(
-                clk, 0x1884, passcost.TARGET_DRAIN_PLAYER
-            )
+            cost += badline.charge(clk, 0x1884, passcost.TARGET_DRAIN_PLAYER)
+            return budget - cost, BODY_DONE, 0
         cost += badline.charge(clk, 0x184D, passcost.TARGET_DRAIN_OBJ)
-        return BODY_DONE, cost + _body_tail(state, target, clk)
+        return budget - cost - _body_tail(state, target, clk), BODY_DONE, 0
     # $184D: only the head -> hunt a tree to convert
-    return BODY_MAKE_MEANIE, cost + badline.charge(clk, 0x1841, passcost.TARGET_MEANIE)
+    cost += badline.charge(clk, 0x1841, passcost.TARGET_MEANIE)
+    return budget - cost, BODY_MAKE_MEANIE, 0
 
 
 # ---------------------------------------------------------------------------
 # rotate_enemy $1805
 # ---------------------------------------------------------------------------
-def _rotate_enemy(state, enemy):
-    """$1805: add the per-enemy rotation step to its facing; reload the rotation
-    cooldown to 200; re-arm the meanie hunt ($1818)."""
+def _rotate_enemy(state, enemy, budget, spent, clk):
+    """$1805..$1884, resumable at each of the six CORE writes its line makes.
+
+    Adds the per-enemy rotation step to the facing, reloads the rotation cooldown to
+    200 and re-arms the meanie hunt ($1818 JSR $1973), each on the frame that pays the
+    ROM's own cycle for it.  Returns (budget, stage, spent)."""
     mem = state.mem
-    step = mem[mm.ROTATION_SPEED_TABLE + enemy]
-    state.obj_h_angle[enemy] = (state.obj_h_angle[enemy] + step) & 0xFF
-    mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = ROTATION_COOLDOWN_RELOAD
-    start_tune(state, mm.SOUND_ROTATE)  # $180F JSR $3470
-    _initialise_enemy_meanie_variables(state, enemy)  # $1818
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_ANGLE, clk, 0x1805)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:  # $1810: $9D37,X added to the facing
+        step = mem[mm.ROTATION_SPEED_TABLE + enemy]
+        state.obj_h_angle[enemy] = (state.obj_h_angle[enemy] + step) & 0xFF
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_CD, clk, 0x1813)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = ROTATION_COOLDOWN_RELOAD  # $1815
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_MEANIE, clk, 0x1818)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_MEANIE_OBJECT + enemy] = 0x80  # $1975
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_MEMORY, clk, 0x1978)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy] = 0x80  # $1978
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_SCANS, clk, 0x197B)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = 0  # $197D
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_SEARCH, clk, 0x1980)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    if what == _COMMIT:
+        mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $1982
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_RTS, clk, 0x1985)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    budget, spent, what = _reach(budget, spent, AT_ROTATE_END, clk, 0x181B)
+    if what == _WAIT:
+        return budget, BODY_ROTATE, spent
+    start_tune(state, mm.SOUND_ROTATE)  # $181D JSR $3470
+    return budget - _redraw_cost(state, enemy, clk), BODY_DONE, 0
 
 
 # ---------------------------------------------------------------------------
 # consider_enemy_state $16E6 (no-meanie path)
 # ---------------------------------------------------------------------------
-def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
+def _consider_enemy_state(state, enemy, budget, stage, index, partial, spent, clk):
     """$16E6, resumable at its own write points.
 
     Spends ``budget`` and suspends where the ROM would be when the frame ran out --
-    between an $1887 query and the CORE write its answer causes.  Returns
-    (budget, stage, index, partial); stage BODY_DONE means the routine reached RTS."""
+    between an $1887 query and the CORE write its answer causes, and inside a segment
+    at each write's own cycle.  Returns (budget, stage, index, partial, spent)."""
     mem = state.mem
     while True:
         if stage == BODY_DONE:
-            return budget, BODY_DONE, 0, -1
+            return budget, BODY_DONE, 0, -1, 0
         if stage == BODY_ENTRY:
-            if mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] >= COOLDOWN_STICK:
+            if spent == 0 and mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] >= COOLDOWN_STICK:
                 gate = badline.charge(clk, 0x16E6, passcost.UPDATE_GATE_CLOSED)
-                return budget - gate, BODY_DONE, 0, -1
-            budget -= badline.charge(clk, 0x16E6, passcost.CONSIDER_ENTRY)
-            mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_SCAN  # $16ED
-            mem[mm.FOV_WIDTH] = FOV_SCAN  # $16F0
+                return budget - gate, BODY_DONE, 0, -1, 0
+            budget, spent, what = _reach(budget, spent, AT_ENTRY_CD, clk, 0x16E6)
+            if what == _WAIT:
+                return budget, BODY_ENTRY, index, partial, spent
+            if what == _COMMIT:
+                mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_SCAN  # $16ED
+            budget, spent, what = _reach(budget, spent, AT_ENTRY_END, clk, 0x16F2)
+            if what == _WAIT:
+                return budget, BODY_ENTRY, index, partial, spent
+            mem[mm.FOV_WIDTH] = FOV_SCAN  # $16F4
+            spent = 0
             # $16EA: an enemy that owns a meanie (top bit clear) runs its lifecycle
             if not (mem[mm.ENEMIES_MEANIE_OBJECT + enemy] & 0x80):
                 budget -= badline.charge(clk, 0x16F7, passcost.CONSIDER_MEANIE)
@@ -503,7 +681,16 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
             continue
 
         if index > -1 and budget < 1:  # nothing charged is awaiting its write
-            return budget, stage, index, partial
+            return budget, stage, index, partial, spent
+
+        if stage == BODY_TARGET:
+            budget, stage, spent = _target_object(
+                state, enemy, index, budget, spent, clk
+            )
+            if stage == BODY_TARGET:
+                return budget, stage, index, partial, spent
+            index, partial = 0, -1
+            continue
 
         if stage == BODY_MEANIE:
             budget, stage, index = _update_meanie(state, enemy, budget, index, clk)
@@ -518,7 +705,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
             if discharged:  # $177A: the tail redraws, then the update is over
                 budget -= badline.charge(clk, 0x1778, passcost.DISCHARGED)
                 budget -= _body_tail(state, slot, clk)
-                return budget, BODY_DONE, 0, -1
+                return budget, BODY_DONE, 0, -1, 0
             budget -= badline.charge(clk, 0x177D, passcost.NO_DISCHARGE)
             # $177F: only mid meanie-hunt does the enemy act on the considering flag
             if mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] & 0x80:
@@ -535,7 +722,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
                 state, enemy, budget, index, clk
             )
             if tb == -2:  # suspended mid-scan
-                return budget, stage, index, partial
+                return budget, stage, index, partial, spent
             if tb >= 0:
                 mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $178B
                 budget -= badline.charge(clk, 0x178B, passcost.HUNT_HIT)
@@ -543,7 +730,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
                 budget -= _reduce_object_energy(state, tb, enemy, clk)[1]  # $17EA
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
                 budget -= badline.charge(clk, 0x17ED, passcost.DRAIN_TAIL)
-                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1
+                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1, 0
             budget -= badline.charge(clk, 0x1787, passcost.HUNT_MISS)
             mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (  # $1792
                 mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
@@ -564,12 +751,12 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
                 budget -= badline.charge(clk, 0x179A, passcost.HELD_CALL)
                 budget -= _see_cost(see, clk)
                 if budget <= 0:
-                    return budget, stage, paid(0), partial
+                    return budget, stage, paid(0), partial, spent
             exposure = _exposure_byte(see)
+            mem[mm.OBJECT_EXPOSURE] = exposure  # $1887's own $14
             if exposure != 0:
                 budget -= badline.charge(clk, 0x17A6, passcost.HELD_KEPT)
-                stage, cost = _target_object(state, enemy, held, exposure, clk)
-                budget, index = budget - cost, 0
+                stage, index, spent = BODY_TARGET, held, 0
                 continue
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # target lost
             budget -= badline.charge(clk, 0x17A2, passcost.HELD_LOST)
@@ -584,19 +771,12 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
             continue
 
         if stage == BODY_PARTIAL:
-            budget -= badline.charge(clk, 0x17D1, passcost.SCAN_END_PARTIAL)
-            # $17C4: fresh-arm the meanie hunt unless this player already failed one
-            if partial != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
-                _initialise_enemy_meanie_variables(state, enemy)
-                budget -= badline.charge(clk, 0x17D7, passcost.PARTIAL_ARM)
-                stage, cost = _target_object(state, enemy, partial, 0x40, clk)
-                budget, index, partial = budget - cost, 0, -1
-                continue
-            mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= badline.charge(clk, 0x17D5, passcost.PARTIAL_KNOWN)
-            budget -= badline.charge(clk, 0x17E0, passcost.TREE_CALL)
-            budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
-            stage, index, partial = BODY_TREE, mm.NUM_SLOTS - 1, -1
+            budget, stage, spent, index = _scan_tail(
+                state, enemy, budget, spent, partial, clk
+            )
+            if stage == BODY_PARTIAL:
+                return budget, stage, index, partial, spent
+            partial = -1
             continue
 
         if stage == BODY_TREE:
@@ -604,7 +784,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
                 state, enemy, budget, index, clk
             )
             if tb == -2:
-                return budget, stage, index, partial
+                return budget, stage, index, partial, spent
             if tb >= 0:
                 mem[mm.TARGETED_OBJECT_SLOT] = tb
                 budget -= badline.charge(clk, 0x17E8, passcost.TREE_HIT)
@@ -612,25 +792,87 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
                 budget -= _reduce_object_energy(state, tb, enemy, clk)[1]
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
                 budget -= badline.charge(clk, 0x17ED, passcost.DRAIN_TAIL)
-                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1
+                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1, 0
             budget -= badline.charge(clk, 0x17E8, passcost.TREE_NONE)
             stage, index = BODY_ROTATE, 0
             continue
 
         if stage == BODY_ROTATE:
             # no_drain ($17F9): rotate if the cooldown is low; the turn redraws it
-            if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
-                _rotate_enemy(state, enemy)
-                budget -= badline.charge(clk, 0x17F9, passcost.ROTATE_GATE)
-                budget -= badline.charge(clk, 0x1805, passcost.ROTATE)
-                budget -= _redraw_cost(state, enemy, clk)
-                return budget, BODY_DONE, 0, -1
-            held = badline.charge(clk, 0x1802, passcost.ROTATE_GATE_HELD)
-            return budget - held, BODY_DONE, 0, -1
+            if spent == 0:
+                if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] >= COOLDOWN_STICK:
+                    held = badline.charge(clk, 0x1802, passcost.ROTATE_GATE_HELD)
+                    return budget - held, BODY_DONE, 0, -1, 0
+                budget, spent, what = _reach(
+                    budget, spent, passcost.ROTATE_GATE, clk, 0x17F9
+                )
+                if what == _WAIT:
+                    return budget, BODY_ROTATE, index, partial, spent
+            budget, stage, spent = _rotate_enemy(state, enemy, budget, spent, clk)
+            if stage == BODY_ROTATE:
+                return budget, stage, index, partial, spent
+            continue
 
         budget, stage, index = _consider_creating_meanie(
             state, enemy, budget, index, clk
         )
+
+
+def _scan_tail(state, enemy, budget, spent, partial, clk):
+    """$17CD..$17E5, resumable: what the exhausted robot scan does with what it found.
+
+    A head-only player arms the meanie hunt ($1973's four writes) and targets it; any
+    other exit drops the held target at $17E2 and calls the tile scan.  Returns
+    (budget, stage, spent, index) -- stage BODY_PARTIAL means the frame ran out."""
+    mem = state.mem
+    if partial >= 0 and partial != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
+        # $17C4: fresh-arm the meanie hunt unless this player already failed one
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_HEAD, clk, 0x17CD)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_MEANIE, clk, 0x17D5)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            mem[mm.ENEMIES_MEANIE_OBJECT + enemy] = 0x80  # $1975
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_MEMORY, clk, 0x1978)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy] = 0x80  # $1978
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_SCANS, clk, 0x197B)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = 0  # $197D
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_SEARCH, clk, 0x1980)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $1982
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_RTS, clk, 0x1985)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        budget, spent, what = _reach(budget, spent, AT_PARTIAL_END, clk, 0x17DA)
+        if what == _WAIT:
+            return budget, BODY_PARTIAL, spent, 0
+        mem[mm.OBJECT_EXPOSURE] = 0x40  # $17DC
+        return budget, BODY_TARGET, 0, partial
+    head = AT_TREE_KNOWN if partial >= 0 else AT_TREE_GONE
+    budget, spent, what = _reach(budget, spent, head, clk, 0x17CD)
+    if what == _WAIT:
+        return budget, BODY_PARTIAL, spent, 0
+    budget, spent, what = _reach(budget, spent, head + passcost.TREE_CLEAR, clk, 0x17E0)
+    if what == _WAIT:
+        return budget, BODY_PARTIAL, spent, 0
+    if what == _COMMIT:
+        mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E2
+    owed = head + passcost.TREE_CALL
+    budget, spent, what = _reach(budget, spent, owed, clk, 0x17E5)
+    if what == _WAIT:
+        return budget, BODY_PARTIAL, spent, 0
+    budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
+    return budget, BODY_TREE, 0, mm.NUM_SLOTS - 1
 
 
 def _scan_for_robot(state, enemy, budget, index, partial, clk):
@@ -641,19 +883,8 @@ def _scan_for_robot(state, enemy, budget, index, partial, clk):
     mem = state.mem
     player = mem[mm.PLAYER_OBJECT]
     while True:
-        if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
-            y = -2 - index
-            see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-            stage, cost = _target_object(state, enemy, y, _exposure_byte(see), clk)
-            return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
-            if partial >= 0:
-                return budget, BODY_PARTIAL, 0, partial
-            mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= badline.charge(clk, 0x17CD, passcost.SCAN_END)
-            budget -= badline.charge(clk, 0x17E0, passcost.TREE_CALL)
-            budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
-            return budget, BODY_TREE, mm.NUM_SLOTS - 1, -1
+            return budget, BODY_PARTIAL, 0, partial
         if budget <= 0:
             return budget, BODY_SCAN, index, partial
         y = index
@@ -671,10 +902,8 @@ def _scan_for_robot(state, enemy, budget, index, partial, clk):
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
             budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_FULL)
-            if budget <= 0:  # the ROM has not reached $1825 yet
-                return budget, BODY_SCAN, paid(y), partial
-            stage, cost = _target_object(state, enemy, y, exposure, clk)
-            return budget - cost, stage, 0, -1
+            mem[mm.OBJECT_EXPOSURE] = exposure  # $1887's own $14, as $1829 reads it
+            return budget, BODY_TARGET, y, -1
         if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial = y
             budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_PARTIAL - last)
@@ -1067,13 +1296,22 @@ def update_body(state, budget, clk):
     if state.obj_flags[x] & 0x80:  # $16CC BPL: absorbed -> discharge its bank only
         budget -= badline.charge(clk, 0x16CC, passcost.UPDATE_ABSORBED)
         return budget - _consider_discharging_enemy_energy(state, x, clk)[1], True
-    budget, stage, index, partial = _consider_enemy_state(
-        state, x, budget, state.body_stage, state.body_index, state.body_partial, clk
+    budget, stage, index, partial, spent = _consider_enemy_state(
+        state,
+        x,
+        budget,
+        state.body_stage,
+        state.body_index,
+        state.body_partial,
+        state.body_paid,
+        clk,
     )
     if stage == BODY_DONE:
         state.body_stage, state.body_index, state.body_partial = BODY_ENTRY, 0, -1
+        state.body_paid = 0
         return budget, True
     state.body_stage, state.body_index, state.body_partial = stage, index, partial
+    state.body_paid = spent
     return budget, False
 
 
@@ -1280,6 +1518,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_stage,
                 state.body_index,
                 state.body_partial,
+                state.body_paid,
                 state.camera_shift,
                 state.camera_clear,
                 remaining,
@@ -1296,6 +1535,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_stage,
                 state.body_index,
                 state.body_partial,
+                state.body_paid,
                 state.camera_shift,
                 state.camera_clear,
             )

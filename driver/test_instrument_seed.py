@@ -11,9 +11,9 @@ from driver import instrument  # noqa: E402
 from sentinel import enemies  # noqa: E402
 
 # a $9630 marker inside the $1CDD march: resumable only to the $17B2 scan's head
-INEXACT = ((enemies.PHASE_BODY, enemies.BODY_SCAN, 61, -1, None), 0x1D16, 0x17B7)
+INEXACT = ((enemies.PHASE_BODY, enemies.BODY_SCAN, 61, -1, None, 0), 0x1D16, 0x17B7)
 # one on the $1289 straight line: the cycles already spent are counted
-EXACT = ((enemies.PHASE_HEAD, enemies.BODY_ENTRY, 0, -1, 25), 0x1294, 0x1294)
+EXACT = ((enemies.PHASE_HEAD, enemies.BODY_ENTRY, 0, -1, 25, 0), 0x1294, 0x1294)
 
 
 class StubEmu:

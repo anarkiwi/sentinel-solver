@@ -9,7 +9,7 @@ import pytest
 
 from driver import kbd_aim
 from sentinel import actioncost, aimcost, badline, enemies, enemies_jit, memmap as mm
-from sentinel import pancost, passcost, playerbase, projector, relative
+from sentinel import pancost, passcost, playerbase, projector, relative, statecmp
 from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -581,7 +581,7 @@ def test_the_sub_pass_position_is_read_back_off_the_stack_frame():
         frame = (cpu.y, cpu.x, cpu.a, cpu.p, pc & 0xFF, pc >> 8)
         for i, val in enumerate(frame):
             mem[0x0100 + ((sp + 1 + i) & 0xFF)] = val
-        phase, stage, index, _p, _c = enemies.resume_from_stack(
+        phase, stage, index, _p, _c, _paid = enemies.resume_from_stack(
             mem, sp, mem[0x100:0x200]
         )
         if 0x17B2 <= pc < 0x17CD:  # in the scan loop itself: Y is the live index
@@ -675,8 +675,8 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     monkeypatch.setattr(
         relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
     )
-    monkeypatch.setattr(passcost, "ROTATE", passcost.ROTATE - 323 + 6)
     monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
+    monkeypatch.setattr(enemies, "AT_ROTATE_END", enemies.AT_ROTATE_END - 323 + 6)
     cpu, mem, state = oracle.generate_machine(landscape)
     oracle.prime_enemy_driver(cpu, mem, state)
     mem[mm.PLAYER_NOT_ACTED] = 0
@@ -870,50 +870,266 @@ def _trace_calls(cpu, mem, mstate, oracle, target):
     return hits
 
 
-@pytest.mark.oracle
-@pytest.mark.xfail(
-    strict=True,
-    reason="the body applies a segment's CORE writes at the segment's start: $16ED "
-    "lands 15 cycles early, $1809/$1813 65/72, $1825/$1835 66/89 -- open_items 8",
-)
-@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
-def test_the_body_commits_its_core_writes_at_the_roms_own_cycle(landscape):
-    """The `$16ED` reload must not appear in the sim before the ROM has paid for it.
+_CORE_ADDRS = tuple(a for a, _n, tier in statecmp.FIELDS if tier == statecmp.CORE)
+BODY_EXIT = 0x16D6  # every consider_enemy_state exit is a JMP $16D6
 
-    `$16E6 LDA $0C30,X` 4 + `CMP #2` 2 + `BCS` not taken 2 + `$16ED LDA #4` 2 +
-    `$16EF STA $0C30,X` 5: the machine's `update_cd` becomes 4 at cycle 15 of the body,
-    so a model spending fewer than 15 must still read the old value."""
+
+def _rom_body_writes(oracle, image, enemy):
+    """[(cycle, addr, value)] for each CORE byte the ROM's $16E6 changes, and its total.
+
+    Page 1 carries the object flags and v_angle arrays as well as the stack, so any
+    address the run's own stack pointer reached is dropped."""
+    cpu, mem, mstate = oracle.wrap_image(bytes(image))
+    cpu.a, cpu.x, cpu.y = 0, enemy, 0
+    cpu.pc = 0x16E6
+    mstate["stop"] = False
+    shadow = {a: mem[a] for a in _CORE_ADDRS}
+    pending, out = [], []
+
+    def note(addr, value):
+        if value != shadow[addr]:
+            pending.append((addr, value))
+        shadow[addr] = value
+
+    cpu._memory.subscribe_to_write(
+        _CORE_ADDRS, note
+    )  # pylint: disable=protected-access
+    c0, low, steps = cpu.processorCycles, cpu.sp, 0
+    while cpu.pc != BODY_EXIT and not mstate["stop"] and steps < 400_000:
+        cpu.step()
+        steps += 1
+        low = min(low, cpu.sp)
+        if pending:
+            at = cpu.processorCycles - c0
+            out.extend((at, a, v) for a, v in pending)
+            del pending[:]
+    assert low >= 0x80, "the stack reached the object arrays: page 1 is ambiguous"
+    stack = range(0x0100 + low, 0x0200)
+    return [w for w in out if w[1] not in stack], cpu.processorCycles - c0
+
+
+def _body_cases(oracle, landscape):
+    """(enemy, image) per aimed and turned-away body, with the meanie bytes dirtied.
+
+    A generated board leaves $1973's four writes at the values it already rewrites, so
+    the sweep would never see them land; seeding them non-default makes them changes."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
 
-    oracle = _oracle()
     cpu, mem, mstate = oracle.generate_machine(landscape)
     oracle.prime_enemy_driver(cpu, mem, mstate)
-    checked = 0
+    mem[mm.PLAYER_NOT_ACTED] = 0
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    player = mem[mm.PLAYER_OBJECT]
     for e in range(8):
-        if mem[mm.OBJECTS_FLAGS + e] & 0x80:
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
             continue
-        if mem[mm.OBJECTS_TYPE + e] not in mm.ENEMY_TYPES:
-            continue
-        image = bytearray(mem)
-        image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
-        image[mm.CURSOR] = e
-        c, m, ms = oracle.wrap_image(bytes(image))
-        c.a, c.x, c.y = 0, e, 0
-        c.pc = 0x16E6
-        c0, at = c.processorCycles, None
-        while at is None and not ms["stop"]:
-            c.step()
-            if m[mm.ENEMIES_UPDATE_COOLDOWN + e] == enemies.UPDATE_COOLDOWN_SCAN:
-                at = c.processorCycles - c0
-        assert at == 15
-        for budget in range(1, at):
-            st = State.from_mem(bytes(image))
-            enemies.update_body(st, budget, badline.frame_clock(False))
-            assert (
-                st.mem[mm.ENEMIES_UPDATE_COOLDOWN + e] == 0
-            ), f"ls{landscape:04x} enemy {e}: $16ED committed on {budget} cycles"
-        checked += 1
-    assert checked
+        aim = _aim_at(base, e, player)
+        for off in (0, 96):
+            image = bytearray(snap)
+            image[mm.OBJECTS_H_ANGLE + e] = (aim + off) & 0xFF
+            image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+            image[mm.ENEMIES_FAILED_MEANIE_MEMORY + e] = 0x11
+            image[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + e] = 0x22
+            image[mm.ENEMIES_MEANIE_SEARCH_OBJECT + e] = 0x33
+            image[mm.CURSOR] = e
+            image[0x6E] = e
+            yield e, image
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_body_commits_its_core_writes_at_the_roms_own_cycle(landscape, monkeypatch):
+    """Every CORE byte $16E6 writes lands in the sim on the ROM's own cycle, exactly.
+
+    Stepping the real $16E6 records the cycle each CORE byte changes at; the model
+    given one cycle less must not have made that write and given that cycle must have.
+    $1F9F/$3470 are RTS-stubbed on both sides, as the $16E6 cost test stubs them."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
+    )
+    monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
+    monkeypatch.setattr(enemies, "AT_ROTATE_END", enemies.AT_ROTATE_END - 323 + 6)
+    oracle = _oracle()
+
+    def at(image, budget, addr):
+        st = State.from_mem(bytes(image))
+        enemies.update_body(st, budget, badline.frame_clock(False))
+        return st.mem[addr]
+
+    seen = set()
+    for enemy, image in _body_cases(oracle, landscape):
+        writes, _total = _rom_body_writes(oracle, image, enemy)
+        for cycle, addr, value in writes:
+            where = f"ls{landscape:04x} enemy {enemy} ${addr:04X} at {cycle}"
+            assert at(image, cycle - 1, addr) != value, f"{where}: committed early"
+            assert at(image, cycle, addr) == value, f"{where}: not committed"
+        seen.update(a for _c, a, _v in writes)
+    assert seen, f"ls{landscape:04x}: no CORE write to check"
+
+
+def test_every_write_cycle_offset_sums_to_its_own_segment_term():
+    """The ladder's rungs are a partition of the segment terms, not new numbers.
+
+    Each rung is the instructions between two CORE writes, so the rungs of a segment
+    must add up to the whole-segment cost the $16E6 oracle already pins."""
+    assert passcost.ENTRY_UPDATE_CD + passcost.ENTRY_FOV == passcost.CONSIDER_ENTRY
+    assert (
+        passcost.TARGET_SLOT + passcost.TARGET_EXPOSURE + passcost.TARGET_TIMER
+        == passcost.TARGET_HEAD
+    )
+    assert passcost.TARGET_ARM + passcost.TARGET_ARM_TAIL == passcost.TARGET_FIRST
+    assert passcost.TREE_CLEAR + passcost.TREE_SCAN_CALL == passcost.TREE_CALL
+    meanie_tail = (
+        passcost.MEANIE_INIT_MEMORY
+        + passcost.MEANIE_INIT_SCANS
+        + passcost.MEANIE_INIT_SEARCH
+        + passcost.MEANIE_INIT_RTS
+    )
+    assert passcost.ROTATE_ARM + meanie_tail == 6 + passcost.MEANIE_INIT  # $1818 JSR
+    assert (
+        passcost.ROTATE_TURN
+        + passcost.ROTATE_RELOAD
+        + passcost.ROTATE_ARM
+        + meanie_tail
+        + passcost.ROTATE_TAIL
+        == passcost.ROTATE
+    )
+    assert enemies.AT_ROTATE_END == passcost.ROTATE_GATE + passcost.ROTATE
+    assert (
+        passcost.PARTIAL_ARM_MEANIE + meanie_tail + passcost.PARTIAL_ARM_TAIL
+        == passcost.PARTIAL_ARM
+    )
+    assert enemies.AT_ENTRY_END == passcost.CONSIDER_ENTRY
+    assert enemies.AT_TARGET_TIMER == passcost.TARGET_HEAD
+    assert enemies.AT_PARTIAL_END == passcost.SCAN_END_PARTIAL + passcost.PARTIAL_ARM
+
+
+def _rom_boundaries(oracle, image, start, stop, **regs):
+    """{pc: cycles from ``start``} at every instruction boundary before ``stop``."""
+    cpu, _mem, mstate = oracle.wrap_image(bytes(image))
+    cpu.pc = start
+    for name, value in regs.items():
+        setattr(cpu, name, value)
+    mstate["stop"] = False
+    c0, out, steps = cpu.processorCycles, {}, 0
+    while cpu.pc != stop and not mstate["stop"] and steps < 4000:
+        out.setdefault(cpu.pc, cpu.processorCycles - c0)
+        cpu.step()
+        steps += 1
+    out.setdefault(cpu.pc, cpu.processorCycles - c0)
+    return out
+
+
+@pytest.mark.oracle
+def test_a_resumed_segment_picks_up_at_the_roms_own_cycle_inside_it():
+    """``resume_from_stack``'s paid is the ROM's own spend at the PC it interrupted.
+
+    A resume that under-counted would repeat a write the machine already made and one
+    that over-counted would skip a write it had not reached; the model's per-PC tables
+    are checked against the cycles the real $16E6, $17F9 and $1825 lines spend."""
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(0x0335)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    mem[0x3470] = 0x60  # RTS: the rotate's tune player is out of the ladder
+    e = next(
+        s
+        for s in range(8)
+        if not mem[mm.OBJECTS_FLAGS + s] & 0x80
+        and mem[mm.OBJECTS_TYPE + s] in mm.ENEMY_TYPES
+    )
+    image = bytearray(mem)
+    image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+    image[mm.ENEMIES_ROTATION_COOLDOWN + e] = 0
+    image[mm.ENEMIES_DRAINING_COOLDOWN + e] = 0
+    image[mm.CURSOR] = e
+    lines = (
+        (enemies.BODY_ENTRY, 0x16E6, 0x16F7, {"x": e}),
+        (enemies.BODY_ROTATE, 0x17F9, 0x181B, {"x": e}),
+        (enemies.BODY_PARTIAL, 0x17CD, 0x1825, {"x": e}),
+        (enemies.BODY_TARGET, 0x1825, 0x183A, {"x": e, "y": e}),
+    )
+    checked = 0
+    for stage, start, stop, regs in lines:
+        rom = _rom_boundaries(oracle, image, start, stop, **regs)
+        table = dict(enemies._STAGE_SPENT[stage])
+        base = enemies._MEANIE_INIT_BASE.get(stage)
+        if base is not None:
+            table.update({a: base + c for a, c in enemies._MEANIE_INIT_SPENT.items()})
+        for pc, spent in sorted(table.items()):
+            if pc not in rom:
+                continue
+            assert spent == rom[pc], f"stage {stage} ${pc:04X}: {spent} != {rom[pc]}"
+            assert enemies._stage_paid(stage, pc, pc) == spent
+            checked += 1
+    assert checked >= 40
+    sp = 0xF0  # the six bytes $95E9 pushes over the interrupted $1810
+    page = bytearray(0x100)
+    page[(sp + 1) & 0xFF], page[(sp + 2) & 0xFF] = e, e
+    page[(sp + 5) & 0xFF], page[(sp + 6) & 0xFF] = 0x10, 0x18
+    resume = enemies.resume_from_stack(image, sp, page)
+    assert resume[1] == enemies.BODY_ROTATE
+    assert resume[5] == enemies.AT_ROTATE_ANGLE - 5  # $1810 has not stored yet
+
+
+@pytest.mark.oracle
+def test_a_body_split_at_every_single_cycle_repeats_and_skips_nothing():
+    """Suspending the rotating body at EVERY cycle leaves the same CORE bytes.
+
+    The coarse split sweep steps in fortieths, which can walk over a ladder whose
+    rungs are seven cycles apart; this one lands on every one of them."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    clk = badline.frame_clock(False)
+
+    def run(image, enemy, first):
+        st = State.from_mem(bytes(image))
+        budget, stage, index, partial, paid = enemies._consider_enemy_state(
+            st, enemy, first, enemies.BODY_ENTRY, 0, -1, 0, clk
+        )
+        spent = first - budget
+        while stage != enemies.BODY_DONE:
+            grant = budget + enemies.UNBOUNDED
+            budget, stage, index, partial, paid = enemies._consider_enemy_state(
+                st, enemy, grant, stage, index, partial, paid, clk
+            )
+            spent += grant - budget
+        fields = (
+            (mm.OBJECTS_H_ANGLE, mm.NUM_SLOTS),
+            (mm.ENEMIES_UPDATE_COOLDOWN, 8),
+            (mm.ENEMIES_ROTATION_COOLDOWN, 8),
+            (mm.ENEMIES_DRAINING_COOLDOWN, 8),
+            (mm.ENEMIES_TARGETED_OBJECT, 8),
+            (mm.ENEMIES_MEANIE_OBJECT, 8),
+            (mm.ENEMIES_FAILED_MEANIE_MEMORY, 8),
+            (mm.ENEMIES_MEANIE_ATTEMPT_SCANS, 8),
+            (mm.ENEMIES_MEANIE_SEARCH_OBJECT, 8),
+        )
+        return spent, tuple(bytes(st.mem[a : a + n]) for a, n in fields)
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(0x0042)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    e = next(
+        s
+        for s in range(8)
+        if not mem[mm.OBJECTS_FLAGS + s] & 0x80
+        and mem[mm.OBJECTS_TYPE + s] in mm.ENEMY_TYPES
+    )
+    image = bytearray(mem)
+    image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+    image[mm.ENEMIES_ROTATION_COOLDOWN + e] = 0
+    image[mm.ENEMIES_DRAINING_COOLDOWN + e] = 0
+    image[mm.ENEMIES_FAILED_MEANIE_MEMORY + e] = 0x11
+    image[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + e] = 0x22
+    image[mm.ENEMIES_MEANIE_SEARCH_OBJECT + e] = 0x33
+    image[mm.CURSOR] = e
+    whole = run(image, e, enemies.UNBOUNDED)
+    assert whole[0] > 500
+    for first in range(1, whole[0] + 1):
+        assert run(image, e, first) == whole, f"split at {first}"
 
 
 @pytest.mark.oracle
@@ -947,14 +1163,14 @@ def test_the_body_split_is_exact_wherever_the_frame_ends(landscape, monkeypatch)
     def run(image, enemy, first):
         st = State.from_mem(bytes(image))
         clk = badline.frame_clock(False)
-        budget, stage, index, partial = enemies._consider_enemy_state(
-            st, enemy, first, enemies.BODY_ENTRY, 0, -1, clk
+        budget, stage, index, partial, paid = enemies._consider_enemy_state(
+            st, enemy, first, enemies.BODY_ENTRY, 0, -1, 0, clk
         )
         spent = first - budget
         while stage != enemies.BODY_DONE:
             grant = budget + enemies.UNBOUNDED
-            budget, stage, index, partial = enemies._consider_enemy_state(
-                st, enemy, grant, stage, index, partial, clk
+            budget, stage, index, partial, paid = enemies._consider_enemy_state(
+                st, enemy, grant, stage, index, partial, paid, clk
             )
             spent += grant - budget
         return spent, core(st)

@@ -154,7 +154,9 @@ def test_rotation_steps_by_speed_table():
     enemy = enemies.enemy_slots(state)[0]
     before = state.obj_h_angle[enemy]
     step = state.mem[mm.ROTATION_SPEED_TABLE + enemy]
-    enemies._rotate_enemy(state, enemy)
+    enemies._rotate_enemy(
+        state, enemy, enemies.UNBOUNDED, 0, badline.frame_clock(False)
+    )
     assert state.obj_h_angle[enemy] == (before + step) & 0xFF
     assert state.mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] == 0xC8
 

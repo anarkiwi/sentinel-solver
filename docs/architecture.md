@@ -238,31 +238,39 @@ is paid, which is why the cursor no longer diverges at frame 1 on any board.
 The body is the expensive segment and the only one holding CORE writes, so it is itself
 split. Every `$1887` visibility call writes only SCRATCH (`$0014`, `$0C56`, `$0CDD`,
 `$0C76`, `$0C58`), so a frame boundary inside one leaves no trace; the CORE writes sit
-between them. `State.body_stage` names the resume point, `body_index` the scan slot reached
-and `body_partial` the `$17B2` head-only player candidate — three fields the 64 KB image
-does not hold, carried through the numba twin's call and through `tests/ckpt.py`.
+between them. `State.body_stage` names the resume point, `body_index` the scan slot reached,
+`body_partial` the `$17B2` head-only player candidate and `body_paid` the cycles that stage
+has already spent — four fields the 64 KB image does not hold, carried through the numba
+twin's call and through `tests/ckpt.py`.
 
-| `body_stage` | ROM | CORE writes it commits |
+| `body_stage` | ROM | CORE writes, at their own cycle in the stage |
 |---|---|---|
-| `BODY_ENTRY` | `$16E6` gate, `$16ED`, `$16F0` | `update_cd = 4` (`$16F0` is SCRATCH) |
+| `BODY_ENTRY` | `$16E6` gate, `$16ED`, `$16F2` | `update_cd = 4` at 15 (`$16F4` is SCRATCH) |
 | `BODY_MEANIE` | `$16F2 update_meanie` | facing, `update_cd`, the meanie/hyperspace |
 | `BODY_DISCHARGE` | `$1773`/`$1A5D` | the discharged tree and its tile |
 | `BODY_HUNT` | `$177F`→`$1AB0` | `$178B` search reset + the drain |
-| `BODY_HELD` | `$178C` re-check | `$1825 target_object`, or `drain_cd = 0` |
-| `BODY_SCAN` | `$17B2` slots 63..0 | `$1825` on the first fully-visible robot |
-| `BODY_PARTIAL` | `$17C4` | `$196A` re-arm + `$1825` |
+| `BODY_HELD` | `$178C` re-check | hands `$1825` over, or `drain_cd = 0` |
+| `BODY_SCAN` | `$17B2` slots 63..0 | hands `$1825` the first fully-visible robot |
+| `BODY_PARTIAL` | `$17CD..$17E5` | `$1973`'s four at 26/31/38/45, `$17E2` at 13 or 21 |
 | `BODY_TREE` | `$17E0`→`$1AB0` | the drain and its `update_cd` reload |
-| `BODY_ROTATE` | `$17F9`/`$1805` | facing, `rotation_cd`, `$196A` |
+| `BODY_ROTATE` | `$17F9`/`$1805` | facing 66, `rotation_cd` 73, `$1973`'s four 86..105 |
+| `BODY_TARGET` | `$1825 target_object` | target 7, exposure 15, `draining_cd` 30 |
 | `BODY_MAKE_MEANIE` | `$184D`→`$197D` | `meanie_search` per step, then the meanie |
 
 `body_index` is a scan position: `>= 0` the next slot to query, `-1` the scan is exhausted,
-`<= -2` the slot `-2 - i` has been **charged** and owes only its write. That last encoding is
-what makes the split exact rather than one-unit-coarse: when the budget runs out between an
-`$1887` and the `$1825` its answer causes, the model suspends there and commits on resume,
-recomputing the query for free because its cycles are already paid.
+`<= -2` the slot `-2 - i` has been **charged** and owes only its write. `body_paid` is the
+finer half of the same idea, inside a segment rather than between two: `enemies._reach`
+charges the stage forward to the ROM's own cycle for a write and commits it only there, so
+a budget that stops short suspends with the write outstanding and one that has already
+passed it skips it on resume. Every offset is the instruction sequence at its address —
+`$16ED` is `LDA $0C30,X` 4 + `CMP #2` 2 + `BCS` not taken 2 + `LDA #4` 2 + `STA` 5, so
+`update_cd` becomes 4 at cycle 15 and not before, and the sums are the whole-segment terms
+(`ENTRY_UPDATE_CD + ENTRY_FOV == CONSIDER_ENTRY`, and so on).
 
-The body is the open residual for a different reason now — its cycle *cost*, not its
-atomicity: [open_items.md 8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early). `enemies.resume_from_stack` reads that same position back off a `$9630` halt's `$95E9` frame, so a seed or a resync starts the sim where the machine is rather than at a pass head.
+`enemies.resume_from_stack` reads that same position back off a `$9630` halt's `$95E9`
+frame, `body_paid` included: `_STAGE_SPENT` and `_MEANIE_INIT_SPENT` map the interrupted PC
+to the cycles its stage has spent, so a resumed segment repeats no write the machine already
+made and skips none it had not reached.
 
 Every term is an instruction count off the disassembly, reproduced by running the real code
 in the jennings oracle:

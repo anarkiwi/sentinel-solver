@@ -266,7 +266,7 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock commits `consider_enemy_state`'s CORE writes early
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**18** events, the first at frame 151) and on ls335 (**14**, the first at 156).
+ls9795 (**19** events, the first at frame 151) and on ls335 (**14**, the first at 156).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
 the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
@@ -274,8 +274,8 @@ measured, and none of it is the cause.  Those counts are from a seed that carrie
 its own; the 116/24 this item used to quote were **partly the instrument's own seeding**, see
 *The seed's own error* below.
 
-All 18 and all 14 are `update_cd`; the `obj[62].h_angle` events are gone (*The camera the
-replot borrows* below). Four of ls9795's 18 catch the machine inside a replot, at `$9786`,
+All 19 and all 14 are `update_cd`; the `obj[62].h_angle` events are gone (*The camera the
+replot borrows* below). Four of ls9795's 19 catch the machine inside a replot, at `$9786`,
 `$978D`, `$988E` and `$9899` — the `$9730` buffer flush, i.e. the replot's *exit*, where the
 model's debt has run out and the machine's has not. `render_cost` reads 332100 cycles for
 that pass against the machine's 22-frame wall (~343500 foreground), 0.97x — the `$2625` area
@@ -656,6 +656,47 @@ the two-probe robot path, and over a whole 8x64 scan run as one sequence on one 
 `$1CDD` is exact over random rays on five boards; `$1C54` over all 55296 angle/fraction
 pairs; `$9287` and `$933D` over thousands of random inputs.
 
+**Measured — `$1AB0` and `$1887` are not the residual: their price is exact.** Both are
+now checked against the ROM directly rather than only through the rounds a generated board
+happens to run (`test_the_see_cost_model_matches_the_roms_own_1887`,
+`test_the_tile_scan_cost_model_matches_the_roms_own_1ab0`). `$1887` is cycle-exact, and
+leaves the same `$0014`, over every occupied slot as target on ls42/ls335/ls9795, asked for
+as the robot `$17B2` wants and as its own type, from every enemy aimed at the player and
+turned away. `$1AB0` is cycle-exact over its whole loop, with the board's top-of-tile trees
+restacked so its drain half runs at all: on a freshly generated board nothing stands on a
+stack, so `TILE_SCAN_TILE`, `_SEE`, `_SEE_BOULDER`, `_NEXT`, `_HIT`, `SCAN_SLOT_FULL`,
+`TARGET_*` and `DRAIN_*` were never once reached by the `$16E6` oracle rounds.
+
+**Fixed, and it was a write's placement, not its price: the body committed every CORE
+write EARLY.** Stepping the ROM's `$16E6` instruction by instruction, recording the cycle
+each CORE byte changes at, and binary-searching the smallest budget at which
+`enemies.update_body` makes the same write, every one of the 153 writes the aimed bodies
+make on the three boards landed before the ROM's own offset, because the model applied a
+segment's writes at the segment's *start*:
+
+| write | ROM offset in its segment | early by |
+|---|---|---|
+| `update_cd` (`$16ED`) | 15 | 15 |
+| `h_angle` (`$1810`) | rotate + 66 | 65 |
+| `rotation_cd` (`$1815`) | rotate + 73 | 72 |
+| `targeted_object` (`$1826`) | `$1825` + 7 | 66 |
+| `targeted_exposure` (`$182B`) | `$1825` + 15 | 74 |
+| `draining_cd` (`$1837`) | `$1825` + 30 | 89 |
+
+`State.body_paid` and `enemies._reach` now charge each stage forward to a write's own
+cycle and commit it only there: `$1825` is a stage (`BODY_TARGET`) rather than a call, the
+rotate line is seven rungs, `$16E6`'s gate and reload are two, and `$17CD..$17E5` is one
+laddered stage covering `$1973`'s four writes and the `$17E2` drop. Every offset is the
+instruction sequence at its address and every ladder sums to the whole-segment term the
+`$16E6` oracle already pins (`test_every_write_cycle_offset_sums_to_its_own_segment_term`).
+`test_the_body_commits_its_core_writes_at_the_roms_own_cycle` now steps the ROM and
+demands the model make **every** CORE write on the ROM's own cycle and not one cycle
+earlier, on ls42/ls335/ls9795 with the meanie bytes seeded dirty so `$1973`'s four writes
+are changes; `test_a_resumed_segment_picks_up_at_the_roms_own_cycle_inside_it` checks the
+per-PC resume tables against the same stepped ROM, and
+`test_a_body_split_at_every_single_cycle_repeats_and_skips_nothing` suspends a rotating
+body at every one of its cycles.
+
 **Measured — the body is now exact.** Stepping `$16E6 consider_enemy_state` one round at a
 time against the same oracle, comparing **every** round the play loop dispatches, is
 cycle-exact on ls42, ls335, ls9795, ls0, ls60, ls110, ls298 and ls373 — gated, marching,
@@ -801,14 +842,29 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** Not the frame budget, not the clock, not the replot's placement and not the
-march price — all four are now measured directly against the machine and none has room for
-what this item is chasing. Not the seed either: it now starts at the machine's own cycle on
-every board, and that took ls9795 116 -> 18 and ls0335 24 -> 14 without a constant moving.
-What is left, and both boards now say the same thing, is the **`$1887` see cost inside
-`$17B2`/`$1AB0`** — the `$17B7`/`$17E8` loop addresses are 10 of ls9795's 18 events and 11
-of ls0335's 14. The replot's *price* — both backends now 0.90..0.92 of a machine wall
-measured at 22 frames — is [5](#5-one-object-vertex-angle-is-ten-units-out)'s.
+**Measured — the write placement was a real defect, and it was not the gate's.** With every
+CORE write committed on the ROM's own cycle, `--frames 3000 --follow` reads ls9795 **19**
+(was 18), ls0335 **14** (was 14) and ls42 **0** (was 0). Every survivor is still an enemy's
+`update_cd` reading 1 on the machine against 4 in the sim, and the interrupted PC says why:
+the model has already run that enemy's body when the frame ends and the machine has not.
+Classified by the `$95E9` chain, ls9795's 19 are 8 with the machine inside an `$1887` march
+(`$1893`, `$189D`, `$1916` x2, `$191D`, `$1D16`, `$85C4`, `$17B7`), 3 inside `$1AB0`
+(`$1AB5` x2, `$1ABE`), 4 inside the `$1F9F` replot's `$9730` flush (`$9786`, `$978D`,
+`$988E`, `$9899`), 3 on the body's own straight line (`$16F4`, `$17B0`, `$17B2`) and 1 in
+the prnd (`$31D8`); ls0335's 14 are 9 under `$1887`, 2 under `$1AB0` and 3 on the straight
+line. That distribution is unchanged by the fix, which is the point: where a write lands
+*inside* a segment is now exact, so what is left is when the model **arrives** at the
+segment at all.
+
+**Resolves.** Not the frame budget, not the clock, not the replot's placement, not the march
+price and no longer the write's placement inside its segment — all now measured directly
+against the machine. Not the seed either: it starts at the machine's own cycle on every
+board. What is left is the model reaching a due enemy's `$16ED` one frame before the machine
+does, with the machine caught mid-`$1887` in 8 of ls9795's 19 and 9 of ls0335's 14 — a
+**foreground-budget** question (how many cycles a frame grants the play loop across a march
+that spans dozens of badline windows), not a per-write one. The replot's *price* — both
+backends now 0.90..0.92 of a machine wall measured at 22 frames — is
+[5](#5-one-object-vertex-angle-is-ten-units-out)'s.
 
 ## 9. The human line does not replay to a win through the live executor
 
