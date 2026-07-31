@@ -897,26 +897,30 @@ def _scan_for_robot(state, enemy, budget, index, partial, clk):
             return budget, BODY_SCAN, index, partial
         y = index
         index -= 1
-        last = passcost.SCAN_LAST if y == 0 else 0  # $17CB BPL not taken
+        step = passcost.SCAN_STEP - (passcost.SCAN_LAST if y == 0 else 0)  # $17CB BPL
+        budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_CALL)
         see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
         budget -= _see_cost(see, clk)
         # $17B7: a non-target tree in the sightline to this robot's HEAD hides it
         if see["tree_in_los_head"]:
-            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_HIDDEN - last)
+            budget -= badline.charge(clk, 0x17B7, passcost.SCAN_TEST_HIDDEN)
+            budget -= badline.charge(clk, 0x17CA, step)
             continue
         exposure = _exposure_byte(see)
         if exposure == 0:  # $17BE/$17C0: not visible at all -> next slot
-            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_UNSEEN - last)
+            budget -= badline.charge(clk, 0x17B7, passcost.SCAN_TEST_UNSEEN)
+            budget -= badline.charge(clk, 0x17CA, step)
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
-            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_FULL)
+            budget -= badline.charge(clk, 0x17B7, passcost.SCAN_TEST_FULL)
             mem[mm.OBJECT_EXPOSURE] = exposure  # $1887's own $14, as $1829 reads it
             return budget, BODY_TARGET, y, -1
         if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial = y
-            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_PARTIAL - last)
+            budget -= badline.charge(clk, 0x17B7, passcost.SCAN_TEST_PARTIAL)
         else:
-            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_OTHER - last)
+            budget -= badline.charge(clk, 0x17B7, passcost.SCAN_TEST_OTHER)
+        budget -= badline.charge(clk, 0x17CA, step)
 
 
 # ---------------------------------------------------------------------------

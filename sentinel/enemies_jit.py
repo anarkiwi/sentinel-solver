@@ -269,11 +269,13 @@ _HELD_CALL = passcost.HELD_CALL
 _HELD_LOST = passcost.HELD_LOST
 _HELD_KEPT = passcost.HELD_KEPT
 _SCAN_INIT = passcost.SCAN_INIT
-_SCAN_SLOT_HIDDEN = passcost.SCAN_SLOT_HIDDEN
-_SCAN_SLOT_UNSEEN = passcost.SCAN_SLOT_UNSEEN
-_SCAN_SLOT_FULL = passcost.SCAN_SLOT_FULL
-_SCAN_SLOT_OTHER = passcost.SCAN_SLOT_OTHER
-_SCAN_SLOT_PARTIAL = passcost.SCAN_SLOT_PARTIAL
+_SCAN_SLOT_CALL = passcost.SCAN_SLOT_CALL
+_SCAN_TEST_HIDDEN = passcost.SCAN_TEST_HIDDEN
+_SCAN_TEST_UNSEEN = passcost.SCAN_TEST_UNSEEN
+_SCAN_TEST_FULL = passcost.SCAN_TEST_FULL
+_SCAN_TEST_OTHER = passcost.SCAN_TEST_OTHER
+_SCAN_TEST_PARTIAL = passcost.SCAN_TEST_PARTIAL
+_SCAN_STEP = passcost.SCAN_STEP
 _SCAN_LAST = passcost.SCAN_LAST
 _SCAN_END = passcost.SCAN_END
 _SCAN_END_PARTIAL = passcost.SCAN_END_PARTIAL
@@ -1711,27 +1713,31 @@ def _scan_for_robot(mem, zp, enemy, budget, index, partial, clk):
             return budget, _BODY_SCAN, index, partial
         y = index
         index -= 1
-        last = np.int64(_SCAN_LAST if y == 0 else 0)  # $17CB BPL not taken
+        step = np.int64(_SCAN_STEP - (_SCAN_LAST if y == 0 else 0))  # $17CB BPL
+        budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_CALL))
         in_slot, in_fov, exp_raw, _full, tree_head, scost, sweight = _can_see_object(
             mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
         )
         budget -= _see_charge(clk, scost, sweight)
         if tree_head:  # $17B7: a tree hides this robot's head
-            budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_HIDDEN) - last)
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_HIDDEN))
+            budget -= charge(clk, 0x17CA, step)
             continue
         exposure = _exposure_byte(in_slot, in_fov, exp_raw)
         if exposure == 0:  # $17BE: not visible at all
-            budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_UNSEEN) - last)
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_UNSEEN))
+            budget -= charge(clk, 0x17CA, step)
             continue
         if exposure & 0x80:  # $17BA: fully visible -> drain target
-            budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_FULL))
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_FULL))
             _wr(mem, _OBJ_EXPOSURE, exposure)  # $1887's own $14, as $1829 reads it
             return budget, _BODY_TARGET, y, -1
         if y == player:  # $17C0: head only -> meanie candidate
             partial = y
-            budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_PARTIAL) - last)
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_PARTIAL))
         else:
-            budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_OTHER) - last)
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_OTHER))
+        budget -= charge(clk, 0x17CA, step)
 
 
 @njit(cache=True)

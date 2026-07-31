@@ -802,6 +802,66 @@ run confirms the term: flat steal (1072 / 1071) reads ls9795 14 -> **10** and ls
 **10** (first at 479, was 613), so the events are the steal's and no constant serves both
 boards. Diagnostic only; nothing is kept.
 
+**Measured — window by window: the write maps are right, the placement is not.** The
+per-frame figure above is an aggregate; the same seeding prices each window directly. Seed the
+sim at the machine's exact cycle, run ONE frame on both, and read the sim's own refund for
+event *i* against the steal `cpuhistory` measures at that window. Over 120 exactly-seeded
+frames a board — 1974 windows on ls0042, 1466 on ls0335:
+
+| | ls0042 | ls0335 |
+|---|---|---|
+| model refund a window | 0.150 | 0.171 |
+| machine refund a window | 0.162 | 0.158 |
+| windows the model prices right | 80.3% | 79.5% |
+| answering 0 to every window would price right | **88.2%** | **89.4%** |
+| nonzero calls, of them real | 205, **31** | 179, **23** |
+
+The mean is right to 0.01 and the per-window answer is *worse than a constant zero*: precision
+15% and 13% against base rates of 12% and 11%, so the calls are chance. A uniform shift of
+every offset over -8..+8 moves the agreement by under 4 points and has no peak, so it is not
+one origin offset.
+
+**Where the sim places a window exactly, it prices it exactly: 13 windows of 13** (10 of 10
+within a cycle on ls0042 alone). Recording the sim's own `(anchor, offset)` per window and
+finding that anchor in the machine's own instruction stream gives the placement error in
+cycles, ls0042, n=1249:
+
+| the sim's anchor | n | p25 | median | p75 |
+|---|---|---|---|---|
+| `$95E9` raster-IRQ body | 66 | +10 | **+10** | +12 |
+| `$16D6` prnd | 671 | -483 | +5 | +146 |
+| `$1925` exposure | 264 | -625 | -138 | -8 |
+| `$12A2` pass tail | 162 | -622 | -518 | -38 |
+| `$1289` pass head | 31 | -696 | -593 | -509 |
+
+Inside the body the sim is a tight **+10** cycles ahead — `b` plus the 7-cycle entry, which
+`badline.entry_cycles` already names and `advance_frame` does not apply. Past the body the
+error is pass-scale, not cycle-scale: `$1289`'s whole run is 25 cycles, so a machine offset of
+389..787 means the machine is elsewhere in the pass entirely. Median |error| by window index
+runs 10 inside the body, ~150 over the next four windows and ~480 by mid-frame, oscillating
+against ls0042's ~630-cycle idle pass. **At most windows the sim and the machine are not in
+the same routine**, so no per-window refund of any kind can track the machine until the
+within-frame phase does.
+
+**So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
+callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can
+measure at all it prices **4.1 of 25 windows** (ls0042 4.1, ls0335 4.1, ls9795 4.2), all of
+them the body's: a march frame has no countable position, so it is skipped. The other ~20 go
+through `run_at` against a real map, `$16D6`'s exactly-measured prnd map the largest share
+(918 of 1974 on ls0042), and price right 73.2% against the 88.2% a constant zero scores. Both
+paths are uninformative, so charging the see path's terms individually would replace one
+uninformative refund with another while the placement stands.
+
+**Charged in the ROM's own order: `$17B2`.** The scan loop charged its whole slot *after* the
+`$1887` query the ROM runs in the middle of it, and its 22..36-cycle map walked through the
+`JSR` into `$1887`'s own prologue — writes at offsets 10/14/18 belong to the callee the model
+charges separately. It is now the ROM's three pieces: `SCAN_SLOT_CALL` 8 at `$17B2` (map
+`(5,6)`, the JSR's pushes), the query, the branch's own test at `$17B7` (map `(22,)`, the
+`$17C8 STY`) and the `$17CA` loop step (no writes). Cycle totals per slot are unchanged.
+**The gate reshuffles rather than improves: ls9795 14 -> 11, ls0335 4 -> 8, ls0042 0 -> 0**
+(18 events to 19), which is what a refund carrying no per-window information does under any
+perturbation. Kept for the map and the order, not for the count.
+
 **Not the frame origin.** `b`, the 2..7 cycles from the raster assert to the instruction
 boundary the IRQ is taken at, is not the missing datum. Shifting the whole event list by a
 constant b = 0 / 3 / 6 leaves the single-frame error at mean -0.44 / -0.52 / -0.44 and sd

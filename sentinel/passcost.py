@@ -339,12 +339,14 @@ OBJ_SKIP_OTHER = 13  # + $1EA0 LDA #$C0 2 + STA $0060 3, less 1
 OBJ_GHOL_LOOP = 9  # $1EA4 LDA 4 + CMP #$40 2 + BCS taken 3: another stack level
 OBJ_GHOL_RTS = 18  # + $1EAB LDA 4 + RTS 6, less 1
 
-# find_drainable_robot_loop $17B2, one slot, by the branch it takes; the $1887 apart.
-SCAN_SLOT_HIDDEN = 22  # $17B2 2 + JSR 6 + $17B7 6 + $17BC BNE taken 3 + DEY/BPL 5
-SCAN_SLOT_UNSEEN = 27  # ... BNE nt 2 + $17BE LDA $14 3 + $17C0 BEQ taken 3 + 5
-SCAN_SLOT_FULL = 25  # ... BEQ nt 2 + $17C2 BMI $1825 taken 4, page crossed
-SCAN_SLOT_OTHER = 34  # ... BMI nt 2 + $17C4 CPY $0B 3 + $17C6 BNE taken 3 + 5
-SCAN_SLOT_PARTIAL = 36  # ... BNE nt 2 + $17C8 STY $0F 3 + DEY/BPL 5
+# find_drainable_robot_loop $17B2 in the ROM's own pieces; $1887 runs between the first two.
+SCAN_SLOT_CALL = 8  # $17B2 LDA #0 2 + $17B4 JSR $1887 6
+SCAN_TEST_HIDDEN = 9  # $17B7 LDA $0C76 4 + AND #$40 2 + $17BC BNE taken 3
+SCAN_TEST_UNSEEN = 14  # ... BNE nt 2 + $17BE LDA $14 3 + $17C0 BEQ taken 3
+SCAN_TEST_FULL = 17  # ... BEQ nt 2 + $17C2 BMI $1825 taken 4, page crossed
+SCAN_TEST_OTHER = 21  # ... BMI nt 2 + $17C4 CPY $0B 3 + $17C6 BNE taken 3
+SCAN_TEST_PARTIAL = 23  # ... BNE nt 2 + $17C8 STY $0F 3
+SCAN_STEP = 5  # $17CA DEY 2 + $17CB BPL $17B2 taken 3
 SCAN_LAST = 1  # slot 0 leaves by $17CB BPL not taken, one cycle short
 SCAN_END = 6  # $17CD LDY $0F 3 + $17CF BMI $17E0 taken 3: no head-only player
 SCAN_END_PARTIAL = 11  # $17CD LDY 3 + BMI nt 2 + $17D1 TYA 2 + $17D2 CMP $0C90,X 4

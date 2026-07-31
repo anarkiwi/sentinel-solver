@@ -34,6 +34,10 @@ EXTRA_ANCHORS = {
     "UPDATE_CURSOR_WRAP": 0x16D9,
     "SOUND_VOICE_LAST": 0x8F08,
     "REMOVE_GROUND": 0x1EEF,
+    "SCAN_TEST_UNSEEN": 0x17B7,  # the $17B2 slot test: every branch of it runs
+    "SCAN_TEST_FULL": 0x17B7,  # from $17B7, so their comments name a later address
+    "SCAN_TEST_OTHER": 0x17B7,
+    "SCAN_TEST_PARTIAL": 0x17B7,
     "WIDE_STEEP_COLUMN": 0x3115,  # the $3115 BCC not taken; its comment names $0076
     "WIDE_AREA": 0x31A4,  # $31A4's other branches; their comments name $0041
     "WIDE_AREA_LEFT": 0x31A4,
