@@ -250,15 +250,15 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock underprices `consider_enemy_state`'s own tail
+## 8. The enemy clock commits `consider_enemy_state`'s CORE writes early
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
 ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
 enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
-sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
-`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and the
-classification below puts more than a quarter of what is left inside `$1AB0`
-`find_drainable_boulder_or_tree`, the tile scan `consider_enemy_state` ends on.
+sim reaches a pass early — or the `$1805` rotation that follows from the same lead. That is
+not a price: `$16E6` and everything under it is cycle-exact, and the `$16ED` write is one the
+model makes 15 cycles before the ROM does, because the body applies a segment's writes at the
+segment's start rather than at the ROM's offset inside it.
 
 **Measured — the counts, and what each event is.** ls9795 **142 -> 64 -> 67 -> 64**, ls0335
 **57 -> 57**, ls0042 **0 -> 0** over 3000 frames; the 64 -> 67 was pricing the play machine's
@@ -281,8 +281,9 @@ Classifying every surviving event by the `$95E9` chain the halt exposes:
 
 At 142 the replot alone was 80 of them: a replot's 21 frames produced 21 consecutive events,
 where it now produces the one that finds it plus a couple at its exit. ls0335 is unchanged
-because no resync in 3000 frames lands inside a replot at all. **`$1AB0` is now the largest
-single group** and is what this item names: 18 of 64, ahead of `$1887`'s 14.
+because no resync in 3000 frames lands inside a replot at all. The table is a histogram of
+where the machine **spends its time**, not of what is mispriced: `$1AB0` and `$1887` head it
+because the body is where the cycles are, and both are now measured cycle-exact (below).
 
 **Not a flag the model guessed.** At all 64 halts the live machine has `$0C6D`, `$0C4D`,
 `$0C4E`, `$0C5F`, `$0008` and `$0095` **all zero** — the branch configuration `passcost`'s
@@ -357,7 +358,53 @@ that is short is `consider_enemy_state`'s own tail once the robot scan is exhaus
 `$17E5 JSR $1AB0` + `$17E8 BCS $17F9` is 22 cycles that `enemies._scan_for_robot` charges
 as `TILE_SCAN_FIXED` (10, which is `$1AB0`'s own entry and exit), and the `$17F9` rotate
 gate is 14 when it holds (`$1800 BCC` not taken + `$1802 JMP $16D6`) against the charged
-`ROTATE_GATE` 12. Nothing here needs anything the 64 KB image does not carry.
+`ROTATE_GATE` 12. Nothing here needs anything the 64 KB image does not carry. Both are
+now charged (`TREE_CALL`/`TREE_NONE`/`ROTATE_GATE_HELD`), and the whole body is exact.
+
+**Measured — `$1AB0` and `$1887` are not the residual: their price is exact.** Both are
+now checked against the ROM directly rather than only through the rounds a generated
+board happens to run (`test_the_see_cost_model_matches_the_roms_own_1887`,
+`test_the_tile_scan_cost_model_matches_the_roms_own_1ab0`). `$1887` is cycle-exact, and
+leaves the same `$0014`, over every occupied slot as target on ls42/ls335/ls9795, asked
+for as the robot `$17B2` wants and as its own type, from every enemy aimed at the player
+and turned away — the `$1893`/`$189D` rejects, the `$18CA` FOV reject, the partial and
+the full-sight two-probe marches. `$1AB0` is cycle-exact over its whole loop, and the
+direct call reproduces `$1AB0` as the round itself reaches it, cycle for cycle. The
+suspend/resume split is exact too: over the resume points of every aimed body on the
+three boards, suspending anywhere costs the same total and leaves the same CORE bytes
+(`test_the_body_split_is_exact_wherever_the_frame_ends`).
+
+That the old rounds proved less than they looked is measurable: on a freshly generated
+board nothing stands on a stack, so `$1AB0` only ever walks its empty/rejected/wrong-top
+exits — `TILE_SCAN_TILE`, `_SEE`, `_SEE_BOULDER`, `_NEXT`, `_HIT` and `TILE_SCAN_LOOSE`
+were never once reached by the `$16E6` oracle rounds, nor were `SCAN_SLOT_FULL`,
+`SCAN_SLOT_PARTIAL`, `TARGET_*`, `DRAIN_*` or `SEE_NOT_ROBOT`, because no enemy on a
+generated board ever sees the player. Aiming each enemy at the player and restacking the
+board's top-of-tile trees covers all of them, and the price holds.
+
+**Wrong, and named by measurement: the body commits every CORE write EARLY.** Stepping
+the ROM's `$16E6` instruction by instruction and recording the cycle offset at which each
+CORE byte changes, then binary-searching the smallest budget at which
+`enemies.update_body` makes the same write, every one of the 153 writes the aimed bodies
+make on the three boards lands before the ROM's own offset:
+
+| write | ROM offset | earliest model budget | early by |
+|---|---|---|---|
+| `update_cd` ($16ED) | 15 | 0 | 15 |
+| `h_angle` ($1809) | rotate + 65 | rotate | 65 |
+| `rotation_cd` ($1813) | rotate + 72 | rotate | 72 |
+| `targeted_object` ($1825) | scan + 66 | scan | 66, and up to **300782** |
+| `draining_cd` ($1835) | scan + 89 | scan | 89, and up to **300805** |
+
+The model charges a segment and applies its writes at the segment's start, so a frame
+boundary landing inside the segment puts the write in the sim a frame before the machine
+— which is exactly the reported symptom, an `update_cd` of 4 in the sim against 1 on the
+machine. The 15-cycle `$16ED` window is worth about two events per 3000 frames. The two
+300k outliers are measured, not explained: on those the model reaches the `$1825` write
+having spent 300k fewer cycles than the ROM had at its own, and which slot the two scans
+answer on is the thing to look at first. Nothing here is a price: every cost above is
+already exact. What is wrong is *where the write is committed*, and the fix is the
+`paid()` treatment `$17B2`/`$1AB0` already give the `$1825` write, applied to the rest.
 
 **No longer a mean: the rotation's redraw.** `$1F9F update_object_on_screen` **does** run
 headless — it needs no render context on the branch the enemy clock takes. It calls
@@ -469,9 +516,12 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** Charging `$17CD..$17E8` and the held `$17F9` gate at their instruction
-counts, and then re-running the per-round `$16B5` oracle until it is exact on every
-non-rotating round; after that, the `$1FFC` strip replot.
+**Resolves.** Committing each CORE write only once its own offset inside the segment is
+paid, the way `$17B2`/`$1AB0` already defer the `$1825` write through `paid()`: the `$16ED`
+reload behind `CONSIDER_ENTRY`, the `$1809`/`$1813` rotate writes behind their 65/72, and
+the `$1825`/`$1835` pair behind theirs. The `$16ED` case is pinned as a strict xfail,
+`test_the_body_commits_its_core_writes_at_the_roms_own_cycle`: it steps the ROM to the
+cycle the write lands on and asks the model for it on every smaller budget.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -555,7 +605,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) landed, so
+  [8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.

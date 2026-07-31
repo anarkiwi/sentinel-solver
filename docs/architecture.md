@@ -261,8 +261,12 @@ what makes the split exact rather than one-unit-coarse: when the budget runs out
 `$1887` and the `$1825` its answer causes, the model suspends there and commits on resume,
 recomputing the query for free because its cycles are already paid.
 
-The body is the open residual for a different reason now — its cycle *cost*, not its
-atomicity: [open_items.md 8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail).
+The split is exact in both directions the model can be asked about: suspending anywhere
+costs the same total and leaves the same CORE bytes
+(`test_the_body_split_is_exact_wherever_the_frame_ends`), and the cost of every segment is
+the ROM's own. What is *not* exact is where inside a segment each CORE write lands — the
+body applies them at the segment's start, the ROM at its own offset:
+[open_items.md 8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early).
 
 Every term is an instruction count off the disassembly, reproduced by running the real code
 in the jennings oracle:
@@ -362,8 +366,12 @@ when it crosses a page (`$1CF1`/`$1CF9`→`$1D44`, `$1D18`/`$1D40`→`$1CE8`). `
 prepare_vector_from_angle` is priced the same way, down to `$0D03`'s shift-adds, and so
 is the whole `$1887` bearing chain — `$8401`, `$9287` with its variable-length
 `$92C1`/`$92FF` shift loop, `$0D4A`, `$933D` and `$937F`. Every one of those is
-cycle-exact against the jennings oracle; what is left over is upstream of them,
-[open_items.md 8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail).
+cycle-exact against the jennings oracle — `$1887` itself over every occupied slot as
+target, asked for as a robot and as its own type, from every enemy aimed at the player and
+turned away (`test_the_see_cost_model_matches_the_roms_own_1887`), and `$1AB0` over its
+whole loop with the board's top-of-tile objects restacked so the drain half runs
+(`test_the_tile_scan_cost_model_matches_the_roms_own_1ab0`); what is left over is upstream,
+[open_items.md 8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early).
 
 `IRQ_CYCLES` is the one term measured rather than counted, and it is three mechanisms, all
 read off the machine with VICE's `cpuhistory` (an absolute cycle stamp per instruction, so
@@ -611,12 +619,12 @@ foreground work folded into a settle constant.
 | `$125A`/`$1272` | `get_random_tile_coordinate` | a `prnd` draw masked to 0..31, rejecting 31 | `enemies._random_tile_coord`, `landscape._random_tile_coord` | `golden_landscape` |
 | `$127C` | `update_game` | the per-pass game update |  |  |
 | `$1281` | (in `update_game`) | zeroes the action latch `$0C51` | `kbd_aim.tap_action` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
-| `$1289` | `update_game_loop` | calls `update_enemies` once per main-loop pass | `enemies.CURSOR_SLOTS` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
+| `$1289` | `update_game_loop` | calls `update_enemies` once per main-loop pass | `enemies.CURSOR_SLOTS` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$12D0` | `consider_player_action` | requires the sights active before create/absorb/transfer | `kbd_aim.tap_action` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$12D5` | (in `consider_player_action`) | `CMP #$22 / BCS $12DE` — codes `>= $22` skip the sights check | `playerbase._aim_unfreeze_split` | `test_settle_accuracy.py` |
 | `$12E1` | (in `consider_player_action`) | `LSR $0CE5` — the first action unfreezes the enemy clock | `actions._mark_player_acted` | `test_settle_accuracy.py` |
-| `$130C` | `update_enemy_cooldowns` | per-frame Bresenham: `$1335 += $CD`, call `$1317` on carry | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
-| `$1317` | `update_enemy_cooldowns` | decrement stage, every third carry (gated by `$0C50`) | `enemies.tick_cooldowns` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
+| `$130C` | `update_enemy_cooldowns` | per-frame Bresenham: `$1335 += $CD`, call `$1317` on carry | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
+| `$1317` | `update_enemy_cooldowns` | decrement stage, every third carry (gated by `$0C50`) | `enemies.tick_cooldowns` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$134C` | `initialise_sights` | a sights-ON toggle re-centres the cursor to `$0CC6`=80 / `$0CC7`=95 | `playerbase.SIGHTS_CENTRE`, `kbd_aim.sights_set` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$1363` | `check_for_player_input` | the ungated input scan (three callers) | `kbd_aim.ACTION_CODE` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$139C` | action-code table | maps a key to the action code latched in `$0CE9` | `sentinel_execute.CREATE_KEY` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
@@ -783,11 +791,11 @@ foreground work folded into a settle constant.
 | `$35C3`/`$35C6` | (in `play_landscape_loop`) | the two `plot_world` passes | `projector.REPLOT_PASSES`, `playerbase._settle_eye` | `test_settle_accuracy.py` |
 | `$35D5` | `wait_for_end_of_tune` | spins until the tune's bit 7 sets | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
 | `$3603` | `landscape_completed` | sets `$0CDE` bit 6 — the win | `memmap.LANDSCAPE_COMPLETE`, `actions.won` | read back out of live memory by the driver |
-| `$363D` | `update_game_and_continue` | the main loop; no vsync wait | `enemies.advance_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
+| `$363D` | `update_game_and_continue` | the main loop; no vsync wait | `enemies.advance_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$3642` | viewpoint redraw entry | into `play_landscape_loop` | `kbd_aim._run_to_scan` | `test_settle_accuracy.py` |
 | `$365A`/`$365D` | (in the main loop) | the `JSR pan_viewpoint` call site and the pan-done PC | `kbd_aim.PC_PAN_DONE` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$3682` | (in the main loop) | skips the enemy clock while `$0CE5` bit 7 is set | `playerbase._frozen`, `actions._mark_player_acted` | `test_settle_accuracy.py` |
-| `$3684` | scroll loop | ticks cooldowns while scrolling; mutually exclusive with `$9663` | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
+| `$3684` | scroll loop | ticks cooldowns while scrolling; mutually exclusive with `$9663` | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$3700` | grid projection-table build | per **position**, all 1024 tiles, into `$BC00`/`$C000`/`$C400`/`$C800`; `$35BD` runs it once per play redraw and no pan or strip rebuilds it | `projector.SETTLE_FIXED_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
 | `$37F2` | — | the play path's examine: the same plottables off `$3700`'s table less the camera reference `$001F`/`$00B0`/`$00B1`/`$00B2`, no trig and no object-stack walk | `projector._project`, `passcost.TAB_*` | `golden_render_cost`, cycle-exact on all 15 views |
 | `$3B00`/`$3C01` | arctan coefficient tables | reproduced closed-form, byte-exact | `relative._ARCTAN_LO`/`_HI` | closed form, byte-exact against the ROM table |
@@ -801,9 +809,9 @@ foreground work folded into a settle constant.
 | `$9287` | `calculate_angle` | bearing from a relative x/y pair | `relative._calc_angle` | `golden_relative` |
 | `$933D` | `calculate_object_relative_vertical_angle` | pitch from z and distance | `relative._vertical_angle` | `golden_relative` |
 | `$937F` | `calculate_hypotenuse` | horizontal distance | `relative._calc_hypotenuse` | `golden_relative` |
-| `$9630` | raster frame marker | `DEC $0CDF`; one `$9630`→`$9630` span is exactly one frame | `driver.clock.frames`/`run_frames` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
-| `$9659` | (in the raster IRQ) | skips the enemy clock while frozen | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
-| `$9663` | (in the raster IRQ) | the once-per-frame cooldown tick | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
+| `$9630` | raster frame marker | `DEC $0CDF`; one `$9630`→`$9630` span is exactly one frame | `driver.clock.frames`/`run_frames` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
+| `$9659` | (in the raster IRQ) | skips the enemy clock while frozen | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
+| `$9663` | (in the raster IRQ) | the once-per-frame cooldown tick | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$9678`/`$967B` | gated full input scan | the driver's press window | `kbd_aim._run_to_scan`, `playerbase.TAP_FRAMES` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$98B2` | `plot_status_bar` | fixed per-settle foreground work |  | folded into `projector.SETTLE_FIXED_FRAMES`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
 | `$9925` | `PAN_DELTA` table | `$14/$F8/$04/$F4` added before the pan's `plot_world` | `pancost.PAN_DELTA` | `golden_pan_cost` |
@@ -1369,7 +1377,7 @@ and the whole `$9730` flush over `$211B`. `seed_sim` charges the sum as a cycle 
 at `$1884`'s `JMP $16D6` (`pass_phase` `PHASE_BODY`, `body_stage` `BODY_DONE`: the body is
 done, the prnd is not) and applies the `$2003`/`$2008` camera restore on the frame that debt
 clears. What it is worth, and what it still owes, is
-[open_items.md 8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail).
+[open_items.md 8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early).
 
 **Status:** no CORE divergence within 1200 frames on ls42;
 `driver/test_enemy_sim_divergence.py::test_enemy_sim_frame_locked_to_live_ls42` gates 600 frames
@@ -1420,7 +1428,7 @@ checks it against the stepped loop over the whole `(accumulator, gate)` space.
 | ls335 | 7 | async | 117 | 117/117 | 89/117 |
 
 The cooldown clock round-trips perfectly everywhere; the ls335 facing gap is
-[open](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail). In aggregate the
+[open](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early). In aggregate the
 action-cost bill lands just under the measured span between genuine player actions, which is what
 a correct bill must do — the human's think time sits on the measured side. Applying the action
 last in its span, 83 of 91 exact-span actions reproduce the human's next energy; the misses are
