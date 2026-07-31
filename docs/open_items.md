@@ -140,14 +140,14 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock underprices `consider_enemy_state`'s own tail
+## 8. The enemy clock: what is left is the redraw and the frame budget
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
-enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
-sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
-`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and what
-is left is `consider_enemy_state`'s own line between the robot scan and `$1AB0`.
+ls9795 (**144** events) and on ls335 (**62**). ls42 is clean: **0 over 3000 frames**. Every
+event is an enemy's `update_cd` reading 4 in the machine where the sim still reads 1 — one
+`$16ED` reload the sim reaches a frame late — or the `$1805` rotation that follows from it.
+Neither the `$1887` chain nor `$16E6`'s own line is the cause any more: both are now
+cycle-exact against the ROM (below), and what is left is charged per frame, not per pass.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -161,9 +161,10 @@ directly. Over **1500 live frames a board**:
 | `$16D6 JSR $31CA` prnd | 52.3% | 26.8% | 17.4% |
 | `$16D9..$12C7` cursor, loop tail and `$191F` | 38.4% | 22.1% | 15.9% |
 
-That column orders the three boards exactly as the divergence count does, and it is the
-column that says the residual is a **body** problem: only `consider_enemy_state` writes a
-CORE field, and only on the two boards whose rays reach the board edge.
+That column orders the three boards exactly as the divergence count still does, and it is
+what sent the search into the body — where five means were indeed found. It no longer says
+where the residual is: the body it names is now cycle-exact, and the boards keep their
+order because a long body is what makes a per-frame error visible at all.
 
 **What the sub-pass and sub-body splits fixed.** A pass is spent in four segments with
 `pass_phase` naming the resume point, and `consider_enemy_state` itself in ten stages with
@@ -209,20 +210,52 @@ the two-probe robot path, and over a whole 8x64 scan run as one sequence on one 
 `$1CDD` is exact over random rays on five boards; `$1C54` over all 55296 angle/fraction
 pairs; `$9287` and `$933D` over thousands of random inputs.
 
-**Where it stops, exactly.** Stepping `$16B5 update_enemies` one round at a time against
-the same oracle (reseeding the machine from the sim each round) is exact for the first 60
-ls9795 rounds and then **+10 cycles** on about a quarter of the rounds after it. The line
-that is short is `consider_enemy_state`'s own tail once the robot scan is exhausted:
-`$17CD LDY $0F` + `$17CF BMI $17E0` + `$17E0 LDA #0` + `$17E2 STA $0C20,X` +
-`$17E5 JSR $1AB0` + `$17E8 BCS $17F9` is 22 cycles that `enemies._scan_for_robot` charges
-as `TILE_SCAN_FIXED` (10, which is `$1AB0`'s own entry and exit), and the `$17F9` rotate
-gate is 14 when it holds (`$1800 BCC` not taken + `$1802 JMP $16D6`) against the charged
-`ROTATE_GATE` 12. Nothing here needs anything the 64 KB image does not carry.
+**Measured — the body is now exact.** Stepping `$16E6 consider_enemy_state` one round at a
+time against the same oracle, comparing **every** round the play loop dispatches, is
+cycle-exact on ls42, ls335, ls9795, ls0, ls60, ls110, ls298 and ls373 — gated, marching,
+rotating, held-target, draining and discharging rounds alike
+(`test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count`). Getting there priced
+five regions that were means or were not charged at all:
 
-**Also still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723,
-the mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the
-oracle stubs it because it writes the render buffer — so it is the one `$16B5` term the
-per-round oracle cannot check, and it is spent once per rotation.
+* **`$16E6`'s own line.** `CONSIDER_ENTRY` folded the `$16FA` meanie branch,
+  `CONSIDER_PREAMBLE` folded the `$1782`/`$1798` gates *and* the scan init, and `SCAN_FIXED`
+  charged that init a second time. `SCAN_SLOT` was one shape of five (22 hidden, 27 unseen,
+  25 full, 34 another robot's head, 36 the player's). `$17CD..$17E8`, the held-target line
+  `$1795..$17A9`, `target_object $1825` and the `$1876` redraw tail were charged **nothing**.
+* **`$1AB0`.** Its entry and its exhausted exit were one constant, the last slot's untaken
+  `$1AF0 BPL` was overcharged, a boulder top's `$1ADF` compare was priced as a tree's, and
+  the hit exit omitted `$1AE6 LDA $14` and its own `RTS`.
+* **`reduce_object_energy $1A08`.** Every drain was free. It is now charged per target kind,
+  with `$1AF4`'s update gate, `remove_object $1EEF` (86 on a stack, 94 on the ground) and
+  the `$1A4F` energy bank.
+* **`plot_status_bar $9508`.** A player drain replots the bar. It pads to fixed columns, so
+  its whole cost is a function of the energy byte the drain just wrote — exact over 0..39.
+* **The discharge.** `DISCHARGE_FIXED` 100 and `DISCHARGE_TRY` 966-a-draw were means over
+  `$211D create_object`, `$1238`'s tile hunt and `$1F16 put_object_in_tile`; each is now
+  charged per slot walked, per lap by the test that lap failed, and per `$1272` draw (445,
+  plus 440 for each draw masking to `$1F`).
+
+**Where it stops now.** At ls9795 frame 66 the sim reaches the *same* consider exactly one
+frame after the machine while its cumulative pass count matches, so the residual is a few
+hundred cycles a frame, not a pass — it is in the per-frame budget and in the one term the
+per-round oracle cannot see, not in the body it can.
+
+**Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
+mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
+stubs it because it writes the render buffer — and it is spent by **every** `$1876` exit: a
+turn's redraw, a drain's and a discharge's. Three paths now carry a ±150-cycle mean.
+
+**Still a mean: the frame budget.** `FOREGROUND_CYCLES` = 15614 is `PAL_FRAME_CYCLES` less a
+constant `IRQ_CYCLES`, but the live `$9630` handler is not constant: `full_9630_wall` in
+`fixtures/live_pass_cycles.json` records 2683..2705 on ordinary frames and 3079..3153 on the
+frames whose `$130C` runs the 24-byte walk, and `foreground_cpu_per_frame` spans
+15124..15593 with a 15575 median against the model's 15593 cheap-frame value. The badline
+steal inside the handler is hardware, but `$95E9`, `$119F` and `$1635` are all in the image,
+so the handler's own line is countable and is not counted.
+
+**Still a mean: `$3470`.** `start_tune` ends in `JMP $FFF1`, a vector outside the 64 KB
+image, so it cannot be counted at all. `TUNE` keeps the live 323 the rotation measures and
+the drain's own tune at `$1A1F` is charged the same number.
 
 **Not `$0078`.** `$0D4A` does **not** clear `$0078` before round 10: `$0DF1 ROR $78` rotates
 the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so bit 0 of the
@@ -258,9 +291,9 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** Charging `$17CD..$17E8` and the held `$17F9` gate at their instruction
-counts, and then re-running the per-round `$16B5` oracle until it is exact on every
-non-rotating round; after that, `ROTATE_REDRAW`.
+**Resolves.** Counting the `$9630` handler's own line per frame instead of charging a
+constant, which needs a live cycle probe the driver does not have yet; and then `$1F9F`,
+which needs the render context the oracle cannot give it.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -344,7 +377,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) landed, so
+  [8](#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
