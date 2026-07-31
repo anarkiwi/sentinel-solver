@@ -836,12 +836,15 @@ cycles, ls0042, n=1249:
 
 Inside the body the sim is a tight **+10** cycles ahead — `b` plus the 7-cycle entry, which
 `badline.entry_cycles` already names and `advance_frame` does not apply. Past the body the
-error is pass-scale, not cycle-scale: `$1289`'s whole run is 25 cycles, so a machine offset of
-389..787 means the machine is elsewhere in the pass entirely. Median |error| by window index
-runs 10 inside the body, ~150 over the next four windows and ~480 by mid-frame, oscillating
-against ls0042's ~630-cycle idle pass. **At most windows the sim and the machine are not in
-the same routine**, so no per-window refund of any kind can track the machine until the
-within-frame phase does.
+error is pass-scale, not cycle-scale: `$16D6`'s own term is 433 cycles and its quartiles span
+-483..+146, so at a quarter of those windows the machine is in a *different pass's* prnd, and
+`$1289`'s whole run is 25 cycles against machine offsets of 389..787. Median |error| by window
+index runs 10 inside the body, ~150 over the next four windows and ~480 by mid-frame,
+oscillating against ls0042's ~630-cycle idle pass. **The sim's offset into its own term is
+not where the machine is**, so no per-window refund of any kind can track the machine until
+the within-frame phase does. (Comparing the *anchor's* routine against the machine's PC
+overstates this — a term legitimately spans into its callee, `$16D6` into `$31CA` and `$95E9`
+into `$119F` — so it is the offset, not the routine, that carries the measurement.)
 
 **So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
 callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can
