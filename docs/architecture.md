@@ -714,7 +714,7 @@ foreground work folded into a settle constant.
 | `$2170` | (in `do_hyperspace`) | kills on underflow | `actions.hyperspace` | `golden_actions` |
 | `$217F` | `player_survived_hyperspace` | sets `$0CDE` bit 6 when the jump left the platform tile | `actions.won` | read back out of live memory by the driver |
 | `$21AE` | `plot_stack_of_objects` | the per-tile object stack draw | `projector._inview_object_base` | `golden_projector` |
-| `$22AA` | `span_fill` | middle-of-polygon fill, 8 cycles per byte, 4 px/byte | `rendercost._span_fill` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)) |
+| `$22AA` | `span_fill` | middle-of-polygon fill, 8 cycles per byte, 4 px/byte | `rendercost._span_fill` | `golden_render_cost` |
 | `$23D0` | `plot_middle_of_row` | per-row span emit; the `$23DB` branch offset selects the entry into a 31-store unrolled loop | `rendercost._span_fill` | `golden_render_cost` |
 | `$245B` | `populate_tile_visibility_bit_table` | raytraced occlusion into the `$3E80`/`$24DA` bitmap | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$24E2` | `trace_rays_from_observer_to_row_of_tiles` | the fixed-point DDA occlusion raytrace | `projector._occlusion_visible_py.trace` | tile-for-tile against the ROM `$3E80` bitmap |
@@ -773,7 +773,9 @@ foreground work folded into a settle constant.
 | `$3D02` | hypotenuse coefficient table | reproduced closed-form, byte-exact | `relative._HYP` | closed form, byte-exact against the ROM table |
 | `$8401` | `calculate_object_relative_angles_and_distance` | relative x/y (`$85C4`), z (`$85F5`), then the angles | `relative.relative_angles` | `golden_relative` |
 | `$8475` | object transform loop | per-vertex `transform_vertex` | `projector.C_VERTEX` | `golden_render_cost` |
-| `$8533` | `plot_object` | the object model draw | `projector.C_VERTEX` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)) |
+| `$8533` | `plot_object` | the object model draw | `objectcost.object_cycles` | `golden_object_cost`, every vertex byte-exact; `projector._inview_object_base`'s floor without the game image |
+| `$0F70` | `calculate_sine_and_cosine` | \|sin\| and \|cos\| from the `$AC80` quarter-turn table | `objectcost._sin_cos` | `golden_object_cost` |
+| `$9939`/`$994F` | the pan raster window | `$0051`/`$0052` from `$994B`/`$994D`: a pitch notch plots 64 rows, a bearing notch 192 | `pancost.PAN_ROWS` | `golden_pan_cost` |
 | `$888F` | `start_tune` | begins a tune, number in `$0CE7` | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
 | `$9287` | `calculate_angle` | bearing from a relative x/y pair | `relative._calc_angle` | `golden_relative` |
 | `$933D` | `calculate_object_relative_vertical_angle` | pitch from z and distance | `relative._vertical_angle` | `golden_relative` |
@@ -1006,9 +1008,10 @@ to plot is how many frames an action spends. `FRAME_CYCLES` = 19656 (PAL). Valid
 runs `plot_tile $2A24` → `prepare_polygon $2D6C` / `process_line` / `span_fill $22AA`, object
 tiles adding `$21AE`/`$8533`).
 
-`render_cost(state, view, observer, mode)` = the exact `$2845` examine cycles + the emulated
-fill (`rendercost.py`) + the object floor, over `FRAME_CYCLES`, memoized on
-`(scene_key, observer, h, v, mode)`. One uncached call is ~0.1 ms. With
+`render_cost(state, view, observer, mode, window, rows)` = the exact `$2845` examine cycles +
+the emulated fill (`rendercost.py`, `objectcost.py`), over `FRAME_CYCLES`, memoized on
+`(scene_key, observer, h, v, mode, window, rows)`. It lands within 0.92-0.98× of the ROM on
+every golden view, at 0.14-0.21 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
 exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles)).
 
@@ -1016,7 +1019,7 @@ exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-bac
 | --- | --- |
 | (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`), bar one `$0078`-stale branch a pass |
 | (b) terrain fill | sequence emulated (`rendercost.py`); within 5% of the ROM on 11 of 15 golden views |
-| (c) object fill | plotted set **exact**; per-object base floor, `plot_object`'s own polygons unmodelled |
+| (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
 
 **Occlusion is exact.** `projector._occlusion_visible` is a byte-exact port validated
 tile-for-tile against the ROM `$3E80` bitmap: (1) temp height table `$25C4`, per tile
@@ -1066,17 +1069,25 @@ What is genuinely stateful is `$0010`: `plot_polygon $2AA9` runs the other verti
 whenever a polygon clipped an edge (`$002C`/`$002D` ≠ 1) and leaves `$0010` toggled for the
 next tile, so the model carries it across the whole pass.
 
-**Object term.** `plot_object $8533` → transform loop `$8475`: per vertex `transform_vertex`
-runs `calculate_sine_and_cosine` + two `multiply_byte_by_byte` + `$9287` + `$937F` + `$933D`,
-charged as `C_VERTEX`, then per polygon the same `prepare_polygon`+`span_fill`. Model sizes
-come from engine facts `$9CA0`/`$9CA1` (verts) and `$9CAB`/`$9CAC` (polys): type 0=(29,27)
-1=(22,25) 2=(17,15) 3=(8,10) 4=(18,25) 5=(30,35) 6=(12,11) 7=(8,4). `_inview_object_base` sums
-a fixed per-object base over plotted object tiles' `$0100` stacks and, with object `span_fill`
-unmodelled, is a strict floor — the one term still fitted rather than emulated, and the whole
-of the model's remaining under-charge ([open item 5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)).
-`RENDER_C_VERTEX`/`RENDER_C_PREP_CALL`/`RENDER_SECTIONS` stay env-overridable but are
-ROM-derived: a perturbation smaller than the model's own error can flip a knife-edge board, so
-tuning them to win one is evidence of nothing.
+**Object term.** `plot_stack_of_objects $21AE` walks the tile's stack — the levels at or below
+the eye bottom-up, then the rest top-down — and `plot_object $8533` draws each: `$8401` for the
+observer-relative angles and distance, `$8475` to transform every model vertex, then `$856F`
+over the object's polygons through the same `plot_polygon $2AA9` the terrain uses. Per vertex
+`$0F70` reads |sin| and |cos| out of the `$AC80` quarter-turn table, two `$0D03` multiplies
+scale the radius, and `$9287`/`$937F`/`$933D` give the screen coordinates — all already
+cycle-counted in `relative.py`. A concave model (`$9CB6`) is drawn in two passes chosen by its
+orientation (`$854D`), and a distant object (`$8536 CMP #$0F`) sets `suppress_lines $0C7A` bit 7
+for its own polygons, which `span_fill` pays 21 cycles more for and `$85BE` clears after.
+
+`objmodel.py` reads the geometry — `$9CA0`/`$9CAB` bounds, `$9DE0`/`$9F20`/`$A060` per vertex,
+`$A1A0`/`$A2E0`/`$A420` per polygon, `$AC80` — from `out/sentinel_stage2.bin`, the same
+gitignored image the oracle tests use; nothing of it is carried in the repo. With the image
+present every transformed vertex is byte-identical to the ROM's
+(`test_objectcost.py`, `golden_object_cost.json`) and `plot_object`'s own cost lands within a
+few percent. **Without the image, or without numba**, `_inview_object_base` charges the old
+per-object floor instead (`C_VERTEX` per vertex plus a `prepare_polygon` call per polygon per
+section), which is a strict under-charge; that is the only fidelity difference between the two
+modes and it is the one term still fitted rather than emulated.
 
 **Transfer settle `$357D`.**
 

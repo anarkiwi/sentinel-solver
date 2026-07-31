@@ -98,36 +98,37 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Object fill is a floor; the terrain fill is emulated
+## 5. The render model under-charges by the walk it does not price
 
-**Wrong.** `_inview_object_base` charges a fixed per-object base (`C_VERTEX` per vertex plus a
-`prepare_polygon` call per polygon per section) and does not model `plot_object`'s own
-`process_line`/`span_fill`, so `render_cost` under-charges every view with an object in it.
+**Wrong.** `render_cost` prices `$2845`, the terrain fill and the object fill, but not the
+`$26DE`/`$27D7` row scan, the `$295D` plot loop's own laps or `$2993`, so it under-charges
+every view.
 
-**Measured.** Against the golden's subtree split, the terrain side is now emulated
-([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)) and the
-$2845 tree is cycle-exact, so the whole residual is the object term: total frame cost is
-0.91-0.98x the ROM on the 10 golden views with little or no object fill and 0.63-0.80x on the
-five carrying 130k-555k object cycles. The terrain fill itself is within 5% on 11 of the 15
-views; the remaining terrain error is on polygons whose vertices leave the inner area and drive
-`process_line`'s sectioning and `process_wide_line`, where the model's section count and the
-`$0043` x-step high byte are approximate.
+**Measured.** Against the golden's exact subtree split the model is 0.92-0.98× the ROM on all
+15 views (median 0.961, mean absolute error 4.2%) and the error is one-signed: it never
+over-charges. Flat PC-range attribution puts `$2625`-`$2844` at 4.1-7.8k cycles a pass,
+`$295D`-`$2A11` at 4.6-8.4k and `$2A12`'s own entry inside the modelled term — 2-3% of a pass,
+which is the residual's size and shape.
 
-**Why the object term cannot simply be emulated.** `plot_object $8533` transforms the model's
-vertices through `calculate_sine_and_cosine` and two `multiply_byte_by_byte` each, then runs
-the same `prepare_polygon`/`span_fill` the terrain does. That needs the vertex and face tables
-in the game image, which is copyrighted and not distributed; only the per-type vertex/polygon
-counts (`$9CA0`/`$9CA1`, `$9CAB`/`$9CAC`) are engine facts the model may carry. A ROM-gated
-object emulation would be exact only where `RENDER_COST_BACKEND=py65` already is.
+**Also not derived.**
 
-**Also not derived.** One `$2845` call a pass is ~90 cycles cheap because `divide_and_arctan`'s
-`$0E30 BVS` reads bit 6 of `$0078`, which the previous call left there;
-`relative._divide_and_arctan` starts it at 0 and cannot know better without whole-zero-page
-emulation. And `$0028` (the `$29C7` half-column fraction) is modelled as 0, which is right for
-every `$2993` mode but not for an odd-width strip replot.
+- **`$0078` carries a bit between calls.** One `$2845` a pass is ~90 cycles cheap because
+  `divide_and_arctan`'s `$0E30 BVS` reads bit 6 of `$0078`, which the *previous* call left
+  there; `relative._divide_and_arctan` starts it at 0 and cannot know better without
+  whole-zero-page emulation. Bisected to that single byte against the live machine; 0.04% of
+  the examine term.
+- **`$0028`** (the `$29C7` half-column fraction) is modelled as 0, right for every `$2993` mode
+  but not for an odd-width strip replot.
+- **Wide-polygon sections.** `$3002`'s section count and `$30BD`'s area walk are emulated, but
+  `$3030`'s two overflow guards are modelled as a loop rather than the ROM's re-entry, so a
+  line needing exactly that guard can get one section too many.
+- **The object term without the game image.** `objectcost` needs the model geometry, so a
+  checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
+  `_inview_object_base`'s floor and under-charges every object
+  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Pricing `plot_object`'s polygons from the observer-relative model geometry,
-ROM-gated, and closing the wide-polygon sectioning residual.
+**Resolves.** Pricing `$26DE`, `$27D7` and `$295D` from their own branches, the way `$2845`
+and the fill now are.
 
 ## 6. The py65 exact backend skips transfer settles
 
