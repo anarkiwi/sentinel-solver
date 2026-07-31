@@ -599,11 +599,10 @@ def _get_tile_z_from_object(vec, state, raw, c56, cdd, c58):
     calculate_tile_address_z_and_slope ($1E00 BCS).
 
     Every exit leaves carry CLEAR, so the caller always takes check_flat_tile.
-    Returns (z, s79, c0c, c67, c56, cdd, s60, cycles), the cycles net of the flat
-    continuation MARCH_STEP already carries."""
+    Returns (z, s79, c0c, c67, c56, cdd, s60, cycles)."""
     s60, s79, c0c, c67 = 0x80, 0, 0x80, 0
     raw &= 0xFF
-    cyc = passcost.OBJ_ENTRY - passcost.OBJ_FLAT_TAIL
+    cyc = 0
     for _ in range(80):  # bound the stack walk
         Y = raw & 0x3F  # $1E3F AND #$3F ; TAY
         do_ghol = False
@@ -729,18 +728,32 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
     c6e = do_los_checks & 0xFF
     tx = ty = 0
     cycles = 0
+    # $1CBB costs 4 more per component whose high byte is negative ($1CCC DEC $0074);
+    # the signs are fixed for the whole march, so the sub-step's fixed part is too.
+    neg = sum(1 for h in (vec.vy_hi, vec.vz_hi, vec.vx_hi) if h & 0x80)
+    step_fixed = (
+        passcost.ADD_VECTOR
+        + passcost.ADD_VECTOR_NEG * neg
+        + 2 * passcost.STEP_EDGE
+        + passcost.STEP_SETUP
+        + passcost.TILE_Z_CALL
+        + passcost.TILE_ADDR
+        + passcost.TILE_Z_READ
+    )
     # bound the march like the ROM's natural board-edge exit; an off-board ray
     # eventually trips the $1F edge test. Cap to avoid an infinite near-horizontal
     # ray (treated as no-LOS, walked off board).
     for _step in range(max_steps):
-        cycles += passcost.MARCH_STEP  # $1CE8: every sub-step pays the fixed body
+        cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
         _add_vector(vec)
         # $1CEB LDA $003A -> $0024 ; CMP #$1f ; BCS leave_with_carry_set
         tx = vec.px_whole
         if tx >= 0x1F:
+            cycles += passcost.STEP_EDGE_EXIT - passcost.STEP_EDGE + passcost.LEAVE_SET
             return tx, ty, False, cycles
         ty = vec.py_whole  # $003C -> $0026
         if ty >= 0x1F:
+            cycles += passcost.STEP_EDGE_EXIT + passcost.LEAVE_SET
             return tx, ty, False, cycles
         # $1CFB LDA #$80 ; STA $0060 ; STA $000C ; $1D01 LDA #0 ; STA $0079 ;
         # $1D05 STA $0C67 (clear boulder-consider flag).
@@ -749,12 +762,8 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         s79 = 0
         c67 = 0
         z, slope, carry_set, is_obj, raw = _calc_tile_z_and_slope(state, tx, ty)
-        if carry_set and not is_obj:
-            cycles += (
-                passcost.MARCH_SLOPE_EDGE
-                if slope in (0x04, 0x0C)
-                else passcost.MARCH_SLOPE_QUAD
-            )
+        cycles += passcost.TILE_Z_OBJ if is_obj else passcost.TILE_Z_FLAT
+        cycles += passcost.SLOPE_BRANCH if carry_set else passcost.FLAT_BRANCH
         if is_obj:
             # $1E00 BCS get_tile_z_from_object: faithfully walk the object stack. This
             # sets z (surface high byte), $0079 (surface fraction), $000C (tolerance),
@@ -775,6 +784,7 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         if not carry_set:
             # check_flat_tile $1D0D
             # X=A(=z) ; A=$0079(=s79) ; SEC SBC $0038(pz_sub) -> $0079
+            cycles += passcost.FLAT_DIFF
             tX = z & 0xFF
             t = s79 - vec.pz_sub
             s79 = t & 0xFF
@@ -785,45 +795,59 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
             d = (tX - vec.pz_whole - borrow) & 0xFF
             if d & 0x80:
                 # BMI: 8-bit result negative -> tile below position, keep marching
+                cycles += passcost.FLAT_BELOW
                 continue
             if d != 0:
                 # BNE leave_with_carry_set: tile above position
+                cycles += passcost.FLAT_ABOVE + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_TOL
             # equal high byte: $1D1C LDA $0079 ; CMP $000C; BCS leave_set
             # ($000C defaults to $80 but the object path lowers it to $10 for a
             # near-centre platform -- a tight vertical tolerance.)
             if (s79 & 0xFF) >= c0c_var:
+                cycles += passcost.FLAT_TOL_HIT + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_BIT60
             # $1D22 BIT $0060 ; $1D24 BVS leave_set -- $0060 bit6 ($40) is set if a
             # SLOPE or an OBJECT has been checked (partial-obscure rejection). Note
             # this is the LOCAL $0060 (set $C0 by the object path / $40 by a slope),
             # NOT $0C6E.
             if s60 & 0x40:
+                cycles += passcost.FLAT_BIT60_HIT + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_ANGLE
             # $1D26 LDA $0C6E ; $1D29 ORA $0C67 ; $1D2C BMI skip_angle_check
             # ($0C67 top bit = a boulder on this tile is TARGETABLE -> SKIP the
             # looking-up rejection, so a centre-aimed boulder above the eye is
             # visible/buildable.)
             if (c6e | c67) & 0x80:
-                pass  # skip angle check
+                cycles += passcost.FLAT_ANGLE_SKIP
             else:
+                cycles += passcost.FLAT_LOOKUP
                 # LDA $0030 (vector_z high = vec.s30) ; BPL leave_set (looking up)
                 if not (vec.s30 & 0x80):
+                    cycles += passcost.FLAT_LOOKING_UP + passcost.LEAVE_SET
                     return tx, ty, False, cycles
             # skip_angle_check $1D32: same tile as observer? keep marching, else clear
             ox = state.obj_x[slot]
             oy = state.obj_y[slot]
-            if (tx & 0xFF) == (ox & 0xFF) and (ty & 0xFF) == (oy & 0xFF):
+            cycles += passcost.FLAT_SAME
+            if (tx & 0xFF) != (ox & 0xFF):  # $1D39 BNE leave_with_carry_clear
+                cycles += passcost.FLAT_SAME_X_DIFF
+                return tx, ty, True, cycles
+            cycles += passcost.FLAT_SAME_Y
+            if (ty & 0xFF) == (oy & 0xFF):
+                cycles += passcost.FLAT_SAME_HIT
                 continue  # same tile as observer -> keep going
+            cycles += passcost.FLAT_SAME_Y_DIFF
             return tx, ty, True, cycles  # leave_with_carry_clear (LOS!)
         else:
             # check_sloping_tile $1D46
-            res = _check_sloping_tile(vec, state, tx, ty, z, slope)
+            res, scyc = _check_sloping_tile(vec, state, tx, ty, z, slope)
+            cycles += scyc
             if res == "loop":
                 continue
-            if res == "blocked":
-                return tx, ty, False, cycles
-            # res == "clear" doesn't happen from slope (it only loops or blocks)
             return tx, ty, False, cycles
     return tx, ty, False, cycles
 
@@ -900,8 +924,8 @@ def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
 
 
 def _check_sloping_tile(vec, state, x, y, z00, slope):
-    """check_sloping_tile $1D46. Returns 'loop' (vector above the slope, keep
-    marching) or 'blocked' (vector below the slope -> tile hit, no LOS).
+    """check_sloping_tile $1D46. Returns (verdict, cycles): 'loop' (vector above the
+    slope, keep marching) or 'blocked' (vector below the slope -> tile hit, no LOS).
 
     The four corner heights:
       $0073=$0077 = z at (x,y)        [the calculate_tile_address_z_and_slope value
@@ -910,46 +934,56 @@ def _check_sloping_tile(vec, state, x, y, z00, slope):
       $0075 = z at (x+1, y+1)
       $0074 = z at (x,   y+1)
     """
+    cyc = passcost.SLOPE_HEAD
     p73 = z00 & 0xFF
     _p77 = z00 & 0xFF
     # INC $0024 -> z at (x+1,y) -> $0076
-    z76 = _slope_corner_z(state, x + 1, y)
-    p76 = z76
+    p76, c = _slope_corner_z(state, x + 1, y)
+    cyc += c
     # INC $0026 -> z at (x+1,y+1) -> $0075
-    z75 = _slope_corner_z(state, x + 1, y + 1)
-    p75 = z75
+    p75, c = _slope_corner_z(state, x + 1, y + 1)
+    cyc += c
     # DEC $0024 -> z at (x,y+1) -> $0074
-    z74 = _slope_corner_z(state, x, y + 1)
-    p74 = z74
+    p74, c = _slope_corner_z(state, x, y + 1)
+    cyc += c
     # DEC $0026 ; calculate_tile_address ; read slope nibble
     nib = tile_byte(state, x, y) & 0x0F
     # CMP #$4 BEQ ... CMP #$c BNE tile_is_corner_or_quad
-    if nib == 0x04 or nib == 0x0C:
+    if nib in (0x04, 0x0C):
+        cyc += passcost.SLOPE_NIB_4 if nib == 0x04 else passcost.SLOPE_NIB_12
         # tile_has_one_flat_and_one_sloping_edge: compare $003B against all 4 corners
+        cyc += passcost.SLOPE_EDGE_LDA
         b = vec.pz_whole & 0xFF
         for corner in (p73, p74, p75, p76):
             if b >= corner:  # BCS to_loop
-                return "loop"
-        return "blocked"  # vector below all four -> hit
+                return "loop", cyc + passcost.SLOPE_EDGE_HIT
+            cyc += passcost.SLOPE_EDGE_MISS
+        return "blocked", cyc + passcost.SLOPE_EDGE_BLOCK
     # tile_is_corner_or_quadrilateral $1D8A
-    return _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76)
+    verdict, qcyc = _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76)
+    return verdict, cyc + passcost.SLOPE_NIB_QUAD + qcyc
 
 
 def _slope_corner_z(state, x, y):
-    """The corner-height read inside check_sloping_tile: calculate_tile_address_z_
-    and_slope returns A = tile z (high nibble) for a flat read; for object tiles it
-    resolves the object base z. Here it is used purely as a corner height."""
+    """One $1D4E/$1D55/$1D5C corner read inside check_sloping_tile.
+
+    $1D4A LSR $0060 clears bit7, so an object tile takes $1E44 BPL straight to
+    get_height_of_lowest_object and leaves no trace.  Returns (z, cycles)."""
+    cyc = passcost.TILE_Z_CALL + passcost.TILE_ADDR + passcost.TILE_Z_READ
     z, _slope, _carry_set, is_obj, raw = _calc_tile_z_and_slope(
         state, x & 0xFF, y & 0xFF
     )
-    if is_obj:
-        o = raw & 0x3F
-        for _ in range(64):
-            if state.obj_flags[o] < 0x40:
-                break
-            o = state.obj_flags[o] & 0x3F
-        return state.obj_z_height[o] & 0xFF
-    return z & 0xFF
+    if not is_obj:
+        return z & 0xFF, cyc + passcost.TILE_Z_FLAT
+    cyc += passcost.TILE_Z_OBJ
+    o = raw & 0x3F
+    for _ in range(64):
+        cyc += passcost.OBJ_HEAD_GHOL
+        if state.obj_flags[o] < 0x40:
+            break
+        cyc += passcost.OBJ_GHOL_LOOP
+        o = state.obj_flags[o] & 0x3F
+    return state.obj_z_height[o] & 0xFF, cyc + passcost.OBJ_GHOL_RTS
 
 
 _EDGES = (0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03)  # the $1DF1-$1DF8 ROM table
@@ -959,16 +993,18 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     """$1D8A-$1DEE, literal instruction-faithful port (corner/quadrilateral slope).
     The 6502 control flow here is bit-intricate (the $1D8B BCC lands on $1D9C, an
     EXTRA LSR before use_corner_for_slope), so we transcribe it opcode-by-opcode with
-    explicit A and the carry flag. Returns 'loop' (ray above slope -> keep marching)
-    or 'blocked' (ray below slope -> tile hit)."""
+    explicit A and the carry flag. Returns (verdict, cycles): 'loop' (ray above the
+    slope -> keep marching) or 'blocked' (ray below it -> tile hit)."""
     # zero-page square: $73=p73, $74=p74, $75=p75, $76=p76, $77=p73 (first==last)
     corners = [p73 & 0xFF, p74 & 0xFF, p75 & 0xFF, p76 & 0xFF, p73 & 0xFF]  # $73..$77
 
+    cyc = 0
     A = nib & 0xFF
     # $1D8A LSR A
     C = A & 1
     A >>= 1
     if C == 0:
+        cyc += passcost.SLOPE_Q_C2
         # $1D8B BCC tile_is_corner_type_two -> target is $1D9C (an extra LSR)
         # $1D9C LSR A
         C = A & 1
@@ -980,10 +1016,10 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         A >>= 1
         # $1DA0 LDA $0037 (px_sub)
         A = vec.px_sub & 0xFF
-        if C == 0:
-            pass  # $1DA2 BCC skip_inversion
-        else:
+        if C:
             A ^= 0xFF  # $1DA4 EOR #$ff
+            cyc += passcost.SLOPE_Q_CORNER_EOR
+        cyc += passcost.SLOPE_Q_CORNER
         # $1DA6 CMP $0039 (py_sub): carry = A >= py_sub
         C = 1 if A >= (vec.py_sub & 0xFF) else 0
         # $1DA8 LDA $0078 ; $1DAA ROL A ; $1DAB TAY ; $1DAC LDA edges,Y
@@ -996,6 +1032,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         C = A & 1
         A >>= 1
         if C == 1:
+            cyc += passcost.SLOPE_Q_C1
             # $1D8E BCS tile_is_corner_type_two -> $1D95 (NOTE: no extra LSR here)
             # $1D95 ADC #$1 : A = A + 1 + C (C is the carry from $1D8D LSR, =1)
             A = (A + 1 + C) & 0xFF
@@ -1005,16 +1042,17 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
             C = A & 1
             A >>= 1  # $1D9F LSR A
             A = vec.px_sub & 0xFF  # $1DA0 LDA $0037
-            if C == 0:
-                pass  # $1DA2 BCC skip
-            else:
+            if C:
                 A ^= 0xFF  # $1DA4 EOR #$ff
+                cyc += passcost.SLOPE_Q_CORNER_EOR
+            cyc += passcost.SLOPE_Q_CORNER
             C = 1 if A >= (vec.py_sub & 0xFF) else 0  # $1DA6 CMP $0039
             A = ((s78 << 1) | C) & 0xFF  # $1DA8 LDA $0078 ; $1DAA ROL A
             Y = A
             A = _EDGES[Y] if Y < len(_EDGES) else 0
         else:
             # $1D90 AND #$1 ; $1D92 JMP use_edge_for_slope
+            cyc += passcost.SLOPE_Q_EDGE
             A = A & 1
 
     # use_edge_for_slope $1DAF: TAX ; LSR A ; LDY $0037 ; BCS use_x ; LDY $0039
@@ -1022,17 +1060,16 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     C = A & 1
     A >>= 1  # $1DB0 LSR A
     Yreg = vec.px_sub & 0xFF  # $1DB1 LDY $0037
-    if C:
-        pass  # $1DB3 BCS use_x_for_slope
-    else:
+    cyc += passcost.SLOPE_Q_TAIL
+    if not C:
         Yreg = vec.py_sub & 0xFF  # $1DB5 use_y_for_slope
+        cyc += passcost.SLOPE_Q_USE_Y
     C = A & 1
     A >>= 1  # $1DB7 LSR A
     A = Yreg  # $1DB8 TYA
-    if C == 0:
-        pass  # $1DB9 BCC skip_inversion
-    else:
+    if C:
         A ^= 0xFF  # $1DBB EOR #$ff
+        cyc += passcost.SLOPE_Q_INVERT
     s02 = A & 0xFF  # $1DBD STA $0002
 
     # $1DBF LDA $73,X ; STA $0078
@@ -1041,17 +1078,18 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     a = (corners[(X & 3) + 1] - corners[X & 3]) & 0x1FF
     res = a & 0xFF
     neg = bool(res & 0x80)  # PHP: N flag of the subtraction
-    if not neg:
-        pass  # $1DC9 BPL skip_inversion
-    else:
+    if neg:
         res = ((res ^ 0xFF) + 1) & 0xFF  # abs
+        cyc += passcost.SLOPE_Q_ABS
     s75 = res  # $1DD0 STA $0075
     # $1DD2 LDA $0002 ; $1DD4 JSR multiply_byte_by_byte ($0D03): $0074=$0002 * $0075
     prod_h, prod_lo = _mul8(s02, s75)  # A=high, $0074=low
+    cyc += passcost.MUL8_BIT * _bits(s02)
     # $1DD7 PLP ; $1DD8 invert_A_and_a_fraction_if_negative: invert (A:$0074) if the
     # slope subtraction (N flag we saved) was negative.
     if neg:
         prod_h, prod_lo = invert16(prod_h, prod_lo)
+        cyc += passcost.SLOPE_Q_NEG
     # $1DDB CLC ; ADC $0078 -> $0075
     s75b = (prod_h + s78) & 0xFF
     # $1DE0 LDA $0038 ; SEC ; SBC $0074(=prod_lo) ; LDA $003B ; SBC $0075(=s75b) ; BPL
@@ -1059,8 +1097,8 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     borrow = 1 if lo < 0 else 0
     hi8 = (vec.pz_whole - s75b - borrow) & 0xFF
     if hi8 & 0x80:  # BPL false -> below slope -> hit
-        return "blocked"
-    return "loop"
+        return "blocked", cyc + passcost.SLOPE_Q_BLOCK
+    return "loop", cyc
 
 
 # ============================================================================

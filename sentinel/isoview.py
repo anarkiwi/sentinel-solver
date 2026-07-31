@@ -81,10 +81,10 @@ def _corners(state, x, y):
     if not slope:
         return (z, z, z, z)
     return (
-        _slope_corner_z(state, x, y),
-        _slope_corner_z(state, x + 1, y),
-        _slope_corner_z(state, x + 1, y + 1),
-        _slope_corner_z(state, x, y + 1),
+        _slope_corner_z(state, x, y)[0],
+        _slope_corner_z(state, x + 1, y)[0],
+        _slope_corner_z(state, x + 1, y + 1)[0],
+        _slope_corner_z(state, x, y + 1)[0],
     )
 
 

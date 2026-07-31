@@ -32,9 +32,54 @@ LOS_CLEAR = 1
 BLOCKED = 0
 
 # Per-sub-step 6502 cost, bound as njit-visible globals (sentinel.passcost).
-_MARCH_STEP = passcost.MARCH_STEP
-_OBJ_FLAT_TAIL = passcost.OBJ_FLAT_TAIL
-_OBJ_ENTRY = passcost.OBJ_ENTRY
+_ADD_VECTOR = passcost.ADD_VECTOR
+_ADD_VECTOR_NEG = passcost.ADD_VECTOR_NEG
+_STEP_EDGE = passcost.STEP_EDGE
+_STEP_EDGE_EXIT = passcost.STEP_EDGE_EXIT
+_STEP_SETUP = passcost.STEP_SETUP
+_TILE_Z_CALL = passcost.TILE_Z_CALL
+_TILE_ADDR = passcost.TILE_ADDR
+_TILE_Z_READ = passcost.TILE_Z_READ
+_TILE_Z_FLAT = passcost.TILE_Z_FLAT
+_TILE_Z_OBJ = passcost.TILE_Z_OBJ
+_LEAVE_SET = passcost.LEAVE_SET
+_FLAT_BRANCH = passcost.FLAT_BRANCH
+_FLAT_DIFF = passcost.FLAT_DIFF
+_FLAT_BELOW = passcost.FLAT_BELOW
+_FLAT_ABOVE = passcost.FLAT_ABOVE
+_FLAT_TOL = passcost.FLAT_TOL
+_FLAT_TOL_HIT = passcost.FLAT_TOL_HIT
+_FLAT_BIT60 = passcost.FLAT_BIT60
+_FLAT_BIT60_HIT = passcost.FLAT_BIT60_HIT
+_FLAT_ANGLE = passcost.FLAT_ANGLE
+_FLAT_ANGLE_SKIP = passcost.FLAT_ANGLE_SKIP
+_FLAT_LOOKUP = passcost.FLAT_LOOKUP
+_FLAT_LOOKING_UP = passcost.FLAT_LOOKING_UP
+_FLAT_SAME = passcost.FLAT_SAME
+_FLAT_SAME_X_DIFF = passcost.FLAT_SAME_X_DIFF
+_FLAT_SAME_Y = passcost.FLAT_SAME_Y
+_FLAT_SAME_HIT = passcost.FLAT_SAME_HIT
+_FLAT_SAME_Y_DIFF = passcost.FLAT_SAME_Y_DIFF
+_SLOPE_BRANCH = passcost.SLOPE_BRANCH
+_SLOPE_HEAD = passcost.SLOPE_HEAD
+_SLOPE_NIB_4 = passcost.SLOPE_NIB_4
+_SLOPE_NIB_12 = passcost.SLOPE_NIB_12
+_SLOPE_NIB_QUAD = passcost.SLOPE_NIB_QUAD
+_SLOPE_EDGE_LDA = passcost.SLOPE_EDGE_LDA
+_SLOPE_EDGE_MISS = passcost.SLOPE_EDGE_MISS
+_SLOPE_EDGE_HIT = passcost.SLOPE_EDGE_HIT
+_SLOPE_EDGE_BLOCK = passcost.SLOPE_EDGE_BLOCK
+_SLOPE_Q_C2 = passcost.SLOPE_Q_C2
+_SLOPE_Q_C1 = passcost.SLOPE_Q_C1
+_SLOPE_Q_EDGE = passcost.SLOPE_Q_EDGE
+_SLOPE_Q_CORNER = passcost.SLOPE_Q_CORNER
+_SLOPE_Q_CORNER_EOR = passcost.SLOPE_Q_CORNER_EOR
+_SLOPE_Q_TAIL = passcost.SLOPE_Q_TAIL
+_SLOPE_Q_USE_Y = passcost.SLOPE_Q_USE_Y
+_SLOPE_Q_INVERT = passcost.SLOPE_Q_INVERT
+_SLOPE_Q_ABS = passcost.SLOPE_Q_ABS
+_SLOPE_Q_NEG = passcost.SLOPE_Q_NEG
+_SLOPE_Q_BLOCK = passcost.SLOPE_Q_BLOCK
 _OBJ_HEAD_GHOL = passcost.OBJ_HEAD_GHOL
 _OBJ_HEAD_LOS = passcost.OBJ_HEAD_LOS
 _OBJ_TARGET_HIT = passcost.OBJ_TARGET_HIT
@@ -88,8 +133,6 @@ _MUL_DBL_DBL_ODD = passcost.MUL_DBL_DBL_ODD
 _MUL_DBL_DBL_CARRY = passcost.MUL_DBL_DBL_CARRY
 _MUL_DBL_DBL_NEG = passcost.MUL_DBL_DBL_NEG
 _PREP_VEC = passcost.PREP_VEC
-_MARCH_SLOPE_EDGE = passcost.MARCH_SLOPE_EDGE
-_MARCH_SLOPE_QUAD = passcost.MARCH_SLOPE_QUAD
 
 # Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
 # code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
@@ -113,18 +156,21 @@ def _tile_byte(mem, x, y):
 
 @njit(cache=True)
 def _corner_z(mem, x, y):
-    """los._slope_corner_z: corner height at (x,y) -- bare-terrain nibble, or the
-    bottommost stacked object's z_height for an object tile."""
+    """los._slope_corner_z: one $1D4E/$1D55/$1D5C corner read.  Returns (z, cycles)."""
+    cyc = np.int64(_TILE_Z_CALL + _TILE_ADDR + _TILE_Z_READ)
     b = _tile_byte(mem, x, y)
-    if b >= 0xC0:
-        o = b & 0x3F
-        for _ in range(64):
-            f = int(mem[_OFLAGS + o])
-            if f < 0x40:
-                break
-            o = f & 0x3F
-        return int(mem[_OZHEIGHT + o])
-    return (b >> 4) & 0x0F
+    if b < 0xC0:
+        return (b >> 4) & 0x0F, cyc + np.int64(_TILE_Z_FLAT)
+    cyc += np.int64(_TILE_Z_OBJ)
+    o = b & 0x3F
+    for _ in range(64):
+        cyc += np.int64(_OBJ_HEAD_GHOL)
+        f = int(mem[_OFLAGS + o])
+        if f < 0x40:
+            break
+        cyc += np.int64(_OBJ_GHOL_LOOP)
+        o = f & 0x3F
+    return int(mem[_OZHEIGHT + o]), cyc + np.int64(_OBJ_GHOL_RTS)
 
 
 @njit(cache=True, inline="always")
@@ -163,12 +209,14 @@ def _corner_at(i, p73, p74, p75, p76):
 
 @njit(cache=True)
 def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
-    """los._slope_corner_or_quad $1D8A-$1DEE, opcode-faithful.  Returns 1 (blocked,
-    ray below slope -> tile hit) or 0 (loop, ray above slope -> keep marching)."""
+    """los._slope_corner_or_quad $1D8A-$1DEE, opcode-faithful.  Returns (verdict,
+    cycles): 1 blocked (ray below the slope) or 0 loop (above it)."""
+    cyc = np.int64(0)
     A = nib & 0xFF
     C = A & 1
     A >>= 1
     if C == 0:
+        cyc += np.int64(_SLOPE_Q_C2)
         C = A & 1
         A >>= 1
         s78 = A
@@ -177,6 +225,8 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
         A = px_sub & 0xFF
         if C != 0:
             A ^= 0xFF
+            cyc += np.int64(_SLOPE_Q_CORNER_EOR)
+        cyc += np.int64(_SLOPE_Q_CORNER)
         C = 1 if A >= (py_sub & 0xFF) else 0
         A = ((s78 << 1) | C) & 0xFF
         A = _edge(A)
@@ -184,6 +234,7 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
         C = A & 1
         A >>= 1
         if C == 1:
+            cyc += np.int64(_SLOPE_Q_C1)
             A = (A + 1 + C) & 0xFF
             A &= 0x03
             s78 = A
@@ -192,24 +243,30 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
             A = px_sub & 0xFF
             if C != 0:
                 A ^= 0xFF
+                cyc += np.int64(_SLOPE_Q_CORNER_EOR)
+            cyc += np.int64(_SLOPE_Q_CORNER)
             C = 1 if A >= (py_sub & 0xFF) else 0
             A = ((s78 << 1) | C) & 0xFF
             A = _edge(A)
         else:
+            cyc += np.int64(_SLOPE_Q_EDGE)
             A = A & 1
 
     # use_edge_for_slope $1DAF
+    cyc += np.int64(_SLOPE_Q_TAIL)
     X = A & 0xFF
     C = A & 1
     A >>= 1
     yreg = px_sub & 0xFF
     if C == 0:
         yreg = py_sub & 0xFF
+        cyc += np.int64(_SLOPE_Q_USE_Y)
     C = A & 1
     A >>= 1
     A = yreg
     if C != 0:
         A ^= 0xFF
+        cyc += np.int64(_SLOPE_Q_INVERT)
     s02 = A & 0xFF
 
     s78 = _corner_at(X & 3, p73, p74, p75, p76)
@@ -221,7 +278,9 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
     neg = (res & 0x80) != 0
     if neg:
         res = ((res ^ 0xFF) + 1) & 0xFF
+        cyc += np.int64(_SLOPE_Q_ABS)
     s75 = res
+    cyc += np.int64(_MUL8_BIT) * _bits(s02)
     prod = (s02 & 0xFF) * (s75 & 0xFF)
     prod_h = (prod >> 8) & 0xFF
     prod_lo = prod & 0xFF
@@ -230,13 +289,14 @@ def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
         negv = (-val) & 0xFFFF
         prod_h = (negv >> 8) & 0xFF
         prod_lo = negv & 0xFF
+        cyc += np.int64(_SLOPE_Q_NEG)
     s75b = (prod_h + s78) & 0xFF
     lo = (pz_sub & 0xFF) - prod_lo
     borrow = 1 if lo < 0 else 0
     hi8 = ((pz_whole & 0xFF) - s75b - borrow) & 0xFF
     if hi8 & 0x80:
-        return 1  # blocked
-    return 0  # loop
+        return 1, cyc + np.int64(_SLOPE_Q_BLOCK)  # blocked
+    return 0, cyc  # loop
 
 
 @njit(cache=True, inline="always")
@@ -302,7 +362,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
     c0c = 0x80
     c67 = 0
     raw = raw0 & 0xFF
-    cyc = _OBJ_ENTRY - _OBJ_FLAT_TAIL
+    cyc = np.int64(0)
     for _ in range(80):
         Y = raw & 0x3F
         do_ghol = False
@@ -461,9 +521,29 @@ def march(
     cp74 = 0
     cp75 = 0
     cp76 = 0
+    ccorner = np.int64(0)
+    neg = 0
+    if ax_hi & 0x80:
+        neg += 1
+    if az_hi & 0x80:
+        neg += 1
+    if ay_hi & 0x80:
+        neg += 1
+    step_fixed = np.int64(
+        _ADD_VECTOR
+        + _ADD_VECTOR_NEG * neg
+        + 2 * _STEP_EDGE
+        + _STEP_SETUP
+        + _TILE_Z_CALL
+        + _TILE_ADDR
+        + _TILE_Z_READ
+    )
+    flat_step = step_fixed + np.int64(
+        _TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF + _FLAT_BELOW
+    )
     while steps < max_steps:
         steps += 1
-        cycles += _MARCH_STEP  # $1CE8: every sub-step pays the fixed body
+        cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
         # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
         # the axes are independent).
         t = (px_frac & 0xFF) + (ax_lo & 0xFF)
@@ -492,10 +572,12 @@ def march(
 
         tx = px_whole & 0xFF
         if tx >= 0x1F:
+            cycles += np.int64(_STEP_EDGE_EXIT - _STEP_EDGE + _LEAVE_SET)
             status = BLOCKED
             break
         ty = py_whole & 0xFF
         if ty >= 0x1F:
+            cycles += np.int64(_STEP_EDGE_EXIT + _LEAVE_SET)
             status = BLOCKED
             break
 
@@ -507,11 +589,13 @@ def march(
             cz = (cb >> 4) & 0x0F
             if cb < 0xC0 and cnib != 0:
                 cp73 = cz
-                cp76 = _corner_z(mem, tx + 1, ty)
-                cp75 = _corner_z(mem, tx + 1, ty + 1)
-                cp74 = _corner_z(mem, tx, ty + 1)
+                cp76, c1 = _corner_z(mem, tx + 1, ty)
+                cp75, c2 = _corner_z(mem, tx + 1, ty + 1)
+                cp74, c3 = _corner_z(mem, tx, ty + 1)
+                ccorner = c1 + c2 + c3
         b = cb
         if b >= 0xC0:
+            cycles += np.int64(_TILE_Z_OBJ + _FLAT_BRANCH + _FLAT_DIFF)
             # object tile: stack surface $1E3F, then object-aware check_flat_tile $1D0D
             z, s79, c0c, c67, c56, cdd, s60, ocyc = _object_surface(
                 mem, b, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd
@@ -522,28 +606,48 @@ def march(
             s79 = t & 0xFF
             d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
             if d & 0x80:
+                cycles += np.int64(_FLAT_BELOW)
                 continue
             if d != 0:
+                cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
                 status = BLOCKED
                 break
+            cycles += np.int64(_FLAT_TOL)
             if s79 >= (c0c & 0xFF):
+                cycles += np.int64(_FLAT_TOL_HIT + _LEAVE_SET)
                 status = BLOCKED
                 break
+            cycles += np.int64(_FLAT_BIT60)
             if s60 & 0x40:
+                cycles += np.int64(_FLAT_BIT60_HIT + _LEAVE_SET)
                 status = BLOCKED
                 break
+            cycles += np.int64(_FLAT_ANGLE)
             if ((c6e | c67) & 0x80) == 0:
+                cycles += np.int64(_FLAT_LOOKUP)
                 if (s30 & 0x80) == 0:  # looking up -> rejected
+                    cycles += np.int64(_FLAT_LOOKING_UP + _LEAVE_SET)
                     status = BLOCKED
                     break
-            if tx == (ox & 0xFF) and ty == (oy & 0xFF):
+            else:
+                cycles += np.int64(_FLAT_ANGLE_SKIP)
+            cycles += np.int64(_FLAT_SAME)
+            if tx != (ox & 0xFF):
+                cycles += np.int64(_FLAT_SAME_X_DIFF)
+                status = LOS_CLEAR
+                break
+            cycles += np.int64(_FLAT_SAME_Y)
+            if ty == (oy & 0xFF):
+                cycles += np.int64(_FLAT_SAME_HIT)
                 continue
+            cycles += np.int64(_FLAT_SAME_Y_DIFF)
             status = LOS_CLEAR
             break
 
         slope = cnib
         z = cz
         if slope == 0:
+            cycles += np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF)
             # check_flat_tile $1D0D, fast path (s79=0, tolerance $000C=$80,
             # $0060 bit6 clear, $0C67 clear).
             s79 = (0 - (pz_sub & 0xFF)) & 0xFF
@@ -590,7 +694,7 @@ def march(
                     hit = 1
                     break
                 steps += m
-                cycles += m * _MARCH_STEP  # replayed sub-steps are all flat
+                cycles += np.int64(_FLAT_BELOW) + m * flat_step  # replayed flat steps
                 xacc = (xacc + m * vx16) & 0xFFFF
                 yacc = (yacc + m * vy16) & 0xFFFF
                 px_frac = xacc & 0xFF
@@ -603,52 +707,92 @@ def march(
                 if hit == 0:
                     continue  # left the tile (or hit budget) -> resume march
                 # terminated inside the tile: flat verdict at this sub-step
+                cycles -= np.int64(_FLAT_BELOW)
                 s79 = (0 - (pz_sub & 0xFF)) & 0xFF
                 if (
                     ((z & 0xFF) - (pz_whole & 0xFF) - (1 if pz_sub & 0xFF else 0))
                     & 0xFF
                 ) != 0:
+                    cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
                     status = BLOCKED
                     break
+                cycles += np.int64(_FLAT_TOL)
                 if s79 >= 0x80:
+                    cycles += np.int64(_FLAT_TOL_HIT + _LEAVE_SET)
                     status = BLOCKED
                     break
+                cycles += np.int64(_FLAT_BIT60 + _FLAT_ANGLE)
                 if (c6e & 0x80) == 0:
+                    cycles += np.int64(_FLAT_LOOKUP)
                     if (s30 & 0x80) == 0:
+                        cycles += np.int64(_FLAT_LOOKING_UP + _LEAVE_SET)
                         status = BLOCKED
                         break
+                else:
+                    cycles += np.int64(_FLAT_ANGLE_SKIP)
+                cycles += np.int64(_FLAT_SAME)
+                if tx != (ox & 0xFF):
+                    cycles += np.int64(_FLAT_SAME_X_DIFF)
+                else:
+                    cycles += np.int64(_FLAT_SAME_Y + _FLAT_SAME_Y_DIFF)
                 status = LOS_CLEAR
                 break
             if d != 0:
+                cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
                 status = BLOCKED
                 break
+            cycles += np.int64(_FLAT_TOL)
             if s79 >= 0x80:
+                cycles += np.int64(_FLAT_TOL_HIT + _LEAVE_SET)
                 status = BLOCKED
                 break
+            cycles += np.int64(_FLAT_BIT60 + _FLAT_ANGLE)
             if (c6e & 0x80) == 0:
+                cycles += np.int64(_FLAT_LOOKUP)
                 if (s30 & 0x80) == 0:  # looking up -> rejected
+                    cycles += np.int64(_FLAT_LOOKING_UP + _LEAVE_SET)
                     status = BLOCKED
                     break
-            if tx == (ox & 0xFF) and ty == (oy & 0xFF):
+            else:
+                cycles += np.int64(_FLAT_ANGLE_SKIP)
+            cycles += np.int64(_FLAT_SAME)
+            if tx != (ox & 0xFF):
+                cycles += np.int64(_FLAT_SAME_X_DIFF)
+                status = LOS_CLEAR
+                break
+            cycles += np.int64(_FLAT_SAME_Y)
+            if ty == (oy & 0xFF):
+                cycles += np.int64(_FLAT_SAME_HIT)
                 continue  # same tile as the observer -> keep going
+            cycles += np.int64(_FLAT_SAME_Y_DIFF)
             status = LOS_CLEAR
             break
         else:
             # check_sloping_tile $1D46, corner heights hoisted out of the sub-step loop
+            cycles += np.int64(_TILE_Z_FLAT + _SLOPE_BRANCH + _SLOPE_HEAD) + ccorner
             if cnib == 0x04 or cnib == 0x0C:
-                cycles += _MARCH_SLOPE_EDGE
+                cycles += np.int64(
+                    _SLOPE_NIB_4 if cnib == 0x04 else _SLOPE_NIB_12
+                ) + np.int64(_SLOPE_EDGE_LDA)
                 b8 = pz_whole & 0xFF
-                if b8 >= cp73 or b8 >= cp74 or b8 >= cp75 or b8 >= cp76:
+                hit = 0
+                for corner in (cp73, cp74, cp75, cp76):
+                    if b8 >= corner:
+                        hit = 1
+                        break
+                    cycles += np.int64(_SLOPE_EDGE_MISS)
+                if hit:
+                    cycles += np.int64(_SLOPE_EDGE_HIT)
                     continue  # ray above the slope -> keep marching
+                cycles += np.int64(_SLOPE_EDGE_BLOCK)
                 status = BLOCKED
                 break
-            cycles += _MARCH_SLOPE_QUAD
-            if (
-                _slope_quad(
-                    cnib, cp73, cp74, cp75, cp76, px_sub, py_sub, pz_sub, pz_whole
-                )
-                == 0
-            ):
+            cycles += np.int64(_SLOPE_NIB_QUAD)
+            verdict, qcyc = _slope_quad(
+                cnib, cp73, cp74, cp75, cp76, px_sub, py_sub, pz_sub, pz_whole
+            )
+            cycles += qcyc
+            if verdict == 0:
                 continue  # ray above the slope -> keep marching
             status = BLOCKED
             break
