@@ -442,7 +442,27 @@ What it does need is `c`, the cycles the machine has already spent, and that IS 
 `$0034..$003C`. `check_for_line_of_sight_to_tile` already takes `max_steps` and leaves the
 marched position in its `Vector`, so a **binary search on `max_steps`** against the machine's
 `$0034..$003C` finds the interrupted sub-step and reads its cycles off the same call — no
-instrumented march, no step index threaded anywhere. **Not implemented.**
+instrumented march, no step index threaded anywhere. **Not implemented, and measured to be
+worth nothing.**
+
+**Measured — a resync never lands in the march; it lands in the replot.** Reading the
+interrupted PC and the whole `$95E9` stack chain at every CORE event of the gate's own
+3000-frame follow race: ls9795 **0** of 111 and ls335 **0** of 12 are inside `$1CDD`, so a
+`body_spent` resume moves neither board. **84 of ls9795's 111 are inside the `$1FFC JSR
+$2625` replot** — `$1FFF` sits on the stack under the interrupted PC, with `$1884` beneath
+it. That is the defect: `_innermost_loop_address` walks the stack for the first return
+address in the play loop, finds `$1884`, maps it through `_BODY_LADDER` to **BODY_DONE**
+and resumes the model at the prnd — discarding a `$2625` the machine is up to 22 frames
+into, so the model runs a whole frame of passes against a machine that runs none, every
+frame until it ends. ls335's twelve are the play loop, the `$16B5` dispatch, the `$31CA`
+prnd and the tail's sound; ls42 has none.
+
+**The replot resume needs `$2625`'s own progress, which this item does not have.** The
+resume owes `total - elapsed`: `projector.strip_replot_frames` gives the total, and nothing
+gives the elapsed without modelling how far `plot_world` has walked its own render order —
+[5](#5-terrain-fill-cost-cannot-close-per-tile). Charging the whole replot again over-charges
+by the elapsed part and charging nothing is what happens now; neither is exact, so neither
+ships.
 
 **No longer a mean: the rotation's redraw.** `$1F9F update_object_on_screen` **does** run
 headless — it needs no render context on the branch the enemy clock takes. It calls
@@ -560,8 +580,9 @@ rewritten it, and the plotting readers touch no field the schema carries.
 **Resolves.** Not the frame budget, not the clock, not the replot's placement and not the
 march price — all four are now measured directly against the machine and none has room for
 what this item is chasing. What is left on this side is the **badline steal per frame**,
-which needs the raster position and the instruction it caught, and a `body_spent` resume so
-a follow-mode resync inside `$1887` does not restart the query. The replot's *price* —
+which needs the raster position and the instruction it caught, and the **replot resume**,
+which needs `$2625`'s own progress; a `body_spent` resume is measured to move neither
+board. The replot's *price* —
 proxy 1.12x and py65 1.54x of a machine wall measured at 22 frames — is
 [5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
 
@@ -772,6 +793,10 @@ Each is a hypothesis and the measurement that killed it.
   probe that decides the board accepts a landing that is genuinely survivable, six probe
   models leave it lost, and the verdict moves with `ARBITRATE_ACTIONS` alone
   ([13](#13-arbitration-charges-an-option-with-its-continuations-mistakes)).
+- **A `body_spent` resume would cut the follow-mode event count.** Over the gate's own
+  3000-frame races, **0** of ls9795's 111 and **0** of ls335's 12 CORE events catch the
+  machine inside `$1CDD`; 84 of ls9795's catch it inside the `$1FFC JSR $2625` replot
+  ([8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
 - **The `$1887` march that decides ls9795's frame 129 is ~1% under-priced.** On the live
   image captured at that very `$16E6`, jennings and `enemies.update_body` both give
   **280640**; the real 6510 matches jennings at all 89941 instruction sites; and the
