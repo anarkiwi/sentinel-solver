@@ -116,7 +116,6 @@ _UPDATE_CURSOR_WRAP = passcost.UPDATE_CURSOR_WRAP
 _PASS_HEAD = passcost.PASS_HEAD
 _PASS_TAIL = passcost.PASS_TAIL
 _CONSIDER_ENTRY = passcost.CONSIDER_ENTRY
-_CONSIDER_PREAMBLE = passcost.CONSIDER_PREAMBLE
 
 _DISCHARGE_NONE = passcost.DISCHARGE_NONE
 _DISCHARGE_FIXED = passcost.DISCHARGE_FIXED
@@ -213,10 +212,49 @@ _VANG_TAIL = passcost.VANG_TAIL
 _HYP_HEAD = passcost.HYP_HEAD
 _HYP_TAIL = passcost.HYP_TAIL
 
-_SCAN_SLOT = passcost.SCAN_SLOT
-_SCAN_FIXED = passcost.SCAN_FIXED
+_CONSIDER_MEANIE = passcost.CONSIDER_MEANIE
+_CONSIDER_NO_MEANIE = passcost.CONSIDER_NO_MEANIE
+_DISCHARGE_CALL = passcost.DISCHARGE_CALL
+_DISCHARGED = passcost.DISCHARGED
+_NO_DISCHARGE = passcost.NO_DISCHARGE
+_HUNT_CLEAR = passcost.HUNT_CLEAR
+_HUNT_CALL = passcost.HUNT_CALL
+_HUNT_MISS = passcost.HUNT_MISS
+_HUNT_HIT = passcost.HUNT_HIT
+_HELD_NONE = passcost.HELD_NONE
+_HELD_CALL = passcost.HELD_CALL
+_HELD_LOST = passcost.HELD_LOST
+_HELD_KEPT = passcost.HELD_KEPT
+_SCAN_INIT = passcost.SCAN_INIT
+_SCAN_SLOT_HIDDEN = passcost.SCAN_SLOT_HIDDEN
+_SCAN_SLOT_UNSEEN = passcost.SCAN_SLOT_UNSEEN
+_SCAN_SLOT_FULL = passcost.SCAN_SLOT_FULL
+_SCAN_SLOT_OTHER = passcost.SCAN_SLOT_OTHER
+_SCAN_SLOT_PARTIAL = passcost.SCAN_SLOT_PARTIAL
+_SCAN_LAST = passcost.SCAN_LAST
+_SCAN_END = passcost.SCAN_END
+_SCAN_END_PARTIAL = passcost.SCAN_END_PARTIAL
+_PARTIAL_KNOWN = passcost.PARTIAL_KNOWN
+_PARTIAL_ARM = passcost.PARTIAL_ARM
+_TREE_CALL = passcost.TREE_CALL
+_TREE_NONE = passcost.TREE_NONE
+_TREE_HIT = passcost.TREE_HIT
+_DRAIN_CALL = passcost.DRAIN_CALL
+_DRAIN_TAIL = passcost.DRAIN_TAIL
+_BODY_TAIL = passcost.BODY_TAIL
+_TARGET_HEAD = passcost.TARGET_HEAD
+_TARGET_FIRST = passcost.TARGET_FIRST
+_TARGET_WAIT = passcost.TARGET_WAIT
+_TARGET_DUE = passcost.TARGET_DUE
+_TARGET_MEANIE = passcost.TARGET_MEANIE
+_TARGET_DRAIN = passcost.TARGET_DRAIN
+_TARGET_DRAIN_OBJ = passcost.TARGET_DRAIN_OBJ
+_TARGET_DRAIN_PLAYER = passcost.TARGET_DRAIN_PLAYER
 
-_TILE_SCAN_FIXED = passcost.TILE_SCAN_FIXED
+_TILE_SCAN_ENTRY = passcost.TILE_SCAN_ENTRY
+_TILE_SCAN_EXHAUSTED = passcost.TILE_SCAN_EXHAUSTED
+_TILE_SCAN_LAST = passcost.TILE_SCAN_LAST
+_TILE_SCAN_SEE_BOULDER = passcost.TILE_SCAN_SEE_BOULDER
 _TILE_SCAN_EMPTY = passcost.TILE_SCAN_EMPTY
 _TILE_SCAN_OTHER = passcost.TILE_SCAN_OTHER
 _TILE_SCAN_STACKED = passcost.TILE_SCAN_STACKED
@@ -237,6 +275,7 @@ _MEANIE_SCAN_SEE = passcost.MEANIE_SCAN_SEE
 _MEANIE_SCAN_DONE = passcost.MEANIE_SCAN_DONE
 
 _ROTATE_GATE = passcost.ROTATE_GATE
+_ROTATE_GATE_HELD = passcost.ROTATE_GATE_HELD
 _ROTATE = passcost.ROTATE
 _ROTATE_REDRAW = passcost.ROTATE_REDRAW
 _MEANIE_ROTATE = passcost.MEANIE_ROTATE
@@ -1004,19 +1043,22 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
                 _wr(mem, _TARGETED_SLOT, y)
                 return budget - np.int64(_TILE_SCAN_HIT), index, y
             budget -= np.int64(_TILE_SCAN_NEXT)
+            if x == 0:  # $1AF0 BPL not taken
+                budget += np.int64(_TILE_SCAN_LAST)
             continue
         if index < 0:  # $1AF2: the whole scan came up empty
-            return budget, index, -1
+            return budget - np.int64(_TILE_SCAN_EXHAUSTED), index, -1
         if budget <= 0:
             return budget, index, -2
         x = index
         index -= 1
+        last = np.int64(_TILE_SCAN_LAST if x == 0 else 0)  # $1AF0 BPL not taken
         flags = _rd(mem, _OFLAGS + x)
         if flags & 0x80:  # empty slot
-            budget -= np.int64(_TILE_SCAN_EMPTY)
+            budget -= np.int64(_TILE_SCAN_EMPTY) - last
             continue
         if not (flags >= 0x40 or _rd(mem, _OTYPE + x) == _T_BOULDER):
-            budget -= np.int64(_TILE_SCAN_OTHER)
+            budget -= np.int64(_TILE_SCAN_OTHER) - last
             continue
         budget -= np.int64(
             (_TILE_SCAN_STACKED if flags >= 0x40 else _TILE_SCAN_LOOSE)
@@ -1024,20 +1066,22 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
         )
         tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
         if tb < _OBJECT_TILE:
-            budget -= np.int64(_TILE_SCAN_NO_TILE)
+            budget -= np.int64(_TILE_SCAN_NO_TILE) - last
             continue
         y = tb & 0x3F  # topmost object of the tile
         otype = _rd(mem, _OTYPE + y)
         budget -= np.int64(_TILE_SCAN_TOP)
         if otype != _T_TREE and otype != _T_BOULDER:
-            budget -= np.int64(_TILE_SCAN_WRONG_TOP)
+            budget -= np.int64(_TILE_SCAN_WRONG_TOP) - last
             continue
         _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
             mem, zp, enemy, y, otype, _FOV_SCAN
         )
-        budget -= np.int64(_TILE_SCAN_SEE) + scost
+        budget -= scost + np.int64(
+            _TILE_SCAN_SEE if otype == _T_TREE else _TILE_SCAN_SEE_BOULDER
+        )
         if not full:
-            budget -= np.int64(_TILE_SCAN_NEXT)
+            budget -= np.int64(_TILE_SCAN_NEXT) - last
             continue
         if budget <= 0:  # the ROM has not reached $1AEA yet
             return budget, -2 - x, -2
@@ -1173,24 +1217,32 @@ def _update_meanie(mem, zp, enemy, budget, index):
 @njit(cache=True)
 def _target_object(mem, enemy, target, exposure):
     """target_object $1825 up to its $184D branch: record the target, drain it when
-    the timer expires.  Returns the next stage (BODY_MAKE_MEANIE or BODY_DONE)."""
+    the timer expires.  Returns (next stage, the cycles $1825's own line spent)."""
     _wr(mem, _TARGET + enemy, target)
     _wr(mem, _TARGET_EXP + enemy, exposure)
+    cost = np.int64(_TARGET_HEAD)
     cd = _rd(mem, _DRAIN_CD + enemy)
     if cd < 0x01:  # first sight -> arm the drain timer
         _wr(mem, _DRAIN_CD + enemy, _DRAIN_CD_RELOAD)
-        return _BODY_DONE
+        return _BODY_DONE, cost + np.int64(_TARGET_FIRST)
     if cd != 0x01:  # still counting down
-        return _BODY_DONE
+        return _BODY_DONE, cost + np.int64(_TARGET_WAIT)
+    cost += np.int64(_TARGET_DUE)
     if exposure & 0x80:  # fully visible -> drain
         _wr(mem, _TARGETED_SLOT, target)
         killed = target == _rd(mem, _PLAYER) and _rd(mem, _ENERGY) == 0
         _reduce_object_energy(mem, target, enemy)
+        cost += np.int64(_TARGET_DRAIN)
         if killed:  # kill_player $1A00 unwinds the stack
-            return _BODY_DONE
+            return _BODY_DONE, cost
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-        return _BODY_DONE
-    return _BODY_MAKE_MEANIE  # $184D: only the head -> hunt a tree to convert
+        if target == _rd(mem, _PLAYER):  # $184D: a drained player skips the redraw
+            return _BODY_DONE, cost + np.int64(_TARGET_DRAIN_PLAYER)
+        return _BODY_DONE, cost + np.int64(
+            _TARGET_DRAIN_OBJ + _BODY_TAIL + _ROTATE_REDRAW
+        )
+    # $184D: only the head -> hunt a tree to convert
+    return _BODY_MAKE_MEANIE, cost + np.int64(_TARGET_MEANIE)
 
 
 @njit(cache=True)
@@ -1211,35 +1263,43 @@ def _scan_for_robot(mem, zp, enemy, budget, index, partial):
             in_slot, in_fov, exp_raw, _f, _t, _c = _can_see_object(
                 mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
             )
-            stage = _target_object(
+            stage, cost = _target_object(
                 mem, enemy, y, _exposure_byte(in_slot, in_fov, exp_raw)
             )
-            return budget, stage, 0, -1
+            return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
             if partial >= 0:
                 return budget, _BODY_PARTIAL, 0, partial
             _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
-            budget -= np.int64(_TILE_SCAN_FIXED)
+            budget -= np.int64(_SCAN_END + _TREE_CALL + _TILE_SCAN_ENTRY)
             return budget, _BODY_TREE, _NUM_SLOTS - 1, -1
         if budget <= 0:
             return budget, _BODY_SCAN, index, partial
         y = index
         index -= 1
+        last = np.int64(_SCAN_LAST if y == 0 else 0)  # $17CB BPL not taken
         in_slot, in_fov, exp_raw, _full, tree_head, scost = _can_see_object(
             mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
         )
-        budget -= np.int64(_SCAN_SLOT) + scost
+        budget -= scost
         if tree_head:  # $17B7: a tree hides this robot's head
+            budget -= np.int64(_SCAN_SLOT_HIDDEN) - last
             continue
         exposure = _exposure_byte(in_slot, in_fov, exp_raw)
         if exposure == 0:  # $17BE: not visible at all
+            budget -= np.int64(_SCAN_SLOT_UNSEEN) - last
             continue
         if exposure & 0x80:  # $17BA: fully visible -> drain target
+            budget -= np.int64(_SCAN_SLOT_FULL)
             if budget <= 0:  # the ROM has not reached $1825 yet
                 return budget, _BODY_SCAN, -2 - y, partial
-            return budget, _target_object(mem, enemy, y, exposure), 0, -1
+            stage, cost = _target_object(mem, enemy, y, exposure)
+            return budget - cost, stage, 0, -1
         if y == player:  # $17C0: head only -> meanie candidate
             partial = y
+            budget -= np.int64(_SCAN_SLOT_PARTIAL) - last
+        else:
+            budget -= np.int64(_SCAN_SLOT_OTHER) - last
 
 
 @njit(cache=True)
@@ -1257,10 +1317,11 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
             _wr(mem, _UPD_CD + enemy, _UPD_CD_SCAN)  # $16ED
             _wr(mem, _FOV_WIDTH, _FOV_SCAN)  # $16F0
             if not (mem[_M_OBJECT + enemy] & 0x80):  # $16EA: already owns a meanie
+                budget -= np.int64(_CONSIDER_MEANIE)
                 stage = _BODY_MEANIE
                 index = 0
                 continue
-            budget -= np.int64(_CONSIDER_PREAMBLE)  # $1773
+            budget -= np.int64(_CONSIDER_NO_MEANIE + _DISCHARGE_CALL)  # $1773
             stage = _BODY_DISCHARGE
             index = 0
             continue
@@ -1275,13 +1336,16 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
         if stage == _BODY_DISCHARGE:
             discharged, dcost = _consider_discharging_enemy_energy(mem, enemy)
             budget -= dcost
-            if discharged:
+            if discharged:  # $177A: the tail redraws, then the update is over
+                budget -= np.int64(_DISCHARGED + _BODY_TAIL + _ROTATE_REDRAW)
                 return budget, _BODY_DONE, 0, -1
+            budget -= np.int64(_NO_DISCHARGE)
             if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
-                budget -= np.int64(_TILE_SCAN_FIXED)
+                budget -= np.int64(_HUNT_CALL + _TILE_SCAN_ENTRY)
                 stage = _BODY_HUNT
                 index = _NUM_SLOTS - 1
                 continue
+            budget -= np.int64(_HUNT_CLEAR)
             stage = _BODY_HELD
             index = 0
             continue
@@ -1294,9 +1358,13 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 _wr(mem, _M_SEARCH + enemy, 0x40)  # $178B
-                _reduce_object_energy(mem, tb, enemy)
+                _reduce_object_energy(mem, tb, enemy)  # $17EA, never the player
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
+                budget -= np.int64(
+                    _HUNT_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
+                )
                 return budget, _BODY_DONE, 0, -1
+            budget -= np.int64(_HUNT_MISS)
             _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
             stage = _BODY_HELD
             index = 0
@@ -1304,7 +1372,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
 
         if stage == _BODY_HELD:
             if mem[_DRAIN_CD + enemy] == 0:
-                budget -= np.int64(_SCAN_FIXED)
+                budget -= np.int64(_HELD_NONE + _SCAN_INIT)
                 stage = _BODY_SCAN
                 index = _NUM_SLOTS - 1
                 partial = -1
@@ -1314,16 +1382,18 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 mem, zp, enemy, held, _T_ROBOT, _FOV_SCAN
             )
             if index >= 0:
-                budget -= scost
+                budget -= scost + np.int64(_HELD_CALL)
                 if budget <= 0:
                     return budget, stage, -2, partial
             exposure = _exposure_byte(in_slot, in_fov, exp_raw)
             if exposure != 0:
-                stage = _target_object(mem, enemy, held, exposure)
+                budget -= np.int64(_HELD_KEPT)
+                stage, cost = _target_object(mem, enemy, held, exposure)
+                budget -= cost
                 index = 0
                 continue
             _wr(mem, _DRAIN_CD + enemy, 0)  # target lost
-            budget -= np.int64(_SCAN_FIXED)
+            budget -= np.int64(_HELD_LOST + _SCAN_INIT)
             stage = _BODY_SCAN
             index = _NUM_SLOTS - 1
             partial = -1
@@ -1336,14 +1406,17 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
             continue
 
         if stage == _BODY_PARTIAL:
+            budget -= np.int64(_SCAN_END_PARTIAL)
             if partial != _rd(mem, _M_FAILED + enemy):  # $17C4
                 _initialise_enemy_meanie_variables(mem, enemy)
-                stage = _target_object(mem, enemy, partial, 0x40)
+                budget -= np.int64(_PARTIAL_ARM)
+                stage, cost = _target_object(mem, enemy, partial, 0x40)
+                budget -= cost
                 index = 0
                 partial = -1
                 continue
             _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
-            budget -= np.int64(_TILE_SCAN_FIXED)
+            budget -= np.int64(_PARTIAL_KNOWN + _TREE_CALL + _TILE_SCAN_ENTRY)
             stage = _BODY_TREE
             index = _NUM_SLOTS - 1
             partial = -1
@@ -1359,17 +1432,21 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 _wr(mem, _TARGETED_SLOT, tb)
                 _reduce_object_energy(mem, tb, enemy)
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
+                budget -= np.int64(
+                    _TREE_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
+                )
                 return budget, _BODY_DONE, 0, -1
+            budget -= np.int64(_TREE_NONE)
             stage = _BODY_ROTATE
             index = 0
             continue
 
         if stage == _BODY_ROTATE:
-            budget -= np.int64(_ROTATE_GATE)
             if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
                 _rotate_enemy(mem, enemy)
-                budget -= np.int64(_ROTATE + _ROTATE_REDRAW)
-            return budget, _BODY_DONE, 0, -1
+                budget -= np.int64(_ROTATE_GATE + _ROTATE + _ROTATE_REDRAW)
+                return budget, _BODY_DONE, 0, -1
+            return budget - np.int64(_ROTATE_GATE_HELD), _BODY_DONE, 0, -1
 
         budget, stage, index = _consider_creating_meanie(mem, zp, enemy, budget, index)
 

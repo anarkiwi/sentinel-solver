@@ -160,6 +160,11 @@ def _see_cost(see):
     return see["cycles"]
 
 
+def _body_tail():
+    """$1876..$1884: every exit that redraws the object it just touched."""
+    return passcost.BODY_TAIL + passcost.ROTATE_REDRAW
+
+
 def _exposure_byte(see):
     """The ROM's object_exposure ($14) from a can-see check: $80 fully visible (the
     base was reached), $40 partial (only the robot's head), 0 not visible."""
@@ -174,25 +179,32 @@ def _exposure_byte(see):
 def _target_object(state, enemy, target, exposure):
     """$1825 up to its $184D branch: record the target and, once the draining
     cooldown counts down to 1, drain it if fully visible ($1838).  Returns the next
-    stage -- BODY_MAKE_MEANIE when only the player's head is visible, else DONE."""
+    stage -- BODY_MAKE_MEANIE when only the player's head is visible, else DONE --
+    and the cycles $1825's own line spent reaching it."""
     mem = state.mem
     mem[mm.ENEMIES_TARGETED_OBJECT + enemy] = target
     mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + enemy] = exposure
+    cost = passcost.TARGET_HEAD
     cd = mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy]
     if cd < 0x01:  # first sight -> arm the drain timer
         mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = DRAINING_COOLDOWN_RELOAD
-        return BODY_DONE
+        return BODY_DONE, cost + passcost.TARGET_FIRST
     if cd != 0x01:  # still counting down
-        return BODY_DONE
+        return BODY_DONE, cost + passcost.TARGET_WAIT
+    cost += passcost.TARGET_DUE
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
         killed = target == mem[mm.PLAYER_OBJECT] and state.energy == 0
         _reduce_object_energy(state, target, enemy)
+        cost += passcost.TARGET_DRAIN
         if killed:  # kill_player $1A00 unwinds the stack -> no update-cooldown reload
-            return BODY_DONE
+            return BODY_DONE, cost
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-        return BODY_DONE
-    return BODY_MAKE_MEANIE  # $184D: only the head -> hunt a tree to convert
+        if target == mem[mm.PLAYER_OBJECT]:  # $184D: a drained player skips the redraw
+            return BODY_DONE, cost + passcost.TARGET_DRAIN_PLAYER
+        return BODY_DONE, cost + passcost.TARGET_DRAIN_OBJ + _body_tail()
+    # $184D: only the head -> hunt a tree to convert
+    return BODY_MAKE_MEANIE, cost + passcost.TARGET_MEANIE
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +241,10 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             mem[mm.FOV_WIDTH] = FOV_SCAN  # $16F0
             # $16EA: an enemy that owns a meanie (top bit clear) runs its lifecycle
             if not (mem[mm.ENEMIES_MEANIE_OBJECT + enemy] & 0x80):
+                budget -= passcost.CONSIDER_MEANIE
                 stage, index = BODY_MEANIE, 0
                 continue
-            budget -= passcost.CONSIDER_PREAMBLE
+            budget -= passcost.CONSIDER_NO_MEANIE + passcost.DISCHARGE_CALL
             stage, index = BODY_DISCHARGE, 0
             continue
 
@@ -246,13 +259,16 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             # no_meanie ($1773): a discharge makes the enemy skip its drain ($177A)
             discharged, dcost = _consider_discharging_enemy_energy(state, enemy)
             budget -= dcost
-            if discharged:
+            if discharged:  # $177A: the tail redraws, then the update is over
+                budget -= passcost.DISCHARGED + _body_tail()
                 return budget, BODY_DONE, 0, -1
+            budget -= passcost.NO_DISCHARGE
             # $177F: only mid meanie-hunt does the enemy act on the considering flag
             if mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] & 0x80:
-                budget -= passcost.TILE_SCAN_FIXED
+                budget -= passcost.HUNT_CALL + passcost.TILE_SCAN_ENTRY
                 stage, index = BODY_HUNT, mm.NUM_SLOTS - 1
                 continue
+            budget -= passcost.HUNT_CLEAR
             stage, index = BODY_HELD, 0
             continue
 
@@ -264,9 +280,11 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $178B
-                _reduce_object_energy(state, tb, enemy)  # never the player
+                _reduce_object_energy(state, tb, enemy)  # $17EA, never the player
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                return budget, BODY_DONE, 0, -1
+                budget -= passcost.HUNT_HIT + passcost.DRAIN_CALL
+                return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
+            budget -= passcost.HUNT_MISS
             mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (  # $1792
                 mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
             )
@@ -276,21 +294,23 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
         if stage == BODY_HELD:
             # $178C: a held target is kept while visible AT ALL, dropped when not
             if mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] == 0:
-                budget -= passcost.SCAN_FIXED
+                budget -= passcost.HELD_NONE + passcost.SCAN_INIT
                 stage, index, partial = BODY_SCAN, mm.NUM_SLOTS - 1, -1
                 continue
             held = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
             see = relative.can_see_object(state, enemy, held, mm.T_ROBOT, FOV_SCAN)
             if index >= 0:
-                budget -= _see_cost(see)
+                budget -= passcost.HELD_CALL + _see_cost(see)
                 if budget <= 0:
                     return budget, stage, paid(0), partial
             exposure = _exposure_byte(see)
             if exposure != 0:
-                stage, index = _target_object(state, enemy, held, exposure), 0
+                budget -= passcost.HELD_KEPT
+                stage, cost = _target_object(state, enemy, held, exposure)
+                budget, index = budget - cost, 0
                 continue
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # target lost
-            budget -= passcost.SCAN_FIXED
+            budget -= passcost.HELD_LOST + passcost.SCAN_INIT
             stage, index, partial = BODY_SCAN, mm.NUM_SLOTS - 1, -1
             continue
 
@@ -301,14 +321,17 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             continue
 
         if stage == BODY_PARTIAL:
+            budget -= passcost.SCAN_END_PARTIAL
             # $17C4: fresh-arm the meanie hunt unless this player already failed one
             if partial != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
                 _initialise_enemy_meanie_variables(state, enemy)
-                stage = _target_object(state, enemy, partial, 0x40)
-                index, partial = 0, -1
+                budget -= passcost.PARTIAL_ARM
+                stage, cost = _target_object(state, enemy, partial, 0x40)
+                budget, index, partial = budget - cost, 0, -1
                 continue
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= passcost.TILE_SCAN_FIXED
+            budget -= passcost.PARTIAL_KNOWN + passcost.TREE_CALL
+            budget -= passcost.TILE_SCAN_ENTRY
             stage, index, partial = BODY_TREE, mm.NUM_SLOTS - 1, -1
             continue
 
@@ -322,17 +345,20 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 mem[mm.TARGETED_OBJECT_SLOT] = tb
                 _reduce_object_energy(state, tb, enemy)
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                return budget, BODY_DONE, 0, -1
+                budget -= passcost.TREE_HIT + passcost.DRAIN_CALL
+                return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
+            budget -= passcost.TREE_NONE
             stage, index = BODY_ROTATE, 0
             continue
 
         if stage == BODY_ROTATE:
             # no_drain ($17F9): rotate if the cooldown is low; the turn redraws it
-            budget -= passcost.ROTATE_GATE
             if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
                 _rotate_enemy(state, enemy)
-                budget -= passcost.ROTATE + passcost.ROTATE_REDRAW
-            return budget, BODY_DONE, 0, -1
+                budget -= passcost.ROTATE_GATE + passcost.ROTATE
+                budget -= passcost.ROTATE_REDRAW
+                return budget, BODY_DONE, 0, -1
+            return budget - passcost.ROTATE_GATE_HELD, BODY_DONE, 0, -1
 
         budget, stage, index = _consider_creating_meanie(state, enemy, budget, index)
 
@@ -348,31 +374,40 @@ def _scan_for_robot(state, enemy, budget, index, partial):
         if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
             y = -2 - index
             see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-            return budget, _target_object(state, enemy, y, _exposure_byte(see)), 0, -1
+            stage, cost = _target_object(state, enemy, y, _exposure_byte(see))
+            return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
             if partial >= 0:
                 return budget, BODY_PARTIAL, 0, partial
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= passcost.TILE_SCAN_FIXED
-            return budget, BODY_TREE, mm.NUM_SLOTS - 1, -1
+            budget -= passcost.SCAN_END + passcost.TREE_CALL
+            return budget - passcost.TILE_SCAN_ENTRY, BODY_TREE, mm.NUM_SLOTS - 1, -1
         if budget <= 0:
             return budget, BODY_SCAN, index, partial
         y = index
         index -= 1
+        last = passcost.SCAN_LAST if y == 0 else 0  # $17CB BPL not taken
         see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-        budget -= passcost.SCAN_SLOT + _see_cost(see)
+        budget -= _see_cost(see)
         # $17B7: a non-target tree in the sightline to this robot's HEAD hides it
         if see["tree_in_los_head"]:
+            budget -= passcost.SCAN_SLOT_HIDDEN - last
             continue
         exposure = _exposure_byte(see)
         if exposure == 0:  # $17BE/$17C0: not visible at all -> next slot
+            budget -= passcost.SCAN_SLOT_UNSEEN - last
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
+            budget -= passcost.SCAN_SLOT_FULL
             if budget <= 0:  # the ROM has not reached $1825 yet
                 return budget, BODY_SCAN, paid(y), partial
-            return budget, _target_object(state, enemy, y, exposure), 0, -1
+            stage, cost = _target_object(state, enemy, y, exposure)
+            return budget - cost, stage, 0, -1
         if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial = y
+            budget -= passcost.SCAN_SLOT_PARTIAL - last
+        else:
+            budget -= passcost.SCAN_SLOT_OTHER - last
 
 
 # ---------------------------------------------------------------------------
@@ -648,36 +683,42 @@ def _find_drainable_boulder_or_tree(state, enemy, budget, index):
                 state.mem[mm.TARGETED_OBJECT_SLOT] = y
                 return budget - passcost.TILE_SCAN_HIT, index, y
             budget -= passcost.TILE_SCAN_NEXT
+            budget += passcost.TILE_SCAN_LAST if x == 0 else 0
             continue
         if index < 0:  # $1AF2: the whole scan came up empty
-            return budget, index, -1
+            return budget - passcost.TILE_SCAN_EXHAUSTED, index, -1
         if budget <= 0:
             return budget, index, -2
         x = index
         index -= 1
+        last = passcost.TILE_SCAN_LAST if x == 0 else 0  # $1AF0 BPL not taken
         flags = state.obj_flags[x]
         if flags & 0x80:  # empty slot
-            budget -= passcost.TILE_SCAN_EMPTY
+            budget -= passcost.TILE_SCAN_EMPTY - last
             continue
         if not (flags >= 0x40 or state.obj_type[x] == mm.T_BOULDER):
-            budget -= passcost.TILE_SCAN_OTHER
+            budget -= passcost.TILE_SCAN_OTHER - last
             continue
         budget -= (
             passcost.TILE_SCAN_STACKED if flags >= 0x40 else passcost.TILE_SCAN_LOOSE
         ) + passcost.TILE_SCAN_TILE
         y = _tile_top(state, x)
         if y < 0:  # no object on the tile (shouldn't happen)
-            budget -= passcost.TILE_SCAN_NO_TILE
+            budget -= passcost.TILE_SCAN_NO_TILE - last
             continue
         otype = state.obj_type[y]
         budget -= passcost.TILE_SCAN_TOP
         if otype not in (mm.T_TREE, mm.T_BOULDER):
-            budget -= passcost.TILE_SCAN_WRONG_TOP
+            budget -= passcost.TILE_SCAN_WRONG_TOP - last
             continue
         see = relative.can_see_object(state, enemy, y, otype, FOV_SCAN)
-        budget -= passcost.TILE_SCAN_SEE + _see_cost(see)
+        budget -= _see_cost(see) + (
+            passcost.TILE_SCAN_SEE
+            if otype == mm.T_TREE
+            else passcost.TILE_SCAN_SEE_BOULDER
+        )
         if not see["full"]:
-            budget -= passcost.TILE_SCAN_NEXT
+            budget -= passcost.TILE_SCAN_NEXT - last
             continue
         if budget <= 0:  # the ROM has not reached $1AEA yet
             return budget, paid(x), -2

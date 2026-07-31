@@ -47,8 +47,21 @@ UPDATE_CURSOR = 20  # $16D9 DEC 5 + BPL 3 + $16E1 LDA/STA 6 + RTS 6
 UPDATE_CURSOR_WRAP = 24  # cursor 0: BPL not taken 2 + LDA 2 + STA 3
 UPDATE_TAIL = UPDATE_PRND + UPDATE_CURSOR  # 453, the whole $16D6..$16E5
 UPDATE_TAIL_WRAP = UPDATE_PRND + UPDATE_CURSOR_WRAP  # 457
-CONSIDER_ENTRY = 30  # $16E6..$16F6 gate open 21 + $16F7 LDA 4 + BPL 2 + JMP 3
-CONSIDER_PREAMBLE = 36  # $1773..$17B2 around the discharge and considering flags
+CONSIDER_ENTRY = 21  # $16E6 gate open 8 + $16ED reload 7 + $16F2 FOV width 6
+CONSIDER_MEANIE = 7  # $16F7 LDA $0CA0,X 4 + $16FA BPL $16FF taken 3: owns a meanie
+CONSIDER_NO_MEANIE = 9  # ... BPL not taken 2 + $16FC JMP $1773 3
+DISCHARGE_CALL = 9  # $1773 STX $6E 3 + $1775 JSR $1A5D 6
+DISCHARGED = 5  # $1778 BCS not taken 2 + $177A JMP $1876 3: this update is spent
+NO_DISCHARGE = 10  # ... BCS taken 3 + $177D LDX $90 3 + $177F LDA $0CB8,X 4
+HUNT_CLEAR = 3  # $1782 BPL $1795 taken: not mid meanie-hunt
+HUNT_CALL = 8  # ... not taken 2 + $1784 JSR $1AB0 6
+HUNT_MISS = 13  # $1787 LDX 3 + $1789 BCS taken 3 + $1792 LSR $0CB8,X 7: flag decays
+HUNT_HIT = 15  # ... BCS nt 2 + $178B LDA 2 + STA $0C80,X 5 + $1790 BNE $17EA 3
+HELD_NONE = 7  # $1795 LDA $0C20,X 4 + $1798 BEQ $17AC taken 3: nothing held
+HELD_CALL = 18  # ... BEQ nt 2 + $179A LDY 4 + $179D LDA 2 + $179F JSR $1887 6
+HELD_LOST = 11  # $17A2 LDA $14 3 + $17A4 BEQ taken 3 + $17A9 STA $0C20,X 5
+HELD_KEPT = 8  # ... BEQ not taken 2 + $17A6 JMP $1825 3
+SCAN_INIT = 7  # $17AC LDA 2 + STA $0F 3 + $17B0 LDY #$3F 2
 
 DISCHARGE_NONE = 18  # $1A5D LDX 3 + SEC 2 + LDA 4 + BEQ 3 + RTS 6
 DISCHARGE_FIXED = 100  # $1A5D success 62 + create_object $211D + $1238 entry
@@ -252,11 +265,26 @@ OBJ_SKIP_OTHER = 13  # + $1EA0 LDA #$C0 2 + STA $0060 3, less 1
 OBJ_GHOL_LOOP = 9  # $1EA4 LDA 4 + CMP #$40 2 + BCS taken 3: another stack level
 OBJ_GHOL_RTS = 18  # + $1EAB LDA 4 + RTS 6, less 1
 
-SCAN_SLOT = 27  # $17B2 LDA 2 + JSR 6 + the $17B7 gates 11 + $17CA DEY/BPL 5
-SCAN_FIXED = 12  # a 64-slot scan's entry/exit
+# find_drainable_robot_loop $17B2, one slot, by the branch it takes; the $1887 apart.
+SCAN_SLOT_HIDDEN = 22  # $17B2 2 + JSR 6 + $17B7 6 + $17BC BNE taken 3 + DEY/BPL 5
+SCAN_SLOT_UNSEEN = 27  # ... BNE nt 2 + $17BE LDA $14 3 + $17C0 BEQ taken 3 + 5
+SCAN_SLOT_FULL = 25  # ... BEQ nt 2 + $17C2 BMI $1825 taken 4, page crossed
+SCAN_SLOT_OTHER = 34  # ... BMI nt 2 + $17C4 CPY $0B 3 + $17C6 BNE taken 3 + 5
+SCAN_SLOT_PARTIAL = 36  # ... BNE nt 2 + $17C8 STY $0F 3 + DEY/BPL 5
+SCAN_LAST = 1  # slot 0 leaves by $17CB BPL not taken, one cycle short
+SCAN_END = 6  # $17CD LDY $0F 3 + $17CF BMI $17E0 taken 3: no head-only player
+SCAN_END_PARTIAL = 11  # ... BMI nt 2 + $17D1 TYA 2 + $17D2 CMP $0C90,X 4
+PARTIAL_KNOWN = 3  # $17D5 BEQ $17E0 taken: this player already failed a hunt
+PARTIAL_ARM = 49  # ... nt 2 + $17D7 JSR 6 + $1973 32 + LDA 2 + STA 3 + BNE 4
+MEANIE_INIT = 32  # $1973..$1985: the four writes and the RTS
+TREE_CALL = 13  # $17E0 LDA 2 + $17E2 STA $0C20,X 5 + $17E5 JSR $1AB0 6
+TREE_NONE = 3  # $17E8 BCS $17F9 taken: nothing on a stack to drain
+TREE_HIT = 2  # ... BCS not taken
 
 # find_drainable_boulder_or_tree $1AB0 walks its own loop, not $17B2's.
-TILE_SCAN_FIXED = 10  # $1AB0 LDX 2 + $1AF2 SEC/RTS 8
+TILE_SCAN_ENTRY = 2  # $1AB0 LDX #$3F
+TILE_SCAN_EXHAUSTED = 8  # $1AF2 SEC 2 + RTS 6
+TILE_SCAN_LAST = 1  # slot 0 leaves by $1AF0 BPL not taken, one cycle short
 TILE_SCAN_EMPTY = 12  # $1AB2 LDA 4 + BMI 3 + $1AEF DEX/BPL 5
 TILE_SCAN_OTHER = 24  # + the $1AB7 flag and $1ABB type compares 12
 TILE_SCAN_STACKED = 11  # flags >= $40 leaves at $1AB9 BCS
@@ -265,9 +293,10 @@ TILE_SCAN_TILE = 61  # $1AC2..$1AD1 the tile fetch, its $2BA8 lookup 34 included
 TILE_SCAN_NO_TILE = 8  # $1AD3 BCC taken + $1AEF DEX/BPL
 TILE_SCAN_TOP = 12  # $1AD3 BCC 2 + $1AD5..$1ADB the top object's type read 10
 TILE_SCAN_WRONG_TOP = 12  # $1ADD..$1AE1 the two compares 7 + $1AEF DEX/BPL 5
-TILE_SCAN_SEE = 9  # $1AE1 BEQ 3 + the $1AE3 JSR 6 (a boulder top pays 3 more)
+TILE_SCAN_SEE = 9  # a tree top: $1ADD BEQ $1AE3 taken 3 + the $1AE3 JSR 6
+TILE_SCAN_SEE_BOULDER = 12  # ... BEQ nt 2 + $1ADF CMP #3 2 + $1AE1 BNE nt 2 + JSR 6
 TILE_SCAN_NEXT = 11  # $1AE6 LDA/BPL 6 + $1AEF DEX/BPL 5 when the see was not full
-TILE_SCAN_HIT = 8  # $1AE8 BPL not taken 2 + $1AEA STY/CLC 6
+TILE_SCAN_HIT = 17  # $1AE6 LDA $14 3 + BPL nt 2 + $1AEA STY/CLC 6 + RTS 6
 
 # consider_creating_meanie $197D walks the search counter, not a slot index.
 MEANIE_SCAN_SLOT = (
@@ -279,7 +308,23 @@ MEANIE_SCAN_DY = 18  # $19C7..$19D7 the same in y, off the already-loaded index
 MEANIE_SCAN_SEE = 8  # $19D9 LDA 2 + the $19DB JSR 6
 MEANIE_SCAN_DONE = 33  # $198F..$1994 9 + $1996 INC/LDA/STA 16 + SEC/RTS 8
 
-ROTATE_GATE = 12  # $17F9 LDX 3 + LDA 4 + CMP 2 + BCC 3; 14 when the gate holds
+DRAIN_CALL = 6  # $17EA JSR $1A08 reduce_object_energy
+DRAIN_TAIL = 15  # $17ED BCS nt 2 + $17EF LDY 3 + LDA 2 + STA $0C30,Y 5 + JMP 3
+DRAIN_TAIL_PLAYER = 7  # $17ED BCS $1802 taken 4, page crossed, + JMP $16D6 3
+BODY_TAIL = 24  # $1876..$1884: the $0C6D flag, the JSR $1F9F and the JMP $16D6
+
+# target_object $1825, entered from $17A6, $17C2, $17DE.
+TARGET_HEAD = 21  # $1825..$1831: record the target and its exposure, read the timer
+TARGET_FIRST = 12  # $1833 BCS nt 2 + $1835 LDA 2 + STA $0C20,X 5 + JMP 3: arm it
+TARGET_WAIT = 9  # $1833 BCS taken 3 + $183D BNE taken 3 + $183A JMP $16D6 3
+TARGET_DUE = 8  # ... $183D BNE not taken 2 + $183F LDA $14 3: the timer is up
+TARGET_MEANIE = 3  # $1841 BPL $1852 taken: a head-only player buys a meanie hunt
+TARGET_DRAIN = 18  # ... nt 2 + $1843 JSR $1A08 6 + $1846 LDY 3 + LDA 2 + STA 5
+TARGET_DRAIN_OBJ = 5  # $184D BCS not taken 2 + $184F JMP $1876 3
+TARGET_DRAIN_PLAYER = 6  # ... BCS $1884 taken 3 + JMP $16D6 3
+
+ROTATE_GATE = 12  # $17F9 LDX 3 + LDA $0C28,X 4 + CMP 2 + $1800 BCC $1805 taken 3
+ROTATE_GATE_HELD = 14  # ... BCC not taken 2 + $1802 JMP $16D6 3: too soon to turn
 ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 straight
 ROTATE_REDRAW = 1723  # $1F9F update_object_on_screen; MEASURED 1576..1843, 16 rotations
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
