@@ -10,7 +10,7 @@ import os
 
 import numpy as np
 
-from sentinel import relative, terrain, memmap as mm
+from sentinel import passcost, relative, terrain, memmap as mm
 
 try:
     from sentinel import projector_jit
@@ -75,49 +75,90 @@ def _tile_xy(quadrant, col, row):
 
 def _tile_height(state, tx, ty):
     """($28E9) ground height of tile (tx,ty); object tiles resolve to the
-    bottommost object's z_height. Returns (height, tile_byte)."""
+    bottommost object's z_height. Returns (height, tile_byte, stack levels walked)."""
     tb = terrain.tile_byte(state, tx, ty)
-    if tb >= mm.OBJECT_TILE:
-        return state.obj_z_height[terrain.bottom_object(state, tb & 0x3F)], tb
-    return tb >> 4, tb
+    if tb < mm.OBJECT_TILE:
+        return tb >> 4, tb, 0
+    slot, levels = tb & 0x3F, 1
+    for _ in range(mm.NUM_SLOTS):
+        flags = state.obj_flags[slot]
+        if flags < 0x40:  # $28FA CMP #$40: this level is on the ground
+            break
+        slot, levels = flags & 0x3F, levels + 1
+    return state.obj_z_height[slot], tb, levels
 
 
-def _project(state, setup, col, row):
+_QUAD_CYCLES = (
+    passcost.EXAM_QUAD_NORTH,
+    passcost.EXAM_QUAD_EAST,
+    passcost.EXAM_QUAD_SOUTH,
+    passcost.EXAM_QUAD_WEST,
+)
+
+
+def _project(state, setup, col, row, vis=None):
     """$2845: project grid point (col,row). Returns (sx_lo, sx_hi, sy_lo, sy_hi,
-    tile_byte, onscreen) matching the ROM plottables, visibility byte and $007F."""
+    tile_byte, onscreen, cycles) matching the ROM plottables, visibility byte, $007F
+    and the exact cycles the call spent, the trig it drives included."""
     observer = setup["observer"]
     zp = collections.defaultdict(int)
+    cyc = passcost.EXAM_CALL + passcost.EXAM_HEAD
     sx = (col - setup["c3"] - 1) & 0xFF  # signed column ($2858, CLC-before-SBC -1)
     zp[0x86], zp[0x80] = sx, 0x80
     if sx & 0x80:
         zp[0x83], zp[0x80] = _neg16(sx, 0x80)
+        cyc += passcost.EXAM_COL_NEG
     else:
         zp[0x83] = sx
+        cyc += passcost.EXAM_COL_POS
     sr = (row - setup["c1d"] - 1) & 0xFF  # signed row ($2876)
     zp[0x88], zp[0x82] = sr, 0x80
+    cyc += passcost.EXAM_ROW
     if sr & 0x80:
         zp[0x85], zp[0x82] = _neg16(sr, 0x80)
+        cyc += passcost.EXAM_ROW_NEG
     else:
         zp[0x85] = sr
-    relative._calc_angle(zp)  # $9287 -> zp[$8A]/zp[$8B]
+        cyc += passcost.EXAM_ROW_POS
+    cyc += passcost.EXAM_ANGLE + relative._calc_angle(zp)  # $9287 -> zp[$8A]/zp[$8B]
     sx_lo = (zp[0x8A] - setup["ref_lo"]) & 0xFF  # screen x ($2891), carry stays set
     sx_hi = (zp[0x8B] - setup["ref_hi"]) & 0xFF
-    relative._calc_hypotenuse(zp)  # $937F -> zp[$7C]/zp[$7D]
+    cyc += passcost.EXAM_STORE + relative._calc_hypotenuse(zp)  # $937F -> zp[$7C]/$7D
+    cyc += _QUAD_CYCLES[setup["quadrant"]] + passcost.EXAM_ADDR
     tx, ty = _tile_xy(setup["quadrant"], col, row)
-    height, tile_byte = _tile_height(state, tx, ty)
+    height, tile_byte, levels = _tile_height(state, tx, ty)
+    if levels:  # $28F2: an object tile walks its stack and skips the raytrace bit
+        cyc += passcost.EXAM_OBJECT + passcost.EXAM_OBJECT_BOTTOM
+        cyc += (levels - 1) * passcost.EXAM_OBJECT_STEP
+    else:
+        if vis is None:
+            vis = occlusion_visible(state, observer)
+        cyc += passcost.EXAM_GROUND
+        cyc += passcost.EXAM_VISIBLE if vis[ty][tx] else passcost.EXAM_HIDDEN
     zf = state.obj_z_frac[observer]  # tile height relative to eye ($291E)
     zp[0x80] = (-zf) & 0xFF
     rel_z_hi = (height - state.obj_z_height[observer] - (1 if zf else 0)) & 0xFF
-    sy_hi, _vcyc = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
+    sy_hi, vcyc = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
     sy_lo = zp[0x50]
+    cyc += passcost.EXAM_VANGLE + vcyc + passcost.EXAM_TAIL
     # $293C on-screen test against the mode's $0007/$0012; $0028=0 waives the fraction check.
     if sx_hi < setup["buf_left"]:
         onscreen = 0x00
-    elif sx_hi < setup["buf_right"]:
-        onscreen = 0x80
+        cyc += passcost.EXAM_OFF_LEFT
     else:
-        onscreen = 0x81
-    return sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen
+        cyc += passcost.EXAM_ON_LEFT
+        if sx_hi == setup["buf_left"]:
+            cyc += passcost.EXAM_FRACTION + passcost.EXAM_FRACTION_OK
+        else:
+            cyc += passcost.EXAM_NO_FRACTION
+        cyc += passcost.EXAM_RIGHT
+        if sx_hi < setup["buf_right"]:
+            onscreen = 0x80
+            cyc += passcost.EXAM_OFF_RIGHT
+        else:
+            onscreen = 0x81
+            cyc += passcost.EXAM_ON_RIGHT
+    return sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, cyc
 
 
 _SCREEN_H = int(os.environ.get("RENDER_SCREEN_H", "240"))  # $F0 fillable scanlines
@@ -147,22 +188,24 @@ _OFFSET_TO_TILE = (
 )  # offset_to_tile_table $27D3, indexed by quadrant
 
 
-def _scan_visible(state, setup):
+def _scan_visible(state, setup, vis=None):
     """Exact port of find_visible_extent ($27D7) + plot_rows_in_front_of_observer_loop
-    ($26DE): the furthest->nearest walk that probes tiles via $2845. Returns
-    (n_examine, rows, cache) with the exact $2845 call count and per-row (row, lo, hi)
-    plotted extents; the on-screen byte drives every branch so the count is byte-exact.
+    ($26DE), the furthest->nearest walk that probes tiles via $2845.
+
+    Returns (n_examine, exam_cycles, rows, cache): the exact $2845 call count, the exact
+    cycles those calls spent, and the per-row (row, lo, hi) plotted extents.
     """
     cache = {}
-    exam = [0]
+    exam = [0, 0]
 
     def probe(col, row):
-        exam[0] += 1
         col &= 0xFF
         r = cache.get((col, row))
         if r is None:
-            r = _project(state, setup, col, row)
+            r = _project(state, setup, col, row, vis)
             cache[(col, row)] = r
+        exam[0] += 1
+        exam[1] += r[6]
         return r[5]
 
     def find_end(row, col):  # find_end_of_row_loop $27E2
@@ -275,7 +318,7 @@ def _scan_visible(state, setup):
                 if y == p_end:
                     break
         rows.append((row, min(start, p_start), max(end, p_end)))
-    return exam[0], rows, cache
+    return exam[0], exam[1], rows, cache
 
 
 def _occlusion_visible_py(state, observer=None):
@@ -435,14 +478,14 @@ def occlusion_visible(state, observer=None):
 
 def _project_scene_py(state, setup, observer):
     """The pure-Python tile-selection body of :func:`project_scene`."""
-    n_examine, rows, cache = _scan_visible(state, setup)
     visible = occlusion_visible(state, observer)
+    n_examine, exam_cycles, rows, cache = _scan_visible(state, setup, visible)
 
     def proj(col, row):
         col &= 0xFF
         cached = cache.get((col, row))
         if cached is None:
-            cached = _project(state, setup, col, row)
+            cached = _project(state, setup, col, row, visible)
             cache[(col, row)] = cached
         return cached
 
@@ -483,7 +526,7 @@ def _project_scene_py(state, setup, observer):
                     "w": max(min(span, _W_SCREEN), 0),
                 }
             )
-    return tiles, n_examine
+    return tiles, n_examine, exam_cycles
 
 
 def _project_scene_jit(state, setup, observer):
@@ -500,7 +543,7 @@ def _project_scene_jit(state, setup, observer):
     su[projector_jit.S_OBS_ZF] = state.obj_z_frac[observer]
     su[projector_jit.S_LEFT] = setup["buf_left"]
     su[projector_jit.S_RIGHT] = setup["buf_right"]
-    out, spans, n, n_examine = projector_jit.project_scene(
+    out, spans, n, n_examine, exam_cycles = projector_jit.project_scene(
         np.frombuffer(state.mem, dtype=np.uint8),
         su,
         _occlusion_memo(state, observer)[1],
@@ -510,7 +553,7 @@ def _project_scene_jit(state, setup, observer):
     )
     # .tolist() once: the columns come back as Python ints/floats, as the reference has;
     # the width clamp stays here, applied by the same expression the reference uses.
-    return [
+    tiles = [
         {
             "col": r[0],
             "row": r[1],
@@ -525,13 +568,16 @@ def _project_scene_jit(state, setup, observer):
             "w": max(min(span, _W_SCREEN), 0),
         }
         for r, span in zip(out[:n].tolist(), spans[:n].tolist())
-    ], int(n_examine)
+    ]
+    return tiles, int(n_examine), int(exam_cycles)
 
 
 def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None):
-    """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
-    $2845 examination count under ``mode``'s $2993 buffer window. Non-object tiles the
-    occlusion table hides are examined but dropped; each kept tile carries its H and W.
+    """Return (tiles, n_examine, exam_cycles) under ``mode``'s $2993 buffer window.
+
+    The plotted tile set and the $2845 examination count and cycles are all exact.
+    Non-object tiles the occlusion table hides are examined but dropped; each kept tile
+    carries its H and W.
     """
     if observer is None:
         observer = state.player
@@ -543,8 +589,6 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window
 
 FRAME_CYCLES = 19656.0  # PAL frame
 BASE_CYCLES = float(os.environ.get("RENDER_BASE_CYCLES", "0"))
-# term (a) per-$2845-calltree cost ($2845+$9287+$937F+$933D), py65 mean (1551-2046).
-C_EXAMINE = float(os.environ.get("RENDER_C_EXAMINE", "1737"))
 PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b) edge/row
 PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))  # term (b) span_fill byte
 
@@ -643,10 +687,10 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None):
     obs = state.player if observer is None else observer
 
     def make():
-        tiles, n_examine = project_scene(state, h, v, obs, mode, window)
+        tiles, _n_examine, exam_cycles = project_scene(state, h, v, obs, mode, window)
         area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
         base = _terrain_poly_base(tiles) + _inview_object_base(state, tiles)
-        return (BASE_CYCLES + n_examine * C_EXAMINE + area + base) / FRAME_CYCLES
+        return (BASE_CYCLES + exam_cycles + area + base) / FRAME_CYCLES
 
     key = (scene_key(state), obs, h, v, mode, window)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)

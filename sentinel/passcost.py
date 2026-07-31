@@ -378,6 +378,39 @@ SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RT
 SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
+# $2845 check_if_tile_is_on_screen_and_calculate_screen_coordinates, by its branches; the trig it calls ($9287, $937F, $933D) is counted by relative.py off its own data.
+EXAM_CALL = 6  # the JSR, from $26D6/$270A/$271E/$2738/$274C and the $27D7 loops
+EXAM_HEAD = 44  # $2845..$2861: the slot index, the $007F reset and the column delta
+EXAM_COL_POS = 3  # $2863 BPL $2870 taken: the column delta is already positive
+EXAM_COL_NEG = 17  # ... not taken 2 + the $2865 16-bit negate 15
+EXAM_ROW = 19  # $2870..$287B: the row delta against the observer's row
+EXAM_ROW_POS = 3  # $287D BPL $288A taken
+EXAM_ROW_NEG = 17  # ... not taken 2 + the $287F negate 15
+EXAM_ANGLE = 9  # $288A STA $85 3 + $288C JSR $9287 6
+EXAM_STORE = 36  # $288F..$28A0 the two 16-bit stores and the JSR $937F 33 + $28A3 BIT 3
+EXAM_QUAD_NORTH = 13  # $28A5 BMI nt 2 + $28A7 BVS nt 2 + $28A9..$28AD 9
+EXAM_QUAD_EAST = 20  # ... BVS taken 3 + $28B0..$28B8 15
+EXAM_QUAD_SOUTH = 26  # $28A5 BMI taken 3 + $28BB BVS nt 2 + $28BD..$28C9 21
+EXAM_QUAD_WEST = 18  # ... BVS taken 3 + $28CC..$28D2 12, falling into $28D4
+EXAM_ADDR = 47  # $28D4..$28F0 calculate_tile_address through the CMP #$c0
+EXAM_OBJECT = 2  # $28F2 BCC not taken: the tile holds an object stack
+EXAM_OBJECT_STEP = 13  # $28F4 one level whose flags say another is below it
+EXAM_OBJECT_BOTTOM = 22  # the bottommost level 12 + $28FE its z_height and the JMP 10
+EXAM_GROUND = 37  # $28F2 BCC taken 4, page crossed, + $2906..$2919 the $3E80 bit 33
+EXAM_VISIBLE = 3  # $2919 BNE taken: the raytrace bit is set
+EXAM_HIDDEN = 7  # ... not taken 2 + $291B STA $0180,X 5: the plot byte is zeroed
+EXAM_VANGLE = 53  # $291E..$293F: relative z, JSR $933D, both stores, the $0007 CMP
+EXAM_OFF_LEFT = 3  # $2941 BCC leave taken: beyond the left edge of the buffer
+EXAM_ON_LEFT = 2  # ... not taken
+EXAM_NO_FRACTION = 3  # $2943 BNE taken: the high byte alone settles the left edge
+EXAM_FRACTION = 9  # ... not taken 2 + $2945 LDA $0BA0,Y 4 + CMP $0028 3
+EXAM_FRACTION_LEFT = 3  # $294A BCC leave taken
+EXAM_FRACTION_OK = 6  # ... not taken 2 + $294C LDA $A800,Y 4
+EXAM_RIGHT = 8  # $294F ROR $007F 5 + CMP $0012 3
+EXAM_OFF_RIGHT = 3  # $2953 BCC leave taken
+EXAM_ON_RIGHT = 7  # ... not taken 2 + $2955 INC $007F 5
+EXAM_TAIL = 14  # $2957 LDY $0F 3 + LDA $7F 3 + CLC 2 + RTS 6
+
 
 def status_bar_cycles(energy):
     """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""

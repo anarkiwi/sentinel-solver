@@ -35,23 +35,10 @@ VIEWS = [
 ]
 
 
-# examine call-tree PC ranges: $2845 shell + calculate_angle/hypotenuse/vertical trig.
-_EXAMINE_RANGES = (
-    (0x2845, 0x295C),
-    (0x9287, 0x93AC),
-    (0x0D4A, 0x0F49),
-    (0x0F4A, 0x1000),
-)
-
-
-def _in_examine_tree(pc):
-    return any(lo <= pc <= hi for lo, hi in _EXAMINE_RANGES)
-
-
 def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     """Run plot_world ($2625) headless in py65 with the raytraced occlusion table
-    ($245B) active; return per-view exact cycles broken into examine / object-fill /
-    terrain-fill, the $2845 count, and the count of tiles actually filled ($2A24)."""
+    ($245B) active; return per-view exact cycles split by SUBTREE -- the $2845
+    examinations, the $21AE object stacks and the terrain fill that is left."""
     player = mem[0x000B]
     mem[0x006E] = player
     mem[0x09C0 + player] = h_angle  # objects_h_angle
@@ -63,6 +50,7 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     mem[0x0CDE] = 0  # not hyperspaced
     mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
     mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
+    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
     oracle.call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
     state["stop"] = False
     oracle.call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
@@ -75,12 +63,12 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     cpu.pc = 0x2625
     c0 = cpu.processorCycles
     n_examine = n_filled = examine_cycles = object_cycles = 0
-    in_obj = False
-    obj_sp = 0
-    steps = 0
+    in_exam = in_obj = False
+    exam_sp = obj_sp = steps = 0
     while cpu.pc != ret and steps < 20_000_000:
         pc = cpu.pc
-        if pc == 0x2845:
+        if pc == 0x2845 and not in_exam:  # $2845 subtree, the trig it calls included
+            in_exam, exam_sp = True, cpu.sp
             n_examine += 1
         if pc == 0x2A24 and mem[0x0180 + cpu.x]:  # plot_tile with a non-hidden byte
             n_filled += 1
@@ -89,14 +77,17 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
         c1 = cpu.processorCycles
         cpu.step()
         d = cpu.processorCycles - c1
-        if _in_examine_tree(pc):
+        if in_exam:
             examine_cycles += d
+            if cpu.sp > exam_sp:
+                in_exam = False
         if in_obj:
             object_cycles += d
             if cpu.sp > obj_sp:
                 in_obj = False
         steps += 1
     total = cpu.processorCycles - c0
+    examine_cycles += 6 * n_examine  # the JSR the caller pays, which the model charges
     return {
         "cycles": total,
         "examine_cycles": examine_cycles,
@@ -120,11 +111,11 @@ def _check(data):
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles, n_examine = projector.project_scene(state, h, v)
+        tiles, n_examine, exam_cycles = projector.project_scene(state, h, v)
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine} != {rec}"
         assert len(tiles) == rec["n_filled"], f"{key} plots {len(tiles)} != {rec}"
-        pred_ex = n_examine * projector.C_EXAMINE  # examine cycles ~ count * mean floor
-        assert pred_ex == pytest.approx(rec["examine_cycles"], rel=0.16), key
+        # The $2845 tree is cycle-exact bar one $0078-stale branch a pass (open item 5).
+        assert exam_cycles == pytest.approx(rec["examine_cycles"], rel=0.002), key
         want = (
             rec["cycles"] / projector.FRAME_CYCLES
         )  # fill term approx: see residual doc
@@ -166,7 +157,7 @@ def test_object_base_never_overshoots_and_is_present():
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles, _ = projector.project_scene(state, h, v)
+        tiles = projector.project_scene(state, h, v)[0]
         base = projector._inview_object_base(state, tiles)
         assert base <= rec["object_fill_cycles"] + 1  # floor, never overshoots
         if rec["object_fill_cycles"] and base:
@@ -282,7 +273,7 @@ def test_offband_tiles_still_cost_their_prepare_polygon_calls():
     for key, rec in sorted(json.load(open(GOLDEN)).items()):
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles, _ = projector.project_scene(state, h, v)
+        tiles = projector.project_scene(state, h, v)[0]
         if not tiles or any(t["h"] for t in tiles):
             continue
         zero_area.append(key)
@@ -299,7 +290,7 @@ def test_terrain_polygon_floor_counts_two_triangles_for_a_sloped_tile():
     mixed = 0
     for ls, h, v in VIEWS:
         state = landscape.generate(ls)
-        tiles, _ = projector.project_scene(state, h, v)
+        tiles = projector.project_scene(state, h, v)[0]
         flat = [t for t in tiles if t["tile_byte"] < mm.OBJECT_TILE]
         n_sloped = sum(1 for t in flat if terrain.resolve_ground(state, *t["tile"])[1])
         want = (len(flat) + n_sloped) * projector.SECTIONS * projector.C_PREP_CALL
