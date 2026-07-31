@@ -143,7 +143,7 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock: what is left is the redraw and the frame budget
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**131** events) and on ls335 (**39**). ls42 is clean: **0 over 3000 frames**. Every
+ls9795 (**128** events) and on ls335 (**31**). ls42 is clean: **0 over 3000 frames**. Every
 event is an enemy's `update_cd` reading 4 in the machine where the sim still reads 1 — one
 `$16ED` reload the sim reaches a frame late — or the `$1805` rotation that follows from it.
 Neither the `$1887` chain nor `$16E6`'s own line is the cause any more: both are now
@@ -254,8 +254,20 @@ instrument applies it at the seed and at every resync.
 
 **Measured — same seed, same machine, two sims.** One restarting the interrupted pass, one
 resuming it: on ls9795 the first CORE divergence moves **66 -> 129 frames**, and on ls335,
-where that seed happened to land on the pass head, both give 155 — the control. In follow
-mode ls335 goes 63 -> 39 events with its median gap 19 -> 56 frames; ls42 stays at 0.
+where that seed happened to land on the pass head, both give 155 — the control.
+
+**And mid-segment, not just mid-pass.** Resuming at the interrupted segment's *head* still
+lost what the machine had spent inside it — up to 433 cycles in the prnd, a whole `$191F`
+walk in the tail. `resume_from_stack` now also returns the signed cycle offset between the
+machine's position and the model's resume point, counted off the ROM's own straight lines
+(`$1289` through the `$16B5` dispatch for both enemy types, `$16D9`'s cursor step both ways
+round its wrap, `$12A2`'s tail with its exposure walk and three sound bodies, and `$31CA`
+per LFSR lap off the interrupted Y), and the instrument hands it over as the opening
+`cycle_residual`; every entry is checked against the ROM running that stretch. A position
+off those lines resumes at its segment head as before, so the seed waits up to 40 frames
+for a marker that catches the loop on one it can count. ls9795's first divergence
+**66 -> 129**, ls335's **155 -> 194**, follow-mode events on ls335 **63 -> 31** with its
+median gap **19 -> 86** frames; ls42 stays at 0 throughout.
 
 **Where it stops now.** Two things, both named by measurement rather than suspicion:
 
@@ -263,11 +275,12 @@ mode ls335 goes 63 -> 39 events with its median gap 19 -> 56 frames; ls42 stays 
   the one act whose cost carries `$1F9F`'s mean. Over the frames before it there is not a
   single `$1F9F` or `$1805` (checkpoint hit counts over the first 66 frames: 0 and 0), which
   is what rules the redraw out of everything earlier and into this.
-* ls335's frame-155 event is `enemy[2]` and `enemy[4]` swapping which of them the pass
-  considered: one pass of phase, not a wrong cost. The reconstruction is exact only to
-  *segment* granularity — the machine is somewhere inside the segment it was caught in (up to
-  one `$1887` query on the scan path, 433 cycles in the prnd) and the model resumes at that
-  segment's start.
+* ls335's first event is now frame 194, a single `enemy[2].update_cd`: still one pass of
+  phase, not a wrong cost. What is left of the seed is the **body** — a marker that catches
+  the loop inside `$16E6` resumes at the interrupted `$1887` query's start, because no
+  straight line counts a march — and the `$9630` head's own 5-9 cycle variation
+  (`$FFC2`/`$FFC5` and `$119F`), which over a run that long is itself worth about a pass:
+  the size of the tie it decides.
 
 **Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
 mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
@@ -329,9 +342,9 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** `$1F9F` counted rather than averaged; and sub-segment seed resolution — either
-an instruction count from the interrupted PC to the end of its segment, or a first frame
-whose budget is the raster clock's own measure of what is left of that frame.
+**Resolves.** `$1F9F` counted rather than averaged; the `$9630` head's own 5-9 cycles
+counted through `$FFC2`/`$FFC5` and `$119F`; and, for a seed caught inside a march, a first
+frame whose budget is the raster clock's measure of what is left of it.
 
 ## 9. The human line does not replay to a win through the live executor
 
