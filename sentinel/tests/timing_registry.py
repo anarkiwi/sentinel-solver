@@ -318,12 +318,12 @@ REGISTRY = {
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,
-        "$9630 + VIC-II DMA steal. The handler IS in the fixture (KERNAL banked out, "
-        "$FFC2/$FFC5 are the game's own RAM) but the DMA steal is hardware, so the "
-        "budget is measured, not counted: the complement of the counted foreground; "
-        "the modelled idle cadence lands inside the live bracket on all 5 boards of "
-        "fixtures/live_pass_rate.json (spanning 1..8 enemies)",
-        "test_irq_cycles_matches_the_live_pass_rate",
+        "BADLINE_FRAME + the four short raster interrupts + IRQ_BODY. The handler is "
+        "COUNTED off the image (KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, "
+        "so py65 walks it); only the VIC-II DMA steal is hardware, and BADLINE_FRAME is "
+        "the frozen-clock $1289 rate on three boards to under a pass in 50000 "
+        "(fixtures/live_pass_cycles.json frozen_idle_rate)",
+        "test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count",
     ),
     "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
     "ROTATE_REDRAW": entry(

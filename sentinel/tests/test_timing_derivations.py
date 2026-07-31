@@ -4,6 +4,7 @@ cites.  Each case names the primitive symbols, not the derived literal."""
 import json
 import os
 
+import numpy as np
 import pytest
 
 from driver import kbd_aim
@@ -186,7 +187,8 @@ def test_irq_cycles_matches_the_live_pass_rate():
     for digits, rec in boards.items():
         st = Game.typed(int(digits)).state
         counts = [int(k) for k in rec["idle_passes_per_frame"]]
-        modelled = passcost.FOREGROUND_CYCLES / passcost.idle_pass_cycles(st.mem)
+        budget = passcost.FOREGROUND_CYCLES - passcost.SOUND_TICK_IDLE
+        modelled = budget / passcost.idle_pass_cycles(st.mem)
         assert min(counts) <= modelled <= max(counts), (
             f"ls{digits}: modelled {modelled:.2f} passes/frame outside the live "
             f"bracket {min(counts)}..{max(counts)}"
@@ -234,29 +236,33 @@ def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
 
 
 def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
-    """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: 25 badlines, four
-    short raster interrupts and the $9630 body, each measured on the machine."""
+    """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: the badline steal,
+    four short raster interrupts and the $9630 body, each measured on the machine.
+
+    A badline steals 40..43 by where in its instruction the CPU is, so the frame's own
+    total (the frozen pass rate below) lands just under 25 times the 43 mode."""
     irq = _live_cycles()["irq"]
     assert passcost.BADLINE_STEAL == _mode(irq["badline_steal"])
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
     assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
-    steal = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
+    per = passcost.BADLINE_FRAME / passcost.BADLINES_PER_FRAME
+    assert passcost.BADLINE_STEAL - 1 < per <= passcost.BADLINE_STEAL
     shorts = (
         passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
     )
-    assert passcost.IRQ_CYCLES == steal + shorts + passcost.IRQ_BODY
-    fg = irq["foreground_cpu_per_frame"]
-    cheap = passcost.FOREGROUND_CYCLES - passcost.COOLDOWN_TICK_NO_CARRY
-    dear = (
-        passcost.FOREGROUND_CYCLES
-        - passcost.COOLDOWN_TICK_WALK
-        - 24 * passcost.COOLDOWN_TICK_BYTE_DEC
+    assert passcost.IRQ_CYCLES == passcost.BADLINE_FRAME + shorts + passcost.IRQ_BODY
+
+
+def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
+    """With the clock frozen the $9659 gate shuts, the note tick idles and every pass
+    is the idle one, so the frame budget IS the live $1289 rate -- on three boards."""
+    rec = _live_cycles()["frozen_idle_rate"]["boards"]
+    budget = (
+        passcost.FOREGROUND_CYCLES - passcost.IRQ_GATE_SHUT - passcost.SOUND_TICK_IDLE
     )
-    # The cheapest frame is the one whose $130C does not carry.  The fixture's own
-    # short_wall histogram is 3:1 over 119:120 -- one split entry a frame wraps its
-    # index and costs SHORT_IRQ_WRAP more -- so its foreground max is that 1 high.
-    assert cheap == fg["max"] - passcost.SHORT_IRQ_WRAP
-    assert dear <= fg["min"]  # every cooldown byte decrementing
+    for board, m in rec.items():
+        modelled = m["frames"] * budget / m["pass_cycles"]
+        assert abs(modelled - m["passes"]) <= 4, (board, modelled, m["passes"])
 
 
 def test_the_cooldown_tick_prices_every_live_130c_sample():
@@ -433,6 +439,46 @@ def test_the_drain_cost_model_matches_the_roms_own_1a08():
         assert cpu.processorCycles - c0 == model, (slot, flags)
         mem[:] = snap
     assert len(cases) >= 4
+
+
+@pytest.mark.oracle
+def test_the_note_tick_cost_and_writes_match_the_roms_own_8ed1():
+    """$8ED1 per voice, against the real 6502: idle, counting, note end and gate end.
+
+    Both twins must agree with it byte for byte as well as cycle for cycle."""
+    import random  # pylint: disable=import-outside-toplevel
+
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.fresh_machine()
+    addrs = [
+        base + x
+        for base in (
+            mm.SOUND_NOTE_TIMER,
+            mm.SOUND_NOTE_LENGTH,
+            mm.SOUND_GATE_TIMER,
+            mm.SOUND_VOICE_FLAG,
+        )
+        for x in range(3)
+    ]
+    rng = random.Random(0x8ED1)
+    seen = set()
+    for _ in range(300):
+        for addr in addrs:
+            mem[addr] = rng.choice([0x80, 0, 1, 2, 12, rng.randrange(256)])
+        st = State.from_mem(bytes(mem))
+        model = enemies.sound_frame(st)
+        jit = State.from_mem(bytes(mem))
+        assert enemies_jit._sound_frame(np.frombuffer(jit.mem, dtype=np.uint8)) == model
+        state["stop"] = False
+        c0 = cpu.processorCycles
+        oracle.call(cpu, mem, 0x8ED1, state=state)
+        rom = cpu.processorCycles - c0 + 9  # $963D JSR 6 + the $FFC2 JMP 3
+        assert rom == model
+        assert all(st.mem[a] == mem[a] == jit.mem[a] for a in addrs)
+        seen.add(model)
+    assert passcost.SOUND_TICK_IDLE in seen and len(seen) > 4
 
 
 @pytest.mark.oracle

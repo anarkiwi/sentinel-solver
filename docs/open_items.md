@@ -280,14 +280,25 @@ median gap **19 -> 86** frames; ls42 stays at 0 throughout.
   the loop inside `$16E6` resumes at the interrupted `$1887` query's start, for the reason
   below.
 
-**NOT the `$9630` head.** Its two vectored calls, `$963A JSR $FFC5` and `$963D JSR $FFC2`,
-land in the sound engine's three-voice tick at `$8F0C` and `$8ED1` — in RAM the image
-carries, and measured live at a constant **72 and 63** on ls335 and ls9795 alike, because in
-play the voices are idle (`$8E86..$8E88` = `80 80 80`). Its one state-dependent branch is
-`$9633 BPL`, and `$0CDF` — a sound timer nothing reloads during play — sits at **0 at every
-marker**, so the `$9635 INC` path is taken every frame and is already what `IRQ_BODY` counts.
-What is left is +9 on a minority of body interrupts, unlocated and worth 2-3 cycles a frame:
-about a third of a pass over the 194 frames of the ls335 tie, not the pass I earlier claimed.
+**It WAS the `$9630` head: the note tick, and the badline mean.** `$963D JSR $FFC2` vectors
+into the sound engine's note tick `$8ED1`, and 63 is only its all-idle cost: a voice whose
+`$8E86,X` note timer is counting costs **+9**, one that has run out **+5**, and the frame the
+gate expires **+67**. Live on ls335 those four land 20/26/73/1 in 120 frames. The tick is now
+charged per frame from its own branches (`sound_frame`, exact against the ROM over 300 random
+voice states), the three `$3470` sites reload the voice off the `$AC00` descriptor
+(`start_tune`), and `IRQ_BODY` is **counted** off the image rather than fitted: 7 entry +
+`$95E9` 81 + the `$9630` body 2275 + the `$969A` RTI tail 22 = 2385, with the `$9659`-gated
+block (`JSR $130C`, `$1635`, and the branch itself) charged only when the clock runs — the
+model was paying all 43 of it on frozen frames, and never paying the `JSR $130C` at all.
+What that exposed: `BADLINE_STEAL` 43 is the **mode**, not the mean. With the clock frozen
+(so every pass is the idle one) the live `$1289` rate fixes the frame's whole steal at
+**1071**, 42.8 a badline; the model reproduces the measured pass count on ls42/ls335/ls9795
+to under **4 passes in 50000**. Together: ls335's first CORE divergence **194 -> 478** and its
+follow events **31 -> 12**, ls9795's **128 -> 112**, ls42 still 0 over 3000 frames.
+
+`$963A JSR $FFC5` ($8F0C, the effect tick) stays inside `IRQ_BODY` at a measured constant 72:
+it is gated on `$8E96,X` bit7 and no tune a play frame starts clears it. `$9633 BPL` is not a
+branch in play either — `$0CDF` reads 0 at every marker, so `$9635 INC` runs every frame.
 
 **Where the march resume stops, exactly.** A marker inside `$16E6` is usually inside an
 `$1887` query, and the machine's position *within* that query is fully recoverable from the
