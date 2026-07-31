@@ -260,10 +260,11 @@ the VIC takes the bus and the 6510 runs on to its first **read** cycle, so
 43 being the 40 c-accesses plus the AEC lag. A write run is at most **two** — an NMOS
 read-modify-write's dummy-plus-real pair, or a JSR's two pushes — because every
 instruction opens with an opcode fetch, so **40 is unreachable and 44 impossible**.
-Over **4824 live badlines** on ls0042/ls0335/ls9795 and ls9795 frozen, the steal is
-41, 42 or 43 and `sentinel/badline.py` reproduces **every one** of them from the opcode
-alone, with the window solved to one cycle-in-line (11) that is the same on all four
-captures (`fixtures/live_badline.json`, `test_every_live_badline_steal_is_the_derived_one`).
+Over **6424 live badlines** on ls0042/ls0335/ls9795, ls9795 frozen and ls9795 mid-march,
+the steal is 41, 42 or 43 and `sentinel/badline.py` reproduces **every one** of them from
+the opcode alone, with the window solved to one cycle-in-line (11) that is the same on
+all five captures
+(`fixtures/live_badline.json`, `test_every_live_badline_steal_is_the_derived_one`).
 The 44s this item used to quote were an artefact: a static opcode table charged a taken
 branch's or a crossed page's own extra cycle to the VIC. So was ls9795-frozen's 1075.20,
 which is above the physical maximum of 25 x 43.
@@ -300,23 +301,50 @@ ls9795's frame-129 rotation does move to the machine's own frame 130 — the pha
 this item measured is real and it is the steal — but every other board pays for it.
 
 **What closing it needs, precisely.** The model would have to know *which instruction*
-the raster caught at each of the 25 windows. Two things stand in the way, and both are
-instruction-level:
+the raster caught at each of the 25 windows. Two things were said to stand in the way.
+Both were measured, and neither is a blocker; what is left is plumbing, not physics.
 
-1. **A write-cycle map per charged cost term.** Each `passcost` constant is a contiguous
-   ROM run, so an offset into it does identify an instruction — but the model charges the
-   run as one lump and keeps no map.
-2. **An instruction-aligned frame origin, which does not exist.** The raster IRQ is taken
-   at an instruction boundary, so the `$9630` marker the frame loop anchors on lands at
-   frame position 13509..13514 live — a **4 to 6 cycle** spread, per board
-   (`test_the_9630_anchor_is_not_instruction_aligned`). Inside `$31CA`, where 20% of
-   cycles are writes, that blur alone randomises the answer.
+**1. The frame origin IS instruction-aligned — the 4-6 cycle spread is an output, not
+blur.** The raster IRQ is taken at an instruction boundary, and the `$9630` marker's
+frame position is that boundary plus a constant. Over **204 live frames** on five
+captures the gap is **88** — `IRQ_ENTRY` 7 plus the 81 cycles `$95E9..$9630`, exactly
+`IRQ_BODY`'s own split — with **8** frames reading 87, and every one of those 8 is a
+**branch**, whose IRQ poll the NMOS core takes a cycle earlier (1292 short-IRQ entries
+say the same: 7, or 6 off a branch, 55 of 55). The boundaries land at frame position
+**13421..13426** — raster 213 cycles 2..7 — and 13421+88 = 13509, 13426+88 = 13514, which
+is precisely the observed marker spread. So the spread is the tail of the interrupted
+instruction, and a model that knows the instruction stream *predicts* it
+(`badline.marker_position`, `test_the_9630_anchor_is_instruction_aligned_and_its_spread_is_that_instruction`).
+The four short interrupts land on rasters 53/93/133/173 by the same law, so the frame's
+whole IRQ layout is placeable.
 
-Deriving 2 needs 1 for the interrupted routine as well, and on ls9795 **65%** of frame
-boundaries land in `$16E6`, whose `$1887` marches have no fixed instruction sequence at
-all. So the exact steal is **not** computable in a budget model: it needs cycle-level
-simulation of the instruction stream, everywhere, not a better constant. Until then
-`BADLINE_FRAME` is the one fitted term left in the frame budget and is labelled so.
+**2. The write-cycle map per term exists, and the march resolves.** `sentinel/writemap.py`
+walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables, with
+`$CE DEC abs` corrected from its table's 3 to the machine's 6 — and reads the write cycles
+straight off the addressing mode, so no hand table is needed. Measured against **6424**
+live BA windows over five captures, one of them taken 112 frames into ls9795 so the loop
+is inside a single 274578-cycle `$1887` march:
+
+| | |
+|---|---|
+| windows falling after a `$XXXX` the cost model itself counts from | **6424 of 6424** |
+| distinct (anchor, offset) keys | 1081 |
+| keys carrying more than one steal | **3** |
+| windows the static walk resolves with *no* branch record at all | 6147 (**95.7%**) |
+| complete frames `badline.frame_steal` reproduces from the stream | 192 of 192 |
+
+The march is not the hard case it was called: 842 of the 1600 march-capture windows land
+in `$1CBB`, 240 in `$2BA8` and 237 in `$0D03`, and every one of them is anchored. All
+three ambiguous keys are a branch the charging term *already* decides — `$0D05+57` is
+`$0D03`'s per-bit shift-add (`MUL8_BIT`), `$1CCC+33` its per-component negate
+(`ADD_VECTOR_NEG`), `$193A+10` the `$191F` targeting walk (`EXPOSURE_TARGETS_PLAYER`).
+
+**What is actually missing** is one thing: `enemies.advance_frame` charges terms as bare
+cycle counts and never emits the `(anchor, cycles)` stream, so nothing calls
+`badline.frame_steal`. Threading an anchor through the cost functions — `enemies.py`,
+`los.py`, `relative.py` and both numba twins — is mechanical and is the whole remaining
+job. Until it is done `BADLINE_FRAME` stays the one fitted term in the frame budget and
+is labelled so; the fallback is the lump, and the resolved part above is exact.
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next

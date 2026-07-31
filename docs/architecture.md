@@ -369,12 +369,27 @@ One badline costs `BADLINE_STEAL` 43 — the VIC's 40 c-accesses plus the 3-cycl
 first cycle**, because BA only halts the CPU at its next read. A write run is at most two
 (an NMOS read-modify-write's dummy-plus-real pair, a JSR's two pushes), so the steal is
 41, 42 or 43 and never 40 or 44. `sentinel/badline.py` is that law and
-`driver/badline.py` measures it live off `cpuhistory`; it derives all **4824** sampled
-badlines on four captures. The consequence is that the frame's *total* is a property of
+`driver/badline.py` measures it live off `cpuhistory`; it derives all **6424** sampled
+badlines on five captures. The consequence is that the frame's *total* is a property of
 which instructions the raster caught — 1070.2 on ls0042 against 1072.5 on ls9795, and
 1066..1075 frame to frame — so `BADLINE_FRAME` 1071 is the one fitted term left in the
-budget, and closing it needs cycle-level instruction simulation rather than a better
-constant ([open_items.md 8](open_items.md#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
+budget.
+
+Placing those instructions is two queries, and both are answered.
+`badline.marker_position` is the frame origin: the raster IRQ is taken at an instruction
+boundary and the `$9630` marker sits `IRQ_ENTRY` + 81 cycles past it, so the marker's
+live 13509..13514 spread is the *tail of the interrupted instruction*, reproduced rather
+than absorbed (204 frames; the 8 that read one cycle short are each a branch, whose IRQ
+poll is a cycle earlier). `sentinel/writemap.py` is the other: a cost term is a
+contiguous ROM run, so it walks the run over the image — jennings' own 6510 tables, write
+cycles read off the addressing mode — and answers which instruction, and which write
+cycles, a given offset names. Measured against 6424 live BA windows, one capture taken
+inside a 274578-cycle `$1887` march, **every** window falls after a `$XXXX` the cost
+model counts from and 95.7% resolve from the static walk with no branch record at all.
+`badline.frame_steal` turns a frame's instruction stream into its whole steal. What
+`enemies.advance_frame` does not yet do is *emit* that stream — it charges terms as bare
+cycle counts — which is the remaining work
+([open_items.md 8](open_items.md#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
 
 `$D015 = 0` — no sprite is ever enabled in play — so there is **no** sprite-DMA term. The
 `$95E9` split chain walks `$9588` down 4→0, programming `$D012` from the table at `$9589`

@@ -10,6 +10,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +20,7 @@ from sentinel import (
     badline as bl,
     memmap as mm,
     passcost,
+    writemap as wm,
 )  # noqa: E402  pylint: disable=wrong-import-position
 from driver import clock, core  # noqa: E402  pylint: disable=wrong-import-position
 
@@ -56,8 +58,9 @@ def cost_class(rec, nxt, zeropage):
     return (op, 0, 1 if ((base + index) >> 8) != (base >> 8) else 0)
 
 
-def steals(cap):
-    """One capture as ``(frame_position, steal, op, pc, frame)`` per instruction."""
+def instructions(cap):
+    """One capture as ``(position, cycle, op, pc, nominal, steal, frame)`` per
+    instruction, positions taken modulo the PAL frame from the capture's own origin."""
     zeropage, history, origin = cap["zeropage"], cap["history"], cap["origin"]
     nominal, classed = {}, []
     for rec, nxt in zip(history, history[1:]):
@@ -66,16 +69,27 @@ def steals(cap):
         if delta < nominal.get(key, delta + 1):
             nominal[key] = delta
         classed.append((rec, key, delta))
-    return [
-        (
-            (rec.cycle - origin) % passcost.PAL_FRAME_CYCLES,
-            delta - nominal[key],
-            rec.op,
-            rec.registers[REG_PC],
-            (rec.cycle - origin) // passcost.PAL_FRAME_CYCLES,
-        )
-        for rec, key, delta in classed
-    ]
+    return (
+        [
+            (
+                (rec.cycle - origin) % passcost.PAL_FRAME_CYCLES,
+                rec.cycle,
+                rec.op,
+                rec.registers[REG_PC],
+                nominal[key],
+                delta - nominal[key],
+                (rec.cycle - origin) // passcost.PAL_FRAME_CYCLES,
+            )
+            for rec, key, delta in classed
+        ],
+        nominal,
+    )
+
+
+def steals(cap):
+    """One capture as ``(frame_position, steal, op, pc, frame)`` per instruction."""
+    rows, _ = instructions(cap)
+    return [(r[0], r[5], r[2], r[3], r[6]) for r in rows]
 
 
 def solve_window(samples):
@@ -87,14 +101,181 @@ def solve_window(samples):
     return None
 
 
-def capture(bm, count, frozen=False):
-    """``count`` cpuhistory windows, each frame-anchored at the $9630 marker."""
+ROUTINES = (
+    (0x0D03, "$0D03 mul/div/trig"),
+    (0x1010, "other"),
+    (0x1289, "$1289 pass head/tail"),
+    (0x12C8, "other"),
+    (0x130C, "$130C cooldown tick"),
+    (0x1336, "other"),
+    (0x16B5, "$16B5 dispatch/prnd/cursor"),
+    (0x16E6, "$16E6 body"),
+    (0x1887, "$1887 see"),
+    (0x191F, "$191F exposure"),
+    (0x1973, "$1973 meanie"),
+    (0x1A08, "$1A08 reduce/discharge/tilescan"),
+    (0x1B18, "other"),
+    (0x1CBB, "$1CBB march"),
+    (0x1E3F, "$1E3F object walk"),
+    (0x1F16, "$1F16 place/redraw/span"),
+    (0x2130, "other"),
+    (0x2BA8, "$2BA8 tile address"),
+    (0x2BD0, "other"),
+    (0x31CA, "$31CA prnd"),
+    (0x3200, "other"),
+    (0x3470, "$3470 tune/sound call"),
+    (0x3600, "other"),
+    (0x8401, "$8401 relative"),
+    (0x8600, "other"),
+    (0x8CF0, "$8CF0 sound engine"),
+    (0x9200, "other"),
+    (0x9287, "$9287 angle"),
+    (0x93B0, "other"),
+    (0x9508, "$9508 status bar"),
+    (0x95E9, "$95E9 raster IRQ"),
+    (0x96A1, "other"),
+)
+MODEL_SOURCES = ("passcost.py", "los.py", "relative.py", "enemies.py")
+HANDLER_LOW, HANDLER_HIGH = 0x95E9, 0x96A0
+IMG = os.path.join(os.path.dirname(HERE), "out", "sentinel_stage2.bin")
+
+
+def routine_of(pc):
+    """The ROM routine ``pc`` falls in, by the greatest entry at or below it."""
+    name = "other"
+    for start, label in ROUTINES:
+        if pc >= start:
+            name = label
+    return name
+
+
+def model_anchors():
+    """Every ROM address the cost model counts a run from: the $XXXX it names."""
+    root = os.path.join(os.path.dirname(HERE), "sentinel")
+    found = set()
+    for name in MODEL_SOURCES:
+        with open(os.path.join(root, name), encoding="utf-8") as fh:
+            found.update(
+                int(m, 16) for m in re.findall(r"\$([0-9A-F]{4})\b", fh.read())
+            )
+    return found
+
+
+def marker_law(rows):
+    """$9630's frame position against the instruction boundary the IRQ was taken at.
+
+    The interrupted instruction's own measured overrun is the 6510's 7-cycle interrupt
+    sequence, so its unstolen cost alone gives the boundary.
+    """
+    gaps, boundaries = collections.Counter(), collections.Counter()
+    for i, row in enumerate(rows):
+        if row[3] != clock.FRAME_PC:
+            continue
+        j = i - 1
+        while j >= 0 and HANDLER_LOW <= rows[j][3] <= HANDLER_HIGH:
+            j -= 1
+        if j < 0:
+            continue
+        boundary = rows[j][0] + rows[j][4]
+        boundaries[boundary] += 1
+        gaps[f"{row[0] - boundary} {wm.MNEMONIC[rows[j][2]]}"] += 1
+    return gaps, boundaries
+
+
+def irq_entries(rows):
+    """Every raster IRQ's entry, against the instruction boundary it was taken at.
+
+    All five a frame vector through $95E9, so an entry is a step from outside the
+    handler into it; the gap is the 6510's own interrupt sequence.
+    """
+    gaps, lines = collections.Counter(), collections.Counter()
+    for prev, row in zip(rows, rows[1:]):
+        if row[3] != HANDLER_LOW or prev[3] == HANDLER_LOW:
+            continue
+        boundary = prev[0] + prev[4]
+        gaps[f"{row[0] - boundary} {wm.MNEMONIC[prev[2]]}"] += 1
+        lines[boundary // bl.LINE_CYCLES] += 1
+    return gaps, lines
+
+
+def window_hits(rows, windows):
+    """``(row index, window, steal)`` for every instruction a BA window falls in."""
+    out = []
+    for index, row in enumerate(rows):
+        position, extent = row[0], row[4] + row[5]
+        for window in windows:
+            if position <= window < position + extent:
+                out.append((index, window, bl.steal(row[2], position, windows)))
+    return out
+
+
+def anchor_resolution(rows, hits, anchors, into):
+    """Bin every window by the offset from the model's last anchor before it.
+
+    ``into`` accumulates ``keys`` (offset -> the steals seen there), ``routine`` and
+    the covered/decoded counts across captures.
+    """
+    anchor_at, last = {}, None
+    for index, row in enumerate(rows):
+        anchor_at[index] = last
+        if row[3] in anchors:
+            last = (row[3], row[1])
+    for index, window, steal in hits:
+        into["routine"][routine_of(rows[index][3])] += 1
+        into["count"]["windows"] += 1
+        anchor = anchor_at[index]
+        if anchor is None:
+            continue
+        into["count"]["anchor_covered"] += 1
+        offset = rows[index][1] + (window - rows[index][0]) - anchor[1]
+        into["keys"][(anchor[0], offset)].add(steal)
+        image = into["image"]
+        if image is not None and wm.steal_at(image, anchor[0], offset) == steal:
+            into["count"]["statically_decoded"] += 1
+
+
+def op_cycle_check(nominals):
+    """Live minimum cost per (opcode, branch taken, page crossed) against the table."""
+    bad = {}
+    for (op, taken, page), measured in nominals.items():
+        want = wm.OP_CYCLES[op] + taken + page
+        if measured != want:
+            bad[f"${op:02X} t{taken} p{page}"] = [measured, want]
+    return bad
+
+
+def frame_steal_check(rows, windows):
+    """``badline.frame_steal`` over the live stream against the measured frame total."""
+    per_frame = collections.defaultdict(list)
+    for row in rows:
+        per_frame[row[6]].append((row[0], row[2]))
+    measured = collections.Counter()
+    for index, _, steal in window_hits(rows, windows):
+        measured[rows[index][6]] += steal
+    agree = total = 0
+    for frame, stream in per_frame.items():
+        if measured[frame] < passcost.BADLINES_PER_FRAME * bl.MIN_STEAL:
+            continue
+        total += 1
+        agree += bl.frame_steal(sorted(stream), windows) == measured[frame]
+    return {"complete_frames": total, "frame_steal_agrees": agree}
+
+
+def capture(bm, count, frozen=False, warmup=0):
+    """``count`` cpuhistory windows, each frame-anchored at the $9630 marker.
+
+    ``warmup`` frames are run first, so a board can be caught in a long $1887 march
+    rather than in its opening idle passes.
+    """
     out = []
     with bm.halted():
         bm.run_until_pc(clock.FRAME_PC, timeout=6.0)
         if not frozen:
             acted = bm.mem_get(mm.PLAYER_NOT_ACTED, mm.PLAYER_NOT_ACTED)[0]
             bm.mem_set(mm.PLAYER_NOT_ACTED, bytes([acted & 0x7F]))
+    if warmup:
+        clock.run_frames(bm, warmup)
+    with bm.halted():
         for _ in range(count):
             bm.advance_instructions(1)
             bm.run_until_pc(clock.FRAME_PC, timeout=6.0)
@@ -112,6 +293,53 @@ def capture(bm, count, frozen=False):
     return out
 
 
+def resolution(captures):
+    """The instruction-resolution report: the marker law, and what the anchors reach."""
+    image = None
+    if os.path.exists(IMG):
+        with open(IMG, "rb") as fh:
+            image = fh.read()
+    windows = bl.window_positions()
+    known = model_anchors()
+    gaps, boundaries = collections.Counter(), collections.Counter()
+    entry_gaps, entry_lines = collections.Counter(), collections.Counter()
+    into = {
+        "image": image,
+        "keys": collections.defaultdict(set),
+        "routine": collections.Counter(),
+        "count": collections.Counter(),
+    }
+    frames, nominals = collections.Counter(), {}
+    for cap in captures:
+        rows, nominal = instructions(cap)
+        cap_gaps, cap_boundaries = marker_law(rows)
+        gaps.update(cap_gaps)
+        boundaries.update(cap_boundaries)
+        cap_entry_gaps, cap_entry_lines = irq_entries(rows)
+        entry_gaps.update(cap_entry_gaps)
+        entry_lines.update(cap_entry_lines)
+        for key, value in nominal.items():
+            nominals[key] = min(value, nominals.get(key, value))
+        anchor_resolution(rows, window_hits(rows, windows), known, into)
+        frames.update(frame_steal_check(rows, windows))
+    ambiguous = {k: sorted(v) for k, v in into["keys"].items() if len(v) > 1}
+    return {
+        "marker_gap": dict(gaps.most_common()),
+        "irq_boundary": dict(sorted(boundaries.items())),
+        "irq_entry_gap": dict(entry_gaps.most_common()),
+        "irq_entry_line": dict(sorted(entry_lines.items())),
+        "anchor_keys": len(into["keys"]),
+        "ambiguous_keys": len(ambiguous),
+        "ambiguous": {
+            f"${k[0]:04X}+{k[1]}": v for k, v in list(ambiguous.items())[:12]
+        },
+        "window_routine": dict(into["routine"].most_common()),
+        "op_cycle_mismatch": op_cycle_check(nominals),
+        **dict(into["count"]),
+        **dict(frames),
+    }
+
+
 def analyse(captures):
     """Steal histogram, per-frame totals, the derived window and the $9630 jitter."""
     samples, anchors = [], collections.Counter()
@@ -126,6 +354,7 @@ def analyse(captures):
         totals[sample[4]] += sample[1]
     line_cycle = solve_window(samples)
     return {
+        **resolution(captures),
         "badlines": len(samples),
         "steal": dict(sorted(collections.Counter(s[1] for s in samples).items())),
         "window_line_cycle": line_cycle,
@@ -155,6 +384,9 @@ def main(argv=None):
     ap.add_argument(
         "--frozen", action="store_true", help="leave the enemy clock frozen"
     )
+    ap.add_argument(
+        "--warmup", type=int, default=0, help="frames to run before capturing"
+    )
     ap.add_argument("--out", help="write the report as JSON")
     args = ap.parse_args(argv)
     os.environ.setdefault("NO_RECORD", "1")
@@ -166,11 +398,14 @@ def main(argv=None):
         except Exception as exc:  # pylint: disable=broad-except
             print(f"[badline] warp resource set skipped: {exc}")
         drv.enter_landscape(int(args.landscape.zfill(4), 16))
-        report = analyse(capture(drv.bm, args.captures, frozen=args.frozen))
+        report = analyse(
+            capture(drv.bm, args.captures, frozen=args.frozen, warmup=args.warmup)
+        )
     finally:
         drv.close()
     report["landscape"] = args.landscape
     report["frozen"] = bool(args.frozen)
+    report["warmup"] = args.warmup
     print(json.dumps(report, indent=1))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

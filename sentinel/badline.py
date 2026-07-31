@@ -12,6 +12,10 @@ BADLINE_FIRST_LINE = 51  # raster $33, the first $30..$F7 line with low 3 bits =
 BADLINE_LINE_STEP = 8
 BADLINE_WINDOW_CYCLE = 11  # solved live: the one cycle that derives every sampled steal
 MIN_STEAL = passcost.BADLINE_STEAL - 2  # a write run is at most an RMW's or a JSR's two
+RASTER_IRQ_LINE = 213  # $9589's $D5 entry: the once-a-frame $9630 body
+IRQ_ENTRY = 7  # the 6510 interrupt sequence, run at an instruction boundary
+IRQ_ENTRY_BRANCH = 6  # ... one less off a branch, whose IRQ poll is a cycle earlier
+MARKER_OFFSET = 81  # $95E9 to $9630, the head of that body
 
 # Write cycles by opcode, indexed from its fetch: at most an RMW or JSR/push pair.
 WRITE_CYCLES = {0x08: (2,), 0x48: (2,), 0x20: (3, 4), 0x81: (5,), 0x91: (5,)}
@@ -51,3 +55,30 @@ def steal(op, position, windows=None):
     if window is None:
         return None
     return passcost.BADLINE_STEAL - write_run(op, window - position)
+
+
+def marker_position(boundary, branch=False):
+    """Frame position of the $9630 marker for a raster IRQ taken at ``boundary``.
+
+    The IRQ is taken at an instruction boundary, so the marker's own frame position is
+    that boundary plus a constant -- it is aligned, not blurred.
+    """
+    return boundary + (IRQ_ENTRY_BRANCH if branch else IRQ_ENTRY) + MARKER_OFFSET
+
+
+def frame_steal(instructions, windows=None):
+    """One frame's whole badline steal, from its ``(position, opcode)`` stream.
+
+    The stream is ascending and an instruction runs until the next one starts, so each
+    BA window names an opcode and an offset into it: the law, applied 25 times.  A
+    window ahead of the stream's first instruction is charged the full steal.
+    """
+    windows = window_positions() if windows is None else windows
+    stream = list(instructions)
+    total, index = 0, 0
+    for window in windows:
+        while index + 1 < len(stream) and stream[index + 1][0] <= window:
+            index += 1
+        position, op = stream[index]
+        total += passcost.BADLINE_STEAL - write_run(op, window - position)
+    return total

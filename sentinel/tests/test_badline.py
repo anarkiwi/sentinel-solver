@@ -4,6 +4,7 @@ The fixture is ``driver.badline``'s own report on three boards: every instructio
 unstolen cost recovered from cpuhistory, so each sample is an exact steal.
 """
 
+import collections
 import json
 import os
 
@@ -81,11 +82,74 @@ def test_the_frame_steal_is_state_dependent_so_no_constant_is_right():
     assert min(means.values()) < passcost.BADLINE_FRAME < max(means.values()), means
 
 
-def test_the_9630_anchor_is_not_instruction_aligned():
-    """The raster IRQ is taken at an instruction boundary, so the frame marker's own
-    position moves; a budget model therefore cannot place a badline inside an
-    instruction even where it knows the routine."""
+_BRANCHES = frozenset(("BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ"))
+
+
+def _entries(field, offset=0):
+    """``(entry cycles, mnemonic) -> count`` over every capture's ``field``."""
+    out = collections.Counter()
+    for board in _live().values():
+        for key, count in board[field].items():
+            gap, mnemonic = key.split()
+            out[(int(gap) - offset, mnemonic)] += count
+    return out
+
+
+def test_the_9630_anchor_is_instruction_aligned_and_its_spread_is_that_instruction():
+    """The marker's 4-6 cycle spread is the tail of the instruction the raster IRQ
+    interrupted, not blur: its frame position is that instruction's own end plus the
+    entry and MARKER_OFFSET, on every frame of every capture."""
     for name, board in _live().items():
         positions = sorted(int(k) for k in board["anchor_9630"])
-        assert len(positions) > 1, name
-        assert positions[-1] - positions[0] <= 6, (name, positions)
+        assert len(positions) > 1 and positions[-1] - positions[0] <= 6, name
+        boundaries = sorted(int(k) for k in board["irq_boundary"])
+        assert boundaries[0] // badline.LINE_CYCLES == badline.RASTER_IRQ_LINE, name
+        placed = {badline.marker_position(b, br) for b in boundaries for br in (0, 1)}
+        assert set(positions) <= placed, (name, positions, sorted(placed))
+
+
+def test_the_interrupt_sequence_is_a_cycle_shorter_only_off_a_branch():
+    """The $9589 chain fires on rasters 53/93/133/173/213 and every entry is the
+    6510's own interrupt sequence past the boundary it caught -- 7 cycles, or 6 when
+    the instruction was a branch, whose IRQ poll comes a cycle earlier."""
+    lines = set()
+    for board in _live().values():
+        lines |= {int(k) for k in board["irq_entry_line"]}
+    assert lines == {53, 93, 133, 173, badline.RASTER_IRQ_LINE}
+    seen = _entries("irq_entry_gap") + _entries("marker_gap", badline.MARKER_OFFSET)
+    assert {cycles for cycles, _ in seen} == {
+        badline.IRQ_ENTRY,
+        badline.IRQ_ENTRY_BRANCH,
+    }
+    short = {m for cycles, m in seen if cycles == badline.IRQ_ENTRY_BRANCH}
+    assert short and short <= _BRANCHES, short
+
+
+def test_every_badline_window_lands_in_a_run_the_cost_model_anchors():
+    """A BA window can only be placed if the model knows which run is executing.  Over
+    6424 live windows -- 1600 of them inside one $1887 march -- every one falls after
+    a $XXXX the cost model itself counts from."""
+    windows = sum(b["windows"] for b in _live().values())
+    covered = sum(b["anchor_covered"] for b in _live().values())
+    assert windows > 6000 and covered == windows
+    march = _live()["9795_march"]
+    assert march["window_routine"]["$1CBB march"] > march["windows"] // 2
+
+
+def test_the_offset_into_an_anchored_run_determines_the_steal():
+    """1081 distinct (anchor, offset) keys over five captures; 4 carry two steals, and
+    each of those is a branch the cost model already charges ($0D03's per-bit shift-add,
+    $1CBB's per-component negate, $191F's targeting walk)."""
+    keys = sum(b["anchor_keys"] for b in _live().values())
+    ambiguous = {k: v for b in _live().values() for k, v in b["ambiguous"].items()}
+    assert keys > 1000
+    assert len(ambiguous) <= 4, ambiguous
+    assert set(ambiguous) <= {"$0D05+57", "$1CCC+33", "$193A+10"}, ambiguous
+
+
+def test_the_frame_steal_is_the_law_applied_to_the_frames_instruction_stream():
+    """``frame_steal`` over the live stream reproduces every complete frame's own
+    measured total, march frames included."""
+    for name, board in _live().items():
+        assert board["complete_frames"] > 0, name
+        assert board["frame_steal_agrees"] == board["complete_frames"], name
