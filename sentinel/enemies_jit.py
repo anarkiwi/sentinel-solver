@@ -325,6 +325,7 @@ _COOLDOWN_TICK_GATE = passcost.COOLDOWN_TICK_GATE
 _COOLDOWN_TICK_WALK = passcost.COOLDOWN_TICK_WALK
 _COOLDOWN_TICK_BYTE_STICK = passcost.COOLDOWN_TICK_BYTE_STICK
 _COOLDOWN_TICK_BYTE_DEC = passcost.COOLDOWN_TICK_BYTE_DEC
+_COOLDOWN_TICK_LAST = passcost.COOLDOWN_TICK_LAST
 
 _BODY_ENTRY = 0  # resume points inside $16E6, mirroring sentinel.enemies.BODY_*
 _BODY_MEANIE = 1
@@ -1532,7 +1533,7 @@ def _tick_cooldowns(mem):
     if mem[_GATE] != 0:
         _wr(mem, _GATE, _rd(mem, _GATE) - 1)
         return np.int64(_COOLDOWN_TICK_GATE)
-    cost = np.int64(_COOLDOWN_TICK_WALK)
+    cost = np.int64(_COOLDOWN_TICK_WALK - _COOLDOWN_TICK_LAST)
     for addr in range(_DRAIN_CD, _UPD_CD + 8):
         if mem[addr] >= _COOLDOWN_STICK:
             mem[addr] = np.uint8(mem[addr] - 1)

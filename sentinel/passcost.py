@@ -11,9 +11,10 @@ PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
 BADLINE_STEAL = 43  # a $30..$F7 line whose low 3 bits are YSCROLL ($D011 & 7 = 3)
 BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
 SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
+SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
 IRQ_BODY = 2491  # the $9630 body: $95E9 202 + $119F 2156 + $1635/$FFC2/$FFC5 126 + 7
-IRQ_CYCLES = 4042  # 1075 + 476 + 2491: every FIXED cycle a frame denies the play loop
+IRQ_CYCLES = 4043  # 1075 + 477 + 2491: every FIXED cycle a frame denies the play loop
 IRQ_SPRITES = 1490  # $1635 loses its $963A fast exit once $0C04 != 0
 FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less this frame's own $130C
 
@@ -22,6 +23,7 @@ COOLDOWN_TICK_GATE = 33  # + $1317 LDA 4 + BNE 3 + $1331 DEC 6 + RTS 6 - the tak
 COOLDOWN_TICK_WALK = 33  # the $131C walk's own entry 22 + $132B reload 6 + RTS 6 - 1
 COOLDOWN_TICK_BYTE_STICK = 14  # $131E LDA 4 + CMP 2 + BCC taken 3 + DEX 2 + BPL 3
 COOLDOWN_TICK_BYTE_DEC = 20  # + $1325 DEC 7, less the taken BCC 1
+COOLDOWN_TICK_LAST = 1  # $0C20 leaves the walk by $1329 BPL not taken, one cycle short
 
 PASS_HEAD = 25  # $1289..$129F: LDA 4 + BMI 2 + LSR 6 + LDA 4 + BPL 3 + the JSR 6
 PASS_TAIL = 117  # $12A2..$12C7 48 + the $34BA/$352C/$347D bodies 13 + 29 + 27
