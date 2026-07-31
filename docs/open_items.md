@@ -148,7 +148,7 @@ zeroes both endpoints first. So the ROM is self-consistent and a "stale `$0B40`"
 mechanism. `$2D93` itself is exact: fuzzed 4000 random (`$0BA0`, `$A800`, `$0011`, `$0029`)
 against the real routine, **0 mismatches**. `$2F17` is not the mechanism either.
 
-Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.4%).
+Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
 
 **Also not derived.**
 

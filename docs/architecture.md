@@ -1012,7 +1012,7 @@ tiles adding `$21AE`/`$8533`).
 `render_cost(state, view, observer, mode, window, rows)` = the exact `$2845` examine cycles +
 the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), over
 `FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode, window, rows)`. It lands within
-0.93-1.00× of the ROM on every golden view (median 0.973, mean absolute error 2.9%), at
+0.94-1.00× of the ROM on every golden view (median 0.975, mean absolute error 2.5%), at
 0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
 exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip)).
@@ -1021,7 +1021,7 @@ exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-bac
 | --- | --- |
 | (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`), bar one `$0078`-stale branch a pass |
 | (a2) the walk: `$2625` prologue, `$26DE`, `$27D7`, `$276F`, `$295D` | each block by the branch it takes (`passcost.WALK_*`/`ROW_*`/`SCAN_*`/`PLOT_ROW_*`) |
-| (b) terrain fill | sequence emulated (`rendercost.py`); within 5% of the ROM on 11 of 15 golden views |
+| (b) terrain fill | sequence emulated (`rendercost.py`); loop counts exact on 14 of 15 golden views, cycles 0.92-0.96× the ROM's own fill subtree |
 | (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
 
 **Occlusion is exact.** `projector._occlusion_visible` is a byte-exact port validated
