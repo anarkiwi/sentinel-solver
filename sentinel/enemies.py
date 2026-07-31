@@ -379,18 +379,30 @@ def _see_cost(see, clk):
     return badline.charge(clk, 0x1887, see["cycles"])
 
 
+def _clear_cycles(span):
+    """$1FA4..$1FC2: the strip clear the replot runs before it shifts the camera."""
+    return passcost.REDRAW_CLEAR_CALL + projector.clear_strip_cycles(span)
+
+
 def _redraw_cost(state, target, clk):
     """$187B STX $91 + $1881 JSR $1F9F: what redrawing `target` costs right now.
 
     Off screen ($209B carry set) that is the counted $1F9F alone; on screen it is
     that plus $1FA4..$1F9E, the strip clear, its $2625 chunks and the buffer flush."""
+    state.mem[mm.CAMERA_OBJECT] = state.mem[mm.PLAYER_OBJECT]  # $187D/$187F
     cycles, columns, left, span = relative.update_object_on_screen_cycles(state, target)
     cycles = badline.charge(clk, 0x1F9F, cycles)
     if columns == 0:
         return cycles
     frames = projector.strip_replot_frames(state, target, left, columns, span)
+    projector.shift_camera(state, left)  # $1FC2 points the camera at the strip
+    projector.restore_camera(state)  # ... and $2003/$2008 put it back before $1884
+    # ... but the frames it stalls read the shifted camera, from the $2211 clear on
+    debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
+    state.camera_shift = left
+    state.camera_clear = _clear_cycles(span) - debt
     # whole video frames of stall: PAL_FRAME_CYCLES already carries their own badlines
-    return cycles + int(round(frames * passcost.PAL_FRAME_CYCLES))
+    return cycles + debt
 
 
 def _body_tail(state, target, clk):
@@ -1212,6 +1224,9 @@ def advance_frame_python(state, plotting=False):
         return
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
     budget -= badline.FRAME_STEAL_CEILING  # the 25 windows, refunded by charge()
+    if budget > 0 and state.camera_shift:  # $2003/$2008: this frame's $2625 returned
+        projector.restore_camera(state)
+        state.camera_shift = 0
     phase = state.pass_phase
     while budget > 0:
         if phase == PHASE_HEAD:
@@ -1232,6 +1247,9 @@ def advance_frame_python(state, plotting=False):
         budget -= badline.charge(clk, 0x12A2, passcost.PASS_TAIL)
         budget -= passcost.exposure_cycles(state.mem, clk)
         phase = PHASE_HEAD
+    # the replot stalls on: past its $2211 clear, $09C0,X keeps the $1FC2 shift
+    if state.camera_shift and budget >= state.camera_clear:
+        projector.hold_camera(state, state.camera_shift)
     state.cycle_residual = budget
     state.pass_phase = phase
 
@@ -1262,6 +1280,8 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_stage,
                 state.body_index,
                 state.body_partial,
+                state.camera_shift,
+                state.camera_clear,
                 remaining,
                 target,
                 left,
@@ -1276,11 +1296,20 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_stage,
                 state.body_index,
                 state.body_partial,
+                state.camera_shift,
+                state.camera_clear,
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break
             frames = projector.strip_replot_frames(state, target, left, columns, span)
-            state.cycle_residual -= int(round(frames * passcost.PAL_FRAME_CYCLES))
+            debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
+            state.camera_shift = left  # $1FC2's shift, for the frames the replot stalls
+            state.camera_clear = _clear_cycles(span) - debt
+            projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
+            projector.restore_camera(state)
+            state.cycle_residual -= debt
+            if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
+                projector.hold_camera(state, left)
         return
     advance_frames_python(state, n_frames, plotting=plotting)
 

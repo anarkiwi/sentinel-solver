@@ -135,6 +135,12 @@ OBJECT_SCREEN_HALF_ANGLE = {
 }
 OBJECT_SIZE_FLOOR = 0x0CD4  # a pending size the next $209B takes as a minimum
 
+# update_object_on_screen $1F9F points the camera at the strip it replots and puts it
+# back at $2003/$2008, so $09C0,X carries the shift for as long as $2625 runs.
+CAMERA_OBJECT = 0x006E  # $1FC2/$2625 LDX $6E: the slot whose $09C0/$0140 is the camera
+CAMERA_SAVED = 0x211A  # $1FD5 keeps that slot's own bearing over the shift
+CAMERA_REF_LO = 0x001F  # $1FD0 the camera's half column, zeroed again at $2003
+
 # A tiles_table byte >= OBJECT_TILE holds an object index in its low 6 bits;
 # below it the byte is (height<<4)|slope terrain.
 OBJECT_TILE = 0xC0

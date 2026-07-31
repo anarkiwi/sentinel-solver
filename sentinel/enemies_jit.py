@@ -44,6 +44,10 @@ _OHANG = mm.OBJECTS_H_ANGLE
 _OZF = mm.OBJECTS_Z_FRACTION
 _OTYPE = mm.OBJECTS_TYPE
 
+_CAMERA_OBJECT = mm.CAMERA_OBJECT
+_CAMERA_SAVED = mm.CAMERA_SAVED
+_CAMERA_REF_LO = mm.CAMERA_REF_LO
+
 _PLAYER = mm.PLAYER_OBJECT
 _SIZE_FLOOR = mm.OBJECT_SIZE_FLOOR
 _ENERGY = mm.PLAYER_ENERGY
@@ -415,6 +419,20 @@ def _rd(mem, addr):
 @njit(cache=True, inline="always")
 def _wr(mem, addr, val):
     mem[addr] = np.uint8(val & 0xFF)
+
+
+@njit(cache=True, inline="always")
+def _restore_camera(mem):
+    """$2003/$2008: put the camera's own bearing and half column back."""
+    _wr(mem, _CAMERA_REF_LO, 0)
+    _wr(mem, _OHANG + _rd(mem, _CAMERA_OBJECT), _rd(mem, _CAMERA_SAVED))
+
+
+@njit(cache=True, inline="always")
+def _hold_camera(mem, left):
+    """$1FCF..$1FDB with $211A already saved: $09C0,X and $001F for a strip at ``left``."""
+    _wr(mem, _CAMERA_REF_LO, 0x80 if left & 1 else 0x00)
+    _wr(mem, _OHANG + _rd(mem, _CAMERA_OBJECT), _rd(mem, _CAMERA_SAVED) + (left >> 1))
 
 
 @njit(cache=True)
@@ -843,6 +861,7 @@ def _update_object_on_screen(mem, zp, target):
     the cost is then whole, else the $0C69 strip width, $1FA4..$1F9E unpriced."""
     cyc = np.int64(_REDRAW_CALL + _SPAN_HEAD)
     player = _rd(mem, _PLAYER)
+    _wr(mem, _CAMERA_OBJECT, player)  # $187D/$187F: $1FC2's camera is the player
     if target == player:  # $209F: the player is never drawn
         return cyc + np.int64(_SPAN_PLAYER + _REDRAW_NONE), 0
     c57, _alo, _ahi, _zlo, _zhi, rcyc = _relative_angles(mem, zp, player, target)
@@ -1856,11 +1875,14 @@ def _sound_frame(mem, clk):
 
 
 @njit(cache=True)
-def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial):
+def _advance(
+    mem, zp, n_frames, plotting, residual, phase, stage, index, partial, shift, at
+):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
     Returns the sub-pass resume point the last frame stopped at: the cycles it
-    overspent, which segment of the pass owes them, and where inside $16E6."""
+    overspent, which segment of the pass owes them, where inside $16E6, and whether
+    the $1FC2 strip shift of the camera is still outstanding."""
     for done in range(n_frames):
         clk = frame_clock(True)  # the raster IRQ pins the frame's phase every frame
         irq = charge(clk, 0x95E9, np.int64(_IRQ_BODY)) - np.int64(_IRQ_BODY)
@@ -1868,6 +1890,9 @@ def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial
         if plotting:
             continue
         budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) - irq
+        if budget > 0 and shift != 0:  # $2003/$2008: this frame's $2625 returned
+            _restore_camera(mem)
+            shift = 0
         while budget > 0:
             if phase == 0:
                 budget -= charge(clk, 0x1289, np.int64(_PASS_HEAD))
@@ -1890,21 +1915,35 @@ def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial
             budget -= charge(clk, 0x12A2, np.int64(_PASS_TAIL))
             budget -= _exposure_cycles(mem, clk)
             phase = 0
+        # the replot stalls on: past its $2211 clear, $09C0,X keeps the $1FC2 shift
+        if shift != 0 and budget >= at:
+            _hold_camera(mem, shift)
         residual = budget
         if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
-            return residual, phase, stage, index, partial, n_frames - done - 1
-    return residual, phase, stage, index, partial, 0
+            return (
+                residual,
+                phase,
+                stage,
+                index,
+                partial,
+                shift,
+                at,
+                n_frames - done - 1,
+            )
+    return residual, phase, stage, index, partial, shift, at, 0
 
 
-def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, partial):
+def advance_frames(
+    mem, n_frames, plotting, residual, phase, stage, index, partial, shift, at
+):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
-    the sub-pass resume point (cycle residual, phase, $16E6 stage) in and out.
+    the sub-pass resume point and the outstanding $1FC2 camera shift in and out.
 
     Returns the resume point plus (frames left, replot target, left column, columns,
     span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_N, dtype=np.int64)
-    res, ph, st, ix, pa, left_frames = _advance(
+    res, ph, st, ix, pa, sh, cl, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -1914,6 +1953,8 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
         int(stage),
         int(index),
         int(partial),
+        int(shift),
+        int(at),
     )
     target = int(zp[ZP_REPLOT]) - 1
     return (
@@ -1922,6 +1963,8 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
         int(st),
         int(ix),
         int(pa),
+        int(sh),
+        int(cl),
         int(left_frames),
         target,
         int(zp[ZP_REPLOT_LEFT]),

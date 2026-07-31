@@ -116,3 +116,85 @@ def test_a_column_inside_a_row_owes_less_than_that_rows_start(mid_replot):
             assert columns[-1] < total
             return
     pytest.fail("no plotted row carried more than one tile")
+
+
+def _rotating(new_state):
+    """ls9795 armed, wound to just before its one on-screen $1F9F."""
+    from sentinel import enemies, memmap as mm  # pylint: disable=C0415
+
+    state = new_state(BOARD)
+    state.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    enemies.advance_frames(state, 128)
+    return state
+
+
+def _to_the_replot(state, frames=40):
+    """Step until the model charges a strip replot; the frame it did, or None."""
+    from sentinel import enemies  # pylint: disable=import-outside-toplevel
+
+    for f in range(frames):
+        enemies.advance_frame(state)
+        if state.camera_shift:
+            return f
+    return None
+
+
+def test_the_camera_shift_is_live_for_the_frames_the_replot_stalls(new_state):
+    """$1FC2 leaves $09C0,X shifted until $2003/$2008, i.e. for the whole stall.
+
+    The model charges the replot in one lump, so the shift has to persist over every
+    frame that lump spends and come off in the frame the pass resumes in."""
+    from sentinel import enemies  # pylint: disable=import-outside-toplevel
+
+    state = _rotating(new_state)
+    own = int(state.obj_h_angle[state.player])
+    seen = []
+    for _ in range(40):
+        enemies.advance_frame(state)
+        seen.append(int(state.obj_h_angle[state.player]))
+    shifted = [a for a in seen if a != own]
+    assert shifted, "ls9795 reached no on-screen $1F9F in this span"
+    assert len(set(shifted)) == 1  # one strip, one $0C62, one shift
+    assert seen[-1] == own and state.camera_shift == 0  # $2003/$2008 put it back
+    assert shifted == seen[seen.index(shifted[0]) :][: len(shifted)]  # contiguous
+    assert len(shifted) > 10  # a replot is many frames of stall, not a redraw
+
+
+def test_the_shift_is_0c62_halved_over_the_211a_the_rom_saved(new_state):
+    """$1FD5 saves the bearing, $1FD8 adds $0C62/2 and $1FD0 keeps the odd half."""
+    from sentinel import enemies  # pylint: disable=import-outside-toplevel
+
+    state = _rotating(new_state)
+    for _ in range(40):
+        enemies.advance_frame(state)
+        if projector.held_strip(state):
+            break
+    left = state.camera_shift
+    assert left and projector.held_strip(state) == left  # the column it names back
+    assert (
+        int(state.obj_h_angle[state.player])
+        == (state.mem[projector.CAMERA_SAVED] + (left >> 1)) & 0xFF
+    )
+    assert state.mem[projector.CAMERA_REF_LO] == (0x80 if left & 1 else 0x00)
+
+
+def test_the_shift_waits_for_the_2211_clear_the_replot_runs_first(new_state):
+    """$1FBA JSR $2211 runs before $1FC2, so the clear's own cycles carry no shift.
+
+    ls9795's strip starts at column 37, so the clear is 8021 cycles the model must
+    spend before $09C0,X moves -- more than the frame the replot is charged in had
+    left, which is why the camera is still the player's own at that frame's end."""
+    from sentinel import enemies  # pylint: disable=import-outside-toplevel
+
+    state = _rotating(new_state)
+    assert _to_the_replot(state) is not None  # the frame $1F9F was charged in
+    assert state.camera_clear < 0  # the clear, less the whole replot it belongs to
+    assert state.cycle_residual < state.camera_clear  # ... still inside that clear
+    assert projector.held_strip(state) == 0  # so the camera is the player's own
+    for _ in range(40):  # and the rule holds over the whole stall
+        enemies.advance_frame(state)
+        if not state.camera_shift:
+            break
+        held = state.cycle_residual >= state.camera_clear
+        assert (projector.held_strip(state) != 0) == held
+    assert projector.held_strip(state) == 0  # $2003/$2008 on the resuming frame

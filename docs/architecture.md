@@ -327,7 +327,11 @@ branch above, and a `plot_world` cost, not an enemy-clock one.
 wider object replots in two chunks (`$201E`/`$2021` re-enter `$1FC2` with the remainder,
 each chunk at its own camera shift) while the clear and the flush run once over the whole
 span — `projector.replot_chunks` splits it the same way. `$1FC2` re-points the camera at
-each strip (`$09C0,X += $0C62/2`, `$001F` the fine angle), and `$1FE5 JSR $29C7` narrows
+each strip (`$09C0,X += $0C62/2` over the `$211A` it saves, `$001F` the odd half column) and
+`$2003`/`$2008` put it back, so the shift is **in the object table for the whole stall**:
+`enemies` writes it once the replot's own `$2211` clear is spent and takes it off in the
+frame the pass resumes, which is why `obj[N].h_angle` no longer reads as a divergence.
+`$1FE5 JSR $29C7` narrows
 the buffer to it: `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
 `$2993` sets from its table for a full-screen mode, so `projector.strip_window` feeds it
 straight to `render_cost`. `$9730` copies 24 of the 25 `$3A00` screen banks, skipping bank

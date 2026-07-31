@@ -1038,11 +1038,20 @@ def strip_line_cycles(span, chunks, scroll):
 
 
 SCREEN_SCROLL = 0x95  # $2043: the first screen bank $9730 flushes, $0097 for its loop
-CAMERA_SAVED = 0x211A  # $1FD5 keeps the camera's own bearing over the $1FC2 strip shift
+CAMERA_SAVED = mm.CAMERA_SAVED
 STRIP_LEFT = 0x0C62  # $20D8: the column the strip being plotted starts at
 STRIP_COLUMNS = 0x0C69  # $210B: that strip's own width, capped at 20
 STRIP_REMAINING = 0x0C6A  # $20FD: the columns left to plot, this strip included
 STRIP_SPAN = 0x211B  # $2100: the whole span, which the chunk loop never rewrites
+PLOT_ROW = 0x26  # $26C9 seeds it $1F and $26EF walks it down to the observer row $001D
+PLOT_COLUMN = 0x25  # $295D drives it across the row it plots
+CAMERA_OBJECT = mm.CAMERA_OBJECT
+BUF_LEFT, BUF_RIGHT, BUF_FRAC = (
+    0x07,
+    0x12,
+    0x28,
+)  # the $2993/$29C7 window plot_world is plotting into
+CAMERA_REF_LO = mm.CAMERA_REF_LO
 
 
 def strip_view(h_angle, v_angle, left):
@@ -1055,6 +1064,39 @@ def strip_view(h_angle, v_angle, left):
         "v_angle": v_angle,
         "ref_lo": 0x80 if left & 1 else 0x00,
     }
+
+
+def hold_camera(state, left):
+    """$1FCF..$1FDB with $211A already saved: $09C0,X and $001F for a strip at ``left``.
+
+    Idempotent -- it re-derives the shifted bearing from $211A, never from itself."""
+    mem = state.mem
+    mem[CAMERA_REF_LO] = 0x80 if left & 1 else 0x00
+    state.obj_h_angle[mem[CAMERA_OBJECT]] = (mem[CAMERA_SAVED] + (left >> 1)) & 0xFF
+
+
+def shift_camera(state, left):
+    """$1FC2..$1FDB: save the camera object's own bearing in $211A, then point it at
+    the strip -- so the shift is in the object table, live to anything reading it."""
+    state.mem[CAMERA_SAVED] = state.obj_h_angle[state.mem[CAMERA_OBJECT]]
+    hold_camera(state, left)
+
+
+def restore_camera(state):
+    """$2003/$2008: put the camera's own bearing and half column back."""
+    mem = state.mem
+    mem[CAMERA_REF_LO] = 0
+    state.obj_h_angle[mem[CAMERA_OBJECT]] = mem[CAMERA_SAVED]
+
+
+def held_strip(state):
+    """The $0C62 a still-shifted $09C0,X names, 0 when the camera is its own again.
+
+    $1FCF/$1FD0 put $0C62's low bit in $001F and $1FD8 adds the rest to the saved
+    bearing, so the two together give the column back."""
+    mem = state.mem
+    shift = (state.obj_h_angle[mem[CAMERA_OBJECT]] - mem[CAMERA_SAVED]) & 0xFF
+    return (shift << 1) | (1 if mem[CAMERA_REF_LO] else 0)
 
 
 def strip_replot_frames(state, target, left, columns, span=None):
@@ -1098,17 +1140,6 @@ def _exact_strip_cost(state, target):
             _EXACT_WARNED[0] = True
             print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
         return None
-
-
-PLOT_ROW = 0x26  # $26C9 seeds it $1F and $26EF walks it down to the observer row $001D
-PLOT_COLUMN = 0x25  # $295D drives it across the row it plots
-CAMERA_OBJECT = 0x6E  # $2625 LDX $6E: the slot whose $09C0/$0140 is the camera
-BUF_LEFT, BUF_RIGHT, BUF_FRAC = (
-    0x07,
-    0x12,
-    0x28,
-)  # the $2993/$29C7 window plot_world is plotting into
-CAMERA_REF_LO = 0x1F  # $001F, the camera's fine reference ($1FD0 for a strip)
 
 
 def replot_owed(state, row, column, in_plot):

@@ -39,6 +39,8 @@ def _resume(state):
         state.body_stage,
         state.body_index,
         state.body_partial,
+        state.camera_shift,
+        state.camera_clear,
     )
 
 

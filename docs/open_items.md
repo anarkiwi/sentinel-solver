@@ -266,7 +266,7 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock is not the residual: the replot's frame is
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**22** events, the first at frame 130) and on ls335 (**14**, the first at 156).
+ls9795 (**18** events, the first at frame 151) and on ls335 (**14**, the first at 156).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
 the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
@@ -274,12 +274,12 @@ measured, and none of it is the cause.  Those counts are from a seed that carrie
 its own; the 116/24 this item used to quote were **partly the instrument's own seeding**, see
 *The seed's own error* below.
 
-Of ls9795's 22, **17 are `update_cd`** and 5 are `obj[62].h_angle`. Four of the 17 are a
-replot's *exit*: they fire 19..21 frames after an `obj[62].h_angle` event, on the resync that
-`projector.replot_owed` seeds inside the `$1FFC JSR $2625`, when the model's debt runs out
-before the machine's does. `render_cost` reads 332100 cycles for that pass against the
-machine's 22-frame wall (~343500 foreground), 0.97x — the `$2625` area fill, which is
-[5](#5-one-object-vertex-angle-is-ten-units-out), not this item.
+All 18 and all 14 are `update_cd`; the `obj[62].h_angle` events are gone (*The camera the
+replot borrows* below). Four of ls9795's 18 catch the machine inside a replot, at `$9786`,
+`$978D`, `$988E` and `$9899` — the `$9730` buffer flush, i.e. the replot's *exit*, where the
+model's debt has run out and the machine's has not. `render_cost` reads 332100 cycles for
+that pass against the machine's 22-frame wall (~343500 foreground), 0.97x — the `$2625` area
+fill, which is [5](#5-one-object-vertex-angle-is-ten-units-out), not this item.
 
 **Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
 own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
@@ -530,18 +530,21 @@ missing datum is `plot_world`'s own progress, [5](#5-one-object-vertex-angle-is-
 |---|---|---|
 | `$17B7` — `$17B2`'s scan slot, machine under `$1887` | **8** (`$1893`, `$189D`, `$1916`x2, `$191D`, `$1D16`, `$17B7`, `$85DE`) | **9** (`$1887`'s line, `$1D8A`, `$85FE`, `$92DB`, `$9306`) |
 | `$17E8` — `$1AB0`'s tree/boulder walk | 2 (`$1AB5`, `$1ABE`) | 2 (`$1AB5`x2) |
-| `$1884` — the `$1876` redraw tail, inside a strip replot | 4 (`$26EC`, `$2DD6`, `$0D17`, `$9301`) | 0 |
+| `$1884` — the `$1876` redraw tail, inside a strip replot | 4 (`$9786`, `$978D`, `$988E`, `$9899`, all the `$9730` flush) | 0 |
 | the body's and the loop's own lines | 4 (`$16F4`, `$17B0`, `$17B2`, `$31D8`) | 3 (`$1773`, `$17B2`, `$17BC`) |
 
 * **Both boards are now the same defect: the `$1887` see cost.** Ten of ls9795's fourteen
   `update_cd` events and eleven of ls0335's fourteen catch the machine inside `$17B2`'s or
   `$1AB0`'s scan, in the `$1887`/`$18E6`/`$1CDD`/`$8401`/`$9287` chain the clock charges as
   one opaque term. ls9795's renderer share is gone — 68 of 116 became 4 of 18.
-* **Those 4 are not a clock error at all.** All four, and only they, diverge in
-  `obj[62].h_angle`, and all four resume at `$1884`: `$1FC2` adds `$0C62/2` to the *player's*
-  own `$09C0` for the duration of the strip replot (`projector.strip_replot_frames` prices
-  that shifted camera but writes nothing), so the machine reads 18 above the model at frame
-  130 and the schema calls a restored transient a CORE divergence.
+* **The camera the replot borrows.** `$1FC2` adds `$0C62/2` to the *player's* own `$09C0,X`
+  and `$2003`/`$2008` put it back, so for the whole stall the object table carries a bearing
+  the model priced but never wrote: on ls9795's strip, `$0C62` is 37 and the machine read
+  **18 above the model**. That was 5 of 22 events, every one of them `obj[62].h_angle` alone.
+  The model now writes the shift and takes it off — `$187D`/`$187F` name the camera object
+  (the player, not the drawn one), `$211A` holds its own bearing and `$001F` the odd half
+  column, and the shift lands only once the replot's own `$1FBA JSR $2211` clear is spent,
+  8021 cycles in. All five are gone and nothing else moved (ls0335 14 -> 14, ls42 0 -> 0).
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
@@ -803,9 +806,9 @@ march price — all four are now measured directly against the machine and none 
 what this item is chasing. Not the seed either: it now starts at the machine's own cycle on
 every board, and that took ls9795 116 -> 18 and ls0335 24 -> 14 without a constant moving.
 What is left, and both boards now say the same thing, is the **`$1887` see cost inside
-`$17B2`/`$1AB0`** — the `$17B7`/`$17E8` loop addresses are 10 of ls9795's 17 `update_cd`
-events and 11 of ls0335's 14. The replot's *price* — both backends now 0.90..0.92 of a
-machine wall measured at 22 frames — is [5](#5-one-object-vertex-angle-is-ten-units-out)'s.
+`$17B2`/`$1AB0`** — the `$17B7`/`$17E8` loop addresses are 10 of ls9795's 18 events and 11
+of ls0335's 14. The replot's *price* — both backends now 0.90..0.92 of a machine wall
+measured at 22 frames — is [5](#5-one-object-vertex-angle-is-ten-units-out)'s.
 
 ## 9. The human line does not replay to a win through the live executor
 

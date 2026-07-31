@@ -28,7 +28,6 @@ _PLOT_SETUP = range(
     0x2625, 0x26D6
 )  # $26C9 has not seeded $0026: the whole pass is owed
 REG_SP = 4  # registers_get id of the stack pointer
-CAMERA_FRACTION = 0x1F  # $1FD0 the fine angle, zeroed again at $2003
 
 
 def stack_frames(page, sp):
@@ -69,7 +68,6 @@ class SimClock:
     def __init__(self, image, resume=None):
         self.state = State.from_mem(image)
         self.plotting = False
-        self.replot_tail = None
         if resume is not None:
             self.seat(resume)
 
@@ -89,10 +87,6 @@ class SimClock:
 
     def step_frame(self):
         enemies.advance_frame(self.state, plotting=self.plotting)
-        # $2005: the frame the replot debt clears is the frame $2625 returns in.
-        if self.replot_tail and self.state.body_stage != enemies.BODY_DONE:
-            self.replot_tail()
-            self.replot_tail = None
 
     def poke(self, addr, val):
         self.state.mem[addr] = val & 0xFF
@@ -163,16 +157,18 @@ class Seed:
 
 
 def _replot_resume(state, emu):
-    """The resume a halt inside the $1FFC replot occupies, its cycle debt and its tail.
+    """The resume a halt inside the $1FFC replot occupies, and its cycle debt.
 
     plot_world's own $0025/$0026 price the unspent tail, so the position is countable
     where :func:`enemies.stack_position` has no straight line: the body is done and the
-    prnd is not ($1884 JMP $16D6), and $1FFF..$2008 restores the camera on the way."""
+    prnd is not ($1884 JMP $16D6). The $1FC2 shift is already in the seeded image, so
+    the model carries it and undoes it at $2003/$2008 like any replot of its own."""
     debt = replot_debt(state, emu.frames_on_stack())
     if not debt:
-        return None, 0, None
+        return None, 0
     resume = (enemies.PHASE_BODY, enemies.BODY_DONE, 0, -1, -int(round(debt)))
-    return resume, debt, lambda: _restore_camera(state)
+    state.camera_shift = projector.held_strip(state)
+    return resume, debt
 
 
 def _seed(emu, exact=True, tries=SEED_TRIES):
@@ -187,21 +183,13 @@ def _seed(emu, exact=True, tries=SEED_TRIES):
         resume, pc, addr = emu.position(image)
         caught = caught or (pc, addr)
         sim = SimClock(image)
-        replot, debt, tail = _replot_resume(sim.state, emu)
+        replot, debt = _replot_resume(sim.state, emu)
         resume = replot or resume
         if resume[4] is not None or not exact or waited >= tries:
             sim.seat(resume)
-            sim.replot_tail = tail
             return sim, Seed(resume, waited, pc, addr, caught, debt)
         emu.step_frame()
         waited += 1
-
-
-def _restore_camera(state):
-    """$2003/$2008: undo the $1FC2 strip shift of the camera's own bearing."""
-    state.mem[CAMERA_FRACTION] = 0
-    saved = state.mem[projector.CAMERA_SAVED]
-    state.obj_h_angle[state.mem[projector.CAMERA_OBJECT]] = saved
 
 
 def _unfreeze(img):
