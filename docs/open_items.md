@@ -140,12 +140,14 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock still prices two `$1887` sub-routines by a mean
+## 8. The enemy clock underprices `consider_enemy_state`'s own tail
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
 ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
 enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
-sim reaches a pass early — or the `$1805` rotation that follows from the same lead.
+sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
+`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and what
+is left is `consider_enemy_state`'s own line between the robot scan and `$1AB0`.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -188,17 +190,46 @@ and each is now computed from state both twins already hold:
   whose cost is three `$1DF9` corner reads — each able to walk an object stack — plus,
   on the `$1D8A` quad path, a `$0D03` multiply and the `$1007` invert.
 
-**Where it stops, exactly.** `SEE_GEOMETRY` (1128) and what is left of `SEE_PROBE`
-(719) are still means, over the same shape of code: `$8401
-calculate_object_relative_angles_and_distance` and `$933D
-calculate_object_relative_vertical_angle`, and under them `$9287 calculate_angle`
-(whose `$92C1`/`$92FF scale_using_x/y` is a **variable-length shift loop**), `$0D4A
-divide_and_arctan` with its ten conditional-subtract rounds and the `$1DF1` arctan
-interpolation, and `$937F calculate_hypotenuse` with its own `$0F4A`. Every one of
-them is ported bit-exactly in `relative.py` and again in `enemies_jit.py`, so every
-branch and every multiplier the price needs is already computed; the work is
-threading the cycles out of those seven functions in both twins, as was done for
-`$1C54`. Nothing here needs anything the 64 KB image does not carry.
+**What the geometry derivation fixed.** `SEE_GEOMETRY` (1128) and `SEE_PROBE` (719) were
+the last two means. `$1887` is now charged per branch of its own line; `$8401` from
+`$85C4`/`$85F5` and the sign of each component delta; `$9287` from its quadrant compare and
+the **variable length** of the `$92C1`/`$92FF` shift loop (20 cycles a lap, 21 in y, whose
+`$9306` branch crosses a page); `$0D4A` per conditional-subtract round plus the `$0E1F`
+arctan interpolation; `$933D` and `$937F` from their own lines; and `$1CDD`'s `$1ECC` entry
+as its own term. Deriving them exposed four march errors that the old means had absorbed:
+the per-sub-step fixed cost charged `$1CFB..$1DFE` on a board-edge exit that never reaches
+it, `$1E0E CPY $0C58` was priced as zero page when it is absolute, the `$1D18`/`$1D30`
+not-taken branches and the `$1D44 SEC`/`RTS` after a slope block went uncharged, and in
+`$1C54` the `$0E7B` JSR was counted twice while `$0E8F`'s taken `BVC` and `$1C76`'s
+`JSR $1C7D` were not counted at all.
+
+**Measured — the oracle.** Against jennings on the real image: `$1887` is cycle-exact on
+ls42/ls335/ls9795 over every observer/target pair, both FOV widths, the reject paths and
+the two-probe robot path, and over a whole 8x64 scan run as one sequence on one machine;
+`$1CDD` is exact over random rays on five boards; `$1C54` over all 55296 angle/fraction
+pairs; `$9287` and `$933D` over thousands of random inputs.
+
+**Where it stops, exactly.** Stepping `$16B5 update_enemies` one round at a time against
+the same oracle (reseeding the machine from the sim each round) is exact for the first 60
+ls9795 rounds and then **+10 cycles** on about a quarter of the rounds after it. The line
+that is short is `consider_enemy_state`'s own tail once the robot scan is exhausted:
+`$17CD LDY $0F` + `$17CF BMI $17E0` + `$17E0 LDA #0` + `$17E2 STA $0C20,X` +
+`$17E5 JSR $1AB0` + `$17E8 BCS $17F9` is 22 cycles that `enemies._scan_for_robot` charges
+as `TILE_SCAN_FIXED` (10, which is `$1AB0`'s own entry and exit), and the `$17F9` rotate
+gate is 14 when it holds (`$1800 BCC` not taken + `$1802 JMP $16D6`) against the charged
+`ROTATE_GATE` 12. Nothing here needs anything the 64 KB image does not carry.
+
+**Also still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723,
+the mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the
+oracle stubs it because it writes the render buffer — so it is the one `$16B5` term the
+per-round oracle cannot check, and it is spent once per rotation.
+
+**Not `$0078`.** `$0D4A` does **not** clear `$0078` before round 10: `$0DF1 ROR $78` rotates
+the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so bit 0 of the
+incoming `$0078` can change the quotient bit, the interpolation and the angle. Both twins
+start it at 0. It is live in principle — `$0F9E` and `$1D9D`/`$1DC1` write `$0078` too — but
+over the natural 8x64 scan on ls42/ls335/ls9795 the sim matches the machine cycle for cycle
+and byte for byte, so it does not bite at these states.
 
 **Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
 which staging inside the body cannot correct.
@@ -226,6 +257,10 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 `$84ED`); the other two, `$20C6` and `$20E6`, are in `update_object_on_screen $1F9F` and
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
+
+**Resolves.** Charging `$17CD..$17E8` and the held `$17F9` gate at their instruction
+counts, and then re-running the per-round `$16B5` oracle until it is exact on every
+non-rotating round; after that, `ROTATE_REDRAW`.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -309,7 +344,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-still-prices-two-1887-sub-routines-by-a-mean) landed, so
+  [8](#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
