@@ -114,7 +114,7 @@ _MUL_DBL_BYTE_CARRY = passcost.MUL_DBL_BYTE_CARRY
 _MUL_DBL_BYTE_CALL = passcost.MUL_DBL_BYTE_CALL
 _MUL_PI = passcost.MUL_PI
 _SIN_COS = passcost.SIN_COS
-_SIN_COS_PI_CALL = passcost.SIN_COS_PI_CALL
+_SIN_COS_NOQUAD = passcost.SIN_COS_NOQUAD
 _SIN_COS_QUAD = passcost.SIN_COS_QUAD
 _SIN_COS_LOW = passcost.SIN_COS_LOW
 _SIN_COS_HIGH = passcost.SIN_COS_HIGH
@@ -529,17 +529,13 @@ def march(
         neg += 1
     if ay_hi & 0x80:
         neg += 1
-    step_fixed = np.int64(
-        _ADD_VECTOR
-        + _ADD_VECTOR_NEG * neg
-        + 2 * _STEP_EDGE
-        + _STEP_SETUP
-        + _TILE_Z_CALL
-        + _TILE_ADDR
-        + _TILE_Z_READ
-    )
-    flat_step = step_fixed + np.int64(
-        _TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF + _FLAT_BELOW
+    step_fixed = np.int64(_ADD_VECTOR + _ADD_VECTOR_NEG * neg + 2 * _STEP_EDGE)
+    # $1CFB..$1DFE: only reached once both edge tests fall through.
+    tile_fixed = np.int64(_STEP_SETUP + _TILE_Z_CALL + _TILE_ADDR + _TILE_Z_READ)
+    flat_step = (
+        step_fixed
+        + tile_fixed
+        + np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF + _FLAT_BELOW)
     )
     while steps < max_steps:
         steps += 1
@@ -581,6 +577,7 @@ def march(
             status = BLOCKED
             break
 
+        cycles += tile_fixed
         if tx != cur_tx or ty != cur_ty:
             cur_tx = tx
             cur_ty = ty
@@ -784,7 +781,7 @@ def march(
                 if hit:
                     cycles += np.int64(_SLOPE_EDGE_HIT)
                     continue  # ray above the slope -> keep marching
-                cycles += np.int64(_SLOPE_EDGE_BLOCK)
+                cycles += np.int64(_SLOPE_EDGE_BLOCK + _LEAVE_SET)
                 status = BLOCKED
                 break
             cycles += np.int64(_SLOPE_NIB_QUAD)
@@ -794,6 +791,7 @@ def march(
             cycles += qcyc
             if verdict == 0:
                 continue  # ray above the slope -> keep marching
+            cycles += np.int64(_LEAVE_SET)  # $1D44 SEC + RTS
             status = BLOCKED
             break
     return (
@@ -1003,7 +1001,7 @@ def _vmul_dbl_A_by_pi(A, frac74):
 
 @njit(cache=True)
 def _vsin_cos(angle, frac74):
-    cyc = np.int64(_SIN_COS + _SIN_COS_PI_CALL)
+    cyc = np.int64(_SIN_COS)
     angle &= 0xFF
     c0c = angle
     _apl, aPI_hi, mcyc = _vmul_dbl_A_by_pi(angle, frac74)
@@ -1016,6 +1014,8 @@ def _vsin_cos(angle, frac74):
         X = 1
         sixty = 0
         cyc += np.int64(_SIN_COS_QUAD)
+    else:
+        cyc += np.int64(_SIN_COS_NOQUAD)
     A_cmp = c54
     cur_c53 = c53
     cur_c54 = c54

@@ -145,7 +145,7 @@ def sin_cos_lookup(angle, frac74=0):
     angle &= 0xFF
     c0c = angle  # $0C0C
     aPI_lo, aPI_hi, cyc = multiply_double_A_by_pi(angle, frac74)
-    cyc += passcost.SIN_COS + passcost.SIN_COS_PI_CALL
+    cyc += passcost.SIN_COS
     c53 = aPI_lo  # $0C53
     c54 = aPI_hi  # $0C54
     # X=1; $0060=1; X=0; BIT $0C0C: V(bit6) set => INX, DEC $0060
@@ -155,6 +155,8 @@ def sin_cos_lookup(angle, frac74=0):
         X = 1
         sixty = 0
         cyc += passcost.SIN_COS_QUAD
+    else:
+        cyc += passcost.SIN_COS_NOQUAD
     # After $0E81 LDA $0075 / STA $0C54, A = c54. The loop-top CMP #$7a tests A,
     # which on pass 1 is c54 and on pass 2 is the recomputed c54.
     A_cmp = c54
@@ -732,10 +734,11 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
     # the signs are fixed for the whole march, so the sub-step's fixed part is too.
     neg = sum(1 for h in (vec.vy_hi, vec.vz_hi, vec.vx_hi) if h & 0x80)
     step_fixed = (
-        passcost.ADD_VECTOR
-        + passcost.ADD_VECTOR_NEG * neg
-        + 2 * passcost.STEP_EDGE
-        + passcost.STEP_SETUP
+        passcost.ADD_VECTOR + passcost.ADD_VECTOR_NEG * neg + 2 * passcost.STEP_EDGE
+    )
+    # $1CFB..$1DFE: only reached once both edge tests fall through.
+    tile_fixed = (
+        passcost.STEP_SETUP
         + passcost.TILE_Z_CALL
         + passcost.TILE_ADDR
         + passcost.TILE_Z_READ
@@ -757,6 +760,7 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
             return tx, ty, False, cycles
         # $1CFB LDA #$80 ; STA $0060 ; STA $000C ; $1D01 LDA #0 ; STA $0079 ;
         # $1D05 STA $0C67 (clear boulder-consider flag).
+        cycles += tile_fixed
         s60 = 0x80
         c0c_var = 0x80  # $000C tolerance (object path may lower it)
         s79 = 0
@@ -848,7 +852,7 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
             cycles += scyc
             if res == "loop":
                 continue
-            return tx, ty, False, cycles
+            return tx, ty, False, cycles + passcost.LEAVE_SET  # $1D44 SEC + RTS
     return tx, ty, False, cycles
 
 
