@@ -36,7 +36,7 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
-from sentinel import memmap as mm, relative, actions, terrain, passcost
+from sentinel import memmap as mm, relative, actions, terrain, passcost, projector
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
 
@@ -351,11 +351,22 @@ def _see_cost(see):
     return see["cycles"]
 
 
+def _redraw_cost(state, target):
+    """$187B STX $91 + $1881 JSR $1F9F: what redrawing `target` costs right now.
+
+    Off screen ($209B carry set) that is the counted $1F9F alone; on screen it is
+    that plus the $1FFC JSR $2625 replot of the strip, at the camera $1FC2 shifts to."""
+    cycles, columns, left = relative.update_object_on_screen_cycles(state, target)
+    if columns == 0:
+        return cycles
+    frames = projector.strip_replot_frames(state, target, left, columns)
+    return cycles + int(round(frames * passcost.PAL_FRAME_CYCLES))
+
+
 def _body_tail(state, target):
     """$1876..$1884: every exit that redraws the object it just touched ($187B STX
     $91 names it), and the $1F9F redraw that object's own screen span prices."""
-    redraw = relative.update_object_on_screen_cycles(state, target)[0]
-    return passcost.BODY_TAIL + redraw
+    return passcost.BODY_TAIL + _redraw_cost(state, target)
 
 
 def _exposure_byte(see):
@@ -559,7 +570,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
                 _rotate_enemy(state, enemy)
                 budget -= passcost.ROTATE_GATE + passcost.ROTATE
-                budget -= relative.update_object_on_screen_cycles(state, enemy)[0]
+                budget -= _redraw_cost(state, enemy)
                 return budget, BODY_DONE, 0, -1
             return budget - passcost.ROTATE_GATE_HELD, BODY_DONE, 0, -1
 
@@ -732,7 +743,7 @@ def _update_meanie(state, enemy, budget, index):
         start_tune(state, mm.SOUND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
         budget -= passcost.MEANIE_ROTATE
-        budget -= relative.update_object_on_screen_cycles(state, meanie)[0]
+        budget -= _redraw_cost(state, meanie)
         return budget, BODY_DONE, 0
     if target != mem[mm.PLAYER_OBJECT]:  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(state, enemy)
@@ -1165,22 +1176,32 @@ def advance_frames(state, n_frames, plotting=False):
     Dispatches to the numba twin (:mod:`sentinel.enemies_jit`) when numba is present,
     else to :func:`advance_frames_python`; the two are byte-identical."""
     if _jit_usable(state):
-        (
-            state.cycle_residual,
-            state.pass_phase,
-            state.body_stage,
-            state.body_index,
-            state.body_partial,
-        ) = enemies_jit.advance_frames(
-            state.mem,
-            int(n_frames),
-            plotting,
-            state.cycle_residual,
-            state.pass_phase,
-            state.body_stage,
-            state.body_index,
-            state.body_partial,
-        )
+        remaining = int(n_frames)
+        while remaining > 0:
+            (
+                state.cycle_residual,
+                state.pass_phase,
+                state.body_stage,
+                state.body_index,
+                state.body_partial,
+                remaining,
+                target,
+                left,
+                columns,
+            ) = enemies_jit.advance_frames(
+                state.mem,
+                remaining,
+                plotting,
+                state.cycle_residual,
+                state.pass_phase,
+                state.body_stage,
+                state.body_index,
+                state.body_partial,
+            )
+            if target < 0:  # no $1FFC strip replot to price: the run is complete
+                break
+            frames = projector.strip_replot_frames(state, target, left, columns)
+            state.cycle_residual -= int(round(frames * passcost.PAL_FRAME_CYCLES))
         return
     advance_frames_python(state, n_frames, plotting=plotting)
 

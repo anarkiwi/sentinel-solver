@@ -229,7 +229,9 @@ def test_the_priced_redraw_brackets_every_live_rotation_redraw():
                 continue
             for h_angle in range(0, 256, 8):
                 state.obj_h_angle[state.mem[mm.PLAYER_OBJECT]] = h_angle
-                cycles, columns = relative.update_object_on_screen_cycles(state, slot)
+                cycles, columns, _l = relative.update_object_on_screen_cycles(
+                    state, slot
+                )
                 if columns == 0:
                     modelled.append(cycles)
     assert min(modelled) <= min(samples) and max(samples) <= max(modelled)
@@ -605,7 +607,7 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
     monkeypatch.setattr(
-        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0)
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0)
     )
     monkeypatch.setattr(passcost, "ROTATE", passcost.ROTATE - 323 + 6)
     monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
@@ -664,7 +666,7 @@ def test_the_object_screen_span_is_exact_against_the_roms_own_209b(landscape):
             seen.add("player" if slot == player else "reject")
             rom = _run(cpu, mem, mstate, 0x1F9F)
             state = State(bytearray(mem))
-            assert relative.update_object_on_screen_cycles(state, slot) == (rom, 0)
+            assert relative.update_object_on_screen_cycles(state, slot) == (rom, 0, 0)
     assert seen == {"visible", "reject", "player"}
 
 
@@ -680,3 +682,47 @@ def _run(cpu, mem, mstate, addr):
     c0 = cpu.processorCycles
     _oracle().call(cpu, mem, addr)
     return cpu.processorCycles - c0
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
+    """RENDER_COST_BACKEND=py65 prices the $1FFC replot by running the real $1F9F.
+
+    The proxy prices the same camera through the same $29C7 window, so the two must
+    agree to well inside the factor the un-windowed proxy was out by (1.3..2.8x)."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    mem = bytearray(_oracle().generate(landscape))
+    state = State(mem)
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for h_angle in range(0, 256, 16):
+        state.obj_h_angle[player] = h_angle
+        for slot in range(8):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            visible, left, cols, _cyc = relative.object_screen_span(state, slot)
+            if not visible:
+                continue
+            monkeypatch.setenv("RENDER_COST_BACKEND", "py65")
+            exact = projector.strip_replot_frames(state, slot, left, cols)
+            monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
+            proxy = projector.strip_replot_frames(state, slot, left, cols)
+            assert exact > 1.0  # the replot is always many frames, never a redraw
+            assert 0.8 < proxy / exact < 1.3
+            checked += 1
+            break
+        if checked >= 2:
+            break
+    assert checked >= 1
+
+
+def test_the_strip_buffer_window_is_the_roms_own_29c7():
+    """$29C7 halves the $0C69 column count into $0007 and folds it into $0012.
+
+    A 40-column A is the whole play screen, which is $2993 mode 0's own pair."""
+    assert projector.strip_window(40) == projector.BUF_WINDOW[projector.PLAY_MODE]
+    for columns in range(1, 21):
+        left, right = projector.strip_window(columns)
+        assert (left, right) == (columns >> 1, ((columns >> 1) >> 1) ^ 0x80)

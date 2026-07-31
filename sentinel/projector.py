@@ -32,9 +32,10 @@ def _neg16(hi, lo):
     return ((-hi - borrow) & 0xFF, (-lo) & 0xFF)
 
 
-def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE):
+def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE, window=None):
     """plot_world setup ($2625-$26D6): the view-orientation case and screen-x
-    reference angle from the observer's h_angle, against ``mode``'s $2993 window."""
+    reference angle from the observer's h_angle, against ``mode``'s $2993 window,
+    or ``window`` when a caller sets its own ($29C7, as $1F9F does for a strip)."""
     view_angle = (h_angle + 0x20) & 0xFF  # $001C ($265A)
     quadrant = view_angle >> 6  # $2665: top two bits
     folded = ((view_angle & 0x3F) - 0x20) & 0xFF  # $0074 ($265E)
@@ -47,7 +48,7 @@ def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE):
         c3, c1d = (0x1E - ox) & 0xFF, (0x1E - oy) & 0xFF
     else:  # west ($26BC)
         c3, c1d = oy, (0x1E - ox) & 0xFF
-    left, right = BUF_WINDOW[mode]
+    left, right = window if window is not None else BUF_WINDOW[mode]
     return {
         "observer": observer,
         "quadrant": quadrant,
@@ -527,14 +528,14 @@ def _project_scene_jit(state, setup, observer):
     ], int(n_examine)
 
 
-def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE):
+def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None):
     """Return (tiles, n_examine): the exactly-selected plotted tiles and the exact
     $2845 examination count under ``mode``'s $2993 buffer window. Non-object tiles the
     occlusion table hides are examined but dropped; each kept tile carries its H and W.
     """
     if observer is None:
         observer = state.player
-    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode)
+    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode, window)
     if _HAVE_JIT:
         return _project_scene_jit(state, setup, observer)
     return _project_scene_py(state, setup, observer)
@@ -625,7 +626,7 @@ def _exact_render_cost(state, h, v, observer):
         return None
 
 
-def render_cost(state, view, observer=None, mode=PLAY_MODE):
+def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None):
     """One plot_world pass in PAL frames (docs/architecture.md): examine floor +
     terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
     buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
@@ -635,19 +636,64 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE):
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
-    if mode == PLAY_MODE:
+    if mode == PLAY_MODE and window is None:
         exact = _exact_render_cost(state, h, v, observer)
         if exact is not None:
             return exact
     obs = state.player if observer is None else observer
 
     def make():
-        tiles, n_examine = project_scene(state, h, v, obs, mode)
+        tiles, n_examine = project_scene(state, h, v, obs, mode, window)
         area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
         base = _terrain_poly_base(tiles) + _inview_object_base(state, tiles)
         return (BASE_CYCLES + n_examine * C_EXAMINE + area + base) / FRAME_CYCLES
 
-    return memo(_COST_CACHE, (scene_key(state), obs, h, v, mode), _CACHE_MAX, make)
+    key = (scene_key(state), obs, h, v, mode, window)
+    return memo(_COST_CACHE, key, _CACHE_MAX, make)
+
+
+def strip_window(columns):
+    """$29C7 with A = $0C69: the buffer window $1F9F gives the strip plot.
+
+    $29C9 halves the column count into $0007 and $29D3 folds that into $0012, the
+    same pair $2993 sets from its own table for a full-screen mode."""
+    left = columns >> 1
+    return left, (left >> 1) ^ 0x80
+
+
+def strip_replot_frames(state, target, left, columns):
+    """$1FFC JSR $2625 out of update_object_on_screen $1F9F, in PAL frames.
+
+    $1FC2 re-points the camera at the strip first ($09C0 += $0C62/2) and $1FE5 narrows
+    the buffer to the strip, so both the view and the window priced are the ROM's, not
+    the player's. ``RENDER_COST_BACKEND=py65`` runs the real $1F9F and is exact."""
+    if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() == "py65":
+        exact = _exact_strip_cost(state, target)
+        if exact is not None:
+            return exact
+    player = state.player
+    view = {
+        "h_angle": (state.obj_h_angle[player] + (left >> 1)) & 0xFF,
+        "v_angle": state.obj_v_angle[player],
+    }
+    return render_cost(state, view, player, window=strip_window(columns))
+
+
+def _exact_strip_cost(state, target):
+    """The py65 $1F9F backend, or None when the ROM fixture is absent."""
+    try:
+        from sentinel.tests import oracle
+
+        if not oracle.available():
+            raise FileNotFoundError("ROM fixture absent")
+        from sentinel import rendercost_py65
+
+        return rendercost_py65.strip_replot_cost_exact(state, target)
+    except (ImportError, FileNotFoundError) as exc:
+        if not _EXACT_WARNED[0]:
+            _EXACT_WARNED[0] = True
+            print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
+        return None
 
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/architecture.md).

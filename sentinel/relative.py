@@ -631,13 +631,13 @@ def object_screen_span(state, target):
 
 
 def update_object_on_screen_cycles(state, target):
-    """$1F9F: the redraw $187B/$1881 forces on `target`, as (cycles, columns).
+    """$1F9F: the redraw $187B/$1881 forces on `target`, as (cycles, columns, left).
 
     ``columns`` is 0 when $209B found no screen span, and the whole cost is then
     counted; otherwise it is the $0C69 strip width and the cycles cover only up to
-    $1FA4, the $1FFC JSR $2625 replot beyond it being the render model's to price."""
-    visible, _left, columns, cyc = object_screen_span(state, target)
+    $1FA4 -- the $1FFC JSR $2625 replot beyond it is projector.strip_replot_frames."""
+    visible, left, columns, cyc = object_screen_span(state, target)
     cyc += passcost.REDRAW_CALL
     if not visible:
-        return cyc + passcost.REDRAW_NONE, 0
-    return cyc + passcost.REDRAW_PLOT_ENTRY, columns
+        return cyc + passcost.REDRAW_NONE, 0, 0
+    return cyc + passcost.REDRAW_PLOT_ENTRY, columns, left

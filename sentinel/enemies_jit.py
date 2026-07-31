@@ -397,6 +397,10 @@ _BODY_DONE = -1
 _MAX_STEPS = 20000  # can_see_object's march bound (the ROM's board-edge exit)
 ZP_LO = 0x50  # the zero-page window the geometry touches ($0050..$008B)
 ZP_HI = 0x8C
+ZP_REPLOT = 0x8C  # out of band: the object $1F9F found a screen span for, +1
+ZP_REPLOT_LEFT = 0x8D  # ... and its $0C62 left column and $0C69 width; the
+ZP_REPLOT_COLS = 0x8E  # $1FFC plot itself is priced outside the twin
+ZP_N = 0x8F
 
 
 @njit(cache=True, inline="always")
@@ -880,6 +884,9 @@ def _update_object_on_screen(mem, zp, target):
     if width >= 0x15:  # $2105: a replot spans at most 20 columns at once
         width = 0x14
         cyc += np.int64(_SPAN_WIDTH_CAP)
+    zp[ZP_REPLOT] = target + 1  # the $1FFC strip replot is the caller's to price
+    zp[ZP_REPLOT_LEFT] = left
+    zp[ZP_REPLOT_COLS] = width
     return cyc + np.int64(_REDRAW_PLOT_ENTRY), width
 
 
@@ -1784,7 +1791,7 @@ def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial
 
     Returns the sub-pass resume point the last frame stopped at: the cycles it
     overspent, which segment of the pass owes them, and where inside $16E6."""
-    for _ in range(n_frames):
+    for done in range(n_frames):
         irq = _sound_frame(mem) + _cooldown_frame(mem)
         if plotting:
             continue
@@ -1804,24 +1811,26 @@ def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial
                 stage, index, partial = _BODY_ENTRY, 0, -1
                 budget -= np.int64(_UPDATE_PRND)
                 phase = 2
-                if budget <= 0:
+                if budget <= 0 or zp[ZP_REPLOT] != 0:
                     break
             budget -= _update_cursor(mem) + np.int64(_PASS_TAIL)
             budget -= _exposure_cycles(mem)
             phase = 0
         residual = budget
-    return residual, phase, stage, index, partial
+        if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
+            return residual, phase, stage, index, partial, n_frames - done - 1
+    return residual, phase, stage, index, partial, 0
 
 
 def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, partial):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
     the sub-pass resume point (cycle residual, phase, $16E6 stage) in and out.
 
-    The numpy view shares the caller's buffer, so every mutation lands in the state
-    the caller holds -- exactly as :func:`sentinel.los._march_jit` does."""
+    Returns the resume point plus (frames left, replot target, replot left column):
+    an on-screen $1F9F stops the run so the caller prices its $1FFC strip replot."""
     view = np.frombuffer(mem, dtype=np.uint8)
-    zp = np.zeros(ZP_HI, dtype=np.int64)
-    res, ph, st, ix, pa = _advance(
+    zp = np.zeros(ZP_N, dtype=np.int64)
+    res, ph, st, ix, pa, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -1832,4 +1841,15 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
         int(index),
         int(partial),
     )
-    return int(res), int(ph), int(st), int(ix), int(pa)
+    target = int(zp[ZP_REPLOT]) - 1
+    return (
+        int(res),
+        int(ph),
+        int(st),
+        int(ix),
+        int(pa),
+        int(left_frames),
+        target,
+        int(zp[ZP_REPLOT_LEFT]),
+        int(zp[ZP_REPLOT_COLS]),
+    )
