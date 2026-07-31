@@ -177,12 +177,12 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
 UPDATE_OBJECT_ON_SCREEN = 0x1F9F
 
 
-def update_object_cost(cpu, mem, state, target, maxins=20_000_000):
+def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
     """Run the real $1F9F once headless on ``target`` and return its frame cost.
 
     Same render context as :func:`render_frame_cost` -- $1F9F's own $1FC2 re-points
     the camera at the object's strip and $1FFC replots it, so the view is the ROM's,
-    not the caller's. The player's own $09C0/$0140 are left as the board has them."""
+    not the caller's. ``trace``, when given, is called with every PC executed."""
     player = mem[0x000B]
     mem[0x006E], mem[0x0091] = player, target
     for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
@@ -203,6 +203,8 @@ def update_object_cost(cpu, mem, state, target, maxins=20_000_000):
     c0 = cpu.processorCycles
     steps = 0
     while cpu.pc != ret and steps < maxins:
+        if trace is not None:
+            trace(cpu.pc)
         cpu.step()
         steps += 1
     return (cpu.processorCycles - c0) / FRAME_CYCLES

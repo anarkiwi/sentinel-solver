@@ -338,6 +338,40 @@ def test_every_facing_error_is_exactly_one_extra_rotation():
     assert all(r == 40 for r in over), f"not +-1 rotation: {sorted(set(steps))}"
 
 
+OVERSHOOT_SPAN = 13  # the one facing error of the wrong sign, and the enemy behind it
+OVERSHOOT_SLOT = 4
+
+
+@pytest.mark.oracle
+def test_the_rom_really_replots_the_enemy_the_overshoot_blames():
+    """The single -1 facing error is a $1FFC replot the ROM genuinely pays for.
+
+    Both cheap alternatives are excluded on the recorded state: $0C4D bit 7 is clear so
+    $1FEF does not divert to $8533, and $0C1F bit 7 is clear so $1B00 hands $1AF4 a set
+    carry and the update runs.  What is left is the frame-to-round cadence above $16E6.
+    """
+    oracle = pytest.importorskip("sentinel.tests.oracle")
+    if not oracle.available():
+        pytest.skip("stage2 image absent")
+    from sentinel import relative  # pylint: disable=import-outside-toplevel
+
+    ev = _events()[OVERSHOOT_SPAN]
+    st = state_from_event(ev, _load(FIXTURE)["landscape"])
+    hc.seed_clock(st, ev)
+    assert relative.object_screen_span(st, OVERSHOOT_SLOT)[0]  # ours picks this enemy
+
+    cpu, rom, mstate = oracle.machine_from_image(bytes(st.mem))
+    rom[oracle.WORLD_BUSY_PLOTTING] = 0x00
+    rom[0x0091], rom[0x006E] = OVERSHOOT_SLOT, rom[mm.PLAYER_OBJECT]
+    oracle.call(cpu, rom, 0x1B00, a=OVERSHOOT_SLOT)  # $1AF4's own gate
+    assert cpu.p & 0x01, "$1B00 aborted the update: $0C1F was set after all"
+
+    seen = set()
+    frames = oracle.update_object_cost(cpu, rom, mstate, OVERSHOOT_SLOT, trace=seen.add)
+    assert 0x1FFC in seen and 0x1FF6 not in seen  # $2625 plot_world, not $8533
+    assert 30.0 < frames < 45.0  # a whole span's worth of foreground, once
+
+
 @pytest.mark.oracle
 @pytest.mark.parametrize("span", DIVERGENT_SPANS)
 def test_enemies_step_matches_the_rom_on_a_divergent_state(span):

@@ -364,11 +364,24 @@ exact backend did not). With it, proxy and exact agree on the error structure.
 **What it bought, and the one it cost.** Over the ls335 human replay the modelled facing
 errors fall 40 -> 37 and 35 strip replots fire. Thirty-six of the 37 are still the old
 one-sided "+1 rotation"; the thirty-seventh is new and the other way — span 13 slot 3
-loses a rotation the ROM kept, on both backends, so it is the mechanism and not the
-proxy. Either the ROM took the cheap `$1FEF`/`$8533` object path there, or `$0C1F` was set
-and `$1AF4`/`$1B00` aborted that enemy's update before `$1805` — neither is modelled, and
-`test_every_facing_error_is_exactly_one_extra_rotation` caps the overshoot at one so a
-later fix cannot quietly widen it.
+loses a rotation the ROM kept.
+
+**That one is decided, and it is not `$1F9F`.** Both cheap alternatives are excluded on
+the recorded state by running it: `$0C4D` bit 7 is clear, so `$1FEF` does not divert to
+`$8533`, and `$0C1F` bit 7 is clear, so `$1B00` hands `$1AF4` a set carry and the update
+runs. Stepped round by round with `$1F9F` live, the ROM reaches `$1FFC JSR $2625` on
+**slot 4** — the very enemy the model picks — and pays 728868 cycles, 37.1 frames. `$209B`
+agrees with the model on all seven occupied slots of that state, cycle for cycle
+(`test_the_rom_really_replots_the_enemy_the_overshoot_blames`).
+
+What differs is *order*. Slots 3 and 4 enter the span with the same `$0C28` of 24, so they
+come due together, and the descending `$0090` cursor decides which is considered first.
+The ROM rotates slot 3 at round 68 and only then slot 4, with its stall, at round 75. The
+model reaches slot 4 first, at frame 90 of 111, and the stall runs the span out: slot 3 is
+never considered again and ends holding `$0C28` = 1, due and unserved. That is the
+frame-to-round cadence this item already carries, one round wide, now with a 30-frame
+lever on it. `test_every_facing_error_is_exactly_one_extra_rotation` caps the overshoot at
+one so a later fix cannot quietly widen it.
 
 **NOT the frame budget.** `registers_get` returns the VIC raster line (id 53) and the cycle
 within it (id 54), so `line * 63 + cyc` is an exact intra-frame stamp and the handler can be
