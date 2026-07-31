@@ -165,14 +165,15 @@ def test_reduce_object_energy_downgrades():
     # a tree is removed, a boulder becomes a tree, a robot becomes a boulder.
     tree = state.slot_of_type(mm.T_TREE)
     d0 = state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy]
-    assert enemies._reduce_object_energy(state, tree, enemy) is False
+    assert enemies._reduce_object_energy(state, tree, enemy)[0] is False
     assert state.is_empty(tree)
     # every non-kill drain banks one unit of energy to discharge later as a tree.
     assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 1) & 0xFF
     # player loses one energy (and banks another discharge unit).
     e0 = state.energy
-    drained = enemies._reduce_object_energy(state, state.mem[mm.PLAYER_OBJECT], enemy)
-    assert drained is True and state.energy == e0 - 1
+    player = state.mem[mm.PLAYER_OBJECT]
+    drained, cost = enemies._reduce_object_energy(state, player, enemy)
+    assert drained is True and state.energy == e0 - 1 and cost > 0
     assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 2) & 0xFF
 
 
@@ -206,11 +207,11 @@ def test_drain_at_zero_energy_kills_player():
     state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
     # draining the player with energy left just decrements and does not kill.
     state.energy = 1
-    assert enemies._reduce_object_energy(state, player, enemy) is True
+    assert enemies._reduce_object_energy(state, player, enemy)[0] is True
     assert state.energy == 0
     assert not (state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80)
     # draining again at zero energy sets the death flag (kill_player $1A00).
-    assert enemies._reduce_object_energy(state, player, enemy) is True
+    assert enemies._reduce_object_energy(state, player, enemy)[0] is True
     assert state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80
 
 

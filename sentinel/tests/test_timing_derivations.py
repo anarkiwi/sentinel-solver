@@ -225,9 +225,11 @@ def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
     parts = _live_cycles()["rotate_parts"]
     straight = 32 + 12  # $1805..$1822 and $187B..$1884, the four JSR opcodes apart
     jsrs = 4 * 6  # $1AF4, $1973, $3470 and the $1881 JSR $1F9F charged separately
+    assert passcost.MEANIE_INIT == parts["1973"]
+    assert passcost.TUNE == parts["3470"]  # $3470 vectors through $FFF1, off the image
     assert (
         passcost.ROTATE
-        == straight + jsrs + parts["1af4"] + parts["1973"] + parts["3470"]
+        == straight + jsrs + parts["1af4"] + parts["1973"] + passcost.TUNE
     )
 
 
@@ -343,6 +345,62 @@ def test_the_split_loop_charges_every_segment_exactly_once():
         enemies.PHASE_BODY,
         enemies.PHASE_CURSOR,
     )
+
+
+@pytest.mark.oracle
+def test_the_status_bar_cost_is_a_function_of_the_energy_byte():
+    """$9508 pads to fixed columns, so passcost recomputes it from the energy alone."""
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.generate_machine(0x0042)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    with open(oracle.IMG, "rb") as fh:
+        mem[0x9508] = fh.read()[0x9508]  # un-stub plot_status_bar
+    for energy in range(40):
+        mem[mm.PLAYER_ENERGY] = energy
+        state["stop"] = False
+        c0 = cpu.processorCycles
+        oracle.call(cpu, mem, 0x9508, state=state)
+        assert cpu.processorCycles - c0 == passcost.status_bar_cycles(energy), energy
+
+
+@pytest.mark.oracle
+def test_the_drain_cost_model_matches_the_roms_own_1a08(monkeypatch):
+    """$1A08 priced per target kind against the real 6502: player, robot, tree, boulder.
+
+    $3470 is stubbed by the oracle (it vectors off the image); $9508 is not."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(passcost, "TUNE", 6)
+    cpu, mem, state = oracle.generate_machine(0x0335)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    with open(oracle.IMG, "rb") as fh:
+        mem[0x9508] = fh.read()[0x9508]
+    base = State.from_mem(bytes(mem))
+    kinds = {}
+    for slot in range(mm.NUM_SLOTS):
+        if base.obj_flags[slot] & 0x80 or slot == mem[mm.PLAYER_OBJECT]:
+            continue
+        kinds.setdefault(int(base.obj_type[slot]), slot)
+    cases = [(mem[mm.PLAYER_OBJECT], 0x40)] + [
+        (slot, flags)
+        for otype, slot in sorted(kinds.items())
+        for flags in ((0x00, 0x41) if otype == mm.T_TREE else (None,))
+    ]
+    for slot, flags in cases:
+        snap = bytes(mem)
+        if flags is not None and slot != mem[mm.PLAYER_OBJECT]:
+            mem[mm.OBJECTS_FLAGS + slot] = flags
+        mem[mm.TARGETED_OBJECT_SLOT] = slot
+        st = State.from_mem(bytes(mem))
+        _drained, model = enemies._reduce_object_energy(st, slot, 0)
+        state["stop"] = False
+        c0 = cpu.processorCycles
+        oracle.call(cpu, mem, 0x1A08, state=state)
+        assert cpu.processorCycles - c0 == model, (slot, flags)
+        mem[:] = snap
+    assert len(cases) >= 4
 
 
 @pytest.mark.oracle
