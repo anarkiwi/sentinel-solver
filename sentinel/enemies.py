@@ -107,7 +107,7 @@ def tick_cooldowns(state):
     if mem[mm.COOLDOWN_GATE] != 0:
         mem[mm.COOLDOWN_GATE] = (mem[mm.COOLDOWN_GATE] - 1) & 0xFF
         return passcost.COOLDOWN_TICK_GATE
-    cost = passcost.COOLDOWN_TICK_WALK
+    cost = passcost.COOLDOWN_TICK_WALK - passcost.COOLDOWN_TICK_LAST
     for addr in range(mm.ENEMIES_DRAINING_COOLDOWN, mm.ENEMIES_UPDATE_COOLDOWN + 8):
         if mem[addr] >= COOLDOWN_STICK:
             mem[addr] -= 1

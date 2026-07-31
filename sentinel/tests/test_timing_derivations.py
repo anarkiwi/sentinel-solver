@@ -241,7 +241,9 @@ def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
     assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
     steal = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
-    shorts = passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ
+    shorts = (
+        passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
+    )
     assert passcost.IRQ_CYCLES == steal + shorts + passcost.IRQ_BODY
     fg = irq["foreground_cpu_per_frame"]
     cheap = passcost.FOREGROUND_CYCLES - passcost.COOLDOWN_TICK_NO_CARRY
@@ -250,7 +252,10 @@ def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
         - passcost.COOLDOWN_TICK_WALK
         - 24 * passcost.COOLDOWN_TICK_BYTE_DEC
     )
-    assert cheap == fg["max"]  # the frame whose $130C does not carry
+    # The cheapest frame is the one whose $130C does not carry.  The fixture's own
+    # short_wall histogram is 3:1 over 119:120 -- one split entry a frame wraps its
+    # index and costs SHORT_IRQ_WRAP more -- so its foreground max is that 1 high.
+    assert cheap == fg["max"] - passcost.SHORT_IRQ_WRAP
     assert dear <= fg["min"]  # every cooldown byte decrementing
 
 

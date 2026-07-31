@@ -366,6 +366,8 @@ REGISTRY = {
     "COOLDOWN_TICK_WALK": _tick("$131C entry + the $132B reload + RTS"),
     "COOLDOWN_TICK_BYTE_STICK": _tick("$131E LDA/CMP/BCC + $1328 DEX/BPL"),
     "COOLDOWN_TICK_BYTE_DEC": _tick("+ the $1325 DEC, less the taken BCC"),
+    "COOLDOWN_TICK_LAST": _tick("$0C20 leaves by the $1329 BPL not taken, 1 short"),
+    "_COOLDOWN_TICK_LAST": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_LAST"),
     "_COOLDOWN_TICK_NO_CARRY": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_NO_CARRY"),
     "_COOLDOWN_TICK_GATE": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_GATE"),
     "_COOLDOWN_TICK_WALK": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_WALK"),
