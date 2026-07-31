@@ -160,40 +160,51 @@ def _edge(
         n = (dlo + 1) & 0xFF
         acc = ((dlo >> 1) ^ 0xFF) & 0xFF
         carry = 0
+        store = True
         if y0hi:  # $2FB6: run the rows above the inner area without storing
             cyc += passcost.OUTSIDE_ENTRY
             row = (row + 1) & 0xFF
             while True:
                 row = (row - 1) & 0xFF
                 cyc += passcost.OUTSIDE_STEEP_ROW
-                if row == 0:
+                if row == 0:  # $2FD6 backs up a row and re-enters at $2F67
                     cyc += passcost.OUTSIDE_STEEP_BACK
                     row = 0xFF
+                    n -= 1
+                    if n == 0:
+                        rows[2] = 0
+                        return cyc + passcost.STEEP_ENTER_END
+                    cyc += passcost.STEEP_ENTER
+                    store = False  # $2F58 accumulates before the first store
                     break
                 n -= 1
                 if n == 0:
                     return cyc + passcost.OUTSIDE_STEEP_END
+                cyc += passcost.OUTSIDE_STEEP_NEXT + passcost.OUTSIDE_STEEP_ACC
                 s = acc + dx + carry
                 carry = 1 if s > 0xFF else 0
                 acc = s & 0xFF
                 if carry:
+                    cyc += passcost.OUTSIDE_STEEP_COLUMN
                     s = acc - dlo
                     carry = 1 if s >= 0 else 0
                     acc = s & 0xFF
                     x = (x + step) & 0xFF
         while True:
-            tabv[row] = x
-            row = (row - 1) & 0xFF
-            cyc += passcost.STEEP_ROW
-            if row == 0:
-                cyc += passcost.STEEP_BOTTOM
-                rows[2] = 0
-                break
-            n -= 1
-            if n == 0:
-                cyc += passcost.STEEP_LAST
-                rows[2] = 0
-                break
+            if store:
+                tabv[row] = x
+                row = (row - 1) & 0xFF
+                cyc += passcost.STEEP_ROW
+                if row == 0:
+                    cyc += passcost.STEEP_BOTTOM
+                    rows[2] = 0
+                    break
+                n -= 1
+                if n == 0:
+                    cyc += passcost.STEEP_LAST
+                    rows[2] = 0
+                    break
+            store = True
             rows[R_STEEP] += 1  # $2F58 process_narrow_steep_line_loop
             s = acc + dx + carry
             carry = 1 if s > 0xFF else 0
@@ -211,8 +222,31 @@ def _edge(
     n = (dx + 1) & 0xFF
     acc = ((dx >> 1) ^ 0xFF) & 0xFF
     carry = 0
-    tabv[row] = x
-    cyc += passcost.SHALLOW_STORE
+    if y0hi:  # $2FDC: run the rows above the inner area without storing
+        cyc += passcost.OUTSIDE_ENTRY
+        row = (row + 1) & 0xFF
+        while True:
+            n -= 1
+            if n == 0:
+                return cyc + passcost.OUTSIDE_SHALLOW_END
+            cyc += passcost.OUTSIDE_SHALLOW_STEP
+            x = (x + step) & 0xFF
+            s = acc + dlo + carry
+            carry = 1 if s > 0xFF else 0
+            acc = s & 0xFF
+            if carry:
+                cyc += passcost.OUTSIDE_SHALLOW_ROW
+                s = acc - dx
+                carry = 1 if s >= 0 else 0
+                acc = s & 0xFF
+                row = (row - 1) & 0xFF
+                if row == 0:  # $2FFC backs up a row and re-enters at $2FB0
+                    cyc += passcost.OUTSIDE_SHALLOW_BACK
+                    row = 0xFF
+                    break
+    else:
+        tabv[row] = x
+        cyc += passcost.SHALLOW_STORE
     while True:
         n -= 1
         if n == 0:

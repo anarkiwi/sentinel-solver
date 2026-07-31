@@ -98,44 +98,46 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Five views rasterise their lines differently from the ROM
+## 5. One object vertex angle is ten units out
 
-**Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 10 of the 15 golden
-views. On the other five every polygon is now prepared, so what is left is how lines are routed
-and stepped, not which polygons are drawn. `$2F17` is **not** the mechanism.
+**Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 14 of the 15 golden
+views. The fifteenth, 2024,16,0, runs `$2FA1` twice more than the ROM, and the cause is not
+the fill: one object vertex's 16-bit horizontal angle is 10 units low, which moves its
+`screen_x` byte across a multiple of 32.
 
-**Measured — it is not the `$0B40` test.** `$2D93 convert_angles_into_double_coordinates`,
-which computes the `screen_x` high byte that `$2E3F`/`$2F17` read, is exact: fuzzed 4000 random
-(`$0BA0`, `$A800`, `$0011`, `$0029`) against the real `$2D93`, **0 mismatches**. So the model
-and the machine agree on every value the wide/narrow test is made of.
+**Measured.** Tracing every `$2EE4` of that view, four edges (polygons 3, 12 and 13, one
+object) disagree on their input `$0039` alone: 76 on the machine, 75 in the model. `$2D93`
+builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vertex's pair is
+`$FF80` on the machine against `$FF76` in the model — every other vertex of those polygons is
+byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
-**Closed — the missing prepares were `$2337`'s store.** `plot_polygon $2AA9` reads `$002C,Y`
-with Y = `$0010` and takes the other vertical buffer unless it is exactly 1 (`$2ABC CMP #$01`).
-`span_fill` has four stores that clear that: `$232B` and `$2340` put 0 in `$002D` (the right
-edge, or the clipped left edge, lies left of the buffer), `$2331` puts 0 in `$002C` (the left
-edge lies right of it), and `$2337`, the clip-right path, puts `$0061 ASL` — a row *length*,
-`$E0` for the play buffer — in `$002C`. The model had the other three and the `CMP`, but stored
-nothing at `$2337`, so a polygon clipped only on its right kept `$002C` = 1 and never bought its
-second section. Tracing every `$2AA9` of the real plot_world: 335,0,0 reaches `$2337` on one
-polygon and 2024,184,244 on three, two of them with no `$2331` row — the −1 and −2 exactly.
-With the store, model prepares equal ROM prepares on every view traced: **110/110** (335,0,0),
-**95/95** (2024,184,244), and 103, 238, 103, 123 on 42,160,240 / 777,32,0 / 0,136,248 /
-2024,16,0. Polygon counts match too (73, 66, 54, 156, 79, 83).
+**The suspect is `$0078`.** `divide_and_arctan`'s `$0E2C BIT $78` decides whether `$0E1F`
+interpolates between two `$3B00`/`$3C01` table entries (`$0E35`/`$0E50`) or returns the raw
+entry (`$0E32 JMP $0E74`), so a stale bit 6 or 7 changes the arctan's **value**, not just the
+~90 cycles already recorded below. `relative._divide_and_arctan` starts `$0078` at 0 and
+cannot know better without whole-zero-page emulation, and `objectcost`'s vertex transform runs
+that chain per vertex.
 
-**Measured — what is left**, as the golden's own loop counts minus the ROM's:
+**Closed — the storing loops' second entry.** `$2EE4`'s narrow steep and shallow DDAs each have
+an entry for a line starting above the inner area (`$2FB6`, `$2FDC`) that walks those rows
+without storing. Neither rejoins at the store: `$2FD9` lands on `$2F67`, so `DEY` then `$2F58`
+accumulate before the first `$2F5F`, and `$2FFF` lands on `$2FB0`, so `DEY` then `$2FA1` step
+before the first `$2FAD`. The model stored first, which put every column one row late and wrote
+one row below the polygon's bottom. That was the whole residual on 335,0,0 (-2 filled bytes)
+and 42,160,240 (-6), and the shallow entry was not modelled at all.
 
-| view | residual |
-| --- | --- |
-| 2024,184,244 | wide_steep +212, steep −161, span_rows +76, span_bytes +10, sections +5 |
-| 0,136,248 | steep +81, span_rows +41, shallow −9, edges +1, span_bytes −2 |
-| 42,160,240 | span_bytes −6 |
-| 335,0,0 | span_bytes −2 |
-| 2024,16,0 | shallow +2 |
-
-Two views are now within a handful of filled bytes. The `process_lines` route census that named
-`$2E3D`/`$2E45` as the routing suspect was taken before the `$2337` fix and a changed
-second-pass decision re-parities `$0010` for every polygon after it, so that census has to be
-re-taken before it means anything.
+**Closed — the harness ran `$2993` before `$245B`.** `populate_tile_visibility_bit_table
+$245B` calls `get_object_details $1ECC` per ray, which zeroes `$0034`-`$0036`, and `$2597`
+accumulates the march fraction into `$0035`; nothing rewrites `$0036`. So the raytrace leaves
+the buffer variables as march state (`$0035` = the last ray's fraction, `$0036` = 0), and the
+ROM re-runs `$2993` before every `plot_world` — `$35C0 JSR $1090` on the play redraw, `$994F`
+on a pan notch, `$1FE5 JSR $29C7` on a strip. The oracle harness called `$2993` first and
+`$245B` second, so its `plot_world` ran with `$0036` = 0, where every row's left edge reads as
+right of the buffer: the polygons before the first `$0010` toggle plotted no bytes and clipped,
+re-paritying `$0010` for the rest of the pass. Swapping the two calls is the whole residual on
+0,136,248 and 2024,184,244; it moves three golden views' cycles (0,136,248 +5350,
+2024,184,244 +13739, 42,192,0 -161) and neither `golden_object_cost.json` nor
+`golden_pan_cost.json` by a byte.
 
 **There is no unread-before-written `$0B40` in the ROM.** The image has exactly nine accesses:
 three writes (`$2DC0` in the wide vertex loop, `$2E58`/`$2E5B` in `$2E56`) and six reads
@@ -143,20 +145,10 @@ three writes (`$2DC0` in the wide vertex loop, `$2E58`/`$2E5B` in `$2E56`) and s
 line's own start and end vertex — and both entry paths to them write both: `$2E4F` only from a
 wide polygon, where `$2D93` has written every vertex, and `$2E5E` only through `$2E56`, which
 zeroes both endpoints first. So the ROM is self-consistent and a "stale `$0B40`" cannot be the
-mechanism.
+mechanism. `$2D93` itself is exact: fuzzed 4000 random (`$0BA0`, `$A800`, `$0011`, `$0029`)
+against the real routine, **0 mismatches**. `$2F17` is not the mechanism either.
 
-That relocates the problem. Keying the model's `sxh` by plottable slot, as the ROM does, was
-**tried and reverted**: it drops the exact views from 10 to 1, `edges` +12103 against `sections`
-+54 on 777,32,0 — about 224 extra edges a section, `nsec` saturating at its 255 cap. Probing
-`_section_line` for the first oversized `dxh` on that view returns `sxh[vx]` = `$00`,
-`sxh[vy]` = `$02`, and `$02` is a legitimate `$2D93` output (the byte is 0..3 or `$F8`..`$FF`),
-so the offending line is genuinely wide rather than reading anything stale. The 10 -> 1 is
-therefore a defect in the slot-keyed variant itself, not a ROM behaviour the corner keying was
-hiding, and it is a model-debugging job rather than a disassembly one. `$2DC9` never writing
-`$0B40` at all — where the model clears it — remains a real divergence and is part of that
-variant.
-
-Frame cost is 0.94-1.00× (median 0.975, mean absolute error 2.4%).
+Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.4%).
 
 **Also not derived.**
 
@@ -178,9 +170,8 @@ Frame cost is 0.94-1.00× (median 0.975, mean absolute error 2.4%).
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** A fresh `process_lines` route census against the fixed model, then debugging the
-slot-keyed variant against the corner-keyed one polygon at a time — the ROM side of that
-question is now closed.
+**Resolves.** Emulating `$0078` across a whole `$8475` object transform, which is the one byte
+between the model's arctan and the machine's.
 
 ## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 

@@ -54,9 +54,11 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
     mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
     mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
-    oracle.call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
-    state["stop"] = False
     oracle.call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    state["stop"] = False
+    # the raytrace leaves $0035/$0036 as $1ECC/$2597 march state; $35C0 JSR $1090
+    # re-runs $2993 before every plot_world, so the buffer variables are the table's.
+    oracle.call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -184,16 +186,16 @@ def test_object_base_never_overshoots_and_is_present():
 
 
 def _py65_occlusion(cpu, mem, state):
-    """Decode the real $3E80/$24DA bitmap after running $2993 then $245B in py65."""
+    """Decode the real $3E80/$24DA bitmap after running $245B then $2993 in py65."""
     player = mem[0x000B]
     mem[0x006E] = player
     for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
         mem[addr] = 0
     mem[0x0CCE] = 0x80
     mem[0x352C] = 0x60
-    oracle.call(cpu, mem, 0x2993, a=0, state=state)
-    state["stop"] = False
     oracle.call(cpu, mem, 0x245B, state=state)
+    state["stop"] = False
+    oracle.call(cpu, mem, 0x2993, a=0, state=state)
     vis = [[False] * 32 for _ in range(32)]
     for ty in range(32):
         for tx in range(32):
@@ -412,7 +414,8 @@ def _geometry(state, h, v):
 def test_fill_geometry_matches_the_rom_loop_counts():
     """The residual is a geometry question, so pin the geometry: the model's span rows,
     filled bytes and DDA iterations against the ROM's own $2377/$23DC/$2F58/$2FA1/
-    $3113/$316D/$2EE4/$3002 hit counts. Exact on most views; the rest are the residual.
+    $3113/$316D/$2EE4/$3002 hit counts. Exact on 14 of 15; 2024,16,0 is the object
+    vertex angle ([5](../../docs/open_items.md)), not the fill.
     """
     exact = 0
     for key, rec in sorted(json.load(open(GOLDEN)).items()):
@@ -422,6 +425,6 @@ def test_fill_geometry_matches_the_rom_loop_counts():
         exact += got == want
         for name, w in want.items():
             assert abs(got[name] - w) <= max(
-                4, 0.50 * w
+                2, 0.01 * w
             ), f"{key} {name}: {got[name]} != {w}"
-    assert exact >= 10, f"only {exact} views reproduce the ROM's loop counts"
+    assert exact >= 14, f"only {exact} views reproduce the ROM's loop counts"

@@ -751,6 +751,7 @@ foreground work folded into a settle constant.
 | `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00`, split into sections when a delta overflows a byte | `rendercost._edge`, `rendercost._section_line` | `golden_render_cost` |
 | `$2F5F`/`$2FAD` | (in `rasterise_polygon_edge`) | `STX $AD00`/`$AE00` — the only writes to the edge tables, one row at a time, the address low byte self-modified | `rendercost._edge` | `golden_render_cost` |
 | `$2F58` | (in `process_line`) | the steep inner loop | `projector` steep inner loop | `golden_render_cost` |
+| `$2FB6`/`$2FDC` | (in `rasterise_polygon_edge`) | the second entry for a line starting above the inner area: walk those rows without storing, then rejoin at `$2F67`/`$2FB0`, one column step ahead of the first store | `rendercost._edge` | `golden_render_cost` |
 | `$31CA` | `prnd` | 40-bit LFSR over `$0C7B-$0C7F`, 8 shuffles per call | `prng.Prng` | `golden_prng` |
 | `$339A` | `get_random_two_digit_bcd_number` | one `prnd` draw per call | `landscape._initialise_player_and_trees` | `golden_landscape` |
 | `$33ED` | `seed_prnd_from_landscape_number` | seeds `state[0..1]` from the typed number as packed BCD | `landscape.seed_for`, `core.landscape_from_digits` | `golden_prng`, `test_landscape_numbering.py` |
@@ -1071,9 +1072,30 @@ order the `$0010` buffer toggle sees.
 **The fill's geometry is pinned, not just its cost.** `rendercost` counts what the ROM's own
 loops count — `span_fill` rows and filled bytes, and each of the four DDAs' iterations — into
 the `rows`/`flags` scratch it already threads, and `golden_render_cost.json` carries the
-matching `$2377`/`$23DC`/`$2F58`/`$2FA1`/`$3113`/`$316D`/`$2EE4`/`$3002` hit counts. **10 of 15
+matching `$2377`/`$23DC`/`$2F58`/`$2FA1`/`$3113`/`$316D`/`$2EE4`/`$3002` hit counts. **14 of 15
 golden views reproduce all eight exactly** (`test_fill_geometry_matches_the_rom_loop_counts`),
-which turns a cost residual into a geometry one and is what found the `CLC` below.
+which turns a cost residual into a geometry one and is what found the `CLC` below. The
+fifteenth is an object vertex angle, not the fill
+([open item 5](open_items.md#5-one-object-vertex-angle-is-ten-units-out)).
+
+**A line that starts above the inner area steps before it stores.** `$2EE4`'s two narrow DDAs
+each have a second entry — `$2FB6` steep, `$2FDC` shallow — that walks the rows above the
+buffer without storing, and neither rejoins its storing loop at the store. `$2FD9` lands on
+`$2F67` (`DEY`, then `$2F58` accumulates) and `$2FFF` on `$2FB0` (`DEY`, then `$2FA1` steps),
+so the first row stored already carries one column step. Entering at the store instead put
+every column one row late and wrote one row past the polygon's bottom; that is worth a couple
+of filled bytes a view, and it is the whole residual on 335,0,0 and 42,160,240.
+
+**`$2993` runs after `$245B`, not before.** The raytrace calls `get_object_details $1ECC` per
+ray, which zeroes `$0034`-`$0036`, and `$2597` then accumulates the march fraction into
+`$0035`; `$0036` is left at 0. So after `populate_tile_visibility_bit_table` the buffer
+variables are march state, not the `$29BE`/`$29C1` table. Every ROM entry to `plot_world`
+re-initialises them first — `$35C0 JSR $1090` calls `$2993` for the play redraw, `$994F` for a
+pan notch, `$1FE5 JSR $29C7` for a strip — so the model is right to read the table, and it was
+the oracle harness that had the two calls the wrong way round. With `$0036` = 0 every row's
+left edge reads as right of the buffer, so the polygons before the first `$0010` toggle plotted
+no bytes and clipped, re-paritying `$0010` for the rest of the pass: that alone was the whole
+residual on 0,136,248 and 2024,184,244.
 
 **The two wide DDAs clear the carry every lap.** `$311C` and `$3170` `CLC` between the SBC and
 the next ADC, so `process_wide_line`'s accumulator never carries in; the two narrow loops

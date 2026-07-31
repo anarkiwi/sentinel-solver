@@ -38,9 +38,11 @@ def _rom_plot_object(img, h, v, target):
     mem[0x0CCE] = 0x80
     mem[0x352C] = 0x60
     mem[0x0051], mem[0x0052] = 0xF0, 0x30
-    oracle.call(cpu, mem, 0x2993, a=0, state=state)
-    state["stop"] = False
     oracle.call(cpu, mem, 0x245B, state=state)
+    state["stop"] = False
+    # $2AA9's span_fill reads $0035/$0036, which the raytrace clobbers: the ROM
+    # re-runs $2993 ($35C0 JSR $1090) between the two.
+    oracle.call(cpu, mem, 0x2993, a=0, state=state)
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp

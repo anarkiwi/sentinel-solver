@@ -81,9 +81,9 @@ def _build_golden():
             mem[addr] = 0
         mem[0x0CCE] = 0x80  # skip the raytracer's secret-code check
         mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
-        oracle.call(cpu, mem, 0x2993, a=projector.PLAY_MODE, state=state)
-        state["stop"] = False
         oracle.call(cpu, mem, 0x245B, state=state)  # occlusion table, view-independent
+        state["stop"] = False
+        oracle.call(cpu, mem, 0x2993, a=projector.PLAY_MODE, state=state)
         for v in PITCHES:
             for h in BEARINGS:
                 for d in range(4):

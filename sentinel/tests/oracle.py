@@ -156,9 +156,11 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
     mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
     mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
     mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window ($994b/$994d)
-    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
-    state["stop"] = False
     call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    state["stop"] = False
+    # $35C0 JSR $1090 re-runs $2993 after the raytrace, which leaves $0035/$0036
+    # holding $1ECC/$2597 march state: every ROM plot_world entry re-initialises them.
+    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -190,9 +192,11 @@ def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
     mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
     mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
     mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
-    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
-    state["stop"] = False
     call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    state["stop"] = False
+    # $35C0 JSR $1090 re-runs $2993 after the raytrace, which leaves $0035/$0036
+    # holding $1ECC/$2597 march state: every ROM plot_world entry re-initialises them.
+    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
