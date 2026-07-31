@@ -57,6 +57,22 @@ LINES_LEAVE_FLAG = 6 + passcost.LINES_NOTHING  # $2EBE LDA/BNE taken + $2ECA SEC
 LINES_LEAVE_ROWS = 14 + passcost.LINES_NOTHING  # ... the $2EC2 row compare instead
 LINES_OK = passcost.LINES_DONE + passcost.LINES_RTS  # carry clear: something to fill
 
+# rows[] carries $0004/$0006/$007F and then the counts the ROM's own loops make, so a
+# scene's geometry can be pinned against $2377/$23DC/$2F58/$2FA1/$3113/$316D hit counts.
+R_BOTTOM, R_TOP, R_NOTHING = 0, 1, 2
+R_STEEP, R_SHALLOW, R_WIDE_STEEP, R_WIDE_SHALLOW = 3, 4, 5, 6
+R_N_STEEP, R_N_SHALLOW, R_N_WSTEEP, R_N_WSHALLOW, R_N_EDGE, R_N_SECT = (
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+)
+R_N = 13
+F_CLIP_RIGHT, F_CLIP_LEFT, F_SPAN_ROWS, F_SPAN_BYTES = 0, 1, 2, 3
+F_N = 4
+
 QUAD, TRI_ONE, TRI_TWO = 0, 1, 2
 T_BYTE, T_PARITY, T_CORNER = 0, 1, 2  # tiles[] columns: 4 corners x (xlo,xhi,ylo,yhi)
 TILE_COLS = T_CORNER + 16
@@ -84,6 +100,7 @@ def _edge(
     the left ($AD00) or right ($AE00) edge table. ``rows`` carries ($0004, $0006, $007F).
     """
     cyc = passcost.EDGE_CALL + passcost.EDGE_HEAD
+    rows[R_N_EDGE] += 1
     if y1hi & 0x80:  # $2EF8: the line ends below the inner area
         cyc += passcost.EDGE_BOTTOM_LOW
         rows[0] = bot
@@ -138,6 +155,7 @@ def _edge(
     row = y0lo
     x = x0
     if dx < dlo:  # steep: at most one column step per row
+        rows[R_N_STEEP] += 1
         cyc += passcost.STEEP_SETUP
         n = (dlo + 1) & 0xFF
         acc = ((dlo >> 1) ^ 0xFF) & 0xFF
@@ -176,6 +194,7 @@ def _edge(
                 cyc += passcost.STEEP_LAST
                 rows[2] = 0
                 break
+            rows[R_STEEP] += 1  # $2F58 process_narrow_steep_line_loop
             s = acc + dx + carry
             carry = 1 if s > 0xFF else 0
             acc = s & 0xFF
@@ -186,6 +205,7 @@ def _edge(
                 acc = s & 0xFF
                 x = (x + step) & 0xFF
         return cyc
+    rows[R_N_SHALLOW] += 1
     cyc += passcost.SHALLOW_SETUP  # shallow: at most one row step per column
     store_flat = (step < 0) if tab == 0 else (step > 0)
     n = (dx + 1) & 0xFF
@@ -199,7 +219,8 @@ def _edge(
             cyc += passcost.SHALLOW_LAST
             rows[2] = 0
             break
-        cyc += passcost.SHALLOW_STEP
+        cyc += passcost.SHALLOW_STEP  # $2FA1 the shallow loop's own column step
+        rows[R_SHALLOW] += 1
         x = (x + step) & 0xFF
         s = acc + dlo + carry
         carry = 1 if s > 0xFF else 0
@@ -257,14 +278,14 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
     cyc += acyc
     row = (y0lo + (1 if area_v else 0)) & 0xFF
     x = x0
-    acc = 0
-    carry = 0
     steep = dx < dlo
     if steep:
+        rows[R_N_WSTEEP] += 1
         cyc += passcost.WIDE_STEEP_SETUP
         n = (dlo + 1) & 0xFF
         acc = ((dlo >> 1) ^ 0xFF) & 0xFF
     else:
+        rows[R_N_WSHALLOW] += 1
         cyc += passcost.WIDE_SHALLOW_SETUP
         n = (dx + 1) & 0xFF
         acc = ((dx >> 1) ^ 0xFF) & 0xFF
@@ -295,15 +316,13 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
             if n == 0:
                 cyc += passcost.WIDE_LEAVE
                 break
-            cyc += passcost.WIDE_STEEP_STEP
-            s = acc + dx + carry
-            carry = 1 if s > 0xFF else 0
+            cyc += passcost.WIDE_STEEP_STEP  # $3113 process_wide_steep_line_loop
+            rows[R_WIDE_STEEP] += 1
+            s = acc + dx  # $311C CLCs every lap, so no carry comes in
             acc = s & 0xFF
-            if carry:
+            if s > 0xFF:
                 cyc += passcost.WIDE_STEEP_COLUMN
-                s = acc - dlo
-                carry = 1 if s >= 0 else 0
-                acc = s & 0xFF
+                acc = (acc - dlo) & 0xFF
                 x = (x + step) & 0xFF
                 if x == wrap:  # $311A CPX $0076: the line crossed into the next area
                     cyc += passcost.WIDE_STEEP_AREA_H
@@ -311,25 +330,23 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
                     mode, acyc = _wide_area(area_v, area_h)
                     cyc += acyc
             continue
-        cyc += passcost.WIDE_SHALLOW_STEP
         n -= 1
-        if n == 0:
+        if n == 0:  # $3183 BNE not taken: the line is done, $316D never runs again
             cyc += passcost.WIDE_LEAVE
             break
+        cyc += passcost.WIDE_SHALLOW_STEP  # $316D the shallow loop's own column step
+        rows[R_WIDE_SHALLOW] += 1
         x = (x + step) & 0xFF
         if x == wrap:
             cyc += passcost.WIDE_SHALLOW_AREA_H
             area_h = (area_h + step) & 0xFF
             mode, acyc = _wide_area(area_v, area_h)
             cyc += acyc
-        s = acc + dlo + carry
-        carry = 1 if s > 0xFF else 0
+        s = acc + dlo  # $3170 CLCs every lap, so no carry comes in
         acc = s & 0xFF
-        if carry:
+        if s > 0xFF:
             cyc += passcost.WIDE_SHALLOW_ROW
-            s = acc - dx
-            carry = 1 if s >= 0 else 0
-            acc = s & 0xFF
+            acc = (acc - dx) & 0xFF
             row = (row - 1) & 0xFF
             if row == 0:
                 cyc += passcost.WIDE_SHALLOW_AREA_V
@@ -349,6 +366,7 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
 def _section_line(vxy, left, right, sxb, sxh, vx, vy, dlo, dhi, tab, rows, top, bot):
     """process_line $3002: halve the line until both deltas fit a byte, then rasterise
     each section in turn."""
+    rows[R_N_SECT] += 1
     cyc = passcost.SECTION_HEAD + passcost.SECTION_INVERT + passcost.SECTION_TEST
     dxl = (sxb[vy] - sxb[vx]) & 0xFF
     dxh = (sxh[vy] - sxh[vx] - (1 if sxb[vy] < sxb[vx] else 0)) & 0xFF
@@ -446,6 +464,7 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
     row = p06
     while True:
         cyc += passcost.SPAN_ROW_TEST
+        flags[F_SPAN_ROWS] += 1
         r, ln = right[row], left[row]
         if r < ln:
             return cyc + passcost.SPAN_ROW_EMPTY
@@ -481,7 +500,9 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
                     middle = True
             if middle:
                 cyc += passcost.SPAN_MIDDLE
-                cyc += passcost.SPAN_BYTE * (((r_off - l_off) & 0xFF) // 8 - 1)
+                nbytes = ((r_off - l_off) & 0xFF) // 8 - 1
+                flags[F_SPAN_BYTES] += nbytes
+                cyc += passcost.SPAN_BYTE * nbytes
         if row == p04:
             cyc += passcost.SPAN_LAST
             break
@@ -554,7 +575,7 @@ def _plot_polygon(
                 sxh[v] = h
                 cyc += passcost.PREP_WIDE_LAST if j == 0 else passcost.PREP_WIDE_VERTEX
         cyc += passcost.LINES_HEAD  # process_lines $2DF2
-        rows[0], rows[1], rows[2] = 0xFF, 0x00, 0xFF
+        rows[R_BOTTOM], rows[R_TOP], rows[R_NOTHING] = 0xFF, 0x00, 0xFF
         p30, p31 = 0xFF, 0x00
         npoint = 0
         lastx = vlist[0]
@@ -794,8 +815,8 @@ def tile_workspace():
         np.zeros(4, dtype=np.int64),
         np.zeros(4, dtype=np.int64),
         np.zeros(5, dtype=np.int64),
-        np.zeros(3, dtype=np.int64),
-        np.zeros(2, dtype=np.int64),
+        np.zeros(R_N, dtype=np.int64),
+        np.zeros(F_N, dtype=np.int64),
     )
 
 
@@ -814,8 +835,8 @@ def fill_cycles(tiles, ntiles, s4b, s66, sect0, bufs, top, bot):
         np.zeros(4, dtype=np.int64),
         np.zeros(4, dtype=np.int64),
         np.zeros(5, dtype=np.int64),
-        np.zeros(3, dtype=np.int64),
-        np.zeros(2, dtype=np.int64),
+        np.zeros(R_N, dtype=np.int64),
+        np.zeros(F_N, dtype=np.int64),
     )
     cyc = 0
     sect = sect0

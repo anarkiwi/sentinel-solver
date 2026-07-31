@@ -5,12 +5,15 @@ examination count from py65 (no ROM bytes); the non-oracle test asserts the proj
 reproduces the examination count byte-for-byte and the frame cost within tolerance.
 """
 
+import collections
 import json
 import os
 
 import pytest
 
-from sentinel import landscape, projector, rendercost
+import numpy as np
+
+from sentinel import landscape, objmodel, projector, rendercost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
@@ -65,8 +68,10 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     n_examine = n_filled = examine_cycles = object_cycles = 0
     in_exam = in_obj = False
     exam_sp = obj_sp = steps = 0
+    hits = collections.Counter()
     while cpu.pc != ret and steps < 20_000_000:
         pc = cpu.pc
+        hits[pc] += 1
         if pc == 0x2845 and not in_exam:  # $2845 subtree, the trig it calls included
             in_exam, exam_sp = True, cpu.sp
             n_examine += 1
@@ -95,6 +100,16 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
         "terrain_fill_cycles": total - examine_cycles - object_cycles,
         "n_examine": n_examine,
         "n_filled": n_filled,
+        "geometry": {  # the loops whose iteration counts the fill model must reproduce
+            "span_rows": hits[0x2377],
+            "span_bytes": sum(hits[a] for a in range(0x23DE, 0x2458, 4)),
+            "steep": hits[0x2F58],
+            "shallow": hits[0x2FA1],
+            "wide_steep": hits[0x3113],
+            "wide_shallow": hits[0x316D],
+            "edges": hits[0x2EE4],
+            "sections": hits[0x3002],
+        },
     }
 
 
@@ -345,3 +360,68 @@ def test_the_walk_around_the_examines_is_priced():
         assert walk > 0, key
         walks.append(walk)
     assert len(set(walks)) > 10, "the walk term is not varying with the scene"
+
+
+def _geometry(state, h, v):
+    """The fill model's own loop counts for one view, the object stacks included."""
+    from sentinel import objectcost
+
+    setup = projector._setup(state, h, v, state.player, projector.PLAY_MODE)
+    fill = projector.project_scene(state, h, v)[3]
+    bufs, sect = rendercost.buffers(projector.PLAY_MODE)
+    tile_work, obj_work = rendercost.tile_workspace(), objectcost.workspace()
+    left, right = rendercost.edge_tables()
+    objectcost.pass_cycles(
+        np.frombuffer(state.mem, dtype=np.uint8),
+        objectcost.scratch_zp(),
+        objectcost.model_arrays(),
+        fill,
+        len(fill),
+        (setup["quadrant"] - 2) & 0xFF,
+        (setup["quadrant"] * 4) & 0xFF,
+        sect,
+        bufs,
+        rendercost.SCREEN_TOP,
+        rendercost.SCREEN_BOTTOM,
+        state.player,
+        state.player,
+        h,
+        v,
+        tile_work,
+        obj_work,
+        left,
+        right,
+    )
+    rows = tile_work[4] + obj_work[4]
+    flags = tile_work[5] + obj_work[5]
+    return {
+        "span_rows": int(flags[rendercost.F_SPAN_ROWS]),
+        "span_bytes": int(flags[rendercost.F_SPAN_BYTES]),
+        "steep": int(rows[rendercost.R_STEEP]),
+        "shallow": int(rows[rendercost.R_SHALLOW]),
+        "wide_steep": int(rows[rendercost.R_WIDE_STEEP]),
+        "wide_shallow": int(rows[rendercost.R_WIDE_SHALLOW]),
+        "edges": int(rows[rendercost.R_N_EDGE]),
+        "sections": int(rows[rendercost.R_N_SECT]),
+    }
+
+
+@pytest.mark.skipif(
+    not objmodel.available(), reason="the object stacks need the game image"
+)
+def test_fill_geometry_matches_the_rom_loop_counts():
+    """The residual is a geometry question, so pin the geometry: the model's span rows,
+    filled bytes and DDA iterations against the ROM's own $2377/$23DC/$2F58/$2FA1/
+    $3113/$316D/$2EE4/$3002 hit counts. Exact on most views; the rest are the residual.
+    """
+    exact = 0
+    for key, rec in sorted(json.load(open(GOLDEN)).items()):
+        ls, h, v = (int(x) for x in key.split(","))
+        want = rec["geometry"]
+        got = _geometry(landscape.generate(ls), h, v)
+        exact += got == want
+        for name, w in want.items():
+            assert abs(got[name] - w) <= max(
+                4, 0.50 * w
+            ), f"{key} {name}: {got[name]} != {w}"
+    assert exact >= 10, f"only {exact} views reproduce the ROM's loop counts"

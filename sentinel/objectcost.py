@@ -473,8 +473,8 @@ def workspace():
         np.zeros(n, dtype=np.int64),
         np.zeros(n, dtype=np.int64),
         np.zeros(5, dtype=np.int64),
-        np.zeros(3, dtype=np.int64),
-        np.zeros(2, dtype=np.int64),
+        np.zeros(rendercost.R_N, dtype=np.int64),
+        np.zeros(rendercost.F_N, dtype=np.int64),
     )
 
 
