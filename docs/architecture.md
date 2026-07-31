@@ -295,16 +295,27 @@ in the jennings oracle:
 | `TILE_SCAN_*` | `$1AB0` walks its own loop: empty slot / rejected / tile fetch (`$2BA8`) | 12 / 24 / +61 |
 | `MEANIE_SCAN_*` | `$198F` walks the search counter, not a slot index | 26 / 34 / +42 |
 | `ROTATE` | `$1805..$1884`, its `$1AF4`/`$1973`/`$3470` callees at 31/32/`TUNE_ROTATE` | 454 |
-| `ROTATE_REDRAW` | `$1F9F update_object_on_screen`: the redraw a turn, a drain or a discharge forces | 1723 |
+| `REDRAW_CALL`/`REDRAW_NONE` | `$1881 JSR $1F9F` `update_object_on_screen`, off-screen | 6 / 23 |
+| `SPAN_*` | `$209B calculate_object_screen_span`, branch by branch | 1..33 |
 
 A rotation is the single most expensive thing a gated enemy does and none of it is the
-turn: `$1805` adds the step in 44 cycles and then spends 1723 redrawing the enemy through
-`update_object_on_screen`. Measured live it varies with the enemy's screen geometry
-(1576..1843 over 16 rotations, three boards — `fixtures/live_pass_cycles.json`), so the
-model charges the mean, and that mean is 2.5% of a whole frame's foreground. The same
-`$1F9F` is spent by every `$1876` exit — a drain's and a discharge's redraw as well as a
-turn's — so the mean is charged three times over
-([8](open_items.md#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget)).
+turn: `$1805` adds the step in 44 cycles and then redraws the enemy through
+`update_object_on_screen`. That redraw is **bimodal**, so it is not one number.
+`$1F9F` first calls `$209B`, which takes the object's bearing and horizontal distance
+from `$8401`, re-arctans its `$2112` half-angle over that distance through `$933D`, and
+turns bearing +- half-angle into a left column `$0C62` and a width `$0C69`. An object
+with no span on the 40-column screen ends at `$1F93`, and that whole path is counted
+from state by `relative.update_object_on_screen_cycles` — 1568..1858 on ls0042/ls0335/
+ls9795, cycle-exact against the ROM's own `$209B`/`$1F9F`
+(`test_the_object_screen_span_is_exact_against_the_roms_own_209b`). All 16 live
+rotations in `fixtures/live_pass_cycles.json` (1576..1843) are that branch.
+
+An object that *does* have a span is a different animal: `$1FC2` re-points the camera at
+the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle) and `$1FFC JSR $2625` replots it,
+0.40..0.85 M cycles on ls9795 — 250..500x the branch above, and a `plot_world` cost, not
+an enemy-clock one. The model charges up to `$1FA4` and reports the column width;
+pricing the replot is `projector.render_cost`'s job
+(`projector.BASE_CYCLES` is itself unmeasured, so this is open on both sides).
 
 `$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
 pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
@@ -617,7 +628,7 @@ foreground work folded into a settle constant.
 | `$17B2` | `find_drainable_robot_loop` | scans all 64 slots for a visible type-0 robot | `enemies._consider_enemy_state` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$17F9` | (in `consider_enemy_state`) | the rotate branch, reached only when nothing else fired | `enemies._consider_enemy_state`; forecast `playerbase._cone_onset` | `golden_enemies`, `oracle.step_enemy_round`; the rotation stall is unmodelled [3](open_items.md#3-the-gaze-forecast-assumes-rotation-never-stalls) |
 | `$17FB` | (in `consider_enemy_state`) | `LDA $0C28,X / CMP #$02 / BCC $1805` — the rotate fires only while the rotation cooldown is below the stick value; otherwise `JMP $16D6`, the round tail | `enemies._rotate_enemy`, `COOLDOWN_STICK` | `golden_enemies`, `oracle.step_enemy_round` |
-| `$1805` | `rotate_enemy` | one fixed ±20-unit step, then `$187B JSR $1F9F` redraws the enemy | `enemies._rotate_enemy`, `passcost.ROTATE`/`ROTATE_REDRAW` | `golden_enemies`, `oracle.step_enemy_round`, `test_rotate_redraw_matches_the_live_object_redraw` |
+| `$1805` | `rotate_enemy` | one fixed ±20-unit step, then `$187B JSR $1F9F` redraws the enemy | `enemies._rotate_enemy`, `passcost.ROTATE`, `relative.update_object_on_screen_cycles` | `golden_enemies`, `oracle.step_enemy_round`, `test_the_object_screen_span_is_exact_against_the_roms_own_209b` |
 | `$1813` | (in `rotate_enemy`) | reloads the rotation cooldown to 200 | `enemies.ROTATION_COOLDOWN_RELOAD` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$1825` | `target_object` | records the target and ARMS `$0C20` to 120 rounds | `enemies._target_object`, `DRAINING_COOLDOWN_RELOAD` | `golden_enemies`, `oracle.step_enemy_round` |
 | `$1838` | (in `consider_reducing_object`) | only FULL sight drains | `enemies._target_object` | `golden_enemies`, `oracle.step_enemy_round` |

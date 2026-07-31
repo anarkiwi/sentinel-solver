@@ -351,9 +351,11 @@ def _see_cost(see):
     return see["cycles"]
 
 
-def _body_tail():
-    """$1876..$1884: every exit that redraws the object it just touched."""
-    return passcost.BODY_TAIL + passcost.ROTATE_REDRAW
+def _body_tail(state, target):
+    """$1876..$1884: every exit that redraws the object it just touched ($187B STX
+    $91 names it), and the $1F9F redraw that object's own screen span prices."""
+    redraw = relative.update_object_on_screen_cycles(state, target)[0]
+    return passcost.BODY_TAIL + redraw
 
 
 def _exposure_byte(see):
@@ -392,7 +394,7 @@ def _target_object(state, enemy, target, exposure):
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         if target == mem[mm.PLAYER_OBJECT]:  # $184D: a drained player skips the redraw
             return BODY_DONE, cost + passcost.TARGET_DRAIN_PLAYER
-        return BODY_DONE, cost + passcost.TARGET_DRAIN_OBJ + _body_tail()
+        return BODY_DONE, cost + passcost.TARGET_DRAIN_OBJ + _body_tail(state, target)
     # $184D: only the head -> hunt a tree to convert
     return BODY_MAKE_MEANIE, cost + passcost.TARGET_MEANIE
 
@@ -448,10 +450,10 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
 
         if stage == BODY_DISCHARGE:
             # no_meanie ($1773): a discharge makes the enemy skip its drain ($177A)
-            discharged, dcost = _consider_discharging_enemy_energy(state, enemy)
+            discharged, dcost, slot = _consider_discharging_enemy_energy(state, enemy)
             budget -= dcost
             if discharged:  # $177A: the tail redraws, then the update is over
-                budget -= passcost.DISCHARGED + _body_tail()
+                budget -= passcost.DISCHARGED + _body_tail(state, slot)
                 return budget, BODY_DONE, 0, -1
             budget -= passcost.NO_DISCHARGE
             # $177F: only mid meanie-hunt does the enemy act on the considering flag
@@ -474,7 +476,12 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 drain = _reduce_object_energy(state, tb, enemy)[1]  # $17EA
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
                 budget -= passcost.HUNT_HIT + passcost.DRAIN_CALL + drain
-                return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
+                return (
+                    budget - passcost.DRAIN_TAIL - _body_tail(state, tb),
+                    BODY_DONE,
+                    0,
+                    -1,
+                )
             budget -= passcost.HUNT_MISS
             mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (  # $1792
                 mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
@@ -537,7 +544,12 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 drain = _reduce_object_energy(state, tb, enemy)[1]
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
                 budget -= passcost.TREE_HIT + passcost.DRAIN_CALL + drain
-                return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
+                return (
+                    budget - passcost.DRAIN_TAIL - _body_tail(state, tb),
+                    BODY_DONE,
+                    0,
+                    -1,
+                )
             budget -= passcost.TREE_NONE
             stage, index = BODY_ROTATE, 0
             continue
@@ -547,7 +559,7 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
                 _rotate_enemy(state, enemy)
                 budget -= passcost.ROTATE_GATE + passcost.ROTATE
-                budget -= passcost.ROTATE_REDRAW
+                budget -= relative.update_object_on_screen_cycles(state, enemy)[0]
                 return budget, BODY_DONE, 0, -1
             return budget - passcost.ROTATE_GATE_HELD, BODY_DONE, 0, -1
 
@@ -719,7 +731,8 @@ def _update_meanie(state, enemy, budget, index):
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_ROTATE
         start_tune(state, mm.SOUND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
-        budget -= passcost.MEANIE_ROTATE + passcost.ROTATE_REDRAW
+        budget -= passcost.MEANIE_ROTATE
+        budget -= relative.update_object_on_screen_cycles(state, meanie)[0]
         return budget, BODY_DONE, 0
     if target != mem[mm.PLAYER_OBJECT]:  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(state, enemy)
@@ -812,26 +825,26 @@ def _consider_discharging_enemy_energy(state, enemy):
     return one unit to the landscape as a TREE on a random flat tile no higher than
     the below-enemies ceiling ($0C06), and decrement the bank.  Returns True if a tree
     was discharged (the ROM then dithers and SKIPS this enemy's drain/rotate for the
-    update, $177A), plus the cycles the call cost."""
+    update, $177A), the cycles the call cost, and the slot $1A7D leaves in $91."""
     mem = state.mem
     if mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0:
-        return False, passcost.DISCHARGE_NONE  # $1A63: nothing to discharge
+        return False, passcost.DISCHARGE_NONE, -1  # $1A63: nothing to discharge
     prng = Prng().load(mem)
     slot, ccost = _create_object(state, mm.T_TREE)  # $1A67 create_object(type 2)
     cost = passcost.DISCHARGE_CREATE + ccost
     if slot is None:
         prng.store(mem)
-        return False, cost
+        return False, cost, -1
     placed, pcost = _put_object_in_random_tile_below_z(
         state, slot, mem[mm.ENEMY_BELOW_Z], prng
     )
     prng.store(mem)
     cost += passcost.DISCHARGE_PLACE + pcost
     if not placed:  # $1A70: no tile found -> abandon (slot stays flagged empty)
-        return False, cost + passcost.DISCHARGE_ABANDON
+        return False, cost + passcost.DISCHARGE_ABANDON, -1
     a = mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy
     mem[a] = (mem[a] - 1) & 0xFF  # $1A7A DEC
-    return True, cost + passcost.DISCHARGE_DONE
+    return True, cost + passcost.DISCHARGE_DONE, slot
 
 
 def do_hyperspace(state):

@@ -246,6 +246,10 @@ def _tick(note):
 
 _ROW = "ray-march/sweep iteration cap; unmeasured"
 _RELOAD = "ROM cooldown reload value; no derivation test"
+_REDRAW = (
+    "$1F9F update_object_on_screen around the $209B screen-span query, counted "
+    "instruction by instruction against the ROM's own $209B/$1F9F"
+)
 _GUARD = "wall-clock guard; unmeasured"
 
 REGISTRY = {
@@ -326,16 +330,20 @@ REGISTRY = {
         "test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count",
     ),
     "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
-    "ROTATE_REDRAW": entry(
+    "REDRAW_CALL": _d(_PC, _REDRAW),
+    "REDRAW_NONE": _d(_PC, _REDRAW),
+    "REDRAW_PLOT_ENTRY": entry(
         _PC,
         MEASURED,
-        "$1F9F update_object_on_screen, the redraw a $1805 rotation forces; the mean "
-        "of the 16 live rotations in fixtures/live_pass_cycles.json (1576..1843, 3 "
-        "boards). It varies with the enemy's screen geometry, so the mean is a "
-        "central value, not a bound",
-        "test_rotate_redraw_matches_the_live_object_redraw",
+        "$1FA2 BCS not taken. Past it $1F9F re-points the camera at the object and "
+        "replots its <=20-column strip through $1FFC JSR $2625, 0.40..0.85 M cycles "
+        "on ls9795 -- a plot_world cost, priced by projector.render_cost and NOT "
+        "charged here (separately recorded in docs/open_items.md)",
+        "test_the_object_screen_span_is_exact_against_the_roms_own_209b",
     ),
-    "_ROTATE_REDRAW": _d(_ENJ, "jit alias of passcost.ROTATE_REDRAW"),
+    "_REDRAW_CALL": _d(_ENJ, "jit alias of passcost.REDRAW_CALL"),
+    "_REDRAW_NONE": _d(_ENJ, "jit alias of passcost.REDRAW_NONE"),
+    "_REDRAW_PLOT_ENTRY": _d(_ENJ, "jit alias of passcost.REDRAW_PLOT_ENTRY"),
     "PARTIAL_ARM": entry(
         _PC,
         DERIVED,

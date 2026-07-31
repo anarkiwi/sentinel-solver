@@ -120,6 +120,18 @@ ENERGY_IN_OBJECTS = {
 }
 ENERGY_MASK = 0x3F  # set_player_energy $2148 AND #$3F
 
+# object_screen_half_angle $2112: half the angle an object subtends, the $209B size term.
+OBJECT_SCREEN_HALF_ANGLE = {
+    T_ROBOT: 0x3E,
+    T_SENTRY: 0x46,
+    T_TREE: 0x72,
+    T_BOULDER: 0x7A,
+    T_MEANIE: 0x4A,
+    T_SENTINEL: 0x4E,
+    T_PLATFORM: 0xC1,
+}
+OBJECT_SIZE_FLOOR = 0x0CD4  # a pending size the next $209B takes as a minimum
+
 # A tiles_table byte >= OBJECT_TILE holds an object index in its low 6 bits;
 # below it the byte is (height<<4)|slope terrain.
 OBJECT_TILE = 0xC0

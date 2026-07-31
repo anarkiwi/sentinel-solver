@@ -392,7 +392,31 @@ TARGET_DRAIN_PLAYER = 6  # ... BCS $1884 taken 3 + JMP $16D6 3
 ROTATE_GATE = 12  # $17F9 LDX 3 + LDA $0C28,X 4 + CMP 2 + $1800 BCC $1805 taken 3
 ROTATE_GATE_HELD = 14  # ... BCC not taken 2 + $1802 JMP $16D6 3: too soon to turn
 ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 straight
-ROTATE_REDRAW = 1723  # $1F9F update_object_on_screen; MEASURED 1576..1843, 16 rotations
+# $1F9F update_object_on_screen: no screen span, no replot -- see relative.py $209B.
+REDRAW_CALL = 6  # $1F9F JSR $209B
+REDRAW_NONE = 23  # $1FA2 BCS $1F93 taken 3 + the $1F93 flag reset and RTS 20
+REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is the strip replot, unpriced
+SPAN_HEAD = 6  # $209B LDY $91 3 + CPY $0B 3
+SPAN_PLAYER = 12  # $209F BEQ $2110 taken 4, page crossed, + $2110 SEC/RTS 8
+SPAN_ANGLES = 8  # ... BEQ not taken 2 + $20A1 JSR $8401 6
+SPAN_SIZE = 33  # $20A4..$20BB: the $2112 half-angle, the $0CD4 floor, the JSR $933D
+SPAN_SIZE_FLOOR = 3  # $0CD4 is larger: BCS not taken 2 + $20B1 LDA $0CD4 4, less 3
+SPAN_LEFT = 12  # $20BE..$20C4: bearing - half-angle, low byte
+SPAN_LEFT_HI = 7  # $20C6 LDA $0C57 4 + SBC $8B 3
+SPAN_LEFT_NEG = 7  # $20CB BPL nt 2 + LDA #0 2 + $20CF BEQ $20D8 taken 3: clip to 0
+SPAN_LEFT_POS = 12  # ... BPL taken 3 + $20D1 ASL $74 / ROL A / CMP #$28 9
+SPAN_OFF_RIGHT = 12  # $20D6 BCS $2110 taken 4, page crossed, + SEC/RTS 8
+SPAN_LEFT_ONSCREEN = 2  # ... BCS not taken
+SPAN_LEFT_OK = 8  # $20D8/$20DB: the left column into $0C62 and $211C
+SPAN_RIGHT = 12  # $20DE..$20E4: bearing + half-angle, low byte
+SPAN_RIGHT_HI = 7  # $20E6 LDA $0C57 4 + ADC $8B 3
+SPAN_BEHIND = 12  # $20EB BMI $2110 taken 4, page crossed, + SEC/RTS 8
+SPAN_RIGHT_OK = 11  # ... BMI not taken 2 + $20ED ASL $74 / ROL A / CMP #$28 9
+SPAN_WIDTH_CLIP = 1  # $20F2 BCC not taken 2 + $20F4 LDA #$27 2, less the taken 3
+SPAN_WIDTH = 21  # $20F2 BCC taken 3 + $20F6..$2100: right + 1 - left into $0C6A/$211B
+SPAN_ZERO_WIDTH = 11  # $2103 BEQ $2110 taken 3 + SEC/RTS 8
+SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RTS 8
+SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
 

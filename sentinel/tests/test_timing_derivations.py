@@ -9,7 +9,7 @@ import pytest
 
 from driver import kbd_aim
 from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
-from sentinel import pancost, passcost, playerbase, projector
+from sentinel import pancost, passcost, playerbase, projector, relative
 from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -209,8 +209,11 @@ def _mode(hist):
     return int(max(hist.items(), key=lambda kv: kv[1])[0])
 
 
-def test_rotate_redraw_matches_the_live_object_redraw():
-    """ROTATE_REDRAW is the mean $1F9F a rotation forces, over every live rotation."""
+def test_the_priced_redraw_brackets_every_live_rotation_redraw():
+    """Every live $1F9F is a $209B reject, and the modelled rejects bracket them.
+
+    The redraw is bimodal, so no single number is right; what the live capture
+    constrains is the off-screen branch, the only one 16 rotations ever took."""
     samples = [
         c
         for board, vals in _live_cycles()["rotation_redraw_1f9f"].items()
@@ -218,8 +221,18 @@ def test_rotate_redraw_matches_the_live_object_redraw():
         for c in vals
     ]
     assert len(samples) >= 16
-    assert min(samples) <= passcost.ROTATE_REDRAW <= max(samples)
-    assert abs(passcost.ROTATE_REDRAW - sum(samples) / len(samples)) <= 1.0
+    modelled = []
+    for digits in ("0042", "0335", "9795"):
+        state = Game.typed(int(digits)).state
+        for slot in range(mm.NUM_SLOTS):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            for h_angle in range(0, 256, 8):
+                state.obj_h_angle[state.mem[mm.PLAYER_OBJECT]] = h_angle
+                cycles, columns = relative.update_object_on_screen_cycles(state, slot)
+                if columns == 0:
+                    modelled.append(cycles)
+    assert min(modelled) <= min(samples) and max(samples) <= max(modelled)
 
 
 def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
@@ -591,7 +604,9 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
-    monkeypatch.setattr(passcost, "ROTATE_REDRAW", 6)
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0)
+    )
     monkeypatch.setattr(passcost, "ROTATE", passcost.ROTATE - 323 + 6)
     monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
     cpu, mem, state = oracle.generate_machine(landscape)
@@ -615,3 +630,53 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
             assert model == rom, f"ls{landscape:04x} slot {x}: {model} != {rom}"
             checked += 1
     assert checked > 50
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_object_screen_span_is_exact_against_the_roms_own_209b(landscape):
+    """$209B priced and decided from state, cycle for cycle, against the real 6502.
+
+    Every occupied slot at every 8th player facing, so all four exits ($209F the
+    player, $20D6 off the right, $20EB left of the view, $2103 zero width) and the
+    on-screen branch are covered; the whole $1F9F is then checked on the rejects."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, mstate = _oracle().generate_machine(landscape)
+    mem[0xFFF0] = 0x60
+    player = mem[mm.PLAYER_OBJECT]
+    seen = set()
+    for slot in list(range(8)) + [player]:
+        if mem[mm.OBJECTS_FLAGS + slot] & 0x80 and slot != player:
+            continue
+        for h_angle in range(0, 256, 8):
+            mem[mm.OBJECTS_H_ANGLE + player] = h_angle
+            mem[0x0091], mem[0x006E] = slot, player
+            rom = _run(cpu, mem, mstate, 0x209B)
+            rom_visible = not cpu.p & 0x01
+            state = State(bytearray(mem))
+            visible, left, columns, cycles = relative.object_screen_span(state, slot)
+            assert (cycles, visible) == (rom, rom_visible), (slot, h_angle)
+            if visible:
+                assert (left, columns) == (mem[0x0C62], mem[0x0C69])
+                seen.add("visible")
+                continue
+            seen.add("player" if slot == player else "reject")
+            rom = _run(cpu, mem, mstate, 0x1F9F)
+            state = State(bytearray(mem))
+            assert relative.update_object_on_screen_cycles(state, slot) == (rom, 0)
+    assert seen == {"visible", "reject", "player"}
+
+
+def _oracle():
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    return oracle
+
+
+def _run(cpu, mem, mstate, addr):
+    """One JSR-style call at `addr` on the oracle machine; returns its cycles."""
+    mstate["stop"] = False
+    c0 = cpu.processorCycles
+    _oracle().call(cpu, mem, addr)
+    return cpu.processorCycles - c0

@@ -29,6 +29,9 @@ from sentinel.los_jit import (  # noqa: E402
 ARCTAN_LO = np.array(_ARCTAN_LO, dtype=np.int64)
 ARCTAN_HI = np.array(_ARCTAN_HI, dtype=np.int64)
 HYP = np.array(_HYP, dtype=np.int64)
+HALF_ANGLE = np.array(
+    [mm.OBJECT_SCREEN_HALF_ANGLE.get(t, 0) for t in range(8)], dtype=np.int64
+)
 
 # Addresses and tuning constants, inlined as njit-visible globals.
 _OFLAGS = mm.OBJECTS_FLAGS
@@ -41,6 +44,7 @@ _OZF = mm.OBJECTS_Z_FRACTION
 _OTYPE = mm.OBJECTS_TYPE
 
 _PLAYER = mm.PLAYER_OBJECT
+_SIZE_FLOOR = mm.OBJECT_SIZE_FLOOR
 _ENERGY = mm.PLAYER_ENERGY
 _CURSOR = mm.CURSOR
 _FOV_WIDTH = mm.FOV_WIDTH
@@ -328,7 +332,30 @@ _MEANIE_SCAN_DONE = passcost.MEANIE_SCAN_DONE
 _ROTATE_GATE = passcost.ROTATE_GATE
 _ROTATE_GATE_HELD = passcost.ROTATE_GATE_HELD
 _ROTATE = passcost.ROTATE
-_ROTATE_REDRAW = passcost.ROTATE_REDRAW
+_REDRAW_CALL = passcost.REDRAW_CALL
+_REDRAW_NONE = passcost.REDRAW_NONE
+_REDRAW_PLOT_ENTRY = passcost.REDRAW_PLOT_ENTRY
+_SPAN_HEAD = passcost.SPAN_HEAD
+_SPAN_PLAYER = passcost.SPAN_PLAYER
+_SPAN_ANGLES = passcost.SPAN_ANGLES
+_SPAN_SIZE = passcost.SPAN_SIZE
+_SPAN_SIZE_FLOOR = passcost.SPAN_SIZE_FLOOR
+_SPAN_LEFT = passcost.SPAN_LEFT
+_SPAN_LEFT_HI = passcost.SPAN_LEFT_HI
+_SPAN_LEFT_NEG = passcost.SPAN_LEFT_NEG
+_SPAN_LEFT_POS = passcost.SPAN_LEFT_POS
+_SPAN_OFF_RIGHT = passcost.SPAN_OFF_RIGHT
+_SPAN_LEFT_ONSCREEN = passcost.SPAN_LEFT_ONSCREEN
+_SPAN_LEFT_OK = passcost.SPAN_LEFT_OK
+_SPAN_RIGHT = passcost.SPAN_RIGHT
+_SPAN_RIGHT_HI = passcost.SPAN_RIGHT_HI
+_SPAN_BEHIND = passcost.SPAN_BEHIND
+_SPAN_RIGHT_OK = passcost.SPAN_RIGHT_OK
+_SPAN_WIDTH_CLIP = passcost.SPAN_WIDTH_CLIP
+_SPAN_WIDTH = passcost.SPAN_WIDTH
+_SPAN_ZERO_WIDTH = passcost.SPAN_ZERO_WIDTH
+_SPAN_VISIBLE = passcost.SPAN_VISIBLE
+_SPAN_WIDTH_CAP = passcost.SPAN_WIDTH_CAP
 _MEANIE_ROTATE = passcost.MEANIE_ROTATE
 
 _COOLDOWN_TICK_NO_CARRY = passcost.COOLDOWN_TICK_NO_CARRY
@@ -801,6 +828,62 @@ def _relative_angles(mem, zp, observer, target):
 
 
 @njit(cache=True)
+def _update_object_on_screen(mem, zp, target):
+    """update_object_on_screen $1F9F via calculate_object_screen_span $209B.
+
+    Returns (cycles, columns); columns is 0 when the object has no screen span and
+    the cost is then whole, else the $0C69 strip width, the $1FFC replot unpriced."""
+    cyc = np.int64(_REDRAW_CALL + _SPAN_HEAD)
+    player = _rd(mem, _PLAYER)
+    if target == player:  # $209F: the player is never drawn
+        return cyc + np.int64(_SPAN_PLAYER + _REDRAW_NONE), 0
+    c57, _alo, _ahi, _zlo, _zhi, rcyc = _relative_angles(mem, zp, player, target)
+    c59 = zp[0x8A]
+    cyc += np.int64(_SPAN_ANGLES + _SPAN_SIZE) + rcyc
+    otype = _rd(mem, _OTYPE + target)
+    half = HALF_ANGLE[otype]
+    if half < _rd(mem, _SIZE_FLOOR):  # $20AC: a pending size wins
+        half = _rd(mem, _SIZE_FLOOR)
+        cyc += np.int64(_SPAN_SIZE_FLOOR)
+    _wr(mem, _SIZE_FLOOR, 0)  # $20B8
+    zp[0x80] = half
+    cyc += _vertical_angle(zp, 0, _rd(mem, _OVANGLE + otype))[1]
+    ang_lo = zp[0x8A]
+    ang_hi = zp[0x8B]
+    cyc += np.int64(_SPAN_LEFT + _SPAN_LEFT_HI)
+    d = c59 - ang_lo
+    hi = (c57 - ang_hi - (1 if d < 0 else 0)) & 0xFF
+    if hi & 0x80:  # $20CB: the left edge is behind the view origin -> column 0
+        left = 0
+        cyc += np.int64(_SPAN_LEFT_NEG)
+    else:
+        cyc += np.int64(_SPAN_LEFT_POS)
+        left = ((hi << 1) | ((d & 0xFF) >> 7)) & 0xFF
+        if left >= 0x28:  # $20D6: off the right of the screen
+            return cyc + np.int64(_SPAN_OFF_RIGHT + _REDRAW_NONE), 0
+        cyc += np.int64(_SPAN_LEFT_ONSCREEN)
+    cyc += np.int64(_SPAN_LEFT_OK + _SPAN_RIGHT + _SPAN_RIGHT_HI)
+    s = c59 + ang_lo
+    hi = (c57 + ang_hi + (1 if s > 0xFF else 0)) & 0xFF
+    if hi & 0x80:  # $20EB: the right edge is left of the view
+        return cyc + np.int64(_SPAN_BEHIND + _REDRAW_NONE), 0
+    cyc += np.int64(_SPAN_RIGHT_OK)
+    right = ((hi << 1) | ((s & 0xFF) >> 7)) & 0xFF
+    if right >= 0x28:  # $20F2: clip to the last column
+        right = 0x27
+        cyc += np.int64(_SPAN_WIDTH_CLIP)
+    cyc += np.int64(_SPAN_WIDTH)
+    width = (right + 1 - left) & 0xFF
+    if width == 0:  # $2103
+        return cyc + np.int64(_SPAN_ZERO_WIDTH + _REDRAW_NONE), 0
+    cyc += np.int64(_SPAN_VISIBLE)
+    if width >= 0x15:  # $2105: a replot spans at most 20 columns at once
+        width = 0x14
+        cyc += np.int64(_SPAN_WIDTH_CAP)
+    return cyc + np.int64(_REDRAW_PLOT_ENTRY), width
+
+
+@njit(cache=True)
 def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     """prepare_vector_from_angle $1C54, the standalone entry the enemy probes use.
 
@@ -1101,19 +1184,19 @@ def _reduce_object_energy(mem, target, enemy):
 @njit(cache=True)
 def _consider_discharging_enemy_energy(mem, enemy):
     """consider_discharging_enemy_energy $1A5D: return one banked unit to the
-    landscape as a tree on a random flat tile.  Returns (discharged, cycles)."""
+    landscape as a tree on a random flat tile.  Returns (discharged, cycles, slot)."""
     if mem[_DISCHARGE + enemy] == 0:  # $1A63: nothing to discharge
-        return False, np.int64(_DISCHARGE_NONE)
+        return False, np.int64(_DISCHARGE_NONE), -1
     slot, ccost = _create_object(mem, _T_TREE)  # $1A67
     cost = np.int64(_DISCHARGE_CREATE) + ccost
     if slot < 0:
-        return False, cost
+        return False, cost, -1
     placed, pcost = _put_object_in_random_tile_below_z(mem, slot, _rd(mem, _BELOW_Z))
     cost += np.int64(_DISCHARGE_PLACE) + pcost
     if not placed:  # $1A70: no tile found -> abandon
-        return False, cost + np.int64(_DISCHARGE_ABANDON)
+        return False, cost + np.int64(_DISCHARGE_ABANDON), -1
     _wr(mem, _DISCHARGE + enemy, _rd(mem, _DISCHARGE + enemy) - 1)  # $1A7A
-    return True, cost + np.int64(_DISCHARGE_DONE)
+    return True, cost + np.int64(_DISCHARGE_DONE), slot
 
 
 @njit(cache=True)
@@ -1321,7 +1404,8 @@ def _update_meanie(mem, zp, enemy, budget, index):
         _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_ROTATE)
         _start_tune(mem, _SND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
-        return budget - np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW), _BODY_DONE, 0
+        redraw = _update_object_on_screen(mem, zp, meanie)[0]
+        return budget - np.int64(_MEANIE_ROTATE) - redraw, _BODY_DONE, 0
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(mem, enemy)
         return budget, _BODY_DONE, 0
@@ -1333,7 +1417,7 @@ def _update_meanie(mem, zp, enemy, budget, index):
 
 
 @njit(cache=True)
-def _target_object(mem, enemy, target, exposure):
+def _target_object(mem, zp, enemy, target, exposure):
     """target_object $1825 up to its $184D branch: record the target, drain it when
     the timer expires.  Returns (next stage, the cycles $1825's own line spent)."""
     _wr(mem, _TARGET + enemy, target)
@@ -1355,9 +1439,8 @@ def _target_object(mem, enemy, target, exposure):
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
         if target == _rd(mem, _PLAYER):  # $184D: a drained player skips the redraw
             return _BODY_DONE, cost + np.int64(_TARGET_DRAIN_PLAYER)
-        return _BODY_DONE, cost + np.int64(
-            _TARGET_DRAIN_OBJ + _BODY_TAIL + _ROTATE_REDRAW
-        )
+        redraw = _update_object_on_screen(mem, zp, target)[0]
+        return _BODY_DONE, cost + np.int64(_TARGET_DRAIN_OBJ + _BODY_TAIL) + redraw
     # $184D: only the head -> hunt a tree to convert
     return _BODY_MAKE_MEANIE, cost + np.int64(_TARGET_MEANIE)
 
@@ -1382,7 +1465,7 @@ def _scan_for_robot(mem, zp, enemy, budget, index, partial):
                 mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
             )
             stage, cost = _target_object(
-                mem, enemy, y, _exposure_byte(in_slot, in_fov, exp_raw)
+                mem, zp, enemy, y, _exposure_byte(in_slot, in_fov, exp_raw)
             )
             return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
@@ -1411,7 +1494,7 @@ def _scan_for_robot(mem, zp, enemy, budget, index, partial):
             budget -= np.int64(_SCAN_SLOT_FULL)
             if budget <= 0:  # the ROM has not reached $1825 yet
                 return budget, _BODY_SCAN, -2 - y, partial
-            stage, cost = _target_object(mem, enemy, y, exposure)
+            stage, cost = _target_object(mem, zp, enemy, y, exposure)
             return budget - cost, stage, 0, -1
         if y == player:  # $17C0: head only -> meanie candidate
             partial = y
@@ -1452,10 +1535,11 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
             continue
 
         if stage == _BODY_DISCHARGE:
-            discharged, dcost = _consider_discharging_enemy_energy(mem, enemy)
+            discharged, dcost, slot = _consider_discharging_enemy_energy(mem, enemy)
             budget -= dcost
             if discharged:  # $177A: the tail redraws, then the update is over
-                budget -= np.int64(_DISCHARGED + _BODY_TAIL + _ROTATE_REDRAW)
+                budget -= np.int64(_DISCHARGED + _BODY_TAIL)
+                budget -= _update_object_on_screen(mem, zp, slot)[0]
                 return budget, _BODY_DONE, 0, -1
             budget -= np.int64(_NO_DISCHARGE)
             if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
@@ -1479,8 +1563,9 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 drain = _reduce_object_energy(mem, tb, enemy)[1]  # $17EA
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
                 budget -= drain + np.int64(
-                    _HUNT_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
+                    _HUNT_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL
                 )
+                budget -= _update_object_on_screen(mem, zp, tb)[0]
                 return budget, _BODY_DONE, 0, -1
             budget -= np.int64(_HUNT_MISS)
             _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
@@ -1506,7 +1591,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
             exposure = _exposure_byte(in_slot, in_fov, exp_raw)
             if exposure != 0:
                 budget -= np.int64(_HELD_KEPT)
-                stage, cost = _target_object(mem, enemy, held, exposure)
+                stage, cost = _target_object(mem, zp, enemy, held, exposure)
                 budget -= cost
                 index = 0
                 continue
@@ -1528,7 +1613,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
             if partial != _rd(mem, _M_FAILED + enemy):  # $17C4
                 _initialise_enemy_meanie_variables(mem, enemy)
                 budget -= np.int64(_PARTIAL_ARM)
-                stage, cost = _target_object(mem, enemy, partial, 0x40)
+                stage, cost = _target_object(mem, zp, enemy, partial, 0x40)
                 budget -= cost
                 index = 0
                 partial = -1
@@ -1551,8 +1636,9 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 drain = _reduce_object_energy(mem, tb, enemy)[1]
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
                 budget -= drain + np.int64(
-                    _TREE_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
+                    _TREE_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL
                 )
+                budget -= _update_object_on_screen(mem, zp, tb)[0]
                 return budget, _BODY_DONE, 0, -1
             budget -= np.int64(_TREE_NONE)
             stage = _BODY_ROTATE
@@ -1562,7 +1648,8 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
         if stage == _BODY_ROTATE:
             if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
                 _rotate_enemy(mem, enemy)
-                budget -= np.int64(_ROTATE_GATE + _ROTATE + _ROTATE_REDRAW)
+                budget -= np.int64(_ROTATE_GATE + _ROTATE)
+                budget -= _update_object_on_screen(mem, zp, enemy)[0]
                 return budget, _BODY_DONE, 0, -1
             return budget - np.int64(_ROTATE_GATE_HELD), _BODY_DONE, 0, -1
 
