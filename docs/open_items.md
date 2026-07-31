@@ -143,7 +143,7 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock: what is left is the redraw and the frame budget
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**144** events) and on ls335 (**62**). ls42 is clean: **0 over 3000 frames**. Every
+ls9795 (**137** events) and on ls335 (**63**). ls42 is clean: **0 over 3000 frames**. Every
 event is an enemy's `update_cd` reading 4 in the machine where the sim still reads 1 — one
 `$16ED` reload the sim reaches a frame late — or the `$1805` rotation that follows from it.
 Neither the `$1887` chain nor `$16E6`'s own line is the cause any more: both are now
