@@ -552,21 +552,29 @@ def _update_meanie(state, enemy, budget, index):
 # do_hyperspace $2147 (create a robot on a random low tile + transfer/energy)
 # ---------------------------------------------------------------------------
 def _create_object(state, otype):
-    """create_object $210E: the highest empty slot, typed `otype`, or None."""
+    """create_object $211D: the highest empty slot, typed `otype`, else None.
+
+    Returns (slot, cycles): the walk is 11 a slot, the last one short by its
+    untaken $2128 BPL."""
+    cost = passcost.CREATE_HEAD
     for slot in range(mm.NUM_SLOTS - 1, -1, -1):
         if state.obj_flags[slot] & 0x80:
             state.obj_type[slot] = otype
-            return slot
-    return None
+            return slot, cost + passcost.CREATE_HIT
+        cost += passcost.CREATE_SLOT - (passcost.CREATE_LAST if slot == 0 else 0)
+    return None, cost + passcost.CREATE_NONE
 
 
 def _random_tile_coord(prng):
-    """get_random_tile_coordinate $125A: a prnd draw masked to 0..31, rejecting 31
-    (the 32x32 board's out-of-range edge)."""
+    """$1272: a prnd draw masked to 0..31, rejecting 31 (the board's edge).
+
+    Returns (coordinate, cycles); each rejected draw costs another prnd."""
+    cost = passcost.DRAW
     while True:
         v = prng.next() & 0x1F
         if v != 0x1F:
-            return v
+            return v, cost
+        cost += passcost.DRAW_REJECT
 
 
 def _put_object_in_tile(state, slot, tx, ty, prng):
@@ -585,29 +593,35 @@ def _put_object_in_tile(state, slot, tx, ty, prng):
 
 
 def _put_object_in_random_tile_below_z(state, slot, z, prng):
-    """put_object_in_random_tile_below_z $1224: place `slot` on a random flat,
-    empty tile no higher than `z`.  After 256 misses the height ceiling `z` is
-    raised; it fails once that ceiling reaches 12.  Returns (placed, draws)."""
+    """$1238: place `slot` on a random flat, empty tile no higher than `z`.
+
+    After 256 misses the height ceiling `z` is raised; it fails once that ceiling
+    reaches 12.  Returns (placed, cycles), each lap charged by the test it failed."""
     attempts = 0
-    draws = 0
+    cost = passcost.PLACE_HEAD
     while True:
-        draws += 1
         attempts = (attempts - 1) & 0xFF
-        if attempts == 0:  # $122E: 256 misses -> relax the height ceiling
+        if attempts == 0:  # $1242: 256 misses -> relax the height ceiling
             z = (z + 1) & 0xFF
             if z >= 0x0C:
-                return False, draws
-        tx = _random_tile_coord(prng)
-        ty = _random_tile_coord(prng)
+                return False, cost + passcost.PLACE_GIVE_UP
+            cost += passcost.PLACE_WRAP
+        cost += passcost.PLACE_LAP
+        tx, dx = _random_tile_coord(prng)
+        ty, dy = _random_tile_coord(prng)
+        cost += dx + dy
         b = tile_byte(state, tx, ty)
         if b >= mm.OBJECT_TILE:  # tile already holds an object
+            cost += passcost.PLACE_OCCUPIED
             continue
         if b & 0x0F:  # not a flat tile
+            cost += passcost.PLACE_NOT_FLAT
             continue
         if (b >> 4) >= z:  # tile too high
+            cost += passcost.PLACE_TOO_HIGH
             continue
         _put_object_in_tile(state, slot, tx, ty, prng)
-        return True, draws
+        return True, cost + passcost.PLACE_HIT + passcost.PUT_IN_TILE
 
 
 def _consider_discharging_enemy_energy(state, enemy):
@@ -620,20 +634,21 @@ def _consider_discharging_enemy_energy(state, enemy):
     if mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0:
         return False, passcost.DISCHARGE_NONE  # $1A63: nothing to discharge
     prng = Prng().load(mem)
-    slot = _create_object(state, mm.T_TREE)  # $1A65 create_object(type 2)
+    slot, ccost = _create_object(state, mm.T_TREE)  # $1A67 create_object(type 2)
+    cost = passcost.DISCHARGE_CREATE + ccost
     if slot is None:
         prng.store(mem)
-        return False, passcost.DISCHARGE_FIXED
-    placed, draws = _put_object_in_random_tile_below_z(
+        return False, cost
+    placed, pcost = _put_object_in_random_tile_below_z(
         state, slot, mem[mm.ENEMY_BELOW_Z], prng
     )
     prng.store(mem)
-    cost = passcost.DISCHARGE_FIXED + draws * passcost.DISCHARGE_TRY
+    cost += passcost.DISCHARGE_PLACE + pcost
     if not placed:  # $1A70: no tile found -> abandon (slot stays flagged empty)
-        return False, cost
+        return False, cost + passcost.DISCHARGE_ABANDON
     a = mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy
     mem[a] = (mem[a] - 1) & 0xFF  # $1A7A DEC
-    return True, cost
+    return True, cost + passcost.DISCHARGE_DONE
 
 
 def do_hyperspace(state):
@@ -644,13 +659,13 @@ def do_hyperspace(state):
     landscape ($2187)."""
     mem = state.mem
     prng = Prng().load(mem)
-    slot = _create_object(state, mm.T_ROBOT)
+    slot, _ccost = _create_object(state, mm.T_ROBOT)
     if slot is None:
         prng.store(mem)
         return
     player = mem[mm.PLAYER_OBJECT]
     z = (state.obj_z_height[player] + 1) & 0xFF
-    placed, _draws = _put_object_in_random_tile_below_z(state, slot, z, prng)
+    placed, _pcost = _put_object_in_random_tile_below_z(state, slot, z, prng)
     prng.store(mem)
     if not placed:  # $2159: no tile found -> the hyperspace is abandoned
         state.obj_flags[slot] |= 0x80
