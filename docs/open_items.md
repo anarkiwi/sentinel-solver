@@ -98,55 +98,100 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. The render model's residual is a fill rate, not a missing routine
+## 5. Five views route a handful of lines to the wrong DDA
 
-**Wrong.** `render_cost` reproduces the ROM's own plot_world cost to 0.93-1.00×, and the
-remainder is inside the fill's per-block rates rather than any unpriced routine.
+**Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 10 of the 15 golden
+views; on the other five a few lines per pass reach a different rasteriser than the machine
+sends them to, and the edge tables they leave differ.
 
-**Measured.** Against the golden's exact subtree split: median 0.973, mean absolute error 2.9%,
-one view now above 1.0 (66,96,16 at 1.002), so the residual is no longer one-signed. Views with
-little fill close outright — 0,48,8 1.000, 335,64,16 0.998, 66,0,0 0.997, 42,0,0 0.991 — and
-what is left is proportional to fill volume, 3.6-11.8% of the fill term on the six heavy views.
-That points at the per-row and per-byte constants inside `span_fill` and the two DDAs, not at a
-routine nobody charged: pricing `$26DE`/`$27D7`/`$295D` took the error 4.2% -> 2.9% and closed
-the low-fill views, which is exactly what it should have done if it were the last whole term.
-Per-notch pan rms is 0.99 f over 288 notches, bias -0.62, and nothing in that gate was fitted.
+**Measured.** `golden_render_cost.json` carries the ROM's `$2377`/`$23DC`/`$2F58`/`$2FA1`/
+`$3113`/`$316D`/`$2EE4`/`$3002` hit counts and `test_fill_geometry_matches_the_rom_loop_counts`
+compares the model's own. Where they differ they differ small and structurally:
+
+| view | how the model differs |
+| --- | --- |
+| 2024,16,0 | `shallow` +2 |
+| 335,0,0 | `edges` −8, `sections` −2, `steep` −48, `wide_steep` −48, `span_bytes` −58 |
+| 0,136,248 | `span_rows` +41, `steep` +81, `shallow` −9 |
+| 42,160,240 | `sections` +3, `wide_steep` +284, `shallow` −79, `span_bytes` −3162 |
+| 2024,184,244 | `sections` +3, `wide_steep` +185, `steep` −469, `span_bytes` −909 |
+
+The two worst share a signature: three more `$3002` entries than the ROM makes, more
+`process_wide_line` iterations, fewer narrow ones, and fewer filled bytes — lines taking the
+wide path where the machine takes a narrow one, which then writes different columns into
+`$AD00`/`$AE00`. On 42,160,240 `span_rows` is *exactly* right (1521) while `span_bytes` is 32%
+low, so the polygons' row ranges are right and only the columns in them are wrong. That points
+at `$2F17`'s `$0041`/`$0042` test and the screen_x high bytes `$2D93`/`$3079` feed it, not at
+the DDAs themselves. Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
 
 **Also not derived.**
 
 - **`$0078` carries a bit between calls.** One `$2845` a pass is ~90 cycles cheap because
   `divide_and_arctan`'s `$0E30 BVS` reads bit 6 of `$0078`, which the *previous* call left
   there; `relative._divide_and_arctan` starts it at 0 and cannot know better without
-  whole-zero-page emulation. Bisected to that single byte against the live machine; 0.04% of
-  the examine term.
+  whole-zero-page emulation. Bisected to that single byte against the live machine.
 - **`$0028`** (the `$29C7` half-column fraction) is modelled as 0, right for every `$2993` mode
   but not for an odd-width strip replot.
-- **Wide-polygon sections.** `$3030`'s two overflow guards are modelled as a loop rather than
-  the ROM's re-entry into `$3022`, so a line needing exactly that guard can take one section
-  too many.
+- **`$3030`'s two overflow guards** are modelled as a loop rather than the ROM's re-entry into
+  `$3022`; equivalent in every case checked, but not the same control flow.
 - **`$27CE`, the observer's own tile.** `$2793` forces its four corners off the edges of the
   screen and plots it through `plot_checkerboard_tile`; the model charges the branch but not
   that polygon, because two of its corners inherit a screen_y low byte from whichever row last
-  used the other `$0005` bank. It is never reached on any of the 15 golden views (the observer
-  tile's `screen_y_high >= 2` every time), so it is unmeasured rather than known-small.
+  used the other `$0005` bank. It is never reached on any of the 15 golden views, so it is
+  unmeasured rather than known-small.
 - **The object term without the game image.** `objectcost` needs the model geometry, so a
   checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Counting `span_fill`'s rows and bytes and each DDA's iterations against the ROM's
-own `$2377`/`$23DC`/`$2F58`/`$3113` hit counts, to say whether the residual is a wrong rate or a
-geometry that produces too few of them.
+**Resolves.** Dumping `$0041`/`$0042` per line on 42,160,240 against the ROM's, to find which
+lines the model sends wide that the machine keeps narrow.
 
-## 6. The py65 exact backend skips transfer settles
+## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 
-**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path.
+**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path, and
+its `$1F9F` figure is above what a live strip replot measures.
 
-**Measured.** `projector._exact_render_cost` returns `None` for any `observer != state.player`,
-and a transfer settle is always priced from the post-transfer slot (`playerbase._settle_eye`),
-which is never the player's own at pricing time.
+**Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
+`observer != state.player`, and a transfer settle is always priced from the post-transfer slot
+(`playerbase._settle_eye`), which is never the player's own at pricing time.
 
-**Resolves.** Running the py65 backend from an arbitrary observer slot.
+**Measured — the strip, audited against the machine's own context.** A live ls9795 capture puts
+a real replot at 22 frames wall where `oracle.update_object_cost` reads 27.2. The two suspects
+named for it are **not** the mechanism, by direct attribution: `$2993` and `$245B` both run
+*before* the cycle counter in both oracle entry points and contribute exactly 0% of the figure
+(`$245B` buckets at 0.0%). Nor is the context wrong:
+
+- `$29C7` does narrow the buffer — at `$2625` the harness has `$0010` = 2 (single section),
+  `$0007` = 1-2 and `$0035`/`$0061` narrow, which is the strip, not the screen.
+- `$0C4D` (`$1FEF`: plot only the object, or the world behind it) is 0 in play. It is set only
+  on the death screen (`$87EB`) and cleared at `$1F93`, so the harness takes the machine's
+  branch.
+- Of everything the harness forces, the two that differ from a play machine — `$0C1B` = 0, so
+  no `$1223` pan-abort check per row, and `$352C` stubbed to RTS — both make it **cheaper**.
+- `$0C48`, the furthest-row hint the harness zeroes and a live machine carries, moves the cost
+  by ±3% over the whole `$00`..`$1F` range. Real, small, not the explanation.
+- `relative.object_screen_span` agrees with the ROM's own `$209B` exactly — visible flag, left
+  column and width — on all six visible objects of ls9795, so the proxy prices the window the
+  ROM plots.
+
+**What the audit did find.** The ROM's strip is **1 to 5 columns wide** and its cost barely
+depends on that width: 22.6 frames for a 1-column strip against 29.7 for a 5-column one, one
+`plot_world` each. `find_visible_extent $27D7` scans a whole row to find an extent however
+narrow the window is, so a strip replot examines 111-148 tiles where a full screen examines
+~200-300. A narrow strip is *not* a cheap plot on this ROM, and the intuition that it should be
+is what makes the backend look 1.5× dear rather than ~5 frames dear.
+
+**Resolves.** Running the py65 backend from an arbitrary observer slot; and, for the strip,
+replaying the *captured* `state.mem` rather than a freshly generated board, since after the
+above the only remaining candidates are a captured byte the span depends on differing from the
+machine's, or the 22-frame wall not containing the whole of `$1F9F`.
+
+**Not a threat to the render golden.** `golden_render_cost.json` comes from `_measure_plot_world`,
+which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B` outside the counted
+window; it asks what plot_world costs for a board and a view, which none of the above touches.
+The one assumption it shares with the strip path is `$0C48` = 0, matched by
+`projector._ROW_HINT` and bounded at ±3% above.
 
 ## 7. The driver's wall-clock timeouts are the residual load sensitivity
 

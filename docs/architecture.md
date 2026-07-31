@@ -1014,7 +1014,7 @@ the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), ove
 0.93-1.00× of the ROM on every golden view (median 0.973, mean absolute error 2.9%), at
 0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
-exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles)).
+exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip)).
 
 | term | exactness |
 | --- | --- |
@@ -1067,6 +1067,18 @@ Two ROM facts the emulation forced, both wrong before: `prepare_polygon $2D6C` t
 `$001B`-offset slot `plot_tile` reads the tile byte from; and `plot_row_of_tiles_or_block
 $295D` plots up from `$0037` to `$0003` and then back **down** from `$0038`, which is the
 order the `$0010` buffer toggle sees.
+
+**The fill's geometry is pinned, not just its cost.** `rendercost` counts what the ROM's own
+loops count — `span_fill` rows and filled bytes, and each of the four DDAs' iterations — into
+the `rows`/`flags` scratch it already threads, and `golden_render_cost.json` carries the
+matching `$2377`/`$23DC`/`$2F58`/`$2FA1`/`$3113`/`$316D`/`$2EE4`/`$3002` hit counts. **10 of 15
+golden views reproduce all eight exactly** (`test_fill_geometry_matches_the_rom_loop_counts`),
+which turns a cost residual into a geometry one and is what found the `CLC` below.
+
+**The two wide DDAs clear the carry every lap.** `$311C` and `$3170` `CLC` between the SBC and
+the next ADC, so `process_wide_line`'s accumulator never carries in; the two narrow loops
+(`$2F58`, `$2FA1`) have no such CLC and do carry. Modelling the wide pair like the narrow pair
+walked them off the ROM's rows.
 
 **What the edge tables actually carry.** `polygon_left_edge_table $AD00` and
 `polygon_right_edge_table $AE00` are never cleared — the only writes are the DDA's own
