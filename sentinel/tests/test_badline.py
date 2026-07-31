@@ -8,7 +8,7 @@ import collections
 import json
 import os
 
-from sentinel import badline, passcost
+from sentinel import badline, passcost, writeruns
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "live_badline.json")
 
@@ -190,3 +190,27 @@ def test_an_unarmed_clock_charges_nothing_so_the_isolated_round_is_unchanged():
     clk = badline.frame_clock(False)
     assert badline.charge(clk, 0x31CA, passcost.PRND) == passcost.PRND
     assert clk[3] == 0
+
+
+MARCH_CYCLES = (
+    274578  # the one $1887 the ls9795 gate turns on: ~18 frames of foreground
+)
+
+
+def test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it():
+    """An anchor's map covers only the run walked from it, so the gate's 274578-cycle
+    $1887 pays the full steal at all 25 windows against a 49-cycle map, and the frames
+    it coasts through open a clock that never leaves the unrefundable $9630 body.
+    Live inside that march the machine pays 1071.46 a frame: the ceiling is ~3.5 dear.
+    """
+    assert writeruns.LENGTH_AT[0x1887] < int(badline.EVENT_POS[0])
+    clk = badline.frame_clock()
+    assert badline.charge(clk, 0x1887, MARCH_CYCLES) == MARCH_CYCLES
+    assert clk[2] == badline.N_EVENTS and clk[3] == 0  # every event, no refund at all
+    clk = badline.frame_clock()
+    badline.charge(clk, 0x95E9, passcost.IRQ_BODY)
+    assert clk[2] == 4 and clk[3] == 0  # the body's own four windows, unrefunded
+    totals = _complete_frames(_live()["9795_march"])
+    mean = sum(k * v for k, v in totals.items()) / sum(totals.values())
+    ceiling = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
+    assert 3.0 < ceiling - mean < 4.0, mean

@@ -492,14 +492,53 @@ the machine's own frame 130 is the first CORE. ls0335 moves to 155/24 — which 
 probe above predicted for its own true steal (1072 → 155/20), so the model is now right
 about the steal and ls0335's residue is elsewhere. ls0042 is untouched.
 
-**Placement matters and is not free.** Charging each window's steal at its own raster
-position (rather than the whole frame's up front) is physically right — the model's frame
-opens with 7056 badline-free cycles, rasters 251..50 — and it makes the model measurably
-*worse*: ls9795 111 → 350, ls0335 12 → 233, and `test_human_clock`'s pinned facing count
-89 → 79. With the clock neutralised the refactor is a byte-exact no-op against the old
-model on three boards, so that is placement, not a bug: the rest of the enemy clock is
-calibrated against the lump. The shipped form therefore keeps the lump's placement (the
-ceiling at the frame head) and derives only its *value*.
+**Placement matters and is not free — and the reason is not calibration.** Charging each
+window's steal at its own raster position (rather than the whole frame's ceiling up front)
+is physically right, and it still makes the model measurably *worse*. Re-run on the tree
+that has since lost the `$9AF6`/`$37F2`, `$1F9F`, `$0C48`, camera-shift and CORE-write-offset
+errors that were said to be compensating for it, under exact seeding over 3000 frames:
+
+| board | CORE, ceiling up front | CORE, steal at its own raster |
+|---|---|---|
+| ls9795 | 19 (first at frame 151) | **96** (first at 77) |
+| ls0335 | 14 (first at 156) | **140** (first at 111) |
+| ls0042 | 0 | **0** |
+
+`test_human_clock`'s pinned counts move both ways and net roughly nil (facing cadence
+89 → 91, split cadence 87 → 86, ls335 exact spans 12 → 11, facing errors 42 → 39), so the
+gate is the whole verdict. **The mechanism is measured, and it is not the rest of the clock
+being calibrated against the lump.** The event list `frame_clock` arms covers exactly one
+frame, but a term is charged atomically and may outlive several: over 300 ls9795 frames
+**253 run no foreground at all**, the clock stops at **2701** of 19656 cycles, and only the
+four windows the `$9630` body contains are ever reached. Placement therefore charges those
+four (~172 cycles) where the frame really pays 25 (~1072), handing the model ~900 free
+foreground cycles in every frame a march spans. ls0042 is untouched for the same reason it
+was untouched before: its clock reaches 19655 and all 25 windows in every frame.
+
+**What the ceiling costs instead, and where the residual accrues.** Model per-frame steal
+against the machine's own (`fixtures/live_badline.json`, complete frames only):
+
+| board | machine | model |
+|---|---|---|
+| ls0042 | 1070.22 | 1070.37 |
+| ls0335 | 1072.08 | 1070.71 |
+| ls9795 loop | 1072.56 | — |
+| ls9795 inside the march | **1071.46** | **1074.76** (1075.00 in the 253 quiet frames) |
+
+So across a march the model runs **~3.5 cycles a frame short of foreground** — the sign that
+makes the sim late, which is what every one of the 19 and 14 surviving `update_cd` events is.
+And it is not a placement question at all: `charge(clk, 0x1887, 274578)` walks a 49-cycle
+write map, so every window inside the march is charged the full 43 whatever its position.
+Of the machine's own 3.48 cycles a frame of refund there, **3.09** lands on the march's own
+writes (`$1CBF`, `$1CFF`, `$1CD6`, `$1D4C`, `$1DF9`, `$0D07`, `$2BB9` …) and 0.39 on the sound
+engine the `$9630` body reaches through `$119F` — whose walk from `$95E9` RTIs out of the
+short-IRQ chain, so the model refunds none of it either.
+`test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it` pins all of it.
+
+**Resolves.** The `$1887`/`$18E6`/`$1CDD`/`$8401`/`$9287` chain charged through the clock as
+its own sub-terms instead of one opaque `charge`, so a window inside a march resolves to an
+anchor whose map covers it. Nothing shorter can recover the 3.09: it is spread over thousands
+of `$1CBB` steps, and any per-frame constant standing in for it would be a fit.
 
 **The seed's own error, and its removal.** `resume_from_stack` counts the machine's position
 off the ROM's own straight lines and returns no offset for a position *inside a call*, so a
