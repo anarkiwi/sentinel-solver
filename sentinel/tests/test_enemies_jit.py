@@ -63,3 +63,30 @@ def test_single_frame_dispatch_matches(landscape):
         enemies.advance_frame_python(ref)
         enemies.advance_frame(jit)
         assert _first_diff(ref.mem, jit.mem) is None, f"ls{landscape} frame {frame}"
+
+
+@pytest.mark.parametrize("landscape", LANDSCAPES)
+def test_jit_matches_python_across_an_on_screen_redraw(landscape):
+    """$1F9F with a screen span costs a $1FFC replot the jit twin cannot price itself:
+    it stops and hands the object back, so the two must still land on the same clock."""
+    from sentinel import relative  # pylint: disable=import-outside-toplevel
+
+    state = _armed(landscape)
+    player = state.mem[mm.PLAYER_OBJECT]
+    for h_angle in range(256):
+        state.obj_h_angle[player] = h_angle
+        if any(
+            not state.obj_flags[s] & 0x80
+            and state.obj_type[s] in mm.ENEMY_TYPES
+            and relative.object_screen_span(state, s)[0]
+            for s in range(8)
+        ):
+            break
+    else:
+        pytest.skip("no facing puts an enemy on screen")
+    ref, jit = state.clone(), state.clone()
+    enemies.advance_frames_python(ref, 3000)
+    enemies.advance_frames(jit, 3000)
+    assert _first_diff(ref.mem, jit.mem) is None
+    assert ref.cycle_residual == jit.cycle_residual
+    assert (ref.pass_phase, ref.body_stage) == (jit.pass_phase, jit.body_stage)

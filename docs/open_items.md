@@ -238,10 +238,29 @@ the same board's whole screen, i.e. 20..40 frames of foreground for one rotation
 a function of the strip's own scene, not of the player's facing — four facings that put
 the same object at four different columns cost the identical 841221 cycles, because the
 camera shift cancels the column shift. That branch is real (the ROM only suppresses it
-mid-replot, at `$1AF4`/`$1B00`, where an on-screen object aborts the whole enemy update),
-it is reachable at 8% of facings on ls9795, and it is not charged: pricing it is
-`projector.render_cost`'s problem, and `relative.update_object_on_screen_cycles` returns
-the column width so a caller with the render model can.
+mid-replot, at `$1AF4`/`$1B00`, where an on-screen object aborts the whole enemy update)
+and it is reachable at 8% of facings on ls9795 — about four replots per 3000 frames on
+each of ls0042/ls0335/ls9795 at a facing that puts one enemy on screen, i.e. some 4% of
+the clock spent where the flat 1723 spent none.
+
+It is now charged, by `projector.strip_replot_frames`, at the camera `$1FC2` shifts to
+(`$09C0 += $0C62/2`) rather than the player's own, and through the strip's own buffer
+window: `$1FE5 JSR $29C7` halves `$0C69` into `$0007` and folds that into `$0012`, exactly
+as `$2993` does from its table, so `render_cost` takes the window as an argument.
+`RENDER_COST_BACKEND=py65` runs the real `$1F9F` instead and is exact — 19..29 frames on
+the three boards — but costs ~1.3 s per uncached call, so the default is the windowed
+proxy. The window matters: without it the proxy priced all 40 columns, ran 1.3..2.8x dear
+and the clock over-stalled (ls335 grew a second facing error of the wrong sign, which the
+exact backend did not). With it, proxy and exact agree on the error structure.
+
+**What it bought, and the one it cost.** Over the ls335 human replay the modelled facing
+errors fall 40 -> 37 and 35 strip replots fire. Thirty-six of the 37 are still the old
+one-sided "+1 rotation"; the thirty-seventh is new and the other way — span 13 slot 3
+loses a rotation the ROM kept, on both backends, so it is the mechanism and not the
+proxy. Either the ROM took the cheap `$1FEF`/`$8533` object path there, or `$0C1F` was set
+and `$1AF4`/`$1B00` aborted that enemy's update before `$1805` — neither is modelled, and
+`test_every_facing_error_is_exactly_one_extra_rotation` caps the overshoot at one so a
+later fix cannot quietly widen it.
 
 **Not `$0078`.** `$0D4A` does **not** clear `$0078` before round 10: `$0DF1 ROR $78` rotates
 the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so bit 0 of the

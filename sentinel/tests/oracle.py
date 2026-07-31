@@ -174,6 +174,40 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
     return (cpu.processorCycles - c0) / FRAME_CYCLES
 
 
+UPDATE_OBJECT_ON_SCREEN = 0x1F9F
+
+
+def update_object_cost(cpu, mem, state, target, maxins=20_000_000):
+    """Run the real $1F9F once headless on ``target`` and return its frame cost.
+
+    Same render context as :func:`render_frame_cost` -- $1F9F's own $1FC2 re-points
+    the camera at the object's strip and $1FFC replots it, so the view is the ROM's,
+    not the caller's. The player's own $09C0/$0140 are left as the board has them."""
+    player = mem[0x000B]
+    mem[0x006E], mem[0x0091] = player, target
+    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
+        mem[addr] = 0
+    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
+    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
+    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
+    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
+    state["stop"] = False
+    call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    ret = 0xFFF0
+    mem[ret] = 0x60
+    sp = cpu.sp
+    mem[0x0100 + sp] = (ret - 1) >> 8
+    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
+    cpu.sp = (sp - 2) & 0xFF
+    cpu.pc = UPDATE_OBJECT_ON_SCREEN
+    c0 = cpu.processorCycles
+    steps = 0
+    while cpu.pc != ret and steps < maxins:
+        cpu.step()
+        steps += 1
+    return (cpu.processorCycles - c0) / FRAME_CYCLES
+
+
 def generate_machine(landscape):
     """Run the real play-setup sequence for `landscape` and return the live
     (cpu, mem, state): seed -> terrain -> place enemies -> place player + trees."""

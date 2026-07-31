@@ -10,7 +10,8 @@ from sentinel.tests import human_audit
 # 94 joined the breaches when the RATE reserve stopped refusing its create: a step
 # the floor never let happen cannot leave a body in a cone.  On a WIN every placement
 # survived, so a breach here is a model false positive, same as the rejects.
-_BREACH335 = [23, 24, 28, 44, 45, 56, 94, 137]  # 52 retired by the phase-split advance
+_BREACH335 = [23, 24, 28, 44, 45, 56, 95, 137]  # 52 retired by the phase-split advance
+# 94 became 95 when $1F9F's on-screen strip replot ($1FFC) started stalling the clock.
 # 56 joined with the derived pass cadence: the enemy clock over that span now runs at
 # the board's real rate, so the model puts the human inside a cone it had missed.
 # 18 joined when UTURN_FRAMES went 74 -> 77 (pooled n=9): its budget is aim + HOP_FRAMES and the extra 3 f crosses the drain window. A model false positive, like the rest.

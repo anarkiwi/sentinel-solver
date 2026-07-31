@@ -334,11 +334,11 @@ REGISTRY = {
     "REDRAW_NONE": _d(_PC, _REDRAW),
     "REDRAW_PLOT_ENTRY": entry(
         _PC,
-        MEASURED,
+        DERIVED,
         "$1FA2 BCS not taken. Past it $1F9F re-points the camera at the object and "
-        "replots its <=20-column strip through $1FFC JSR $2625, 0.40..0.85 M cycles "
-        "on ls9795 -- a plot_world cost, priced by projector.render_cost and NOT "
-        "charged here (separately recorded in docs/open_items.md)",
+        "replots its <=20-column strip through $1FFC JSR $2625, which "
+        "projector.strip_replot_frames prices at that shifted camera -- exactly "
+        "under RENDER_COST_BACKEND=py65, else through the render_cost proxy",
         "test_the_object_screen_span_is_exact_against_the_roms_own_209b",
     ),
     "_REDRAW_CALL": _d(_ENJ, "jit alias of passcost.REDRAW_CALL"),

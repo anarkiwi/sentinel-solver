@@ -307,9 +307,20 @@ rotations in `fixtures/live_pass_cycles.json` (1576..1843) are that branch.
 An object that *does* have a span is a different animal: `$1FC2` re-points the camera at
 the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle) and `$1FFC JSR $2625` replots it,
 0.40..0.85 M cycles on ls9795 — 250..500x the branch above, and a `plot_world` cost, not
-an enemy-clock one. The model charges up to `$1FA4` and reports the column width;
-pricing the replot is `projector.render_cost`'s job
-(`projector.BASE_CYCLES` is itself unmeasured, so this is open on both sides).
+an enemy-clock one. `projector.strip_replot_frames` prices it at that shifted camera —
+never the player's own — and through the strip's own buffer window: `$1FE5 JSR $29C7`
+takes `$0C69` and sets `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
+`$2993` sets from its table for a full-screen mode, so `projector.strip_window` feeds it
+straight to `render_cost`. `RENDER_COST_BACKEND=py65` instead runs the real `$1F9F` and is
+exact (19..29 frames on ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized); without
+the window the proxy priced all 40 columns and was 1.3..2.8x dear, which showed up as the
+clock over-stalling. `enemies` charges the result in cycles.
+
+The numba twin cannot call the renderer, so `enemies_jit._advance` **stops** on an
+on-screen `$1F9F`, hands back the object and its left column with the frames still owed,
+and `enemies.advance_frames` prices the replot and resumes — the same number, charged at
+the same point in the pass, which `test_jit_matches_python_across_an_on_screen_redraw`
+holds to byte and residual identity.
 
 `$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
 pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
