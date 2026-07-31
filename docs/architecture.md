@@ -360,9 +360,21 @@ a badline shows up as an instruction that took 43 cycles too long):
 
 | mechanism | per frame | measured |
 |---|---|---|
-| VIC-II badline steal | 25 lines (`$30..$F7`, low 3 bits = YSCROLL 3) × 43 | 1075 |
+| VIC-II badline steal | 25 lines (`$30..$F7`, low 3 bits = YSCROLL 3), 41..43 each | 1070..1073 |
 | short raster interrupts | 4 × 119 (7 entry + 112 body) at raster 53/93/133/173 | 476 |
 | the `$9630` body, less `$130C` | once, at raster 213 | 2491 |
+
+One badline costs `BADLINE_STEAL` 43 — the VIC's 40 c-accesses plus the 3-cycle AEC lag —
+**less the consecutive write cycles the 6510 happens to be performing at the window's
+first cycle**, because BA only halts the CPU at its next read. A write run is at most two
+(an NMOS read-modify-write's dummy-plus-real pair, a JSR's two pushes), so the steal is
+41, 42 or 43 and never 40 or 44. `sentinel/badline.py` is that law and
+`driver/badline.py` measures it live off `cpuhistory`; it derives all **4824** sampled
+badlines on four captures. The consequence is that the frame's *total* is a property of
+which instructions the raster caught — 1070.2 on ls0042 against 1072.5 on ls9795, and
+1066..1075 frame to frame — so `BADLINE_FRAME` 1071 is the one fitted term left in the
+budget, and closing it needs cycle-level instruction simulation rather than a better
+constant ([open_items.md 8](open_items.md#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
 
 `$D015 = 0` — no sprite is ever enabled in play — so there is **no** sprite-DMA term. The
 `$95E9` split chain walks `$9588` down 4→0, programming `$D012` from the table at `$9589`
@@ -1148,6 +1160,7 @@ inside Docker, headless, and verifies each result from the game's own memory. Im
 | `sentinel_state.py` | live memory → `GameState` (`ViceSource`/`Py65Source`), `verify_entry` |
 | `dump_stage2.py` | regenerates `out/sentinel_stage2.bin` from the tape (the `oracle` fixture) |
 | `instrument.py` | the frame-locked divergence race |
+| `badline.py` | exact VIC-II steal off `cpuhistory` → `fixtures/live_badline.json` |
 | `frozen_run.py` | RTS-stubs `update_enemies $16B5` live: isolates frame-cost fidelity |
 | `plan_audit.py` | per-step audit of each `PlanStep`'s recorded budget/windows vs live |
 | `replay_human.py` | replays a recorded human line into `<fixture>_truth.json` |

@@ -8,16 +8,17 @@ pass cost is a property of the state.  Per-term arithmetic: docs/architecture.md
 from sentinel import memmap as mm
 
 PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
-BADLINE_STEAL = 43  # the MODE of a $30..$F7 line whose low 3 bits are YSCROLL
+BADLINE_STEAL = 43  # 40 VIC c-accesses + the 3-cycle AEC lag: the MAXIMUM, not a mode
 BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
-BADLINE_FRAME = 1071  # the frame's whole steal: 42.8 a badline, not the 43 mode
+BADLINE_FRAME = 1071  # THE ONE FIT LEFT: sentinel.badline, open_items.md 8
 SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
 SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
+SHORT_IRQ_FRAME = SHORT_IRQS_PER_FRAME * SHORT_IRQ + SHORT_IRQ_WRAP  # 477, exact live
 IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted
 IRQ_GATE_SHUT = 7  # $9659 LDA $0CE5 4 + $965C BMI $9669 taken 3: no clock, no $1635
 IRQ_GATE_OPEN = 43  # ... nt 2 + $965E LDA/BMI 6 + JSR $130C 6 + the $1635 call 25
-IRQ_CYCLES = 3933  # 1071 + 477 + 2385, the fixed part: the gate and $8ED1 are per frame
+IRQ_CYCLES = BADLINE_FRAME + SHORT_IRQ_FRAME + IRQ_BODY  # 3933, the frame's fixed part
 IRQ_SPRITES = 1490  # $1635 past its $0C04 exit; live it took the 25-cycle one, 500/500
 FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less the $9659 gate and the tick
 

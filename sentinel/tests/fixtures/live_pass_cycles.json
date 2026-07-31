@@ -87,10 +87,9 @@
    ]
   },
   "badline_steal": {
-   "41": 44,
-   "42": 51,
-   "43": 793,
-   "44": 112
+   "41": 229,
+   "42": 179,
+   "43": 4416
   },
   "badlines_per_frame": 25,
   "short_wall": {
@@ -195,7 +194,8 @@
      "longest_flat_run": 275
     }
    }
-  }
+  },
+  "badline_steal_source": "driver/badline.py on ls0042/ls0335/ls9795 and ls9795 frozen; each instruction's unstolen cost is the minimum over its own (opcode, branch taken, index page crossed) class, so 43 is the maximum and the 44s this once carried were an opcode's own extra cycle charged to the VIC. Samples: fixtures/live_badline.json"
  },
  "pass_segments": {
   "_what": "the four sub-pass segments of one $1289 pass, inclusive, ls9795, 632 passes: head $1289..$129F, the $16B5 body up to $16D6, $16D6..$16E5 (prnd + cursor), and $12A2..$12C7 with and without the $191F it calls",

@@ -254,18 +254,18 @@ def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
     """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: the badline steal,
     four short raster interrupts and the $9630 body, each measured on the machine.
 
-    A badline steals 40..43 by where in its instruction the CPU is, so the frame's own
-    total (the frozen pass rate below) lands just under 25 times the 43 mode."""
+    BADLINE_STEAL is the MAXIMUM a badline can take, so the frame's own total lands at
+    or under 25 times it; what it actually takes is test_badline.py's business."""
     irq = _live_cycles()["irq"]
-    assert passcost.BADLINE_STEAL == _mode(irq["badline_steal"])
+    assert passcost.BADLINE_STEAL == max(int(k) for k in irq["badline_steal"])
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
     assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
     per = passcost.BADLINE_FRAME / passcost.BADLINES_PER_FRAME
     assert passcost.BADLINE_STEAL - 1 < per <= passcost.BADLINE_STEAL
-    shorts = (
-        passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
+    assert (
+        passcost.IRQ_CYCLES
+        == passcost.BADLINE_FRAME + passcost.SHORT_IRQ_FRAME + passcost.IRQ_BODY
     )
-    assert passcost.IRQ_CYCLES == passcost.BADLINE_FRAME + shorts + passcost.IRQ_BODY
 
 
 def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
@@ -299,23 +299,22 @@ def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
 def test_the_frame_budget_decomposition_matches_the_live_frame():
     """Every cycle of a live frame is one of the model's four terms, measured apart.
 
-    The four short interrupts and the $9630 body are exact; the badline steal is the
-    one term that cannot be counted off the ROM, and its gap bounds the whole error."""
+    The four short interrupts and the $9630 body are exact.  This split classifies a
+    steal as any delta over the opcode's own minimum, so its badline term is an UPPER
+    bound (a taken branch reads as 44); the exact one is test_badline.py's."""
     rec = _live_cycles()["irq"]["frame_budget"]["boards"]
     gaps = []
     for board, m in rec.items():
         parts = m["steal"] + m["short"] + m["body"] + m["foreground"]
         assert abs(parts - passcost.PAL_FRAME_CYCLES) <= 1, (board, parts)
-        shorts = (
-            passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
-        )
-        assert m["short"] == shorts, (board, m["short"])
+        assert m["short"] == passcost.SHORT_IRQ_FRAME, (board, m["short"])
         gate = passcost.IRQ_GATE_SHUT if m["frozen"] else passcost.IRQ_GATE_OPEN
         tick = m.get("jsr_130c", 6) - 6  # IRQ_GATE_OPEN already carries the JSR
         body = passcost.IRQ_BODY + gate + tick + m["jsr_ffc2"]
         assert abs(body - m["body"]) <= 1, (board, body, m["body"])
         assert m["jsr_ffc5"] == 56 and m.get("jsr_1635", 25) == 25, board
         gaps.append(m["steal"] - passcost.BADLINE_FRAME)
+        assert m["steal"] <= passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL + 1
     assert 1.5 <= min(gaps) and max(gaps) <= 4.5, gaps
 
 

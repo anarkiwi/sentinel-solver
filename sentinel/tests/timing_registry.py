@@ -231,6 +231,7 @@ _PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
 _ENJ = "sentinel.enemies_jit"
 _PC = "sentinel.passcost"
+_BL = "sentinel.badline"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
@@ -319,6 +320,20 @@ REGISTRY = {
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
     "PAL_FRAME_CYCLES": _d(_PC, "PAL 6569: 312 raster lines x 63 cycles"),
+    "LINE_CYCLES": entry(
+        _BL,
+        DERIVED,
+        "PAL_FRAME_CYCLES / 312; the badline windows sit 8 lines apart on it",
+        "test_the_badline_window_is_the_25_lines_of_a_pal_frame",
+    ),
+    "WRITE_CYCLES": entry(
+        _BL,
+        DERIVED,
+        "the NMOS 6510's own write cycles per opcode; a run is at most two, which is "
+        "why a badline never steals 40, and 4824 live badlines are each BADLINE_STEAL "
+        "less the run at their BA window",
+        "test_every_live_badline_steal_is_the_derived_one",
+    ),
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,

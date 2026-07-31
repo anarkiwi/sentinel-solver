@@ -184,11 +184,12 @@ The short interrupts are **exactly** 477 in every one of 500 frames. The body is
 `SOUND_TICK_IDLE` 63 in all 80 frozen frames, and no `$130C` and no `$1635` at all when
 frozen — the `$9659` gate, as `IRQ_GATE_SHUT` says.
 
-So the whole frame-budget error is `BADLINE_FRAME`, at **1.9 to 4.2 cycles a frame**. That
-is also the one term that cannot be counted off the ROM: a badline steals 40..44 by where
-in its instruction the CPU is, so its frame total is a property of the code mix — 1072.9
-over ls42's cheap passes against 1075.2 over ls9795's frozen idle loop. 1071 is the
-frozen-rate fit, and replacing one mean with another mean would buy nothing.
+So the whole frame-budget error is `BADLINE_FRAME`. This split's own steal column is an
+**upper bound** — it charges any delta over the opcode's *table* minimum to the VIC, so a
+taken branch on a badline reads 44 and ls9795-frozen reads 1075.20, above the physical
+25 x 43. The exact steal, per instruction rather than per table, is 1070.2 / 1072.1 /
+1072.5 / 1072.0 on the same four captures: **-0.8 to +1.5 cycles a frame**, and its sign
+changes with the board. The derivation is under *Boundary* below.
 
 **Measured — the clock does not drift.** Frame-locked against the machine with the sim's
 memory replaced from live truth every frame and only its cycle residual carried, so
@@ -242,17 +243,80 @@ there. Rotating with 119 cycles left is not a modelling error — the ROM's own 
 h_angle write is ~80 cycles past `$17F9` — so nothing about *where* the model suspends
 moves it. Only the ~100 cycles do.
 
-**Boundary — that lead is the badline steal, and it cannot be counted.** Per frame,
-19656 = foreground + 477 + the `$9630` body + steal, and the first three are counted off
-the image, so the residual is the steal. Live during the march, the per-badline excesses
-are 41x1, 42x9, 43x84, 44x6 over 100 badlines — **1073.75 a frame** against
-`BADLINE_FRAME` 1071, in a frame with `$D015` = 0 and therefore no sprite term. A badline
-costs 43 less however many of the three BA-window cycles the CPU spends writing, so its
-frame total is a property of *which instruction the raster caught*, and a budget model with
-no raster position cannot count it. 1071 is a frozen-rate fit and 1075 (25 x the 43 mode)
-would be another; either way the frame-129 rotation is decided by ~100 cycles accumulated
-over 129 frames, which is 0.8 a frame. **Zero divergence on ls9795 therefore needs the
-badline steal per frame, i.e. raster-accurate accounting, not a better cost term.**
+**Boundary — the badline steal, now derived exactly, and why no constant can carry it.**
+Per frame, 19656 = foreground + 477 + the `$9630` body + steal, and the first three are
+counted off the image, so the residual is the steal. `driver/badline.py` measures it
+exactly: `cpuhistory` stamps every instruction, and an instruction's *unstolen* cost is
+the minimum delta over its own (opcode, branch taken, index page crossed) class — a steal
+is never negative, so that minimum is its true cost. Every instruction off a badline then
+reads a steal of **exactly zero** (256827 of 258267 in one ls9795 capture; the rest are
+the 7-cycle interrupt entries), which is what makes the badline numbers exact.
+
+The law, and it is a derivation, not a fit. A badline pulls BA low three cycles before
+the VIC takes the bus and the 6510 runs on to its first **read** cycle, so
+
+    one badline = 43 - (consecutive CPU write cycles at the window's first cycle)
+
+43 being the 40 c-accesses plus the AEC lag. A write run is at most **two** — an NMOS
+read-modify-write's dummy-plus-real pair, or a JSR's two pushes — because every
+instruction opens with an opcode fetch, so **40 is unreachable and 44 impossible**.
+Over **4824 live badlines** on ls0042/ls0335/ls9795 and ls9795 frozen, the steal is
+41, 42 or 43 and `sentinel/badline.py` reproduces **every one** of them from the opcode
+alone, with the window solved to one cycle-in-line (11) that is the same on all four
+captures (`fixtures/live_badline.json`, `test_every_live_badline_steal_is_the_derived_one`).
+The 44s this item used to quote were an artefact: a static opcode table charged a taken
+branch's or a crossed page's own extra cycle to the VIC. So was ls9795-frozen's 1075.20,
+which is above the physical maximum of 25 x 43.
+
+**The frame total is state-dependent, so `BADLINE_FRAME` cannot be right.** Exactly:
+
+| board | per badline | per frame | complete-frame range |
+|---|---|---|---|
+| ls0042 | 42.81 | **1070.2** | 1066..1075 |
+| ls0335 | 42.88 | **1072.1** | 1069..1075 |
+| ls9795 | 42.90 | **1072.5** | 1071..1075 |
+| ls9795 frozen | 42.88 | **1072.0** | 1069..1075 |
+
+`BADLINE_FRAME` 1071 is *above* ls0042's true steal and *below* the other two. The
+writers the window catches are named in the fixture and are dominated by `$31CA`'s LFSR
+(`ROL abs` at `$31D9`-`$31E5`, a dummy-plus-real pair, hence the 41s), then `$16D9 DEC
+$0090`, the `$1289`/`$12A2` loop's `LSR`/`ASL`/`JSR`, and `$194D`/`$195F STY`. ls0042
+runs ~19 passes a frame against ls9795's ~7, so it spends far more of the frame inside
+`$31CA` and its windows catch far more writes — which is exactly why one constant cannot
+serve three boards.
+
+**Probe — the steal IS the lever, and one number cannot pull it.** Setting the term to
+each board's own exact steal (`BADLINE_FRAME` **and** `IRQ_CYCLES`, which was a stale
+literal — editing `BADLINE_FRAME` alone had been inert, and is now computed):
+
+| board | steal | first CORE | follow events |
+|---|---|---|---|
+| ls0042 | 1071 → 1070 | none → none | 0 → 0 |
+| ls0335 | 1071 → 1072 | 478 → **155** | 12 → **20** |
+| ls9795 | 1071 → 1073 | 129 → **130** | 111 → **122** |
+| ls9795 | 1071 → 1075 | 129 → **66** | 111 → **164** |
+
+ls9795's frame-129 rotation does move to the machine's own frame 130 — the phase lead
+this item measured is real and it is the steal — but every other board pays for it.
+
+**What closing it needs, precisely.** The model would have to know *which instruction*
+the raster caught at each of the 25 windows. Two things stand in the way, and both are
+instruction-level:
+
+1. **A write-cycle map per charged cost term.** Each `passcost` constant is a contiguous
+   ROM run, so an offset into it does identify an instruction — but the model charges the
+   run as one lump and keeps no map.
+2. **An instruction-aligned frame origin, which does not exist.** The raster IRQ is taken
+   at an instruction boundary, so the `$9630` marker the frame loop anchors on lands at
+   frame position 13509..13514 live — a **4 to 6 cycle** spread, per board
+   (`test_the_9630_anchor_is_not_instruction_aligned`). Inside `$31CA`, where 20% of
+   cycles are writes, that blur alone randomises the answer.
+
+Deriving 2 needs 1 for the interrupted routine as well, and on ls9795 **65%** of frame
+boundaries land in `$16E6`, whose `$1887` marches have no fixed instruction sequence at
+all. So the exact steal is **not** computable in a budget model: it needs cycle-level
+simulation of the instruction stream, everywhere, not a better constant. Until then
+`BADLINE_FRAME` is the one fitted term left in the frame budget and is labelled so.
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
@@ -410,7 +474,8 @@ voice states), the three `$3470` sites reload the voice off the `$AC00` descript
 `$95E9` 81 + the `$9630` body 2275 + the `$969A` RTI tail 22 = 2385, with the `$9659`-gated
 block (`JSR $130C`, `$1635`, and the branch itself) charged only when the clock runs — the
 model was paying all 43 of it on frozen frames, and never paying the `JSR $130C` at all.
-What that exposed: `BADLINE_STEAL` 43 is the **mode**, not the mean. With the clock frozen
+What that exposed: `BADLINE_STEAL` 43 is the **maximum** — a badline can only cost less,
+and only by the writes at its BA window (above). With the clock frozen
 (so every pass is the idle one) the live `$1289` rate fixes the frame's whole steal at
 **1071**, 42.8 a badline; the model reproduces the measured pass count on ls42/ls335/ls9795
 to under **4 passes in 50000**. Together: ls335's first CORE divergence **194 -> 478** and its
