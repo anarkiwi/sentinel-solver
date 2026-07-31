@@ -107,7 +107,7 @@ def _project(state, setup, col, row):
     zf = state.obj_z_frac[observer]  # tile height relative to eye ($291E)
     zp[0x80] = (-zf) & 0xFF
     rel_z_hi = (height - state.obj_z_height[observer] - (1 if zf else 0)) & 0xFF
-    sy_hi = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
+    sy_hi, _vcyc = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
     sy_lo = zp[0x50]
     # $293C on-screen test against the mode's $0007/$0012; $0028=0 waives the fraction check.
     if sx_hi < setup["buf_left"]:

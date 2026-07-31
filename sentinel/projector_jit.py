@@ -251,7 +251,7 @@ def _project(mem, zp, su, col, row, out):
     zf = su[S_OBS_ZF]  # tile height relative to eye ($291E)
     zp[0x80] = (-zf) & 0xFF
     rel_z_hi = (height - su[S_OBS_ZH] - (1 if zf else 0)) & 0xFF
-    out[3] = _vertical_angle(zp, rel_z_hi, su[S_VANGLE])  # $933D
+    out[3], _vcyc = _vertical_angle(zp, rel_z_hi, su[S_VANGLE])  # $933D
     out[2] = zp[0x50]
     out[4] = tile_byte
     if out[1] < su[S_LEFT]:  # $293C on-screen test against $0007/$0012
