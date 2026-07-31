@@ -144,7 +144,7 @@ def _reduce_object_energy(state, target, enemy):
         _discharge_bank(state, enemy)
         cost = passcost.REDUCE_HEAD + passcost.REDUCE_PLAYER + passcost.REDUCE_BANK
         # $1A1A/$1A1F: the drained bar is replotted and the drain sound started
-        cost += passcost.status_bar_cycles(state.energy) + passcost.TUNE
+        cost += passcost.status_bar_cycles(state.energy) + passcost.TUNE_DRAIN
         return True, cost
     cost = passcost.REDUCE_HEAD + passcost.REDUCE_OBJECT + passcost.REDUCE_BANK
     otype = state.obj_type[target]

@@ -294,7 +294,7 @@ in the jennings oracle:
 | `PLACE_*`, `DRAW`, `CREATE_*` | `$1238`'s tile hunt per failed test, its `$1272` draws, `$211D`'s walk | 3..38 / 445 / 11 |
 | `TILE_SCAN_*` | `$1AB0` walks its own loop: empty slot / rejected / tile fetch (`$2BA8`) | 12 / 24 / +61 |
 | `MEANIE_SCAN_*` | `$198F` walks the search counter, not a slot index | 26 / 34 / +42 |
-| `ROTATE` | `$1805..$1884`, its `$1AF4`/`$1973`/`$3470` callees at 31/32/323 | 454 |
+| `ROTATE` | `$1805..$1884`, its `$1AF4`/`$1973`/`$3470` callees at 31/32/`TUNE_ROTATE` | 454 |
 | `ROTATE_REDRAW` | `$1F9F update_object_on_screen`: the redraw a turn, a drain or a discharge forces | 1723 |
 
 A rotation is the single most expensive thing a gated enemy does and none of it is the

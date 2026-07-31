@@ -350,15 +350,22 @@ REGISTRY = {
         "down, counted against the per-round $16E6 oracle",
         _BODY_ORACLE,
     ),
-    "TUNE": entry(
+    "TUNE_ROTATE": entry(
         _PC,
-        MEASURED,
-        "$3470 start_tune ends in JMP $FFF1, a vector outside the 64 KB image, so it "
-        "cannot be counted; 323 is the live rotation measurement in "
-        "fixtures/live_pass_cycles.json, reused for the drain's own tune at $1A1F",
-        "test_rotate_is_the_counted_straight_line_plus_its_measured_callees",
+        DERIVED,
+        "$3470 ends in JMP $FFF1, which the image carries as JMP $8D81 in the game's "
+        "own RAM, so the tune is counted on the image; 323 also matches the live "
+        "rotation measurement in fixtures/live_pass_cycles.json",
+        "test_the_tune_cost_is_counted_off_the_image",
     ),
-    "_TUNE": _d(_ENJ, "jit alias of passcost.TUNE"),
+    "TUNE_DRAIN": entry(
+        _PC,
+        DERIVED,
+        "$1A1D LDA #$05: the drain's tune walks a longer $ACxx descriptor than the "
+        "rotation's, counted on the image the same way",
+        "test_the_tune_cost_is_counted_off_the_image",
+    ),
+    "_TUNE_DRAIN": _d(_ENJ, "jit alias of passcost.TUNE_DRAIN"),
     "_PARTIAL_ARM": _d(_ENJ, "jit alias of passcost.PARTIAL_ARM"),
     "_TARGET_WAIT": _d(_ENJ, "jit alias of passcost.TARGET_WAIT"),
     "COOLDOWN_TICK_NO_CARRY": _tick("$130C to the $1315 BCC and RTS"),

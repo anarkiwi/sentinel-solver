@@ -279,7 +279,7 @@ _REDUCE_BOULDER = passcost.REDUCE_BOULDER
 _REDUCE_BANK = passcost.REDUCE_BANK
 _REMOVE_STACKED = passcost.REMOVE_STACKED
 _REMOVE_GROUND = passcost.REMOVE_GROUND
-_TUNE = passcost.TUNE
+_TUNE_DRAIN = passcost.TUNE_DRAIN
 _STATUS_HEAD = passcost.STATUS_HEAD
 _STATUS_BLOCK = passcost.STATUS_BLOCK
 _STATUS_BLOCK_DONE = passcost.STATUS_BLOCK_DONE
@@ -1035,7 +1035,7 @@ def _reduce_object_energy(mem, target, enemy):
             return True, np.int64(_REDUCE_HEAD + _REDUCE_KILL)
         _wr(mem, _ENERGY, (_rd(mem, _ENERGY) - 1) & _ENERGY_MASK)
         _discharge_bank(mem, enemy)
-        cost = np.int64(_REDUCE_HEAD + _REDUCE_PLAYER + _REDUCE_BANK + _TUNE)
+        cost = np.int64(_REDUCE_HEAD + _REDUCE_PLAYER + _REDUCE_BANK + _TUNE_DRAIN)
         return True, cost + _status_bar_cycles(_rd(mem, _ENERGY))
     cost = np.int64(_REDUCE_HEAD + _REDUCE_OBJECT + _REDUCE_BANK)
     otype = _rd(mem, _OTYPE + target)
