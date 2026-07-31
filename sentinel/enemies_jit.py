@@ -118,8 +118,26 @@ _PASS_TAIL = passcost.PASS_TAIL
 _CONSIDER_ENTRY = passcost.CONSIDER_ENTRY
 
 _DISCHARGE_NONE = passcost.DISCHARGE_NONE
-_DISCHARGE_FIXED = passcost.DISCHARGE_FIXED
-_DISCHARGE_TRY = passcost.DISCHARGE_TRY
+_DISCHARGE_CREATE = passcost.DISCHARGE_CREATE
+_DISCHARGE_PLACE = passcost.DISCHARGE_PLACE
+_DISCHARGE_ABANDON = passcost.DISCHARGE_ABANDON
+_DISCHARGE_DONE = passcost.DISCHARGE_DONE
+_CREATE_HEAD = passcost.CREATE_HEAD
+_CREATE_SLOT = passcost.CREATE_SLOT
+_CREATE_LAST = passcost.CREATE_LAST
+_CREATE_HIT = passcost.CREATE_HIT
+_CREATE_NONE = passcost.CREATE_NONE
+_PLACE_HEAD = passcost.PLACE_HEAD
+_PLACE_LAP = passcost.PLACE_LAP
+_PLACE_WRAP = passcost.PLACE_WRAP
+_PLACE_GIVE_UP = passcost.PLACE_GIVE_UP
+_PLACE_OCCUPIED = passcost.PLACE_OCCUPIED
+_PLACE_NOT_FLAT = passcost.PLACE_NOT_FLAT
+_PLACE_TOO_HIGH = passcost.PLACE_TOO_HIGH
+_PLACE_HIT = passcost.PLACE_HIT
+_PUT_IN_TILE = passcost.PUT_IN_TILE
+_DRAW = passcost.DRAW
+_DRAW_REJECT = passcost.DRAW_REJECT
 
 _SEE_SLOT_EMPTY = passcost.SEE_SLOT_EMPTY
 _SEE_SLOT_WRONG_TYPE = passcost.SEE_SLOT_WRONG_TYPE
@@ -918,21 +936,25 @@ def _remove_object(mem, slot):
 
 @njit(cache=True)
 def _create_object(mem, otype):
-    """create_object $210E: the highest empty slot, typed `otype`, or -1."""
+    """create_object $211D: (the highest empty slot typed `otype`, or -1; cycles)."""
+    cost = np.int64(_CREATE_HEAD)
     for slot in range(_NUM_SLOTS - 1, -1, -1):
         if mem[_OFLAGS + slot] & 0x80:
             _wr(mem, _OTYPE + slot, otype)
-            return slot
-    return -1
+            return slot, cost + np.int64(_CREATE_HIT)
+        cost += np.int64(_CREATE_SLOT - (_CREATE_LAST if slot == 0 else 0))
+    return -1, cost + np.int64(_CREATE_NONE)
 
 
 @njit(cache=True)
 def _random_tile_coord(mem):
-    """get_random_tile_coordinate $125A: a prnd draw masked to 0..31, rejecting 31."""
+    """$1272: (a prnd draw masked to 0..31, rejecting 31; cycles)."""
+    cost = np.int64(_DRAW)
     while True:
         v = _prng_next(mem) & 0x1F
         if v != 0x1F:
-            return v
+            return v, cost
+        cost += np.int64(_DRAW_REJECT)
 
 
 @njit(cache=True)
@@ -951,29 +973,33 @@ def _put_object_in_tile(mem, slot, tx, ty):
 
 @njit(cache=True)
 def _put_object_in_random_tile_below_z(mem, slot, z):
-    """put_object_in_random_tile_below_z $1224: a random flat, empty tile no higher
-    than `z`; after 256 misses the ceiling rises, and it fails once it reaches 12.
-    Returns (placed, draws)."""
+    """$1238: a random flat, empty tile no higher than `z`; after 256 misses the
+    ceiling rises, and it fails once it reaches 12.  Returns (placed, cycles)."""
     attempts = 0
-    draws = np.int64(0)
+    cost = np.int64(_PLACE_HEAD)
     while True:
-        draws += 1
         attempts = (attempts - 1) & 0xFF
-        if attempts == 0:  # $122E: 256 misses -> relax the height ceiling
+        if attempts == 0:  # $1242: 256 misses -> relax the height ceiling
             z = (z + 1) & 0xFF
             if z >= 0x0C:
-                return False, draws
-        tx = _random_tile_coord(mem)
-        ty = _random_tile_coord(mem)
+                return False, cost + np.int64(_PLACE_GIVE_UP)
+            cost += np.int64(_PLACE_WRAP)
+        cost += np.int64(_PLACE_LAP)
+        tx, dx = _random_tile_coord(mem)
+        ty, dy = _random_tile_coord(mem)
+        cost += dx + dy
         b = _tile_byte(mem, tx, ty)
         if b >= _OBJECT_TILE:  # tile already holds an object
+            cost += np.int64(_PLACE_OCCUPIED)
             continue
         if b & 0x0F:  # not flat
+            cost += np.int64(_PLACE_NOT_FLAT)
             continue
         if (b >> 4) >= z:  # too high
+            cost += np.int64(_PLACE_TOO_HIGH)
             continue
         _put_object_in_tile(mem, slot, tx, ty)
-        return True, draws
+        return True, cost + np.int64(_PLACE_HIT + _PUT_IN_TILE)
 
 
 @njit(cache=True)
@@ -1035,27 +1061,28 @@ def _consider_discharging_enemy_energy(mem, enemy):
     landscape as a tree on a random flat tile.  Returns (discharged, cycles)."""
     if mem[_DISCHARGE + enemy] == 0:  # $1A63: nothing to discharge
         return False, np.int64(_DISCHARGE_NONE)
-    slot = _create_object(mem, _T_TREE)  # $1A65
+    slot, ccost = _create_object(mem, _T_TREE)  # $1A67
+    cost = np.int64(_DISCHARGE_CREATE) + ccost
     if slot < 0:
-        return False, np.int64(_DISCHARGE_FIXED)
-    placed, draws = _put_object_in_random_tile_below_z(mem, slot, _rd(mem, _BELOW_Z))
-    cost = np.int64(_DISCHARGE_FIXED) + draws * np.int64(_DISCHARGE_TRY)
-    if not placed:
-        return False, cost  # $1A70: no tile found -> abandon
+        return False, cost
+    placed, pcost = _put_object_in_random_tile_below_z(mem, slot, _rd(mem, _BELOW_Z))
+    cost += np.int64(_DISCHARGE_PLACE) + pcost
+    if not placed:  # $1A70: no tile found -> abandon
+        return False, cost + np.int64(_DISCHARGE_ABANDON)
     _wr(mem, _DISCHARGE + enemy, _rd(mem, _DISCHARGE + enemy) - 1)  # $1A7A
-    return True, cost
+    return True, cost + np.int64(_DISCHARGE_DONE)
 
 
 @njit(cache=True)
 def _do_hyperspace(mem):
     """do_hyperspace $2147: a synthoid on a random low tile, energy spent, player
     transferred; too little energy kills, and doing it from the platform wins."""
-    slot = _create_object(mem, _T_ROBOT)
+    slot, _ccost = _create_object(mem, _T_ROBOT)
     if slot < 0:
         return
     player = _rd(mem, _PLAYER)
     z = (_rd(mem, _OZH + player) + 1) & 0xFF
-    placed, _draws = _put_object_in_random_tile_below_z(mem, slot, z)
+    placed, _pcost = _put_object_in_random_tile_below_z(mem, slot, z)
     if not placed:
         _wr(mem, _OFLAGS + slot, _rd(mem, _OFLAGS + slot) | 0x80)  # $2159
         return
