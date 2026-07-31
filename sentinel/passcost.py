@@ -596,20 +596,36 @@ WIDE_HEAD = 14  # $30BF..$30C8 the 16-bit x delta 12 + the BPL 2, the $30BD LDA 
 WIDE_DIR = 16  # $30CA/$30DA the step direction and $30E0 STY/STA 6
 WIDE_SLOPE = 14  # $30E4 LDY $0D 3 + CPY $0C 3 + LDY $1A 3 + LDA $02 3 + the BCS 2
 WIDE_STEEP_SETUP = 55  # $30EE..$3110: the self-modifies, the DDA seed and both JMPs
-WIDE_STEEP_ROW = 25  # $3113 ADC/BCC 6 + $311F store 4 + DEC/BEQ 8 + $3127 DEC/BNE 7
-WIDE_STEEP_COLUMN = 6  # $3115 BCC nt 2 + SBC 3 + INX/DEX 2 + CPX/CLC 5 + BEQ nt 2, -8
+WIDE_STEEP_ROW = 20  # $311F the store 4 + DEC $3120 6 + BEQ nt 2 + $3127 DEC/BNE 8
+WIDE_STEEP_STEP = 6  # $3113 ADC $000D 3 + $3115 BCC set_row taken 3
+WIDE_STEEP_COLUMN = 11  # ... nt 2 + SBC 3 + INX/DEX 2 + CPX $0076 3 + CLC/BEQ nt 4, -3
+WIDE_STEEP_AREA_H = 15  # $311D BEQ taken 3 + $3140 INC/DEC $0041 5 + JSR 6 + JMP 3, -2
+WIDE_STEEP_AREA_V = (
+    14  # $3125 BEQ taken 3 + $312E DEC $3E 5 + BPL 3 + BNE 3, less the 0
+)
+WIDE_STEEP_AREA_BACK = 12  # $3135 BNE nt 2 + $3137 DEC 6 + JSR 6 + JMP 3, less the 5
 WIDE_SHALLOW_SETUP = 55  # $3148..$316A, the same shape as the steep setup
-WIDE_SHALLOW_STEP = 22  # $316D INX/DEX 2 + CPX/CLC/BEQ 7 + ADC/BCC 6 + store 4 + DEC 3
-WIDE_SHALLOW_ROW = 8  # $3175 BCC nt 2 + SBC 3 + DEC 6 + BEQ nt 2, less the taken 3 + 2
+WIDE_SHALLOW_STEP = (
+    18  # $316D INX/DEX 2 + CPX/CLC/BEQ nt 7 + $317E store 4 + DEC/BNE 8, -3
+)
+WIDE_SHALLOW_ROW = (
+    8  # $3175 BCC nt 2 + SBC 3 + DEC $317F 6 + BEQ nt 2, less the taken 3
+)
+WIDE_SHALLOW_AREA_H = 15  # $3171 BEQ taken 3 + $319A INC/DEC 5 + JSR 6 + JMP 3, -2
+WIDE_SHALLOW_AREA_V = 14  # $317C BEQ taken 3 + $3188 DEC 5 + BPL 3 + BNE 3
+WIDE_SHALLOW_AREA_BACK = 12  # $318F BNE nt 2 + DEC 6 + JSR 6 + JMP 3, less the 5
 WIDE_AREA_CALL = 6  # $310D/$3167/$313A/$3142/$3194/$319C JSR $31A4
-WIDE_AREA = 25  # $31A4 PHA 3 + the $003E/$0041 tests 13 + $31C2 the self-modifies 9
-WIDE_AREA_CLIP = 5  # $31B7/$31BE choosing the inner-area edge instead of the line
+WIDE_AREA_OUT = 33  # $31A4 with $003E non-zero: nothing to plot in this area
+WIDE_AREA = 40  # ... $0041 zero: the line's own x is the edge
+WIDE_AREA_LEFT = 45  # ... $0041 negative: clip to column 0
+WIDE_AREA_RIGHT = 43  # ... $0041 positive: clip to column $FF
 WIDE_LEAVE = 9  # $312B/$3185 JMP leave 3 + $2F6C RTS 6
 SPAN_CALL = 6  # $2AB4/$2AC8 JSR span_fill
 SPAN_ENTRY = 25  # $22AA the two flags 7 + $22B0 the middle row 10 + $22B7 LDA/CMP 8
 SPAN_BACKFACE = 9  # $22BD BCC leave taken 3 + $2310 RTS 6
 SPAN_ADDRESS = 55  # $22BF..$22DE the buffer address for the polygon's first row
 SPAN_COLOURS = 24  # $22E0..$2306 with $0C7A bit 7 clear, the $22E5 BPL taken
+SPAN_SUPPRESSED = 45  # ... bit 7 set ($8538, a distant object): $22E7..$22F1 21 more
 SPAN_START = 12  # $2308 LDY $06 3 + STY $1A 3 + CPY $04 3 + the BCS 3
 SPAN_START_EMPTY = 8  # ... BCS not taken 2 + $2310 RTS 6, less the taken 3
 SPAN_ROW_TEST = 12  # $2377 LDA $AE00,Y 4 + CMP $AD00,Y 4 + BCS nt 2 + $237F TAX 2
@@ -632,3 +648,79 @@ SPAN_NEXT = 17  # $2458 JMP 3 + $2311 LDY/CPY/BEQ nt 8 + $2317 TYA/AND/BNE 6
 SPAN_NEXT_GROUP = 21  # ... $231A BNE not taken 2 + $231C the buffer step 18 + the BNE 3
 SPAN_LAST = 12  # $2311 LDY $1A 3 + CPY $04 3 + BEQ taken 3 + RTS 6, the $2458 JMP apart
 SPAN_ROW_STEP = 10  # $2372 INC $0072 5 + $2374 DEY 2 + STY $1A 3
+
+# plot_stack_of_objects $21AE, plot_object $8533 and its $8475 transform loop, block by block (sentinel/objectcost.py); the trig and the $0D03 multiplies are counted from their own data.
+STACK_HEAD = 8  # $21AE AND #$3F 2 + STA $0C6C 4 + LDX #0 2
+STACK_LEVEL = 15  # $21B5 one level of the height walk, its $21BE BCS taken
+STACK_LAST = 14  # ... the bottommost level, BCS not taken
+STACK_COUNT = 6  # $21C0 DEX 2 + STX $0C6B 4
+STACK_ONE = 3  # $21C4 BEQ plot_objects_loop taken: one object in the tile
+STACK_MANY = 2  # ... not taken
+STACK_BELOW_TEST = (
+    33  # $21C6..$21DB the 16-bit z compare with the player, the BMI apart
+)
+STACK_ABOVE = 3  # $21D7 BMI plot_objects_above_player taken
+STACK_LEVEL_TYPE = (
+    11  # $21DD LDA type 4 + CMP #6 2 + BEQ 3, an object level with the eye
+)
+STACK_BELOW = (
+    21  # $21E4 JSR 6 + LDY 4 + DEC 6 + BMI nt 2 + LDX 4 + BPL 3, the JSR apart
+)
+STACK_RESCAN = 13  # $21F4 one lap: LDA 4 + AND 2 + TAY 2 + DEX 2 + BNE 3
+STACK_ABOVE_HEAD = 4  # $21FF LDY $0C6C
+STACK_PLOT = 17  # $2202 LDA 4 + AND 2 + TAY 2 + DEC 6 + BPL 3, the JSR apart
+STACK_RTS = 6  # $2210 RTS
+
+SC8_CALL = 6  # $848F JSR calculate_sine_and_cosine $0F70
+SC8_POS = 3  # $0F70 BPL positive_sine taken
+SC8_NEG = 4  # ... not taken 2 + $0F72 EOR #$40 2
+SC8_BODY = 20  # $0F74..$0F80: the sign byte, the 9-bit shift and the table index
+SC8_NOCLAMP = 3  # $0F81 BPL skip_ceiling taken
+SC8_CLAMP = 4  # ... not taken 2 + $0F83 LDA #$7F 2
+SC8_TABLE = 13  # $0F85 TAY 2 + the two $AC80 reads 8 + $0F8C BIT $0067 3
+SC8_SAME = 16  # $0F8E BMI nt 2 + BVS nt 2 + $0F92 STA/STX/RTS 12
+SC8_SWAP = 17  # ... $0F90 BVS taken 3 instead
+SC8_NEG_SAME = 18  # $0F8E BMI taken 3 + $0F97 BVS taken 3 + $0F92 12
+SC8_NEG_SWAP = 17  # ... $0F97 BVS not taken 2 + $0F99 12
+
+OBJ_CALL = 6  # $21E4/$2202 JSR plot_object $8533
+OBJ_RELATIVE = 6  # $8533 JSR calculate_object_relative_angles_and_distance $8401
+OBJ_DISTANCE = 11  # $8536 LDA $7D 3 + CMP #$0F 2 + ROR $0C7A 6: distant => no edges
+OBJ_TRANSFORM = 28  # $853D JSR 6 + $8475..$8483 the vertex bounds 22
+OBJ_VERTEX_ANGLE = 15  # $8485..$848C the vertex's apparent angle
+OBJ_VERTEX_COS = 13  # $8492..$8499 the radius and the cosine, the $0D03 JSR apart
+OBJ_VERTEX_COS_SIGN = 8  # $849E STA 3 + LDA #0 2 + BIT $0067 3
+OBJ_COS_POSITIVE = 3  # $84A4 BVC cosine_is_positive taken
+OBJ_COS_NEGATIVE = 32  # ... not taken 2 + JSR $1009 invert_A_and_a_fraction 30
+OBJ_VERTEX_Y = 25  # $84A9..$84B8 the radial component, the $84BA BPL apart
+OBJ_Y_POSITIVE = 3  # $84BA BPL y_is_positive taken
+OBJ_Y_NEGATIVE = 17  # ... not taken 2 + the $84BC 16-bit negate 15
+OBJ_VERTEX_X = 33  # $84C7..$84DD the tangential component and the JSR $9287
+OBJ_VERTEX_SCREEN_X = 35  # $84E0..$84F3 both 16-bit stores and the JSR $937F
+OBJ_VERTEX_Z = 14  # $84F6..$84FE the doubled height, the $8500 BCC apart
+OBJ_Z_POSITIVE = 3  # $8500 BCC z_is_positive taken
+OBJ_Z_NEGATIVE = 32  # ... not taken 2 + JSR $1009 30
+OBJ_VERTEX_VANGLE = 31  # $8505..$8516 the observer-relative z and the JSR $933D
+OBJ_VERTEX_STORE = 19  # $8519..$8524 the two screen_y stores
+OBJ_VERTEX_NEXT = 21  # $8525..$852F INC/INC/LDY/CPY 16 + BEQ nt 2 + JMP 3
+OBJ_VERTEX_LAST = 25  # ... $852D BEQ taken 3 + $8532 RTS 6 instead of the JMP
+OBJ_PASS_HEAD = 14  # $8540..$8548 $003B = $40, $0053 = 0 and $0C47 = 0
+OBJ_SHAPE = 7  # $854B LDX 3 + LDA $9CB6,X 4
+OBJ_CONVEX = 3  # $8550 BEQ plot_object_pass_loop taken: one pass covers the object
+OBJ_CONCAVE = 4  # ... not taken 2 + $8552 LSR A 2
+OBJ_MEANIE = 10  # $8553 BCS nt 2 + $8555 LDA $005A 3 + ADC #$C0 2 + JMP 3
+OBJ_UPRIGHT = 7  # $8553 BCS taken 3 + $855C LDA $0C5C 4
+OBJ_UPRIGHT_Z = 5  # $855F BNE plot_object_in_one_pass_if_negative taken 3 + EOR #$80 2
+OBJ_UPRIGHT_LOW = 6  # ... not taken 2 + $8561 LDA $0C5B 4
+OBJ_UPRIGHT_FLAT = 3  # $8564 BEQ plot_object_pass_loop taken
+OBJ_UPRIGHT_HALVE = 6  # ... not taken 2 + $8566 LSR A 2 + $8567 EOR #$80 2
+OBJ_ONE_PASS = 3  # $8569 BPL plot_object_pass_loop taken
+OBJ_TWO_PASS = 7  # ... not taken 2 + $856B LDA #2 2 + STA $0053 3
+OBJ_POLY_HEAD = 14  # $856F..$8576 the polygon bounds for this pass
+OBJ_POLY_TEST = 13  # $8579 STY 3 + LDA $A1A0,Y 4 + LDX $0053 3 + $8580 BEQ 3
+OBJ_POLY_PASS = 9  # ... BEQ not taken 2 + $8582 EOR $0C47 4 + $8585 BMI 3
+OBJ_POLY_SETUP = 41  # $8587..$85A2 the colour, $0017, the vertex pointer and the JSR
+OBJ_POLY_NEXT = 8  # $85A4 INY 2 + CPY $004F 3 + BCC plot_object_polygons_loop 3
+OBJ_POLY_DONE = 12  # ... BCC not taken 2 + $85A9 DEC $0053 5 + BMI/BEQ 3, +2
+OBJ_PASS_AGAIN = 11  # $85AB BEQ nt 2 + $85AF LDA #$80 2 + STA $0C47 4 + BMI 3
+OBJ_TAIL = 25  # $85B6..$85C3 reset $003C, clear $0C7A bit 7, restore Y and RTS

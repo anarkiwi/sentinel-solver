@@ -172,9 +172,9 @@ def test_pan_notch_cost_matches_the_measured_plot():
     rms = math.sqrt(statistics.fmean(e * e for e in errors))
     median = statistics.median(abs(e) for e in errors)
     bias = statistics.fmean(errors)
-    assert rms < 9.0, f"per-notch rms {rms:.1f} f"
-    assert median < 6.0, f"per-notch median |error| {median:.1f} f"
-    assert abs(bias) < 3.0, f"per-notch bias {bias:+.1f} f"
+    assert rms < 2.0, f"per-notch rms {rms:.1f} f"
+    assert median < 1.5, f"per-notch median |error| {median:.1f} f"
+    assert abs(bias) < 1.5, f"per-notch bias {bias:+.1f} f"
 
 
 def test_derived_notch_beats_the_flat_base_it_replaced():
@@ -190,4 +190,4 @@ def test_derived_notch_beats_the_flat_base_it_replaced():
     best_flat = statistics.fmean(meas)  # the rms-optimal flat constant
     flat_rms = math.sqrt(statistics.fmean((best_flat - m) ** 2 for m in meas))
     model_rms = math.sqrt(statistics.fmean((p - m) ** 2 for p, m in zip(pred, meas)))
-    assert model_rms < 0.5 * flat_rms, f"model {model_rms:.1f} vs flat {flat_rms:.1f} f"
+    assert model_rms < 0.1 * flat_rms, f"model {model_rms:.1f} vs flat {flat_rms:.1f} f"

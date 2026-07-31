@@ -58,6 +58,7 @@ def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE, window=None):
         "c1d": c1d,  # $001D
         "ref_lo": 0x00,  # $001F (play)
         "ref_hi": (folded - 0x0A) & 0xFF,  # $0020 ($267D)
+        "h_angle": h_angle,  # objects_h_angle, the bearing being priced
         "v_angle": v_angle,  # objects_v_angle used by $933D
     }
 
@@ -603,18 +604,72 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window
     return _project_scene_py(state, setup, observer)
 
 
-def fill_frames(setup, fill, mode, columns=None):
-    """rendercost.fill_cycles over a projected scene, in the buffer ``mode`` selects."""
+_OBJECT_MODEL_CACHE = []
+
+
+def _object_backend():
+    """(model tables, scratch) for the $21AE/$8533 emulation, or None.
+
+    The model geometry lives in the local game image; without it, or without numba,
+    the object term falls back to :func:`_inview_object_base`'s floor.
+    """
+    if not _OBJECT_MODEL_CACHE:
+        try:
+            from sentinel import objectcost, objmodel
+
+            if not objmodel.available() or not _HAVE_JIT:
+                _OBJECT_MODEL_CACHE.append(None)
+            else:
+                _OBJECT_MODEL_CACHE.append(
+                    (
+                        objectcost,
+                        objectcost.model_arrays(),
+                        objectcost.scratch_zp(),
+                        objectcost.workspace(),
+                        rendercost.tile_workspace(),
+                    )
+                )
+        except ImportError:  # pragma: no cover - numba absent
+            _OBJECT_MODEL_CACHE.append(None)
+    return _OBJECT_MODEL_CACHE[0]
+
+
+def fill_frames(state, setup, fill, mode, observer, columns=None, rows=None):
+    """One plot_world pass's fill cycles: the terrain sequence, and the object stacks
+    too when the game image is present ($21AE/$8533), else terrain only."""
     bufs, sect = rendercost.buffers(mode, columns)
-    return rendercost.fill_cycles(
-        fill,
+    top, bot = rows if rows else (rendercost.SCREEN_TOP, rendercost.SCREEN_BOTTOM)
+    args = (
         len(fill),
         (setup["quadrant"] - 2) & 0xFF,  # $004B ($267B)
         (setup["quadrant"] * 4) & 0xFF,  # $0066 ($2673)
         sect,
         bufs,
-        rendercost.SCREEN_TOP,
-        rendercost.SCREEN_BOTTOM,
+        top,
+        bot,
+    )
+    backend = _object_backend()
+    if backend is None:
+        return rendercost.fill_cycles(fill, *args), False
+    objectcost, model, zp, obj_work, tile_work = backend
+    left, right = rendercost.edge_tables()
+    return (
+        objectcost.pass_cycles(
+            np.frombuffer(state.mem, dtype=np.uint8),
+            zp,
+            model,
+            fill,
+            *args,
+            observer,
+            state.player,
+            setup["h_angle"],
+            setup["v_angle"],
+            tile_work,
+            obj_work,
+            left,
+            right,
+        ),
+        True,
     )
 
 
@@ -683,7 +738,7 @@ def _exact_render_cost(state, h, v, observer):
         return None
 
 
-def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None):
+def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=None):
     """One plot_world pass in PAL frames (docs/architecture.md): examine floor +
     terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
     buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
@@ -703,11 +758,13 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None):
         setup = _setup(state, h, v, obs, mode, window)
         tiles, _n, exam_cycles, fill = project_scene(state, h, v, obs, mode, window)
         columns = None if window is None else _window_columns(window)
-        fill_cycles = fill_frames(setup, fill, mode, columns)
-        base = _inview_object_base(state, tiles)
+        fill_cycles, exact_objects = fill_frames(
+            state, setup, fill, mode, obs, columns, rows
+        )
+        base = 0.0 if exact_objects else _inview_object_base(state, tiles)
         return (BASE_CYCLES + exam_cycles + fill_cycles + base) / FRAME_CYCLES
 
-    key = (scene_key(state), obs, h, v, mode, window)
+    key = (scene_key(state), obs, h, v, mode, window, rows)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)
 
 

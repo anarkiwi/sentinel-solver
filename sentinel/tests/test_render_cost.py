@@ -267,10 +267,10 @@ def test_transfer_tune_is_96_frames():
 
 
 def _fill_cycles(state, h, v, mode=projector.PLAY_MODE):
-    """The fill model's own cycles for one view."""
+    """The fill model's own cycles for one view, the object stacks included."""
     setup = projector._setup(state, h, v, state.player, mode)
     fill = projector.project_scene(state, h, v, None, mode)[3]
-    return projector.fill_frames(setup, fill, mode)
+    return projector.fill_frames(state, setup, fill, mode, state.player)[0]
 
 
 def test_offband_tiles_still_cost_their_prepare_polygon_calls():
@@ -292,8 +292,8 @@ def test_offband_tiles_still_cost_their_prepare_polygon_calls():
 
 
 def test_fill_model_tracks_the_measured_terrain_fill():
-    """rendercost emulates $2A24 -> $22AA in render order, so its cycles track the
-    golden's own terrain-fill subtree rather than an area proxy."""
+    """rendercost emulates $2A24 -> $22AA and $21AE in render order, so its cycles
+    track the golden's own fill subtrees rather than an area proxy."""
     ratios = []
     for key, rec in sorted(json.load(open(GOLDEN)).items()):
         ls, h, v = (int(x) for x in key.split(","))
@@ -301,12 +301,13 @@ def test_fill_model_tracks_the_measured_terrain_fill():
         want = rec["terrain_fill_cycles"]
         if want < 20_000:  # a view with almost no fill has no ratio worth pinning
             continue
+        want += rec["object_fill_cycles"]  # the emulation covers $21AE too
         got = _fill_cycles(state, h, v)
         ratios.append(got / want)
-        assert 0.45 <= got / want <= 1.35, f"{key}: {got} vs {want}"
+        assert 0.85 <= got / want <= 1.10, f"{key}: {got} vs {want}"
     assert len(ratios) >= 8
     ratios.sort()
-    assert 0.85 <= ratios[len(ratios) // 2] <= 1.15
+    assert 0.90 <= ratios[len(ratios) // 2] <= 1.05
 
 
 def test_fill_model_numba_twin_matches_python():

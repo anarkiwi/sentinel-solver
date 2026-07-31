@@ -14,6 +14,8 @@ PAN_DELTA = (0x14, 0xF8, 0x04, 0xF4)
 H_RIGHT, H_LEFT, V_UP, V_DOWN = 0, 1, 2, 3
 # $2993 buffer mode per direction: $994F A=#$02 for a bearing notch, $9939 A=#$00 for a pitch one.
 PAN_MODE = (2, 2, 0, 0)
+# $994B/$994D raster window per direction: a pitch notch plots a 64-row strip ($9939 Y=0), a bearing notch the whole play window ($994F Y=1).
+PAN_ROWS = ((0xF0, 0x30), (0xF0, 0x30), (0xF0, 0xB0), (0xF0, 0xB0))
 
 # Strip clears: $3912 stores 24 bytes/iteration over 64 iterations, $38AD 32 over 40, each called twice (odd then even X), at 5 cycles a store plus 7 for the loop tail.
 _CLEAR_CYCLES_H = 2 * 64 * (24 * 5 + 7)
@@ -65,7 +67,12 @@ def notch_frames(state, direction, plot_h, plot_v, observer=None, skey=None):
     def make():
         mode = PAN_MODE[direction]
         cost = projector.render_cost(
-            state, {"h_angle": plot_h, "v_angle": plot_v}, obs, mode
+            state,
+            {"h_angle": plot_h, "v_angle": plot_v},
+            obs,
+            mode,
+            None,
+            PAN_ROWS[direction],
         )
         return cost + CLEAR_FRAMES[0 if mode else 1]
 
