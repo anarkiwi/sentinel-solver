@@ -29,7 +29,7 @@ FIXTURE = "ls335.json"  # the only watch_play/3 fixture: it carries the enemy cl
 # $9730 flush, open_items 6) is now the dominant stall the facings want back.
 EXACT_SPANS = 117  # spans whose frame count the clock pins outright
 FACING_EXACT = 89
-FACING_ERRORS = 42  # was 37 against the $2845 examine; all but one are +1 rotation step
+FACING_ERRORS = 41  # was 42 before the fill carried its own cycles; all but one +1 step
 FACING_OVERSHOOT = 1  # ... the exception: a $1FFC stall that ate a rotation
 DIVERGENT_SPANS = (10, 15, 17, 18, 33)  # spans whose facings we get wrong
 ROM_ROUNDS = 60  # rounds of byte-exact agreement demanded on each  # of those, how many our enemy advance reproduces

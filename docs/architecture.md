@@ -1105,8 +1105,8 @@ golden view's plot_world cost by 0.23-0.85×.
 `render_cost(state, view, observer, mode, window, rows)` = the exact `$283D` examine cycles +
 the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), over
 `FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode, window, rows, ref_lo)`. It lands
-within 0.93-1.01× of the ROM on every golden view (median 0.966, mean absolute error 3.4%), at
-0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
+within 0.995-1.000× of the ROM on every golden view (median 0.997), at
+0.13-0.17 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
 exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
 
@@ -1114,7 +1114,7 @@ exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-bac
 | --- | --- |
 | (a) examine tree: `$283D` → `$37F2` in play, `$2845` + `$9287` + `$937F` + `$933D` otherwise | count and cycles **exact** (`passcost.TAB_*`/`EXAM_*`) on 12 of the 15 golden views, the other three within 0.1% |
 | (a2) the walk: `$2625` prologue, `$26DE`, `$27D7`, `$276F`, `$295D` | each block by the branch it takes (`passcost.WALK_*`/`ROW_*`/`SCAN_*`/`PLOT_ROW_*`) |
-| (b) terrain fill | sequence emulated (`rendercost.py`); loop counts exact on 14 of 15 golden views, cycles 0.92-0.96× the ROM's own fill subtree |
+| (b) terrain fill | sequence emulated (`rendercost.py`); loop counts exact on 14 of 15 golden views, cycles 0.991-1.000× the ROM's own fill subtree |
 | (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
 
 **Occlusion is exact.** `projector._occlusion_visible` is a byte-exact port validated
@@ -1155,6 +1155,32 @@ rasterise each into `$AD00`/`$AE00` with the ROM's own DDA, and `$22AA` walks
 `[$0004,$0006]` plotting two edge bytes and eight cycles per whole byte between them. Per-block
 cycles are `passcost.TILE_*`/`PREP_*`/`LINE_*`/`EDGE_*`/`STEEP_*`/`SHALLOW_*`/`WIDE_*`/`SPAN_*`,
 each the block's own instruction line.
+
+**py65 prices `DEC abs` at 3 cycles; the 6502 takes 6.** `py65.devices.mpu6502` declares
+`$CE` `cycles=3` and `deity_informant`'s `CYCLETIME` — which jennings reads — carries the
+same value, while ASL/LSR/ROL/ROR/INC absolute all measure 6. `$CE` is the self-modified
+loop counter of every plot_world DDA (`$2F62`, `$2FA8`, `$2FCB`, `$2FD6`, `$3122`, `$3179`),
+so an uncorrected oracle run understates a fill by ~3% — 8328 executions and 24984 cycles on
+2024,184,244 alone. `oracle.MPU` adds the missing 3 per `$CE`; `writemap.DEC_ABS_CYCLES`
+already corrected the static table. Every golden rose 0.0-3.3% and not one loop count moved.
+
+**`$352C` is not stubbed any more.** `prepare_render_context` zeroes `$0CDF`/`$0C73`
+instead, which is what a live `$1FFC` image carries, so `update_sound` runs its real
+29-cycle play path (`$352C` `LDA $0CDF` / `BNE` / three tune compares / `RTS`) exactly as
+`TILE_SOUND` charges it. The RTS stub cost 6 and made the model read 3-5% dear per plotted
+tile against the golden.
+
+**Every fill block is its own straight-line run, priced branch by branch.** Re-deriving them
+against a per-address ROM profile closed 85189 cycles on 2024,184,244 (-10.3% to -0.2%):
+`span_fill`'s row body was 25 cycles a row light (`$238C..$239C` 26 for 31, `$23B5..$23CF`
+29 for 45, `$23D0..$23DA` 13 for 20, `$22E0..$2306` 24 for 39), the two off-buffer branches
+did not carry the `$2380`/`$2384` compare that decides them, `plot_polygon` charged
+`$2AB7`'s clip test on a pass that never reached it and dropped the second pass's own
+`$2AC3 JSR`, and `$3019`/`$3040` are two `$1007` calls, not one. Four taken branches cross a
+page and cost 4: `$22BD`, `$23DA`, `$2A27`, `$2EFE`/`$2F06`/`$2F1B`/`$30EC`. `$23DA`'s
+target is self-modified, so it crosses only for fewer than 23 filled bytes (`SPAN_MIDDLE_FAR`).
+What is left is the ~0.2% of page-crossed reads (`LDA ($72),Y`, `LDA $0AE0,Y`) whose address
+the model does not carry.
 
 Two ROM facts the emulation forced, both wrong before: `prepare_polygon $2D6C` takes
 `$0025|$0005`, so a polygon's corners are `(col,row)` and its three neighbours — **not** the

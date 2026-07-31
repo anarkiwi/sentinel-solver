@@ -282,7 +282,7 @@
   }
  },
  "strip_replot": {
-  "_what": "the one $1FFC strip replot ls9795 reaches in 400 live frames, caught by running to $1F9F until the call that takes the on-screen branch: the ROM's own $0C62/$0C69 span at that moment, and $9630 frames from that $1F9F to the next $1289. proxy_cycles and py65_cycles are projector.strip_replot_frames' two backends on the captured image. Both now read UNDER the machine's wall (0.90 and 0.92 of it); the exact backend's earlier 1.54x was its $9AF6/$37F2 examine and its $2993/$245B context, both since fixed. What is left is the $2625 area fill, open on item 5",
+  "_what": "the one $1FFC strip replot ls9795 reaches in 400 live frames, caught by running to $1F9F until the call that takes the on-screen branch: the ROM's own $0C62/$0C69 span at that moment, and $9630 frames from that $1F9F to the next $1289. proxy_cycles and py65_cycles are projector.strip_replot_frames' two backends on the captured image, in PAL cycles. With the $2625 fill emulated block for block and the oracle's DEC abs corrected they read 20.4 and 20.7 wall frames against the machine's 22 (0.93 and 0.94 of it); the backends were 332100 and 338644 before, and the exact one's earlier 1.54x was its $9AF6/$37F2 examine and its $2993/$245B context. Measured against the machine's own foreground rather than its wall frames, a captured $1FFC JSR $2625 is 0.986-0.988x over four ls9795 passes",
   "board": 9795,
   "target": 3,
   "rom_left": 37,
@@ -290,7 +290,7 @@
   "machine_wall_frames": 22,
   "machine_2625_frame": 130,
   "model_charge_frame": 129,
-  "proxy_cycles": 332100,
-  "py65_cycles": 338644
+  "proxy_cycles": 343185,
+  "py65_cycles": 347830
  }
 }

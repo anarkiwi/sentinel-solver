@@ -111,25 +111,54 @@ builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vert
 `$FF80` on the machine against `$FF76` in the model — every other vertex of those polygons is
 byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
-**And the exact backend is itself dear on a live state.** One `$1FFC` strip replot caught on
-the machine at `$1F9F` (ls9795, slot 3, the ROM's own span 37/3) takes **22 whole frames** to
-the next `$1289`. On that captured image the proxy charges 387392 cycles, 1.12x, but
-`RENDER_COST_BACKEND=py65` charges **534090**, 1.54x — which the machine cannot have spent in
-22 PAL frames (24277 a frame against 19656). Calibrating the proxy against that backend
-inherits the error. Fixture `strip_replot`, measured from
-[8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early).
+**Closed — the terrain fill, and the oracle's own `DEC abs`.** Two errors, one of each sign.
+py65 declares `$CE DEC abs` at 3 cycles where the 6502 takes 6 (`deity_informant`'s
+`CYCLETIME` inherits it; `writemap.DEC_ABS_CYCLES` already corrected the static table but
+nothing corrected execution), and `$CE` is the self-modified loop counter of every plot_world
+DDA — 8328 executions and 24984 cycles on 2024,184,244, ~3% of a fill, missing from every
+golden and from `RENDER_COST_BACKEND=py65`. Against a corrected profile the fill's own blocks
+were 85189 cycles light on that view: `span_fill`'s row body 25 cycles a row (`$238C..$239C`
+priced 26 for 31, `$23B5..$23CF` 29 for 45, `$23D0..$23DA` 13 for 20, `$22E0..$2306` 24 for
+39), its two off-buffer branches missing the `$2380`/`$2384` compare that decides them,
+`plot_polygon` charging `$2AB7` on a pass that never reaches it and dropping the second
+section's `$2AC3 JSR`, `$3019`/`$3040` counted as one `$1007` call instead of two, and four
+page-crossed taken branches at 3 instead of 4. Every block is now its own straight-line run:
+per routine the model is within 0.2% of the ROM's own subtree (`prepare_polygon` and
+`plot_polygon` exact to the cycle), and what is left is the ~0.2% of page-crossed reads whose
+address the model does not carry. `prepare_render_context` also stopped stubbing `$352C`,
+zeroing `$0CDF`/`$0C73` instead — what a live `$1FFC` image carries — so the golden pays
+`update_sound`'s real 29-cycle play path. `render_cost` is **0.995-1.000x** the ROM on all 15
+golden views (was 0.916-1.008). Live: eleven `$1FFC JSR $2625` passes captured at the `$1FFC`
+halt on ls9795, ls0042 and ls2024, each re-run as the real `$2625` from its own 64 KB image,
+put the model at **0.986-1.002x** of the ROM's own cycles for that pass; on the two boards
+whose per-frame foreground is measured the machine's wall clock agrees with that ROM count to
+**1.000-1.003x**, so the wall, the ROM and the model are one number. (ls2024's wall is not:
+its passes carry ~6200 cycles a frame of non-foreground against ls9795's and ls0042's 4180,
+which is that board's own frame budget, unmeasured, not the fill.) Not one of the eight loop
+counts moved.
 
-**Resolves.** Stateful emulation of the whole `plot_world` fill sequence in render order, the
-interleaved object polygons included. Short of that the only honest levers are
-`projector.PER_SCANLINE`/`PER_PIXEL` — and first, the `$2993`/`$245B` context
-`oracle.update_object_cost` builds, since that is what "exact" is being measured against.
+**Still open — the object term.** `$21AE` is 65% of a strip's own `$2625` and the terrain
+around it is now exact, so what the strip-replot proxy has left is the object's: on ls0335
+h=112 slot=5 the model charges 186052 against the ROM's 175017 (+6.3%), where the same pass's
+terrain-plus-walk is 76464 against 77041 (-0.7%). `test_the_strip_replot_backend_is_the_roms_own_1f9f`'s
+band is two-sided now (0.98-1.02) for that reason.
 
-**The suspect is `$0078`.** `divide_and_arctan`'s `$0E2C BIT $78` decides whether `$0E1F`
-interpolates between two `$3B00`/`$3C01` table entries (`$0E35`/`$0E50`) or returns the raw
-entry (`$0E32 JMP $0E74`), so a stale bit 6 or 7 changes the arctan's **value**, not just the
-~90 cycles already recorded below. `relative._divide_and_arctan` starts `$0078` at 0 and
-cannot know better without whole-zero-page emulation, and `objectcost`'s vertex transform runs
-that chain per vertex.
+**`$0078` is stale in bit 0, not in the bits `$0E2C` reads.** Traced over the whole of
+2024,16,0's plot_world: 70 `$0E2C` reads and 70 writes each at `$0DF1` and `$0DF8`, nothing
+else touching the byte. The two RORs put the divide's own round-9 and round-10 quotient bits
+in bits 6 and 7, so what `$0E2C BIT` reads is never stale — but `$0DF1 ROR $78` rotates the
+*incoming* bit 0 out into the carry `$0DF3 ROL A` consumes, and that can tip round 10's own
+`$0DF6 CMP $76`. Counted: the incoming bit 0 is set on **25 of 70** calls on 2024,16,0, on 75
+of 140 on 335,0,0 and 26 of 68 on 42,192,0, and it changes the round-10 bit — hence `$0E30
+BVS`, hence the interpolation, hence the angle — on **exactly one call of the 70, on 2024,16,0
+alone**, and on none of the other two views. That is one flipped angle on the one view whose
+loop counts are wrong.
+
+**The model can know it.** Within a `plot_world` pass `$0078` has no writer but `$0D4A`
+itself, so its incoming bit 0 is the previous call's own output shifted twice: threading the
+byte from call to call through `relative._divide_and_arctan` (which today seeds it 0) is a
+single byte of state, not whole-zero-page emulation. `$0F9E`/`$1D9D`/`$1DC1` write it outside
+plot_world, so the thread has to start from the image rather than from 0.
 
 **Closed — the storing loops' second entry.** `$2EE4`'s narrow steep and shallow DDAs each have
 an entry for a line starting above the inner area (`$2FB6`, `$2FDC`) that walks those rows
@@ -161,15 +190,10 @@ zeroes both endpoints first. So the ROM is self-consistent and a "stale `$0B40`"
 mechanism. `$2D93` itself is exact: fuzzed 4000 random (`$0BA0`, `$A800`, `$0011`, `$0029`)
 against the real routine, **0 mismatches**. `$2F17` is not the mechanism either.
 
-Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
+Frame cost is 0.995-1.000x (median 0.997).
 
 **Also not derived.**
 
-- **`$0078` carries a bit between calls.** `divide_and_arctan`'s `$0E30 BVS` reads bit 6 of
-  `$0078`, which the *previous* call left there; `relative._divide_and_arctan` starts it at 0
-  and cannot know better without whole-zero-page emulation. Bisected to that single byte
-  against the live machine. It no longer reaches the examine — the play path's `$37F2` calls
-  no trig at all — but `objectcost`'s per-vertex transform still runs that chain.
 - **`$3030`'s two overflow guards** are modelled as a loop rather than the ROM's re-entry into
   `$3022`; equivalent in every case checked, but not the same control flow.
 - **`$27CE`, the observer's own tile.** `$2793` forces its four corners off the edges of the
@@ -183,8 +207,8 @@ Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Emulating `$0078` across a whole `$8475` object transform, which is the one byte
-between the model's arctan and the machine's.
+**Resolves.** Threading `$0078` through `_divide_and_arctan` from the image, so the one call
+in seventy whose round-10 bit the residue tips takes the machine's interpolation branch.
 
 ## 6. The py65 exact backend cannot price another slot's view
 
@@ -278,11 +302,16 @@ its own; the 116/24 this item used to quote were **partly the instrument's own s
 
 Ten of ls9795's 14 and all 4 of ls335's are `update_cd`. The other four of ls9795's catch the
 machine inside a replot, at `$9786`, `$978D`, `$988E` and `$9899` — the `$9730` buffer flush,
-i.e. the replot's *exit* — and they now diverge on `obj[62].h_angle`, not on `update_cd` at
-all (*The camera the replot borrows* below), where the
-model's debt has run out and the machine's has not. `render_cost` reads 332100 cycles for
-that pass against the machine's 22-frame wall (~343500 foreground), 0.97x — the `$2625` area
-fill, which is [5](#5-one-object-vertex-angle-is-ten-units-out), not this item.
+i.e. the replot's *exit* — three of them diverging on `obj[62].h_angle`, not on `update_cd` at
+all (*The camera the replot borrows* below), where the model's debt has run out and the
+machine's has not.
+
+**Measured — the fill was not the residual either.** Closing the `$2625` fill
+([5](#5-one-object-vertex-angle-is-ten-units-out)) moved the model from ~0.956x to
+**0.986-0.988x** of the machine's own foreground on four captured live `$1FFC JSR $2625`
+passes, and the gate did not move at all: ls9795 **14 -> 14**, ls335 **4 -> 4**, ls42
+**0 -> 0** over 3000 `--follow` frames, with the same four replot-exit PCs. So the ~3% of a
+replot the model used to owe is not what the enemy clock is late by.
 
 **Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
 own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
@@ -990,7 +1019,9 @@ the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so b
 incoming `$0078` can change the quotient bit, the interpolation and the angle. Both twins
 start it at 0. It is live in principle — `$0F9E` and `$1D9D`/`$1DC1` write `$0078` too — but
 over the natural 8x64 scan on ls42/ls335/ls9795 the sim matches the machine cycle for cycle
-and byte for byte, so it does not bite at these states.
+and byte for byte, so it does not bite at these states. Now counted inside plot_world as well
+([5](#5-one-object-vertex-angle-is-ten-units-out)): the residue reaches `$0DF3` on a third of
+the calls and tips round 10 on one of 278 across three views.
 
 **Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
 which staging inside the body cannot correct.
