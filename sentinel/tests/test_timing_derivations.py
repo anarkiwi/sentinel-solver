@@ -1265,7 +1265,8 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
 
     The proxy prices the same camera through the same $29C7 window and adds the $2211
     strip clear, the $9730 buffer flush and $1F9F's own line, all off the uncapped
-    $211B span; the residual left is the $2625 area-fill proxy's."""
+    $211B span. With the fill emulated block for block the residual is two-sided and
+    is the object term's, not the terrain's ($21AE is 65% of a strip's own $2625)."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
 
     mem = bytearray(_oracle().generate(landscape))
@@ -1285,7 +1286,7 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
             monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
             proxy = projector.strip_replot_frames(state, slot, left, cols, span)
             assert exact > 1.0  # the replot is always many frames, never a redraw
-            assert 0.98 <= proxy / exact <= 1.00
+            assert 0.98 <= proxy / exact <= 1.02
             checked += 1
             break
         if checked >= 2:

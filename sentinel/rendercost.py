@@ -56,6 +56,8 @@ def buffers(mode, window_columns=None):
     return out, mode
 
 
+# $23DA branches to $2458 - 4*bytes: at 23 bytes or more that target is back in page $23.
+SPAN_RUN_NEAR = 22
 LINES_LEAVE_FLAG = 6 + passcost.LINES_NOTHING  # $2EBE LDA/BNE taken + $2ECA SEC/RTS
 LINES_LEAVE_ROWS = 14 + passcost.LINES_NOTHING  # ... the $2EC2 row compare instead
 LINES_OK = passcost.LINES_DONE + passcost.LINES_RTS  # carry clear: something to fill
@@ -112,7 +114,7 @@ def _edge(
     else:
         cyc += passcost.EDGE_BOTTOM_TEST
         if y1lo >= top:
-            return cyc + passcost.EDGE_BOTTOM_OFF - 6
+            return cyc + passcost.EDGE_BOTTOM_OFF
         if y1lo >= rows[0]:
             cyc += passcost.EDGE_BOTTOM_KEEP
         elif y1lo >= bot:
@@ -164,7 +166,9 @@ def _edge(
         acc = ((dlo >> 1) ^ 0xFF) & 0xFF
         carry = 0
         store = True
-        if y0hi:  # $2FB6: run the rows above the inner area without storing
+        if not y0hi:
+            cyc += passcost.EDGE_INNER_ENTRY
+        else:  # $2FB6: run the rows above the inner area without storing
             cyc += passcost.OUTSIDE_ENTRY
             row = (row + 1) & 0xFF
             while True:
@@ -209,6 +213,7 @@ def _edge(
                     break
             store = True
             rows[R_STEEP] += 1  # $2F58 process_narrow_steep_line_loop
+            cyc += passcost.STEEP_ACC
             s = acc + dx + carry
             carry = 1 if s > 0xFF else 0
             acc = s & 0xFF
@@ -222,6 +227,8 @@ def _edge(
     rows[R_N_SHALLOW] += 1
     cyc += passcost.SHALLOW_SETUP  # shallow: at most one row step per column
     store_flat = (step < 0) if tab == 0 else (step > 0)
+    if not store_flat:
+        cyc += passcost.SHALLOW_SETUP_ALT
     n = (dx + 1) & 0xFF
     acc = ((dx >> 1) ^ 0xFF) & 0xFF
     carry = 0
@@ -249,7 +256,7 @@ def _edge(
                     break
     else:
         tabv[row] = x
-        cyc += passcost.SHALLOW_STORE
+        cyc += passcost.EDGE_INNER_ENTRY + passcost.SHALLOW_STORE
     while True:
         n -= 1
         if n == 0:
@@ -299,21 +306,26 @@ def _wide_area(area_v, area_h):
 def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
     """process_wide_line $30BD: the DDA for a line that leaves the inner area, whose
     store is self-modified per area to skip the row, plot the line, or plot the edge."""
-    cyc = passcost.WIDE_HEAD + passcost.WIDE_DIR + passcost.WIDE_SLOPE
+    cyc = passcost.WIDE_HEAD + passcost.WIDE_SLOPE
     dxl = (x0 - x1) & 0xFF
     dxh = (xh0 - xh1 - (1 if x0 < x1 else 0)) & 0xFF
     if dxh & 0x80:  # $30CA: ensure the delta is positive and step right
         dx = (-((dxh << 8) | dxl)) & 0xFF
         step, wrap = 1, 0x00
+        cyc += passcost.WIDE_DIR_NEG
     else:
         dx = dxl
         step, wrap = -1, 0xFF
+        cyc += passcost.WIDE_DIR
     tabv = right if tab else left
     area_v = y0hi
     area_h = xh0
     mode, acyc = _wide_area(area_v, area_h)
     cyc += acyc
-    row = (y0lo + (1 if area_v else 0)) & 0xFF
+    row = y0lo
+    if area_v:  # $30F6/$3150: the line starts above this area, so skip its first row
+        cyc += passcost.WIDE_AREA_INY
+        row = (row + 1) & 0xFF
     x = x0
     steep = dx < dlo
     if steep:
@@ -342,17 +354,20 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
                 cyc += passcost.WIDE_STEEP_AREA_V
                 area_v = (area_v - 1) & 0xFF
                 if area_v & 0x80:
-                    cyc += passcost.WIDE_LEAVE
+                    cyc += passcost.WIDE_LEAVE_AREA
                     break
                 if area_v == 0:
                     cyc += passcost.WIDE_STEEP_AREA_BACK
                     row = 0xFF
                     mode, acyc = _wide_area(area_v, area_h)
                     cyc += acyc
+                else:
+                    cyc += passcost.WIDE_AREA_ON
             n -= 1
             if n == 0:
                 cyc += passcost.WIDE_LEAVE
                 break
+            cyc += passcost.WIDE_TAIL
             cyc += passcost.WIDE_STEEP_STEP  # $3113 process_wide_steep_line_loop
             rows[R_WIDE_STEEP] += 1
             s = acc + dx  # $311C CLCs every lap, so no carry comes in
@@ -367,10 +382,12 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
                     mode, acyc = _wide_area(area_v, area_h)
                     cyc += acyc
             continue
+        cyc += passcost.WIDE_SHALLOW_STORE
         n -= 1
         if n == 0:  # $3183 BNE not taken: the line is done, $316D never runs again
             cyc += passcost.WIDE_LEAVE
             break
+        cyc += passcost.WIDE_TAIL
         cyc += passcost.WIDE_SHALLOW_STEP  # $316D the shallow loop's own column step
         rows[R_WIDE_SHALLOW] += 1
         x = (x + step) & 0xFF
@@ -389,13 +406,15 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
                 cyc += passcost.WIDE_SHALLOW_AREA_V
                 area_v = (area_v - 1) & 0xFF
                 if area_v & 0x80:
-                    cyc += passcost.WIDE_LEAVE
+                    cyc += passcost.WIDE_LEAVE_AREA
                     break
                 if area_v == 0:
                     cyc += passcost.WIDE_SHALLOW_AREA_BACK
                     row = 0xFF
                     mode, acyc = _wide_area(area_v, area_h)
                     cyc += acyc
+                else:
+                    cyc += passcost.WIDE_AREA_ON
     return cyc
 
 
@@ -404,27 +423,42 @@ def _section_line(vxy, left, right, sxb, sxh, vx, vy, dlo, dhi, tab, rows, top, 
     """process_line $3002: halve the line until both deltas fit a byte, then rasterise
     each section in turn."""
     rows[R_N_SECT] += 1
-    cyc = passcost.SECTION_HEAD + passcost.SECTION_INVERT + passcost.SECTION_TEST
     dxl = (sxb[vy] - sxb[vx]) & 0xFF
     dxh = (sxh[vy] - sxh[vx] - (1 if sxb[vy] < sxb[vx] else 0)) & 0xFF
     dx16 = dxh * 256 + dxl
     negative = dxh & 0x80
-    if negative:  # $3019 invert_A_and_a_fraction_if_negative
+    # $3019 and $3040 both call $1007 and $303E BIT re-reads the same sign byte.
+    invert = passcost.SECTION_INVERT_NEG if negative else passcost.SECTION_INVERT_POS
+    cyc = passcost.SECTION_HEAD + invert + passcost.SECTION_TEST
+    if negative:
         dx16 = (0x10000 - dx16) & 0xFFFF
     dy16 = dhi * 256 + dlo
     nsec = 0
-    if dx16 or dy16:
+    if max(dx16 >> 8, dy16 >> 8):  # $3020 tests the two HIGH bytes, not the deltas
+        laps = 0
         while max(dx16 >> 8, dy16 >> 8):  # $3022: halve until both fit in a byte
-            cyc += passcost.SECTION_HALVE
+            laps += 1
             dx16 >>= 1
             dy16 >>= 1
             nsec = (nsec * 2 + 1) & 0xFF
-        while (dy16 & 0xFF) == 0xFF or (dx16 & 0xFF) == 0xFF:  # $3030 overflow guard
-            cyc += passcost.SECTION_HALVE
-            dx16 >>= 1
-            dy16 >>= 1
-            nsec = (nsec * 2 + 1) & 0xFF
-    cyc += passcost.SECTION_SCALE + passcost.SECTION_SEED
+        cyc += passcost.SECTION_HALVE * laps
+        cyc += passcost.SECTION_HALVE_AGAIN * (laps - 1)
+    else:
+        cyc += passcost.SECTION_ZERO
+    while (dy16 & 0xFF) == 0xFF or (dx16 & 0xFF) == 0xFF:  # $3030 overflow guard
+        if (dy16 & 0xFF) == 0xFF:
+            cyc += passcost.SECTION_GUARD_LO
+        else:
+            cyc += passcost.SECTION_GUARD_HI
+        cyc += passcost.SECTION_HALVE
+        dx16 >>= 1
+        dy16 >>= 1
+        nsec = (nsec * 2 + 1) & 0xFF
+    cyc += passcost.SECTION_SCALE + passcost.SECTION_SEED + invert
+    if nsec == 0:
+        cyc += passcost.SECTION_ONE
+    else:
+        cyc += passcost.SECTION_LOOP_AGAIN * (nsec - 1)
     y_hi, y_lo = vxy[vy, 3], vxy[vy, 2]
     x, xh = sxb[vy], sxh[vy]
     step_lo, step_hi = dy16 & 0xFF, (dy16 >> 8) & 0xFF
@@ -521,7 +555,7 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
                 r_off = (((r - b35) & 0xFF) * 2) & 0xF8
             cyc += passcost.SPAN_READ_LEFT
             if ln >= b36:  # $23A6: the left edge is right of the buffer
-                cyc += passcost.SPAN_EXTENDS
+                cyc += passcost.SPAN_LEFT_OFF + passcost.SPAN_EXTENDS
                 flags[0] = 0
             elif ln < b35:  # $2340: clip the row to the left edge of the buffer
                 cyc += passcost.SPAN_CLIP_LEFT
@@ -539,6 +573,8 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
             if middle:
                 cyc += passcost.SPAN_MIDDLE
                 nbytes = ((r_off - l_off) & 0xFF) // 8 - 1
+                if nbytes <= SPAN_RUN_NEAR:  # $23D4 self-modifies the branch offset
+                    cyc += passcost.SPAN_MIDDLE_FAR
                 flags[F_SPAN_BYTES] += nbytes
                 cyc += passcost.SPAN_BYTE * nbytes
         if row == p04:
@@ -744,11 +780,13 @@ def _plot_polygon(
         if passes == 1 or p == 1:
             cyc += passcost.PP_RTS
             break
-        cyc += passcost.PP_CLIP_TEST
-        if not nothing and flags[sect] == 1:  # $2ABC CMP #$01, not a truth test
-            cyc += passcost.PP_RTS
-            break
-        cyc += passcost.PP_CLIPPED + passcost.BUFVARS
+        if not nothing:  # $2AB2 BCS $2AC0 skips the test when nothing was filled
+            cyc += passcost.PP_CLIP_TEST
+            if flags[sect] == 1:  # $2ABC CMP #$01, not a truth test
+                cyc += passcost.PP_CLEAN + passcost.PP_RTS
+                break
+            cyc += passcost.PP_CLIPPED
+        cyc += passcost.BUFVARS + passcost.PP_SECOND
         sect ^= 1
     return cyc, sect
 
@@ -779,6 +817,8 @@ def tile_cycles(tiles, i, s4b, s66, sect, bufs, top, bot, left, right, work):
             checker = True
         elif nib == 0x0C or nib == 0x04:  # $2A41 a flat and a sloping edge
             cyc += passcost.TILE_EDGE_NIB
+            if nib == 0x04:  # $2A3B BEQ not taken: the $2A3D compare instead
+                cyc += passcost.TILE_EDGE_NIB_LOW
             s45 = s4b & 1
             kinds = 2
         else:
