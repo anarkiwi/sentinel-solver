@@ -68,6 +68,76 @@ _EX_OFF_RIGHT = passcost.EXAM_OFF_RIGHT
 _EX_ON_RIGHT = passcost.EXAM_ON_RIGHT
 _EX_TAIL = passcost.EXAM_TAIL
 
+# The $2625 walk's own branch costs (see passcost); cnt[2] accumulates them.
+_W_SETUP = passcost.WALK_SETUP
+_W_QUAD = np.array(passcost.WALK_SETUP_QUAD, dtype=np.int64)
+_W_PITCH = passcost.WALK_SETUP_PITCH
+_W_ROWS = passcost.WALK_ROWS
+_W_HINT = passcost.WALK_HINT
+_W_SOUND = passcost.TILE_SOUND
+_R_HEAD = passcost.ROW_HEAD
+_R_LAST = passcost.ROW_LAST
+_R_MORE = passcost.ROW_MORE
+_R_NEAR = passcost.ROW_NEAR
+_R_OBS = passcost.ROW_OBSERVER
+_R_SCAN = passcost.ROW_SCAN
+_R_START_SAME = passcost.ROW_START_SAME
+_R_START_AFTER = passcost.ROW_START_AFTER + passcost.ROW_START_AFTER_TAIL
+_R_START_BEFORE = passcost.ROW_START_BEFORE + passcost.ROW_START_BEFORE_TAIL
+_R_EXTRA = passcost.ROW_EXTRA
+_R_EXTRA_LAST = passcost.ROW_EXTRA_LAST
+_R_END_SAME = passcost.ROW_END_SAME
+_R_END_BEFORE = passcost.ROW_END_BEFORE + passcost.ROW_END_BEFORE_TAIL
+_R_END_AFTER = passcost.ROW_END_AFTER + passcost.ROW_END_AFTER_TAIL
+_R_PLOT = passcost.ROW_PLOT
+_O_HEAD = passcost.OBS_ROW_HEAD
+_O_START = passcost.OBS_ROW_START
+_O_TEST = passcost.OBS_ROW_TEST
+_O_END = passcost.OBS_ROW_END
+_O_SKIP = passcost.OBS_ROW_SKIP
+_O_PLOT = passcost.OBS_ROW_PLOT
+_O_TILE = passcost.OBS_TILE + passcost.OBS_TILE_TEST
+_O_TILE_ON = passcost.OBS_TILE_ON + passcost.OBS_TILE_TAIL
+_O_TILE_OFF = passcost.OBS_TILE_OFF
+_S_HEAD = passcost.SCAN_HEAD
+_S_OFF = passcost.SCAN_OFF
+_S_VISIBLE = passcost.SCAN_VISIBLE
+_S_CROPPED = passcost.SCAN_CROPPED
+_S_WHOLE = passcost.SCAN_WHOLE
+_S_INC = passcost.SCAN_INC
+_S_INC_END = passcost.SCAN_INC_END
+_S_DEC = passcost.SCAN_DEC
+_S_DEC_END = passcost.SCAN_DEC_END
+_S_END_HEAD = passcost.SCAN_END_HEAD
+_S_END_WHOLE = passcost.SCAN_END_WHOLE
+_S_END_CROP = passcost.SCAN_END_CROP
+_S_END_GAP = passcost.SCAN_END_GAP
+_S_END_STOP = passcost.SCAN_END_STOP
+_S_GAP_LOOP = passcost.SCAN_GAP_LOOP
+_S_GAP_HIT = passcost.SCAN_GAP_HIT
+_S_GAP_STOP = passcost.SCAN_GAP_STOP
+_S_CROP_HEAD = passcost.SCAN_CROP_HEAD
+_S_CROP_MORE = passcost.SCAN_CROP_MORE
+_S_CROP_AGAIN = passcost.SCAN_CROP_AGAIN
+_S_CROP_EXIT = passcost.SCAN_CROP_EXIT
+_S_CROP_LEFT = passcost.SCAN_CROP_LEFT
+_S_CROP_STOP = passcost.SCAN_CROP_STOP
+_S_START_LOOP = passcost.SCAN_START_LOOP
+_S_START_HIT = passcost.SCAN_START_HIT
+_S_START_STOP = passcost.SCAN_START_STOP
+_S_START_SETUP = passcost.SCAN_START_SETUP
+_S_LEFT_LOOP = passcost.SCAN_LEFT_LOOP
+_S_LEFT_HIT = passcost.SCAN_LEFT_HIT
+_S_LEFT_STOP = passcost.SCAN_LEFT_STOP
+_P_ROW_HEAD = passcost.PLOT_ROW_HEAD
+_P_ROW_FRONT = passcost.PLOT_ROW_FRONT
+_P_ROW_BACK = passcost.PLOT_ROW_BACK
+_P_ROW_TURN = passcost.PLOT_ROW_TURN
+_P_ROW_DONE = passcost.PLOT_ROW_DONE
+_P_ROW_BACK_END = passcost.PLOT_ROW_BACK_END
+_P_ROW_BACK_LOW = passcost.PLOT_ROW_BACK_LOW
+_P_ROW_BACK_EMPTY = passcost.PLOT_ROW_BACK_EMPTY
+
 
 @njit(cache=True, inline="always")
 def _tile_byte(mem, x, y):
@@ -361,21 +431,31 @@ def _find_end(mem, zp, su, vis, cres, seen, cnt, row, col):
     """find_end_of_row_loop $27E2."""
     while True:
         start = col
+        cnt[2] += _S_END_HEAD
         if col == _LAST_TILE:
+            cnt[2] += _S_INC_END + _S_END_STOP
             return start, _LAST_TILE
         col += 1
+        cnt[2] += _S_INC
         a = _probe(mem, zp, su, vis, cres, seen, cnt, col, row)
         if a == 0x81:
+            cnt[2] += _S_END_WHOLE
             continue
         if a == 0x80:
+            cnt[2] += _S_END_CROP
             return start, col
+        cnt[2] += _S_END_GAP
         while True:  # find_first_visible_tile_at_end_loop $27F3
             if col == _LAST_TILE:
+                cnt[2] += _S_INC_END + _S_GAP_STOP
                 return start, col
             col += 1
+            cnt[2] += _S_INC
             a = _probe(mem, zp, su, vis, cres, seen, cnt, col, row)
             if a == 0:
+                cnt[2] += _S_GAP_LOOP
                 continue
+            cnt[2] += _S_GAP_HIT
             return start, col
 
 
@@ -384,10 +464,14 @@ def _start_left(mem, zp, su, vis, cres, seen, cnt, row, end, col):
     """find_first_visible_tile_at_start_of_row_loop $2820."""
     while True:
         if col == 0:
+            cnt[2] += _S_DEC_END + _S_LEFT_STOP
             return 0, end
         col -= 1
+        cnt[2] += _S_DEC
         if _probe(mem, zp, su, vis, cres, seen, cnt, col, row) == 0:
+            cnt[2] += _S_LEFT_LOOP
             continue
+        cnt[2] += _S_LEFT_HIT
         return col, end
 
 
@@ -396,14 +480,21 @@ def _crop_right(mem, zp, su, vis, cres, seen, cnt, row, col):
     """tile_is_cropped_to_right $27FF."""
     while True:
         end = col
+        cnt[2] += _S_CROP_HEAD
         if col == 0:
+            cnt[2] += _S_DEC_END + _S_CROP_STOP
             return 0, end
         col -= 1
+        cnt[2] += _S_DEC
         a = _probe(mem, zp, su, vis, cres, seen, cnt, col, row)
+        cnt[2] += _S_CROP_MORE
         if a == 0x80:
+            cnt[2] += _S_CROP_AGAIN
             continue
         if a != 0:  # into_find_first_visible_tile_at_start_of_row_loop $2825
+            cnt[2] += _S_CROP_EXIT
             return col, end
+        cnt[2] += _S_CROP_LEFT
         return _start_left(mem, zp, su, vis, cres, seen, cnt, row, end, col)
 
 
@@ -411,20 +502,28 @@ def _crop_right(mem, zp, su, vis, cres, seen, cnt, row, col):
 def _find_extent(mem, zp, su, vis, cres, seen, cnt, row, hint):
     """find_visible_extent $27D7."""
     col = hint & 0xFF
+    cnt[2] += _S_HEAD
     a = _probe(mem, zp, su, vis, cres, seen, cnt, col, row)
     if a == 0x80:
+        cnt[2] += _S_VISIBLE + _S_CROPPED
         return _crop_right(mem, zp, su, vis, cres, seen, cnt, row, col)
     if a != 0:
+        cnt[2] += _S_VISIBLE + _S_WHOLE
         return _find_end(mem, zp, su, vis, cres, seen, cnt, row, col)
+    cnt[2] += _S_OFF
     while True:  # find_first_visible_tile_at_start_loop $2811
         if col == _LAST_TILE:  # endRow2 $2818
+            cnt[2] += _S_INC_END + _S_START_STOP + _S_START_SETUP
             return _start_left(
                 mem, zp, su, vis, cres, seen, cnt, row, _LAST_TILE, hint & 0xFF
             )
         col += 1
+        cnt[2] += _S_INC
         a = _probe(mem, zp, su, vis, cres, seen, cnt, col, row)
         if a == 0:
+            cnt[2] += _S_START_LOOP
             continue
+        cnt[2] += _S_START_HIT + _S_START_SETUP
         return _start_left(mem, zp, su, vis, cres, seen, cnt, row, col, hint & 0xFF)
 
 
@@ -440,7 +539,7 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
     # row $20, so the cache spans 256 columns by 33 rows -- not 32 by 32.
     cres = np.zeros((256, _N + 1, 7), dtype=np.int64)
     seen = np.zeros((256, _N + 1), dtype=np.uint8)
-    cnt = np.zeros(2, dtype=np.int64)
+    cnt = np.zeros(3, dtype=np.int64)
     c3 = su[S_C3]
     c1d = su[S_C1D]
     rrow = np.zeros(_N + 1, dtype=np.int64)
@@ -448,56 +547,93 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
     rhi = np.zeros(_N + 1, dtype=np.int64)
     nrows = 0
     row = _LAST_TILE
+    cnt[2] += (
+        _W_SETUP
+        + _W_QUAD[su[S_QUAD]]
+        + (_W_PITCH if su[S_VANGLE] & 0x80 else 0)
+        + _W_ROWS
+        + _R_SCAN
+    )
     start, end = _find_extent(mem, zp, su, vis, cres, seen, cnt, row, row_hint)
+    cnt[2] += _W_HINT
     while True:
         row -= 1
+        cnt[2] += _R_HEAD + _W_SOUND
         if row < 0:
+            cnt[2] += _R_LAST
             break
+        cnt[2] += _R_MORE
         if row == c1d:  # consider_plotting_observer_row $276F: last, observer row
+            cnt[2] += _R_OBS + _O_HEAD
             y = (start + 1) & 0xFF
             if y == c3:  # plot_observer_row $2786: plots the single tile $0037
+                cnt[2] += _O_START + _O_PLOT
                 _probe(mem, zp, su, vis, cres, seen, cnt, start, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
                 rrow[nrows], rlo[nrows], rhi[nrows] = row, start, y
                 nrows += 1
             elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
+                cnt[2] += _O_TEST + _O_END + _O_PLOT
                 _probe(mem, zp, su, vis, cres, seen, cnt, (end - 1) & 0xFF, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, end, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
                 rrow[nrows], rlo[nrows], rhi[nrows] = row, (end - 1) & 0xFF, end
                 nrows += 1
             else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
+                cnt[2] += _O_TEST + _O_SKIP
                 _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
+            # $279E: the observer's own tile is plotted only when it is on screen.
+            cnt[2] += _O_TILE
+            ic = _cached(mem, zp, su, vis, cres, seen, c3, row)
+            cnt[2] += _O_TILE_ON if cres[ic, row, 3] < 2 else _O_TILE_OFF
             break
+        cnt[2] += _R_NEAR + _R_SCAN
         p_start, p_end = start, end
         start, end = _find_extent(mem, zp, su, vis, cres, seen, cnt, row, p_start)
         if start < p_start:  # this_row_starts_before $2713
+            cnt[2] += _R_START_BEFORE
             y = (p_start - 1) & 0xFF
             _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
             while y != start:
                 y = (y - 1) & 0xFF
+                cnt[2] += _R_EXTRA
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
+            cnt[2] += _R_EXTRA_LAST
         elif start > p_start:  # calculate_this_row_new_first_tiles $2709
+            cnt[2] += _R_START_AFTER
             y = (start - 1) & 0xFF
             _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
             while y != p_start:
                 y = (y - 1) & 0xFF
+                cnt[2] += _R_EXTRA
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
+            cnt[2] += _R_EXTRA_LAST
+        else:
+            cnt[2] += _R_START_SAME
         if end > p_end:  # this_row_ends_after $2741
+            cnt[2] += _R_END_AFTER
             y = p_end
             while True:
                 y = (y + 1) & 0xFF
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
                 if y == end:
                     break
+                cnt[2] += _R_EXTRA
+            cnt[2] += _R_EXTRA_LAST
         elif end < p_end:  # calculate_this_row_new_last_tiles $2737
+            cnt[2] += _R_END_BEFORE
             y = end
             while True:
                 y = (y + 1) & 0xFF
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
                 if y == p_end:
                     break
+                cnt[2] += _R_EXTRA
+            cnt[2] += _R_EXTRA_LAST
+        else:
+            cnt[2] += _R_END_SAME
+        cnt[2] += _R_PLOT
         rrow[nrows] = row
         rlo[nrows] = min(start, p_start)
         rhi[nrows] = max(end, p_end)
@@ -518,6 +654,18 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
         re = (rrow[i] + offr) & 0xFF
         lo, hi = rlo[i], rhi[i]  # $295D plots up to $0003, then back down from $0038
         nfront = max(0, min(hi, c3) - lo)
+        nback = hi - max(lo, c3) if c3 < hi else 0
+        cnt[2] += _P_ROW_HEAD + nfront * _P_ROW_FRONT + nback * _P_ROW_BACK
+        if nfront == hi - lo:  # $2963: the front half ran to $0038 and left
+            cnt[2] += _P_ROW_DONE
+        else:
+            cnt[2] += _P_ROW_TURN
+            if max(lo, c3) == 0:  # $2978 BMI: the descent ran off the bottom
+                cnt[2] += _P_ROW_BACK_EMPTY
+            elif c3 <= lo:  # $297E BCC: it reached $0037 before $0003
+                cnt[2] += _P_ROW_BACK_LOW
+            else:
+                cnt[2] += _P_ROW_BACK_END
         for k in range(hi - lo):
             col = lo + k if k < nfront else hi - 1 - (k - nfront)
             if k >= nfront and col < c3:
@@ -571,4 +719,4 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
             out[n, 10] = bot - top
             ws[n] = span
             n += 1
-    return out, ws, n, cnt[0], cnt[1], fill[:nfill]
+    return out, ws, n, cnt[0], cnt[1], fill[:nfill], cnt[2]

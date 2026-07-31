@@ -671,6 +671,97 @@ STACK_ABOVE_HEAD = 4  # $21FF LDY $0C6C
 STACK_PLOT = 17  # $2202 LDA 4 + AND 2 + TAY 2 + DEC 6 + BPL 3, the JSR apart
 STACK_RTS = 6  # $2210 RTS
 
+# plot_world's walk: the $2625 prologue, the $26DE row loop, the $27D7 row scan and the $295D plot loop, each block by its own branches (sentinel/projector.py).
+WALK_SETUP = 172  # $2625..$26C7 looking north with a non-negative v_angle
+WALK_SETUP_QUAD = (0, 5, 9, 3)  # $2684's four view cases, north/east/south/west
+WALK_SETUP_PITCH = 1  # $263C BPL not taken 2 + $263E ORA #$F0 2, less the taken 3
+WALK_ROWS = 17  # $26C9..$26D6: row $1F, the $0C48 hint into $0032 and $0005 = 0
+WALK_HINT = 7  # $26D9 LDA $0032 3 + STA $0C48 4
+ROW_HEAD = 25  # $26DE the $0005 flip 8 + $26E4 the $0037/$0038 copy 12 + $26EF DEC 5
+ROW_LAST = 11  # $26F1 BMI leave_with_carry_clear taken 3 + $26FC CLC 2 + RTS 6
+ROW_MORE = 8  # ... not taken 2 + $26F3 LDY $0026 3 + CPY $001D 3
+ROW_NEAR = 3  # $26F7 BNE move_to_nearer_row taken
+ROW_OBSERVER = 5  # ... not taken 2 + $26F9 JMP consider_plotting_observer_row 3
+ROW_SCAN = 6  # $26D6/$26FE JSR find_visible_extent_of_row_of_tiles
+ROW_START_SAME = 9  # $2701 LDY 3 + CPY $0037 3 + $2705 BEQ consider_end_of_row 3
+ROW_START_AFTER = 4  # ... BEQ not taken 2 + $2707 BCC not taken 2
+ROW_START_AFTER_TAIL = 3  # $2711 BEQ consider_end_of_row
+ROW_START_BEFORE = 19  # $2707 BCC taken 3 + $2713..$271B the bank flip and INC $0026 16
+ROW_START_BEFORE_TAIL = 16  # $2725 STY 3 + DEC $0026 5 + the bank flip back 8
+ROW_EXTRA = (
+    8  # one extra tile: DEY/INY 2 + CPY 3 + BNE taken 3, the JSR being the examine's
+)
+ROW_EXTRA_LAST = 7  # ... the BNE not taken
+ROW_END_SAME = 9  # $272F LDY 3 + CPY $0038 3 + $2733 BEQ plot_row 3
+ROW_END_BEFORE = 4  # ... BEQ not taken 2 + $2735 BCS not taken 2
+ROW_END_BEFORE_TAIL = 3  # $273F BEQ plot_row
+ROW_END_AFTER = 19  # $2735 BCS taken 3 + $2741..$2749 16
+ROW_END_AFTER_TAIL = 16  # $2753 STY 3 + DEC $0026 5 + the bank flip back 8
+ROW_PLOT = 16  # $275D JSR $295D 6 + BIT $0C1B 4 + BPL taken 3 + $276A JMP 3
+OBS_ROW_HEAD = 8  # $276F LDY $0037 3 + INY 2 + CPY $0003 3
+OBS_ROW_START = 9  # $2774 BNE nt 2 + $2776 STY $0038 3 + JMP plot_observer_row 3, +1
+OBS_ROW_TEST = 13  # ... BNE taken 3 + $277B LDY 3 + DEY/DEY 4 + CPY $0003 3
+OBS_ROW_END = 8  # $2781 BNE not taken 2 + $2783 INY 2 + STY $0037 3, +1
+OBS_ROW_SKIP = 3  # $2781 BNE skip_plotting_observer_row taken
+OBS_ROW_PLOT = (
+    24  # $2786 the two examine calls' own LDYs 6 + JSR $295D 6, the JSRs apart
+)
+OBS_TILE = (
+    19  # $2793 LDA/STA $0005 5 + INC $0026 5 + LDY $0003 3, the examine's JSR apart
+)
+OBS_TILE_TEST = 6  # $279E LDA $0AE0,Y 4 + CMP #$02 2
+OBS_TILE_OFF = 11  # $27A3 BCS taken 3 + $27D1 CLC 2 + RTS 6
+OBS_TILE_ON = (
+    72  # ... not taken 2 + $27A5..$27CC forcing the tile's four corners 64 + 6
+)
+OBS_TILE_TAIL = 8  # $27D1 CLC 2 + RTS 6
+SCAN_HEAD = 3  # $27D7 LDY $0032, the $27D9 JSR being the examine's own
+SCAN_OFF = 3  # $27DC BEQ find_first_visible_tile_at_start_loop taken
+SCAN_VISIBLE = 4  # ... not taken 2 + $27DE CMP #$80 2
+SCAN_CROPPED = 3  # $27E0 BEQ tile_is_cropped_to_right taken
+SCAN_WHOLE = 2  # ... not taken
+SCAN_INC = 16  # $2836..$2840 increase_tile_column, falling into $2845
+SCAN_INC_END = 24  # ... $2839 BEQ taken: the JSR 6 + the head 10 + $282C SEC/RTS 8
+SCAN_DEC = 10  # $282E LDY 3 + BEQ nt 2 + DEY 2 + JMP $2845 3
+SCAN_DEC_END = 20  # ... BEQ taken: the JSR 6 + LDY 3 + BEQ 3 + $282C 8
+SCAN_END_HEAD = 6  # $27E2 LDA $0024 3 + STA $0032 3
+SCAN_END_WHOLE = 7  # $27E9 BCS nt 2 + CMP #$81 2 + $27ED BEQ find_end_of_row_loop 3
+SCAN_END_CROP = 9  # ... BEQ nt 2 + CMP #$80 2 + $27F1 BEQ reached_end_of_row 3, +2
+SCAN_END_GAP = 8  # ... $27F1 BEQ not taken 2: fall into find_first_visible_tile_at_end
+SCAN_END_STOP = 3  # $27E9 BCS reached_end_of_row taken
+SCAN_GAP_LOOP = 5  # $27F6 BCS nt 2 + $27F8 BEQ find_first_visible_tile_at_end_loop 3
+SCAN_GAP_HIT = 4  # ... BEQ not taken
+SCAN_GAP_STOP = 3  # $27F6 BCS reached_end_of_row taken
+SCAN_END_TAIL = 12  # $27FA LDA $0024 3 + STA $0033 3 + RTS 6
+SCAN_CROP_HEAD = 6  # $27FF LDA $0024 3 + STA $0033 3
+SCAN_CROP_MORE = 4  # $2806 BCS nt 2 + $2808 CMP #$80 2
+SCAN_CROP_AGAIN = 3  # $280A BEQ tile_is_cropped_to_right taken
+SCAN_CROP_EXIT = 9  # ... nt 2 + CMP #0 2 + JMP $2825 3 + the $2825 BEQ not taken 2
+SCAN_CROP_LEFT = 10  # ... with the $2825 BEQ into the start-of-row loop taken 3
+SCAN_CROP_STOP = 3  # $2806 BCS reached_start_of_row taken
+SCAN_START_LOOP = (
+    5  # $2814 BCS nt 2 + $2816 BEQ find_first_visible_tile_at_start_loop 3
+)
+SCAN_START_HIT = 4  # ... BEQ not taken
+SCAN_START_STOP = 3  # $2814 BCS reached_end_of_row taken
+SCAN_START_SETUP = 12  # $2818 the $0033 store 6 + the $0032 hint back into $0024 6
+SCAN_LEFT_LOOP = (
+    5  # $2823 BCS nt 2 + $2825 BEQ find_first_visible_tile_at_start_of_row 3
+)
+SCAN_LEFT_HIT = 4  # ... BEQ not taken
+SCAN_LEFT_STOP = 3  # $2823 BCS reached_start_of_row taken
+SCAN_LEFT_TAIL = 12  # $2827 LDA $0024 3 + STA $0032 3 + RTS 6
+PLOT_ROW_HEAD = 6  # $295D LDA $0037 3 + STA $0025 3
+PLOT_ROW_FRONT = 27  # $2961 one ascending lap, both compares, the JSR and the $296C INC
+PLOT_ROW_TURN = 14  # $2961 CMP 3 + BCS nt 2 + CMP $0003 3 + BCS taken 3 + $2973 LDA 3
+PLOT_ROW_DONE = 12  # $2961 CMP $0038 3 + BCS leave taken 3 + $298C RTS 6
+PLOT_ROW_BACK = 31  # $2975 one descending lap, its three compares and the JSR
+PLOT_ROW_BACK_END = (
+    26  # ... $2980 CMP $0003 3 + BCC leave taken 3 + RTS 6, less the JSR 9
+)
+PLOT_ROW_BACK_LOW = 21  # ... $297C CMP $0037 3 + BCC leave taken 3 + RTS 6 instead
+PLOT_ROW_BACK_EMPTY = 13  # $2975 SEC 2 + SBC 2 + $2978 BMI leave taken 3 + RTS 6
+
 SC8_CALL = 6  # $848F JSR calculate_sine_and_cosine $0F70
 SC8_POS = 3  # $0F70 BPL positive_sine taken
 SC8_NEG = 4  # ... not taken 2 + $0F72 EOR #$40 2

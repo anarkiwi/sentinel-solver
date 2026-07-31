@@ -111,7 +111,7 @@ def _check(data):
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles, n_examine, exam_cycles, _fill = projector.project_scene(state, h, v)
+        tiles, n_examine, exam_cycles = projector.project_scene(state, h, v)[:3]
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine} != {rec}"
         assert len(tiles) == rec["n_filled"], f"{key} plots {len(tiles)} != {rec}"
         # The $2845 tree is cycle-exact bar one $0078-stale branch a pass (open item 5).
@@ -332,3 +332,16 @@ def test_fill_model_numba_twin_matches_python():
         assert rendercost.fill_cycles(*args) == rendercost.fill_cycles.py_func(*args)
         seen += 1
     assert seen > 10
+
+
+def test_the_walk_around_the_examines_is_priced():
+    """$26DE/$27D7/$295D are 0.6-3.0% of a pass, one-signed if unpriced; the model
+    charges them off their own branches, so the term is non-zero and scene-dependent."""
+    walks = []
+    for key in sorted(json.load(open(GOLDEN))):
+        ls, h, v = (int(x) for x in key.split(","))
+        state = landscape.generate(ls)
+        walk = projector.project_scene(state, h, v)[4]
+        assert walk > 0, key
+        walks.append(walk)
+    assert len(set(walks)) > 10, "the walk term is not varying with the scene"

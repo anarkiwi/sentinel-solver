@@ -137,7 +137,7 @@ def _scene_cases():
 
 def _same(a, b):
     """Compare two project_scene results: tiles/counts by value, ``fill`` elementwise."""
-    return a[:3] == b[:3] and np.array_equal(a[3], b[3])
+    return a[:3] == b[:3] and np.array_equal(a[3], b[3]) and a[4] == b[4]
 
 
 @pytest.mark.parametrize("ls", LANDSCAPES)

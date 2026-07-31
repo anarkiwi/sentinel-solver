@@ -135,7 +135,7 @@ def test_pan_notch_selects_the_same_tiles_as_the_rom():
     """
     for key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)
-        tiles, n_examine, _exam, _fill = projector.project_scene(
+        tiles, n_examine, _exam, _fill, _walk = projector.project_scene(
             state, ph, pv, None, pancost.PAN_MODE[d]
         )
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine}"
@@ -172,9 +172,9 @@ def test_pan_notch_cost_matches_the_measured_plot():
     rms = math.sqrt(statistics.fmean(e * e for e in errors))
     median = statistics.median(abs(e) for e in errors)
     bias = statistics.fmean(errors)
-    assert rms < 2.0, f"per-notch rms {rms:.1f} f"
-    assert median < 1.5, f"per-notch median |error| {median:.1f} f"
-    assert abs(bias) < 1.5, f"per-notch bias {bias:+.1f} f"
+    assert rms < 1.5, f"per-notch rms {rms:.1f} f"
+    assert median < 1.0, f"per-notch median |error| {median:.1f} f"
+    assert abs(bias) < 1.0, f"per-notch bias {bias:+.1f} f"
 
 
 def test_derived_notch_beats_the_flat_base_it_replaced():

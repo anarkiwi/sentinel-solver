@@ -193,11 +193,11 @@ def _scan_visible(state, setup, vis=None):
     """Exact port of find_visible_extent ($27D7) + plot_rows_in_front_of_observer_loop
     ($26DE), the furthest->nearest walk that probes tiles via $2845.
 
-    Returns (n_examine, exam_cycles, rows, cache): the exact $2845 call count, the exact
-    cycles those calls spent, and the per-row (row, lo, hi) plotted extents.
+    Returns (n_examine, exam_cycles, walk_cycles, rows, cache): the exact $2845 count,
+    the cycles those calls spent, and the cycles the walk around them spent.
     """
     cache = {}
-    exam = [0, 0]
+    exam = [0, 0, 0]
 
     def probe(col, row):
         col &= 0xFF
@@ -209,117 +209,192 @@ def _scan_visible(state, setup, vis=None):
         exam[1] += r[6]
         return r[5]
 
+    def walk(n):
+        exam[2] += n
+
     def find_end(row, col):  # find_end_of_row_loop $27E2
         while True:
             start = col
+            walk(passcost.SCAN_END_HEAD)
             if col == _LAST:
+                walk(passcost.SCAN_INC_END + passcost.SCAN_END_STOP)
                 return start, _LAST
             col += 1
+            walk(passcost.SCAN_INC)
             a = probe(col, row)
             if a == 0x81:
+                walk(passcost.SCAN_END_WHOLE)
                 continue
             if a == 0x80:
+                walk(passcost.SCAN_END_CROP)
                 return start, col
+            walk(passcost.SCAN_END_GAP)
             while True:  # find_first_visible_tile_at_end_loop $27F3
                 if col == _LAST:
+                    walk(passcost.SCAN_INC_END + passcost.SCAN_GAP_STOP)
                     return start, col
                 col += 1
+                walk(passcost.SCAN_INC)
                 a = probe(col, row)
                 if a == 0:
+                    walk(passcost.SCAN_GAP_LOOP)
                     continue
+                walk(passcost.SCAN_GAP_HIT)
                 return start, col
 
     def start_left(row, end, col):  # find_first_visible_tile_at_start_of_row_loop $2820
         while True:
             if col == 0:
+                walk(passcost.SCAN_DEC_END + passcost.SCAN_LEFT_STOP)
                 return 0, end
             col -= 1
+            walk(passcost.SCAN_DEC)
             if probe(col, row) == 0:
+                walk(passcost.SCAN_LEFT_LOOP)
                 continue
+            walk(passcost.SCAN_LEFT_HIT)
             return col, end
 
     def crop_right(row, col):  # tile_is_cropped_to_right $27FF
         while True:
             end = col
+            walk(passcost.SCAN_CROP_HEAD)
             if col == 0:
+                walk(passcost.SCAN_DEC_END + passcost.SCAN_CROP_STOP)
                 return 0, end
             col -= 1
+            walk(passcost.SCAN_DEC)
             a = probe(col, row)
+            walk(passcost.SCAN_CROP_MORE)
             if a == 0x80:
+                walk(passcost.SCAN_CROP_AGAIN)
                 continue
             if a != 0:  # into_find_first_visible_tile_at_start_of_row_loop $2825
+                walk(passcost.SCAN_CROP_EXIT)
                 return col, end
+            walk(passcost.SCAN_CROP_LEFT)
             return start_left(row, end, col)
 
     def find_extent(row, hint):  # find_visible_extent $27D7
         col = hint & 0xFF
+        walk(passcost.SCAN_HEAD)
         a = probe(col, row)
         if a == 0x80:
+            walk(passcost.SCAN_VISIBLE + passcost.SCAN_CROPPED)
             return crop_right(row, col)
         if a != 0:
+            walk(passcost.SCAN_VISIBLE + passcost.SCAN_WHOLE)
             return find_end(row, col)
+        walk(passcost.SCAN_OFF)
         while True:  # find_first_visible_tile_at_start_loop $2811
-            if col == _LAST:
-                return start_left(row, _LAST, hint & 0xFF)  # endRow2 $2818
+            if col == _LAST:  # endRow2 $2818
+                walk(passcost.SCAN_INC_END + passcost.SCAN_START_STOP)
+                walk(passcost.SCAN_START_SETUP)
+                return start_left(row, _LAST, hint & 0xFF)
             col += 1
+            walk(passcost.SCAN_INC)
             a = probe(col, row)
             if a == 0:
+                walk(passcost.SCAN_START_LOOP)
                 continue
+            walk(passcost.SCAN_START_HIT + passcost.SCAN_START_SETUP)
             return start_left(row, col, hint & 0xFF)
 
     c1d, c3 = setup["c1d"], setup["c3"]
     rows = []
     row = _LAST
+    walk(
+        passcost.WALK_SETUP
+        + passcost.WALK_SETUP_QUAD[setup["quadrant"]]
+        + (passcost.WALK_SETUP_PITCH if setup["v_angle"] & 0x80 else 0)
+        + passcost.WALK_ROWS
+        + passcost.ROW_SCAN
+    )
     start, end = find_extent(row, _ROW_HINT)
+    walk(passcost.WALK_HINT)
     while True:
         row -= 1
+        walk(passcost.ROW_HEAD + passcost.TILE_SOUND)
         if row < 0:
+            walk(passcost.ROW_LAST)
             break
+        walk(passcost.ROW_MORE)
         if row == c1d:  # consider_plotting_observer_row $276F: last, observer row
+            walk(passcost.ROW_OBSERVER + passcost.OBS_ROW_HEAD)
             y = (start + 1) & 0xFF
             if y == c3:  # plot_observer_row $2786: plots the single tile $0037
+                walk(passcost.OBS_ROW_START + passcost.OBS_ROW_PLOT)
                 probe(start, row)
                 probe(y, row)
                 probe(c3, row)
                 rows.append((row, start, (start + 1) & 0xFF))
             elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
+                walk(
+                    passcost.OBS_ROW_TEST + passcost.OBS_ROW_END + passcost.OBS_ROW_PLOT
+                )
                 probe((end - 1) & 0xFF, row)
                 probe(end, row)
                 probe(c3, row)
                 rows.append((row, (end - 1) & 0xFF, end))
             else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
+                walk(passcost.OBS_ROW_TEST + passcost.OBS_ROW_SKIP)
                 probe(c3, row)
+            # $279E: the observer's own tile is plotted only when it is on screen.
+            walk(passcost.OBS_TILE + passcost.OBS_TILE_TEST)
+            walk(
+                passcost.OBS_TILE_ON + passcost.OBS_TILE_TAIL
+                if cache[(c3, row)][3] < 2
+                else passcost.OBS_TILE_OFF
+            )
             break
+        walk(passcost.ROW_NEAR + passcost.ROW_SCAN)
         p_start, p_end = start, end
         start, end = find_extent(row, p_start)
         if start < p_start:  # this_row_starts_before $2713
+            walk(passcost.ROW_START_BEFORE + passcost.ROW_START_BEFORE_TAIL)
             y = (p_start - 1) & 0xFF
             probe(y, row)
             while y != start:
                 y = (y - 1) & 0xFF
+                walk(passcost.ROW_EXTRA)
                 probe(y, row)
+            walk(passcost.ROW_EXTRA_LAST)
         elif start > p_start:  # calculate_this_row_new_first_tiles $2709
+            walk(passcost.ROW_START_AFTER + passcost.ROW_START_AFTER_TAIL)
             y = (start - 1) & 0xFF
             probe(y, row)
             while y != p_start:
                 y = (y - 1) & 0xFF
+                walk(passcost.ROW_EXTRA)
                 probe(y, row)
+            walk(passcost.ROW_EXTRA_LAST)
+        else:
+            walk(passcost.ROW_START_SAME)
         if end > p_end:  # this_row_ends_after $2741
+            walk(passcost.ROW_END_AFTER + passcost.ROW_END_AFTER_TAIL)
             y = p_end
             while True:
                 y = (y + 1) & 0xFF
                 probe(y, row)
                 if y == end:
                     break
+                walk(passcost.ROW_EXTRA)
+            walk(passcost.ROW_EXTRA_LAST)
         elif end < p_end:  # calculate_this_row_new_last_tiles $2737
+            walk(passcost.ROW_END_BEFORE + passcost.ROW_END_BEFORE_TAIL)
             y = end
             while True:
                 y = (y + 1) & 0xFF
                 probe(y, row)
                 if y == p_end:
                     break
+                walk(passcost.ROW_EXTRA)
+            walk(passcost.ROW_EXTRA_LAST)
+        else:
+            walk(passcost.ROW_END_SAME)
+        walk(passcost.ROW_PLOT)
         rows.append((row, min(start, p_start), max(end, p_end)))
-    return exam[0], exam[1], rows, cache
+    return exam[0], exam[1], exam[2], rows, cache
 
 
 def _occlusion_visible_py(state, observer=None):
@@ -480,7 +555,9 @@ def occlusion_visible(state, observer=None):
 def _project_scene_py(state, setup, observer):
     """The pure-Python tile-selection body of :func:`project_scene`."""
     visible = occlusion_visible(state, observer)
-    n_examine, exam_cycles, rows, cache = _scan_visible(state, setup, visible)
+    n_examine, exam_cycles, walk_cycles, rows, cache = _scan_visible(
+        state, setup, visible
+    )
 
     def proj(col, row):
         col &= 0xFF
@@ -502,7 +579,20 @@ def _project_scene_py(state, setup, observer):
     for row, lo, hi in rows:
         re = (row + offr) & 0xFF
         # plot_row_of_tiles_or_block $295D: up from $0037 to $0003, then down from $0038.
-        order = list(range(lo, min(hi, c3))) + list(range(hi - 1, max(lo, c3) - 1, -1))
+        nfront = max(0, min(hi, c3) - lo)
+        order = list(range(lo, lo + nfront)) + list(range(hi - 1, max(lo, c3) - 1, -1))
+        walk_cycles += passcost.PLOT_ROW_HEAD + nfront * passcost.PLOT_ROW_FRONT
+        walk_cycles += (len(order) - nfront) * passcost.PLOT_ROW_BACK
+        if nfront == hi - lo:  # $2963: the front half ran to $0038 and left
+            walk_cycles += passcost.PLOT_ROW_DONE
+        else:
+            walk_cycles += passcost.PLOT_ROW_TURN
+            if max(lo, c3) == 0:  # $2978 BMI: the descent ran off the bottom
+                walk_cycles += passcost.PLOT_ROW_BACK_EMPTY
+            elif c3 <= lo:  # $297E BCC: it reached $0037 before $0003
+                walk_cycles += passcost.PLOT_ROW_BACK_LOW
+            else:
+                walk_cycles += passcost.PLOT_ROW_BACK_END
         for col in order:
             ce = (col + offc) & 0xFF
             res = proj(ce, re)
@@ -543,7 +633,7 @@ def _project_scene_py(state, setup, observer):
                     "w": max(min(span, _W_SCREEN), 0),
                 }
             )
-    return tiles, n_examine, exam_cycles, fill[:nfill]
+    return tiles, n_examine, exam_cycles, fill[:nfill], walk_cycles
 
 
 def _project_scene_jit(state, setup, observer):
@@ -560,7 +650,7 @@ def _project_scene_jit(state, setup, observer):
     su[projector_jit.S_OBS_ZF] = state.obj_z_frac[observer]
     su[projector_jit.S_LEFT] = setup["buf_left"]
     su[projector_jit.S_RIGHT] = setup["buf_right"]
-    out, spans, n, n_examine, exam_cycles, fill = projector_jit.project_scene(
+    out, spans, n, n_examine, exam_cycles, fill, walk = projector_jit.project_scene(
         np.frombuffer(state.mem, dtype=np.uint8),
         su,
         _occlusion_memo(state, observer)[1],
@@ -586,11 +676,11 @@ def _project_scene_jit(state, setup, observer):
         }
         for r, span in zip(out[:n].tolist(), spans[:n].tolist())
     ]
-    return tiles, int(n_examine), int(exam_cycles), fill
+    return tiles, int(n_examine), int(exam_cycles), fill, int(walk)
 
 
 def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None):
-    """Return (tiles, n_examine, exam_cycles, fill) under ``mode``'s $2993 window.
+    """Return (tiles, n_examine, exam_cycles, fill, walk_cycles) under ``mode``'s window.
 
     The plotted tile set and the $2845 examination count and cycles are all exact.
     Non-object tiles the occlusion table hides are examined but dropped from ``tiles``;
@@ -756,13 +846,15 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
 
     def make():
         setup = _setup(state, h, v, obs, mode, window)
-        tiles, _n, exam_cycles, fill = project_scene(state, h, v, obs, mode, window)
+        tiles, _n, exam_cycles, fill, walk = project_scene(
+            state, h, v, obs, mode, window
+        )
         columns = None if window is None else _window_columns(window)
         fill_cycles, exact_objects = fill_frames(
             state, setup, fill, mode, obs, columns, rows
         )
         base = 0.0 if exact_objects else _inview_object_base(state, tiles)
-        return (BASE_CYCLES + exam_cycles + fill_cycles + base) / FRAME_CYCLES
+        return (BASE_CYCLES + exam_cycles + walk + fill_cycles + base) / FRAME_CYCLES
 
     key = (scene_key(state), obs, h, v, mode, window, rows)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)
