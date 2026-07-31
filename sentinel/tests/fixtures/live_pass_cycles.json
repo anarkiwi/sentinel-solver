@@ -118,6 +118,83 @@
    "median": 15575,
    "mean": 15460.2,
    "max": 15593
+  },
+  "frame_budget": {
+   "_what": "the whole 19656-cycle frame split four ways from cpuhistory (one absolute cycle stamp per instruction): the VIC steal (a delta 20 or more above the opcode's own minimum), the four short raster interrupts, the $9630 body ($95E9 to its RTI) and what is left for the play loop. Means over consecutive $9630 windows; jsr_* are the body's own top-level calls, inclusive of the JSR",
+   "boards": {
+    "0042": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1072.91,
+     "short": 477.0,
+     "body": 2633.49,
+     "foreground": 15472.54,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 68.18,
+     "jsr_130c": 143.49,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.82
+    },
+    "0335": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1073.96,
+     "short": 477.0,
+     "body": 2645.73,
+     "foreground": 15459.24,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 69.99,
+     "jsr_130c": 154.08,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.66
+    },
+    "9795": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1073.93,
+     "short": 477.0,
+     "body": 2648.15,
+     "foreground": 15456.96,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 70.64,
+     "jsr_130c": 155.86,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.65
+    },
+    "9795_frozen": {
+     "frames": 80,
+     "frozen": true,
+     "steal": 1075.2,
+     "short": 477.0,
+     "body": 2454.34,
+     "foreground": 15649.27,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 63.0,
+     "jsr_119f": 2161.34
+    }
+   }
+  },
+  "pass_rate_drift": {
+   "_what": "$1289 hits counted off a silent checkpoint against the model's own pass count, frame-locked over 1200 frames with the sim's memory replaced from live truth every frame and only its cycle residual carried, so nothing but the clock can drift. ls9795's whole drift is discrete: 1045 of 1200 frames tie exactly, and the jumps are the frames the machine reaches no $1289 at all",
+   "boards": {
+    "0042": {
+     "frames": 1200,
+     "machine": 21354,
+     "sim": 21363
+    },
+    "0335": {
+     "frames": 1200,
+     "machine": 9410,
+     "sim": 9408
+    },
+    "9795": {
+     "frames": 1200,
+     "machine": 4974,
+     "sim": 5064,
+     "tied_frames": 1045,
+     "longest_flat_run": 275
+    }
+   }
   }
  },
  "pass_segments": {

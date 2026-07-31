@@ -18,7 +18,7 @@ IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: cou
 IRQ_GATE_SHUT = 7  # $9659 LDA $0CE5 4 + $965C BMI $9669 taken 3: no clock, no $1635
 IRQ_GATE_OPEN = 43  # ... nt 2 + $965E LDA/BMI 6 + JSR $130C 6 + the $1635 call 25
 IRQ_CYCLES = 3933  # 1071 + 477 + 2385, the fixed part: the gate and $8ED1 are per frame
-IRQ_SPRITES = 1490  # $1635 loses its $963A fast exit once $0C04 != 0
+IRQ_SPRITES = 1490  # $1635 past its $0C04 exit; live it took the 25-cycle one, 500/500
 FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less the $9659 gate and the tick
 
 COOLDOWN_TICK_NO_CARRY = 21  # $130C LDA/CLC/ADC/STA 12 + $1315 BCC taken 3 + RTS 6

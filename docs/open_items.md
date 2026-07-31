@@ -140,26 +140,65 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock: the frame budget, not the redraw
+## 8. The enemy clock is not the residual: the replot's frame is
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
 ls9795 (**111** events, the first at frame 129) and on ls335 (**12**, the first at 478).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
-the `$1805` rotation that follows from it. Neither the `$1887` chain nor `$16E6`'s own line
-is the cause: both are cycle-exact against the ROM, the per-frame clock is counted rather
-than fitted (below), and the `$1F9F` redraw is counted rather than meaned (below) — and
-that last one moved the gate by one event and no frames at all.
+the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
+measured, and none of it is the cause.
 
 **Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
 own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
 -31, -91, +35 and +62 cycles at frames 20, 50, 80 and 103, i.e. **-25 cycles of accumulated
-phase** before the frame-129 event. To reach that event a pass early the model has to be
-off by a whole ls9795 pass, ~2180 cycles, or ~17 cycles a frame; the redraw correction is
-0.2 a frame. So the two branches close different things and only the frame budget is load
-bearing here: ls9795 first divergence **129 -> 129** and events **112 -> 111**, ls335
-**478 -> 478** and **12 -> 12**, ls42 **0 -> 0**. What is left is the frame budget itself
-and, for follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
+phase** before the frame-129 event, where reaching it a pass early needs ~2180. The gate
+does not move: ls9795 first divergence **129 -> 129** and events **112 -> 111**, ls335
+**478 -> 478** and **12 -> 12**, ls42 **0 -> 0**.
+
+**Measured — the frame is fully accounted, to under 4 cycles.** `cpuhistory` stamps every
+instruction with an absolute cycle, so the whole 19656-cycle frame splits four ways with
+no inference: the VIC steal (a delta 20 or more above the opcode's own minimum), the four
+short raster interrupts, the `$9630` body (`$95E9` to its RTI) and what is left for the
+play loop. Means over 140 frames a board, `fixtures/live_pass_cycles.json`:
+
+| term | model | ls0042 | ls0335 | ls9795 | ls9795 frozen |
+|---|---|---|---|---|---|
+| four short IRQs | 477 | 477.00 | 477.00 | 477.00 | 477.00 |
+| `$9630` body | `IRQ_BODY` + gate + `$130C` + `$8ED1` | 2633.49 (2633.67) | 2645.73 (2646.07) | 2648.15 (2648.50) | 2454.34 (2455) |
+| badline steal | `BADLINE_FRAME` 1071 | 1072.91 | 1073.96 | 1073.93 | 1075.20 |
+| foreground | the rest | 15472.54 | 15459.24 | 15456.96 | 15649.27 |
+
+The short interrupts are **exactly** 477 in every one of 500 frames. The body is within
+**one cycle** of the model on all four captures: `$FFC5` a flat 56, `$1635` taking its
+25-cycle fast exit every time (so `IRQ_SPRITES` never fires), `$FFC2` exactly
+`SOUND_TICK_IDLE` 63 in all 80 frozen frames, and no `$130C` and no `$1635` at all when
+frozen — the `$9659` gate, as `IRQ_GATE_SHUT` says.
+
+So the whole frame-budget error is `BADLINE_FRAME`, at **1.9 to 4.2 cycles a frame**. That
+is also the one term that cannot be counted off the ROM: a badline steals 40..44 by where
+in its instruction the CPU is, so its frame total is a property of the code mix — 1072.9
+over ls42's cheap passes against 1075.2 over ls9795's frozen idle loop. 1071 is the
+frozen-rate fit, and replacing one mean with another mean would buy nothing.
+
+**Measured — the clock does not drift.** Frame-locked against the machine with the sim's
+memory replaced from live truth every frame and only its cycle residual carried, so
+nothing but the clock can move, over 1200 frames: ls42 **21354** machine passes against
+**21363**, ls335 **9410** against **9408**. Nine passes and two — under 0.01 a frame,
+either sign.
+
+**It is the frames the machine does not pass at all.** ls9795 drifts 90 passes over the
+same 1200, and none of it is a rate: 1045 of the 1200 frames tie exactly, the drift is
+flat across a 275-frame stretch, and the whole 90 arrives in a handful of events shaped
+like frames 498 and 499 — machine **0** passes, sim 16 and 17. The machine reaches no
+`$1289` for two whole frames; the model stalls for its own three (`cycle_residual`
+-58348) but two frames late. That is the `$1FFC` strip replot through
+`projector.strip_replot_frames`, landing at the wrong frame and for the wrong length —
+the same replot the frame-129 rotation turned out to be.
+
+`~17 cycles a frame` was therefore never there. The budget is right to under 4 and the
+clock to under 0.01 of a pass a frame; what is left is a render cost and its timing, plus,
+for follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -451,11 +490,12 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** The frame budget itself: the sim reaches a pass sooner than the machine on
-ls9795 and ls335, and neither the body, the `$1887` chain nor the now-counted `$1F9F`
-accounts for it. Plus a `body_spent` resume so a follow-mode resync inside `$1887` does not
-restart the query. The `$1FFC` replot is charged through `projector.strip_replot_frames`,
-so what is left of *its* accuracy is [5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
+**Resolves.** The `$1FFC` replot's own frame: when the machine stops passing, for how long,
+and how that lines up with the pass in which the model charges it. Its price is
+`projector.strip_replot_frames` and so is [5](#5-terrain-fill-cost-cannot-close-per-tile)'s
+problem; its *timing* is this one's. Plus a `body_spent` resume so a follow-mode resync
+inside `$1887` does not restart the query. Not the frame budget and not the clock — both
+are now measured directly and neither has room for what this item is chasing.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -539,7 +579,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-the-frame-budget-not-the-redraw) landed, so
+  [8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.

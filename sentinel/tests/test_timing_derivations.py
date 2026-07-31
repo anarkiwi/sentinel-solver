@@ -280,6 +280,44 @@ def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
         assert abs(modelled - m["passes"]) <= 4, (board, modelled, m["passes"])
 
 
+def test_the_frame_budget_decomposition_matches_the_live_frame():
+    """Every cycle of a live frame is one of the model's four terms, measured apart.
+
+    The four short interrupts and the $9630 body are exact; the badline steal is the
+    one term that cannot be counted off the ROM, and its gap bounds the whole error."""
+    rec = _live_cycles()["irq"]["frame_budget"]["boards"]
+    gaps = []
+    for board, m in rec.items():
+        parts = m["steal"] + m["short"] + m["body"] + m["foreground"]
+        assert abs(parts - passcost.PAL_FRAME_CYCLES) <= 1, (board, parts)
+        shorts = (
+            passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
+        )
+        assert m["short"] == shorts, (board, m["short"])
+        gate = passcost.IRQ_GATE_SHUT if m["frozen"] else passcost.IRQ_GATE_OPEN
+        tick = m.get("jsr_130c", 6) - 6  # IRQ_GATE_OPEN already carries the JSR
+        body = passcost.IRQ_BODY + gate + tick + m["jsr_ffc2"]
+        assert abs(body - m["body"]) <= 1, (board, body, m["body"])
+        assert m["jsr_ffc5"] == 56 and m.get("jsr_1635", 25) == 25, board
+        gaps.append(m["steal"] - passcost.BADLINE_FRAME)
+    assert 1.5 <= min(gaps) and max(gaps) <= 4.5, gaps
+
+
+def test_the_model_pass_rate_tracks_the_machine_with_the_state_resynced():
+    """Frame-locked with the state replaced from live truth, only the clock can drift.
+
+    Under a pass a thousand frames on ls42 and ls335; ls9795's drift is not a rate at
+    all but the frames the machine reaches no $1289, which the clock does not price."""
+    rec = _live_cycles()["irq"]["pass_rate_drift"]["boards"]
+    for board, m in rec.items():
+        drift = abs(m["sim"] - m["machine"]) / m["frames"]
+        if board == "9795":
+            assert m["tied_frames"] / m["frames"] > 0.85, board
+            assert m["longest_flat_run"] >= 200, board
+            continue
+        assert drift <= 0.01, (board, drift)
+
+
 def test_the_cooldown_tick_prices_every_live_130c_sample():
     """Each live $130C is its counted branch: no carry, gate decrement, or the walk."""
     for cyc, decs, loops, _n in _live_cycles()["irq"]["cooldown_130c"]["samples"]:
