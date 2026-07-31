@@ -116,6 +116,7 @@ _MEANIE_MAX_ATTEMPTS = 0x02
 # Cycle costs, shared with the reference so the two clocks cannot drift.
 _FOREGROUND_CYCLES = passcost.FOREGROUND_CYCLES
 _IRQ_BODY = passcost.IRQ_BODY
+_IRQ_BODY_WEIGHT = writeweight.WEIGHT["IRQ_BODY"]
 _STEAL_CEILING = badline.FRAME_STEAL_CEILING
 _W_SHIFT = writeweight.SHIFT
 _W_HALF = 1 << (writeweight.SHIFT - 1)
@@ -179,80 +180,80 @@ _SEE_TAIL = passcost.SEE_TAIL
 _MARCH_ENTRY = passcost.MARCH_ENTRY
 _PREP_VEC = passcost.PREP_VEC
 
-_REL_XY = passcost.REL_XY
-_REL_XY_ABS = passcost.REL_XY_ABS
-_REL_Z = passcost.REL_Z
-_REL_ANGLES = passcost.REL_ANGLES
-_ANG_CMP = passcost.ANG_CMP
-_ANG_X_LARGER = passcost.ANG_X_LARGER
-_ANG_Y_LARGER = passcost.ANG_Y_LARGER
-_ANG_EQ = passcost.ANG_EQ
-_ANG_EQ_Y = passcost.ANG_EQ_Y
-_ANG_EQ_X = passcost.ANG_EQ_X
-_ANG_MIN_Y = passcost.ANG_MIN_Y
-_ANG_MIN_X = passcost.ANG_MIN_X
-_ANG_ZERO = passcost.ANG_ZERO
-_ANG_NONZERO = passcost.ANG_NONZERO
-_SCALE_SHIFT = passcost.SCALE_SHIFT
-_SCALE_LOOP = passcost.SCALE_LOOP
-_SCALE_LOOP_Y = passcost.SCALE_LOOP_Y
-_SCALE_TAIL = passcost.SCALE_TAIL
-_ANG_SIGN = passcost.ANG_SIGN
-_ANG_SIGN_KEEP = passcost.ANG_SIGN_KEEP
-_ANG_SIGN_NEGATE = passcost.ANG_SIGN_NEGATE
-_ANG_QUAD = passcost.ANG_QUAD
-_ANG_QUAD_LOW = passcost.ANG_QUAD_LOW
-_ANG_QUAD_HIGH = passcost.ANG_QUAD_HIGH
-_ANG_QUAD_TAIL = passcost.ANG_QUAD_TAIL
+_REL_XY = writeweight.pack("REL_XY")
+_REL_XY_ABS = writeweight.pack("REL_XY_ABS")
+_REL_Z = writeweight.pack("REL_Z")
+_REL_ANGLES = writeweight.pack("REL_ANGLES")
+_ANG_CMP = writeweight.pack("ANG_CMP")
+_ANG_X_LARGER = writeweight.pack("ANG_X_LARGER")
+_ANG_Y_LARGER = writeweight.pack("ANG_Y_LARGER")
+_ANG_EQ = writeweight.pack("ANG_EQ")
+_ANG_EQ_Y = writeweight.pack("ANG_EQ_Y")
+_ANG_EQ_X = writeweight.pack("ANG_EQ_X")
+_ANG_MIN_Y = writeweight.pack("ANG_MIN_Y")
+_ANG_MIN_X = writeweight.pack("ANG_MIN_X")
+_ANG_ZERO = writeweight.pack("ANG_ZERO")
+_ANG_NONZERO = writeweight.pack("ANG_NONZERO")
+_SCALE_SHIFT = writeweight.pack("SCALE_SHIFT")
+_SCALE_LOOP = writeweight.pack("SCALE_LOOP")
+_SCALE_LOOP_Y = writeweight.pack("SCALE_LOOP_Y")
+_SCALE_TAIL = writeweight.pack("SCALE_TAIL")
+_ANG_SIGN = writeweight.pack("ANG_SIGN")
+_ANG_SIGN_KEEP = writeweight.pack("ANG_SIGN_KEEP")
+_ANG_SIGN_NEGATE = writeweight.pack("ANG_SIGN_NEGATE")
+_ANG_QUAD = writeweight.pack("ANG_QUAD")
+_ANG_QUAD_LOW = writeweight.pack("ANG_QUAD_LOW")
+_ANG_QUAD_HIGH = writeweight.pack("ANG_QUAD_HIGH")
+_ANG_QUAD_TAIL = writeweight.pack("ANG_QUAD_TAIL")
 
-_DIV_FULL_SHIFT = passcost.DIV_FULL_SHIFT
-_DIV_FULL_CARRY = passcost.DIV_FULL_CARRY
-_DIV_FULL_UNDER = passcost.DIV_FULL_UNDER
-_DIV_FULL_OVER = passcost.DIV_FULL_OVER
-_DIV_FULL_EQ = passcost.DIV_FULL_EQ
-_DIV_FULL_EQ_UNDER = passcost.DIV_FULL_EQ_UNDER
-_DIV_FULL_EQ_OVER = passcost.DIV_FULL_EQ_OVER
-_DIV_SUB = passcost.DIV_SUB
-_DIV_SKIP_TEST = passcost.DIV_SKIP_TEST
-_DIV_SKIP = passcost.DIV_SKIP
-_DIV_NO_SKIP = passcost.DIV_NO_SKIP
-_DIV_BYTE_SHIFT = passcost.DIV_BYTE_SHIFT
-_DIV_BYTE_CARRY = passcost.DIV_BYTE_CARRY
-_DIV_BYTE_UNDER = passcost.DIV_BYTE_UNDER
-_DIV_BYTE_OVER = passcost.DIV_BYTE_OVER
-_DIV_LAST_SHIFT = passcost.DIV_LAST_SHIFT
-_DIV_LAST_CARRY = passcost.DIV_LAST_CARRY
-_DIV_LAST_CMP = passcost.DIV_LAST_CMP
-_DIV_LAST_TAIL = passcost.DIV_LAST_TAIL
-_DIV_PLP = passcost.DIV_PLP
-_DIV_ROUND3_UNDER = passcost.DIV_ROUND3_UNDER
-_DIV_ROUND3_OVER = passcost.DIV_ROUND3_OVER
-_DIV_NO_OVERFLOW = passcost.DIV_NO_OVERFLOW
-_DIV_OVERFLOW = passcost.DIV_OVERFLOW
-_DIV_ARCTAN = passcost.DIV_ARCTAN
-_DIV_ARCTAN_DONE = passcost.DIV_ARCTAN_DONE
-_DIV_DELTA_BR = passcost.DIV_DELTA_BR
-_DIV_HALF_BR = passcost.DIV_HALF_BR
-_DIV_DELTA = passcost.DIV_DELTA
-_DIV_DELTA_KEEP = passcost.DIV_DELTA_KEEP
-_DIV_DELTA_INVERT = passcost.DIV_DELTA_INVERT
-_DIV_DELTA_HALVE = passcost.DIV_DELTA_HALVE
-_DIV_NEXT = passcost.DIV_NEXT
-_DIV_ADD_SKIP = passcost.DIV_ADD_SKIP
-_DIV_ADD_HALF = passcost.DIV_ADD_HALF
-_DIV_AVERAGE = passcost.DIV_AVERAGE
-_DIV_TABLE_CROSS = passcost.DIV_TABLE_CROSS
+_DIV_FULL_SHIFT = writeweight.pack("DIV_FULL_SHIFT")
+_DIV_FULL_CARRY = writeweight.pack("DIV_FULL_CARRY")
+_DIV_FULL_UNDER = writeweight.pack("DIV_FULL_UNDER")
+_DIV_FULL_OVER = writeweight.pack("DIV_FULL_OVER")
+_DIV_FULL_EQ = writeweight.pack("DIV_FULL_EQ")
+_DIV_FULL_EQ_UNDER = writeweight.pack("DIV_FULL_EQ_UNDER")
+_DIV_FULL_EQ_OVER = writeweight.pack("DIV_FULL_EQ_OVER")
+_DIV_SUB = writeweight.pack("DIV_SUB")
+_DIV_SKIP_TEST = writeweight.pack("DIV_SKIP_TEST")
+_DIV_SKIP = writeweight.pack("DIV_SKIP")
+_DIV_NO_SKIP = writeweight.pack("DIV_NO_SKIP")
+_DIV_BYTE_SHIFT = writeweight.pack("DIV_BYTE_SHIFT")
+_DIV_BYTE_CARRY = writeweight.pack("DIV_BYTE_CARRY")
+_DIV_BYTE_UNDER = writeweight.pack("DIV_BYTE_UNDER")
+_DIV_BYTE_OVER = writeweight.pack("DIV_BYTE_OVER")
+_DIV_LAST_SHIFT = writeweight.pack("DIV_LAST_SHIFT")
+_DIV_LAST_CARRY = writeweight.pack("DIV_LAST_CARRY")
+_DIV_LAST_CMP = writeweight.pack("DIV_LAST_CMP")
+_DIV_LAST_TAIL = writeweight.pack("DIV_LAST_TAIL")
+_DIV_PLP = writeweight.pack("DIV_PLP")
+_DIV_ROUND3_UNDER = writeweight.pack("DIV_ROUND3_UNDER")
+_DIV_ROUND3_OVER = writeweight.pack("DIV_ROUND3_OVER")
+_DIV_NO_OVERFLOW = writeweight.pack("DIV_NO_OVERFLOW")
+_DIV_OVERFLOW = writeweight.pack("DIV_OVERFLOW")
+_DIV_ARCTAN = writeweight.pack("DIV_ARCTAN")
+_DIV_ARCTAN_DONE = writeweight.pack("DIV_ARCTAN_DONE")
+_DIV_DELTA_BR = writeweight.pack("DIV_DELTA_BR")
+_DIV_HALF_BR = writeweight.pack("DIV_HALF_BR")
+_DIV_DELTA = writeweight.pack("DIV_DELTA")
+_DIV_DELTA_KEEP = writeweight.pack("DIV_DELTA_KEEP")
+_DIV_DELTA_INVERT = writeweight.pack("DIV_DELTA_INVERT")
+_DIV_DELTA_HALVE = writeweight.pack("DIV_DELTA_HALVE")
+_DIV_NEXT = writeweight.pack("DIV_NEXT")
+_DIV_ADD_SKIP = writeweight.pack("DIV_ADD_SKIP")
+_DIV_ADD_HALF = writeweight.pack("DIV_ADD_HALF")
+_DIV_AVERAGE = writeweight.pack("DIV_AVERAGE")
+_DIV_TABLE_CROSS = writeweight.pack("DIV_TABLE_CROSS")
 
-_VANG_HEAD = passcost.VANG_HEAD
-_VANG_POS = passcost.VANG_POS
-_VANG_NEG = passcost.VANG_NEG
-_VANG_SETUP = passcost.VANG_SETUP
-_VANG_SHIFT = passcost.VANG_SHIFT
-_VANG_SIGN_POS = passcost.VANG_SIGN_POS
-_VANG_SIGN_NEG = passcost.VANG_SIGN_NEG
-_VANG_TAIL = passcost.VANG_TAIL
-_HYP_HEAD = passcost.HYP_HEAD
-_HYP_TAIL = passcost.HYP_TAIL
+_VANG_HEAD = writeweight.pack("VANG_HEAD")
+_VANG_POS = writeweight.pack("VANG_POS")
+_VANG_NEG = writeweight.pack("VANG_NEG")
+_VANG_SETUP = writeweight.pack("VANG_SETUP")
+_VANG_SHIFT = writeweight.pack("VANG_SHIFT")
+_VANG_SIGN_POS = writeweight.pack("VANG_SIGN_POS")
+_VANG_SIGN_NEG = writeweight.pack("VANG_SIGN_NEG")
+_VANG_TAIL = writeweight.pack("VANG_TAIL")
+_HYP_HEAD = writeweight.pack("HYP_HEAD")
+_HYP_TAIL = writeweight.pack("HYP_TAIL")
 
 _CONSIDER_MEANIE = passcost.CONSIDER_MEANIE
 _CONSIDER_NO_MEANIE = passcost.CONSIDER_NO_MEANIE
@@ -440,6 +441,18 @@ ZP_REPLOT_LEFT = 0x8D  # ... and its $0C62 left column and $0C69 width; the
 ZP_REPLOT_COLS = 0x8E  # $1FFC plot itself is priced outside the twin,
 ZP_REPLOT_SPAN = 0x8F  # over the uncapped $211B span the $2211/$9730 line covers
 ZP_N = 0x90
+
+
+@njit(cache=True, inline="always")
+def _wweight(total):
+    """The write weight packed above a cost total (:mod:`sentinel.writeweight`)."""
+    return (total + np.int64(_W_HALF)) >> np.int64(_W_SHIFT)
+
+
+@njit(cache=True, inline="always")
+def _wcycles(total):
+    """The 6502 cycles of a packed cost total."""
+    return total - (_wweight(total) << np.int64(_W_SHIFT))
 
 
 @njit(cache=True, inline="always")
@@ -897,7 +910,7 @@ def _update_object_on_screen(mem, zp, target):
         return cyc + np.int64(_SPAN_PLAYER + _REDRAW_NONE), 0
     c57, _alo, _ahi, _zlo, _zhi, rcyc = _relative_angles(mem, zp, player, target)
     c59 = zp[0x8A]
-    cyc += np.int64(_SPAN_ANGLES + _SPAN_SIZE) + rcyc
+    cyc += np.int64(_SPAN_ANGLES + _SPAN_SIZE) + _wcycles(rcyc)
     otype = _rd(mem, _OTYPE + target)
     half = HALF_ANGLE[otype]
     if half < _rd(mem, _SIZE_FLOOR):  # $20AC: a pending size wins
@@ -905,7 +918,7 @@ def _update_object_on_screen(mem, zp, target):
         cyc += np.int64(_SPAN_SIZE_FLOOR)
     _wr(mem, _SIZE_FLOOR, 0)  # $20B8
     zp[0x80] = half
-    cyc += _vertical_angle(zp, 0, _rd(mem, _OVANGLE + otype))[1]
+    cyc += _wcycles(_vertical_angle(zp, 0, _rd(mem, _OVANGLE + otype))[1])
     ang_lo = zp[0x8A]
     ang_hi = zp[0x8B]
     cyc += np.int64(_SPAN_LEFT + _SPAN_LEFT_HI)
@@ -964,18 +977,6 @@ def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     vx_hi, vx_lo, c = _vmul_dbl_dbl(h_sin_lo, h_sin_hi, s32, s33)
     cyc += c
     return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30, cyc
-
-
-@njit(cache=True, inline="always")
-def _wweight(total):
-    """The write weight packed above a cost total (:mod:`sentinel.writeweight`)."""
-    return (total + np.int64(_W_HALF)) >> np.int64(_W_SHIFT)
-
-
-@njit(cache=True, inline="always")
-def _wcycles(total):
-    """The 6502 cycles of a packed cost total."""
-    return total - (_wweight(total) << np.int64(_W_SHIFT))
 
 
 @njit(cache=True, inline="always")
@@ -2046,7 +2047,19 @@ def _sound_frame(mem, clk):
 
 @njit(cache=True)
 def _advance(
-    mem, zp, n_frames, plotting, residual, phase, stage, index, partial, paid, shift, at
+    mem,
+    zp,
+    n_frames,
+    plotting,
+    residual,
+    phase,
+    stage,
+    index,
+    partial,
+    paid,
+    shift,
+    at,
+    residue,
 ):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
@@ -2055,9 +2068,12 @@ def _advance(
     the $1FC2 strip shift of the camera is still outstanding."""
     for done in range(n_frames):
         clk = frame_clock(True)  # the raster IRQ pins the frame's phase every frame
-        irq = charge(clk, 0x95E9, np.int64(_IRQ_BODY)) - np.int64(_IRQ_BODY)
+        clk[4] = residue  # the fractional refund the last frame left over
+        irq = charge_run(clk, np.int64(_IRQ_BODY), np.int64(_IRQ_BODY_WEIGHT))
+        irq -= np.int64(_IRQ_BODY)
         irq += _sound_frame(mem, clk) + _cooldown_frame(mem, clk)
         if plotting:
+            residue = clk[4]
             continue
         budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) - irq
         if budget > 0 and shift != 0:  # $2003/$2008: this frame's $2625 returned
@@ -2089,6 +2105,7 @@ def _advance(
         if shift != 0 and budget >= at:
             _hold_camera(mem, shift)
         residual = budget
+        residue = clk[4]
         if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
             return (
                 residual,
@@ -2099,13 +2116,25 @@ def _advance(
                 paid,
                 shift,
                 at,
+                residue,
                 n_frames - done - 1,
             )
-    return residual, phase, stage, index, partial, paid, shift, at, 0
+    return residual, phase, stage, index, partial, paid, shift, at, residue, 0
 
 
 def advance_frames(
-    mem, n_frames, plotting, residual, phase, stage, index, partial, paid, shift, at
+    mem,
+    n_frames,
+    plotting,
+    residual,
+    phase,
+    stage,
+    index,
+    partial,
+    paid,
+    shift,
+    at,
+    residue,
 ):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
     the sub-pass resume point and the outstanding $1FC2 camera shift in and out.
@@ -2114,7 +2143,7 @@ def advance_frames(
     span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_N, dtype=np.int64)
-    res, ph, st, ix, pa, pd, sh, cl, left_frames = _advance(
+    res, ph, st, ix, pa, pd, sh, cl, rd, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -2127,6 +2156,7 @@ def advance_frames(
         int(paid),
         int(shift),
         int(at),
+        int(residue),
     )
     target = int(zp[ZP_REPLOT]) - 1
     return (
@@ -2138,6 +2168,7 @@ def advance_frames(
         int(pd),
         int(sh),
         int(cl),
+        int(rd),
         int(left_frames),
         target,
         int(zp[ZP_REPLOT_LEFT]),

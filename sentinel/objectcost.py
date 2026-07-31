@@ -15,6 +15,7 @@ from sentinel.enemies_jit import (
     _calc_hypotenuse,
     _relative_angles,
     _vertical_angle,
+    _wcycles,
 )
 from sentinel.los_jit import _bits, _vmul8
 
@@ -120,12 +121,12 @@ def _transform(
         zp[0x85] = y_hi
         zp[0x86] = signs
         zp[0x88] = 0
-        cyc += _calc_angle(zp)
+        cyc += _wcycles(_calc_angle(zp))  # the $8401 chain rides packed
         cyc += passcost.OBJ_VERTEX_SCREEN_X
         t = zp[0x8A] + c59
         vxy[i, 0] = t & 0xFF
         vxy[i, 1] = (zp[0x8B] + c57 + (1 if t > 0xFF else 0)) & 0xFF
-        cyc += _calc_hypotenuse(zp)
+        cyc += _wcycles(_calc_hypotenuse(zp))
         cyc += passcost.OBJ_VERTEX_Z
         z = (vheight[v] << 1) & 0xFF
         if vheight[v] & 0x80:  # $8500: bit 7 doubled out into the carry means negative
@@ -140,7 +141,7 @@ def _transform(
         zp[0x80] = t & 0xFF
         rel_hi = (c5c + z_hi + (1 if t > 0xFF else 0)) & 0xFF
         sy_hi, vcyc = _vertical_angle(zp, rel_hi, v_angle)
-        cyc += vcyc
+        cyc += _wcycles(vcyc)
         vxy[i, 2] = zp[0x50]
         vxy[i, 3] = sy_hi
         cyc += passcost.OBJ_VERTEX_STORE
@@ -214,7 +215,7 @@ def object_cycles(
     vxy, sxb, sxh, vlist, rows, flags = work
     cyc = passcost.OBJ_CALL + passcost.OBJ_RELATIVE
     _c57, ang_lo, ang_hi, z_lo, z_hi, rcyc = _relative_angles(mem, zp, observer, target)
-    cyc += rcyc
+    cyc += _wcycles(rcyc)
     # $841F/$8423 against the view being priced, which is not the image's own bearing.
     c57 = (ang_hi - h_angle + 0x0A) & 0xFF
     c59 = ang_lo  # $8415: $001F is 0 in play

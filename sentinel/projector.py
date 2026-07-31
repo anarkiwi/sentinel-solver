@@ -11,6 +11,7 @@ import os
 import numpy as np
 
 from sentinel import passcost, relative, rendercost, terrain, memmap as mm
+from sentinel.writeweight import cycles as _plain  # the $8401 chain rides packed
 
 try:
     from sentinel import projector_jit
@@ -144,10 +145,12 @@ def _project(state, setup, col, row, vis=None):
     else:
         zp[0x85] = sr
         cyc += passcost.EXAM_ROW_POS
-    cyc += passcost.EXAM_ANGLE + relative._calc_angle(zp)  # $9287 -> zp[$8A]/zp[$8B]
+    cyc += passcost.EXAM_ANGLE + _plain(relative._calc_angle(zp))  # $9287 -> $8A/$8B
     sx_lo = (zp[0x8A] - setup["ref_lo"]) & 0xFF  # screen x ($2891), carry stays set
     sx_hi = (zp[0x8B] - setup["ref_hi"]) & 0xFF
-    cyc += passcost.EXAM_STORE + relative._calc_hypotenuse(zp)  # $937F -> zp[$7C]/$7D
+    cyc += passcost.EXAM_STORE + _plain(
+        relative._calc_hypotenuse(zp)
+    )  # $937F -> $7C/$7D
     quadrant = setup["quadrant"]
     cyc += _EXAM_QUAD[quadrant] + passcost.EXAM_ADDR
     tab += _TAB_QUAD[quadrant] + passcost.TAB_ADDR
@@ -170,7 +173,7 @@ def _project(state, setup, col, row, vis=None):
     rel_z_hi = (height - state.obj_z_height[observer] - (1 if zf else 0)) & 0xFF
     sy_hi, vcyc = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
     sy_lo = zp[0x50]
-    cyc += passcost.EXAM_VANGLE + vcyc + passcost.EXAM_TAIL
+    cyc += passcost.EXAM_VANGLE + _plain(vcyc) + passcost.EXAM_TAIL
     tab += passcost.TAB_SCREEN + passcost.TAB_TAIL
     onscreen = 0x00
     # $293C/$388F on-screen test against the mode's $0007/$0012/$0028.

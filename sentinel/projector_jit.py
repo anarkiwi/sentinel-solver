@@ -15,6 +15,7 @@ from sentinel.enemies_jit import (
     _calc_angle,
     _calc_hypotenuse,
     _vertical_angle,
+    _wcycles,
 )
 
 # Object-array bases in the 64 KB image, inlined so the njit code needs no Python object.
@@ -406,10 +407,10 @@ def _project(mem, zp, su, vis, col, row, out):
     else:
         zp[0x85] = sr
         cyc += _EX_ROW_POS
-    cyc += _EX_ANGLE + _calc_angle(zp)  # $9287
+    cyc += _EX_ANGLE + _wcycles(_calc_angle(zp))  # $9287, packed weight off
     out[0] = (zp[0x8A] - su[S_REF_LO]) & 0xFF  # screen x ($2891), carry stays set
     out[1] = (zp[0x8B] - su[S_REF_HI]) & 0xFF
-    cyc += _EX_STORE + _calc_hypotenuse(zp)  # $937F
+    cyc += _EX_STORE + _wcycles(_calc_hypotenuse(zp))  # $937F, packed weight off
     cyc += _EX_QUAD[su[S_QUAD]] + _EX_ADDR
     tab += _TB_QUAD[su[S_QUAD]] + _TB_ADDR
     tx, ty = _tile_xy(su[S_QUAD], col, row)
@@ -427,7 +428,7 @@ def _project(mem, zp, su, vis, col, row, out):
     out[3], vcyc = _vertical_angle(zp, rel_z_hi, su[S_VANGLE])  # $933D
     out[2] = zp[0x50]
     out[4] = tile_byte
-    cyc += _EX_VANGLE + vcyc + _EX_TAIL
+    cyc += _EX_VANGLE + _wcycles(vcyc) + _EX_TAIL
     tab += _TB_SCREEN + _TB_TAIL
     out[5] = 0x00
     if out[1] < su[S_LEFT]:  # $293C/$388F on-screen test against $0007/$0012/$0028

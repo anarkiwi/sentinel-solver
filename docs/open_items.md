@@ -266,8 +266,9 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock commits `consider_enemy_state`'s CORE writes early
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**15** events, the first at frame 151) and on ls335 (**9**, the first at 297) — was
-19 and 14 before the march carried its own write weight (*Done* below).
+ls9795 (**14** events, the first at frame 151) and on ls335 (**4**, the first at 613) — was
+19 and 14 before the march carried its own write weight, 15 and 9 before the `$8401` chain
+and the `$9630` body carried theirs (*Done* below).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
 the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
@@ -275,9 +276,10 @@ measured, and none of it is the cause.  Those counts are from a seed that carrie
 its own; the 116/24 this item used to quote were **partly the instrument's own seeding**, see
 *The seed's own error* below.
 
-All 15 and all 9 are `update_cd`; the `obj[62].h_angle` events are gone (*The camera the
-replot borrows* below). Four of ls9795's 15 catch the machine inside a replot, at `$9786`,
-`$978D`, `$988E` and `$9899` — the `$9730` buffer flush, i.e. the replot's *exit*, where the
+Ten of ls9795's 14 and all 4 of ls335's are `update_cd`. The other four of ls9795's catch the
+machine inside a replot, at `$9786`, `$978D`, `$988E` and `$9899` — the `$9730` buffer flush,
+i.e. the replot's *exit* — and they now diverge on `obj[62].h_angle`, not on `update_cd` at
+all (*The camera the replot borrows* below), where the
 model's debt has run out and the machine's has not. `render_cost` reads 332100 cycles for
 that pass against the machine's 22-frame wall (~343500 foreground), 0.97x — the `$2625` area
 fill, which is [5](#5-one-object-vertex-angle-is-ten-units-out), not this item.
@@ -531,9 +533,11 @@ makes the sim late, which is what every one of the 19 and 14 `update_cd` events 
 And it is not a placement question at all: `charge(clk, 0x1887, 274578)` walks a 49-cycle
 write map, so every window inside the march is charged the full 43 whatever its position.
 Of the machine's own 3.48 cycles a frame of refund there, **3.09** lands on the march's own
-writes (`$1CBF`, `$1CFF`, `$1CD6`, `$1D4C`, `$1DF9`, `$0D07`, `$2BB9` …) and 0.39 on the sound
-engine the `$9630` body reaches through `$119F` — whose walk from `$95E9` RTIs out of the
-short-IRQ chain, so the model refunds none of it either.
+writes (`$1CBF`, `$1CFF`, `$1CD6`, `$1D4C`, `$1DF9`, `$0D07`, `$2BB9` …) and 0.42 inside the
+`$9630` body, on the `$8CFC`/`$8D01`/`$8D0D` CIA1 strobes the `$119F` keyboard walk drives
+(called the sound engine here until the walk was read: `driver.badline`'s routine table buckets
+`$8CF9` with `$8ED1`) — and the `$95E9` walk RTIs out of the short-IRQ chain, so the model
+refunded none of it either.
 `test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it` pins all of it.
 
 **Done — the march is charged by its own laps' write weight, and it closes.** No static map
@@ -571,14 +575,58 @@ patterns, is **306/310/314/318** cycles carrying **30/33/36/39** — exactly wha
 errors 42, exact spans 117, facings 89, energies 86), and the rollout costs 6.2 → 6.6 ms
 (ls42), 6.6 → 8.0 (ls335) and 7.7 → 8.7 (ls9795) per 3000 `advance_frame`s.
 
-**What is left, and it is not the march.** 0.21 of the machine's 3.48 a frame is still
-unrefunded, which is about half the 0.39 the `$119F` sound engine drives inside the `$9630`
-body — a walk that RTIs out of the short-IRQ chain, so it is a separate term and untouched.
-The `$8401`/`$9287`/`$0D4A` trig terms carry no weight of their own yet; the march's weight
-spread over the whole query happens to cover them, so naming their own would be the next
-step. Of the 15 and 9 survivors, ls9795 keeps four `$9730` buffer-flush events (`$9786`,
-`$978D`, `$988E`, `$9899`) that belong to [5](#5-one-object-vertex-angle-is-ten-units-out),
-and the rest of both boards are still `$17B2`/`$1AB0` scan `update_cd`.
+**Done — the `$8401` chain and the `$9630` body carry their own weight, and ls335 halves.**
+The 0.21 of the machine's 3.48 a frame that the march's weight did not reach was in two
+places, and neither is the march. **The `$95E9` body is the bigger one.** Its write map is
+walked from `$95E9`, and with every branch falling through that walk takes the split chain's
+`$962D JMP $969A` and RTIs after 380 cycles — before the *first* of the four windows the
+body contains (offsets 389/893/1397/1901 from the raster IRQ), so `charge` refunded
+**nothing at all** for the whole body. It is not a sound engine: the 2162 cycles of `$119F`
+are `$1363`'s keyboard walk, seventeen `$8CF9` CIA1 matrix scans reached through `$0F62`,
+and the walk cannot be placed statically because the body's length moves 450 cycles frame to
+frame (the `$130C` tick, the `$8ED1` branches). So it is charged like a march: `charge_run`
+with the weight of its own sequence, **203** (`writeweight.IRQ_BODY_WRITES`, `$0F62` and
+`$8CF9` repeating `$11D9 LDY #$0E` + 2 times, pinned to the image by
+`test_the_irq_bodys_write_weight_is_its_own_instructions`) — 0.340 a frame. Live over 40
+`$9630` bodies the machine's own walk carries **211.4**, of which the `$8ED1` tick and the
+`$9659` gate own 16.1: 195.3, plus the entry's 8. The fixed-point refund residue is smaller
+than one cycle a frame, so it is now carried on `State.steal_residue` rather than reset with
+the clock; a per-frame stand-in would have been inert.
+
+The `$8401`/`$9287`/`$0D4A` chain now carries its own weight too (`writeweight.TRIG`), each
+term walked over the image to exactly the cycles and write cycles it claims
+(`test_the_trig_chains_write_weight_is_its_own_instructions`). It is worth only **+0.025** a
+frame inside a march — the coincidence was real — but it also stops a query that rejects at
+the `$18CA` FOV gate being charged against `$1887`'s 49-cycle map, which its ~460 cycles
+outran; those now price by their own density, and ls42's whole-run steal lands on the
+machine's.
+
+| model per-frame steal | machine | ceiling only | + march weight | + trig and `$9630` |
+|---|---|---|---|---|
+| ls9795, inside the gate's march | **1071.46** | 1075.00 | 1071.78 | **1071.41** |
+| ls0042, whole run | **1070.22** | — | 1070.43 | **1070.23** |
+| ls0335, whole run | 1072.08 | — | 1070.72 | 1070.44 |
+
+**Measured against the machine, frame-locked, 3000 frames, `--follow`, exact seeding:**
+
+| board | CORE events | first CORE |
+|---|---|---|
+| ls0042 | 0 → **0** | none → none |
+| ls0335 | 9 → **4** | 297 → **613** |
+| ls9795 | 15 → **14** | 151 → 151 |
+
+`test_human_clock`'s pinned counts are untouched (facing cadence 89, split cadence 87, facing
+errors 42, exact spans 117, facings 89, energies 86) and the rollout costs 11.4 → 11.5 ms
+(ls42), 12.2 → 12.3 (ls335) and 9.9 → 10.0 (ls9795) per 3000 `advance_frame`s, i.e. +1%.
+
+**What is left.** ls335's four survivors and ten of ls9795's fourteen are still `update_cd`
+inside the `$17B2`/`$1AB0` scan. ls9795's other four are the same `$9730` buffer-flush
+positions as before (`$9786`, `$978D`, `$988E`, `$9899`) but they no longer diverge on
+`update_cd` at all: the field is now `obj[62].h_angle`, the camera the replot borrows, which
+is [5](#5-one-object-vertex-angle-is-ten-units-out) and not this item. The `$0F4A`/`$0D03`
+multiply beneath `$937F` still carries no weight of its own; it is shared with `$1C54`'s
+sin/cos and with the march's `$1DAF`, so naming it means unpacking at the projector and
+object-cost boundaries as well.
 
 **The seed's own error, and its removal.** `resume_from_stack` counts the machine's position
 off the ROM's own straight lines and returns no offset for a position *inside a call*, so a

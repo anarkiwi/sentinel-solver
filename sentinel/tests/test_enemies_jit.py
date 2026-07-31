@@ -41,6 +41,7 @@ def _resume(state):
         state.body_partial,
         state.camera_shift,
         state.camera_clear,
+        state.steal_residue,
     )
 
 

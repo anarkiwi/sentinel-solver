@@ -127,7 +127,7 @@ ROUTINES = (
     (0x3600, "other"),
     (0x8401, "$8401 relative"),
     (0x8600, "other"),
-    (0x8CF0, "$8CF0 sound engine"),
+    (0x8CF0, "$8CF0 kbd scan + note tick"),
     (0x9200, "other"),
     (0x9287, "$9287 angle"),
     (0x93B0, "other"),

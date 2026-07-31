@@ -44,6 +44,7 @@ from sentinel import (
     terrain,
     passcost,
     projector,
+    writeweight,
 )
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
@@ -56,6 +57,7 @@ except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
     enemies_jit = None
     _HAVE_JIT = False
 
+IRQ_BODY_WEIGHT = writeweight.WEIGHT["IRQ_BODY"]  # $95E9's own, no map reaches it
 FOV_SCAN = 0x14  # $16F2: enemy horizontal FOV width during a scan
 FOV_CREATE_MEANIE = 0x28  # $197F: two screen widths while hunting a tree to convert
 UPDATE_COOLDOWN_SCAN = 0x04  # $16ED
@@ -1462,9 +1464,13 @@ def advance_frame_python(state, plotting=False):
     after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
     """
     clk = badline.frame_clock()  # the raster IRQ pins the frame's phase every frame
-    irq = badline.charge(clk, 0x95E9, passcost.IRQ_BODY) - passcost.IRQ_BODY
+    clk[4] = state.steal_residue  # the fractional refund the last frame left over
+    irq = (
+        badline.charge_run(clk, passcost.IRQ_BODY, IRQ_BODY_WEIGHT) - passcost.IRQ_BODY
+    )
     irq += sound_frame(state, clk) + cooldown_frame(state, clk)
     if plotting:
+        state.steal_residue = clk[4]
         return
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
     budget -= badline.FRAME_STEAL_CEILING  # the 25 windows, refunded by charge()
@@ -1496,6 +1502,7 @@ def advance_frame_python(state, plotting=False):
         projector.hold_camera(state, state.camera_shift)
     state.cycle_residual = budget
     state.pass_phase = phase
+    state.steal_residue = clk[4]
 
 
 def advance_frames_python(state, n_frames, plotting=False):
@@ -1527,6 +1534,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_paid,
                 state.camera_shift,
                 state.camera_clear,
+                state.steal_residue,
                 remaining,
                 target,
                 left,
@@ -1544,6 +1552,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.body_paid,
                 state.camera_shift,
                 state.camera_clear,
+                state.steal_residue,
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break

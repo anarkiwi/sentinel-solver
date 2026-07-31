@@ -24,6 +24,8 @@ import math
 
 from sentinel import memmap as mm, los, passcost, writeweight
 
+tcost = writeweight.TRIG  # the $8401 chain, each term packed with its own writes
+
 # ---------------------------------------------------------------------------
 # Coefficient tables, reproduced from closed form (byte-exact vs ROM).
 # ---------------------------------------------------------------------------
@@ -76,14 +78,14 @@ def _divide_and_arctan(a_lo, a_hi, b_lo, b_hi):
     def full_over(cA):
         # rounds 1-3, a >= b as a 16-bit compare (A:$74 vs $76:$77), and its branches
         if cA:
-            return True, passcost.DIV_FULL_CARRY
+            return True, tcost.DIV_FULL_CARRY
         if A > t76:
-            return True, passcost.DIV_FULL_OVER
+            return True, tcost.DIV_FULL_OVER
         if A < t76:
-            return False, passcost.DIV_FULL_UNDER
+            return False, tcost.DIV_FULL_UNDER
         if t74 >= t77:
-            return True, passcost.DIV_FULL_EQ + passcost.DIV_FULL_EQ_OVER
-        return False, passcost.DIV_FULL_EQ + passcost.DIV_FULL_EQ_UNDER
+            return True, tcost.DIV_FULL_EQ + tcost.DIV_FULL_EQ_OVER
+        return False, tcost.DIV_FULL_EQ + tcost.DIV_FULL_EQ_UNDER
 
     # rounds 1..3: ASL $74 then ROL $74, each with a full 16-bit compare.
     c = 0
@@ -92,22 +94,22 @@ def _divide_and_arctan(a_lo, a_hi, b_lo, b_hi):
         t74, c0 = _asl(t74) if rnd == 1 else _rol(t74, c)
         A, cA = _rol(A, c0)
         over, dcyc = full_over(cA)
-        cyc += passcost.DIV_FULL_SHIFT + dcyc
+        cyc += tcost.DIV_FULL_SHIFT + dcyc
         if over:
             v = t74 - t77
             t74 = v & 0xFF
             A = (A - t76 - (1 if v < 0 else 0)) & 0xFF
             c = 1
-            cyc += passcost.DIV_SUB
+            cyc += tcost.DIV_SUB
         else:
             c = 0
         if rnd == 3:
             php_carry = c  # PHP after round 3
 
     # skip_further_division ($0E10): remainder == b_hi after round 3.
-    cyc += passcost.DIV_SKIP_TEST
+    cyc += tcost.DIV_SKIP_TEST
     if A == t76:
-        cyc += passcost.DIV_SKIP
+        cyc += tcost.DIV_SKIP
         t78 = 0  # LDA #$0 ; STA $0078
         A = 0  # LDA #$0 -> the RORs work on A=0, not the remainder
         cc = 1  # CMP equal -> carry set
@@ -117,19 +119,19 @@ def _divide_and_arctan(a_lo, a_hi, b_lo, b_hi):
         A, cc = _ror(A, cc)
         A = A | 0x20
         return _finish_overflow(A, php_carry, t78, cyc)
-    cyc += passcost.DIV_NO_SKIP
+    cyc += tcost.DIV_NO_SKIP
 
     # rounds 4..9: ASL $74 then ROL $74, each with an 8-bit compare.
     for rnd in range(4, 10):
         t74, c0 = _asl(t74) if rnd == 4 else _rol(t74, c)
         A, cA = _rol(A, c0)
-        cyc += passcost.DIV_BYTE_SHIFT
+        cyc += tcost.DIV_BYTE_SHIFT
         if cA:
-            cyc += passcost.DIV_BYTE_CARRY
+            cyc += tcost.DIV_BYTE_CARRY
         elif A >= t76:
-            cyc += passcost.DIV_BYTE_OVER
+            cyc += tcost.DIV_BYTE_OVER
         else:
-            cyc += passcost.DIV_BYTE_UNDER
+            cyc += tcost.DIV_BYTE_UNDER
         if cA or A >= t76:
             A = (A - t76) & 0xFF
             c = 1
@@ -138,13 +140,13 @@ def _divide_and_arctan(a_lo, a_hi, b_lo, b_hi):
     # round 10 ($0DF1): ROR $78 (round-9 bit), ROL A, compare, ROR $78.
     t78, c0 = _ror(t78, c)  # ROR $0078: shift in round-9 quotient bit
     A, cA = _rol(A, c0)  # ROL A
-    cyc += passcost.DIV_LAST_SHIFT + passcost.DIV_LAST_TAIL
+    cyc += tcost.DIV_LAST_SHIFT + tcost.DIV_LAST_TAIL
     if cA:
         c = 1
-        cyc += passcost.DIV_LAST_CARRY
+        cyc += tcost.DIV_LAST_CARRY
     else:
         c = 1 if A >= t76 else 0  # CMP $0076
-        cyc += passcost.DIV_LAST_CMP
+        cyc += tcost.DIV_LAST_CMP
     t78, _ = _ror(t78, c)  # ROR $0078: shift in round-10 bit
 
     return _finish_overflow(t74, php_carry, t78, cyc)
@@ -153,34 +155,34 @@ def _divide_and_arctan(a_lo, a_hi, b_lo, b_hi):
 def _finish_overflow(A, php_carry, t78, cyc):
     """consider_overflow ($0DFC): apply the round-3 bit ($20), detect the 45-degree
     overflow, then the arctan lookup + rounds-9/10 interpolation."""
-    cyc += passcost.DIV_PLP
+    cyc += tcost.DIV_PLP
     if php_carry:  # round 3 was over
         s = A + 0x1F + 1
         A = s & 0xFF
         carry = 1 if s > 0xFF else 0
-        cyc += passcost.DIV_ROUND3_OVER
+        cyc += tcost.DIV_ROUND3_OVER
     else:
         carry = 0  # BCC round_3_under with carry from prior op == 0
-        cyc += passcost.DIV_ROUND3_UNDER
+        cyc += tcost.DIV_ROUND3_UNDER
     if carry:  # overflow: clamp to 45 degrees
-        return 0x00, 0x20, 0xFF, cyc + passcost.DIV_OVERFLOW
+        return 0x00, 0x20, 0xFF, cyc + tcost.DIV_OVERFLOW
     if php_carry:
-        cyc += passcost.DIV_NO_OVERFLOW
+        cyc += tcost.DIV_NO_OVERFLOW
 
     # no_overflow ($0E1F): arctan lookup + rounds 9/10 interpolation.
     Y = A & 0xFF
     ratio = Y
     ang_lo = _ARCTAN_LO[Y]
     ang_hi = _ARCTAN_HI[Y]
-    cyc += passcost.DIV_ARCTAN + (passcost.DIV_TABLE_CROSS if Y >= 0xFF else 0)
+    cyc += tcost.DIV_ARCTAN + (tcost.DIV_TABLE_CROSS if Y >= 0xFF else 0)
     b78_7 = (t78 >> 7) & 1  # round 10 over
     b78_6 = (t78 >> 6) & 1  # round 9 over
     if not (b78_7 or b78_6):
-        cyc += passcost.DIV_ARCTAN_DONE
+        cyc += tcost.DIV_ARCTAN_DONE
         return ang_lo, ang_hi, ratio, cyc  # BMI/BVS both false -> leave
     # An interpolation block reads $3B01,Y and $3C02,Y, a cycle dearer off-page each
-    cross = (passcost.DIV_TABLE_CROSS if Y >= 0xFF else 0) + (
-        passcost.DIV_TABLE_CROSS if Y >= 0xFE else 0
+    cross = (tcost.DIV_TABLE_CROSS if Y >= 0xFF else 0) + (
+        tcost.DIV_TABLE_CROSS if Y >= 0xFE else 0
     )
 
     # calculate_delta ($0E35): delta = arctan[Y] - arctan[Y+1]
@@ -188,15 +190,15 @@ def _finish_overflow(A, php_carry, t78, cyc):
     borrow = 1 if ang_lo < _ARCTAN_LO[Y + 1] else 0
     d_hi = (ang_hi - _ARCTAN_HI[Y + 1] - borrow) & 0xFF
     if b78_7:
-        cyc += passcost.DIV_DELTA_BR + passcost.DIV_DELTA + cross
+        cyc += tcost.DIV_DELTA_BR + tcost.DIV_DELTA + cross
         if b78_6:  # round 9 over ($0E44 BVC skip; BVS -> invert)
             d_hi, d_lo = _invert16(d_hi, d_lo)
-            cyc += passcost.DIV_DELTA_INVERT
+            cyc += tcost.DIV_DELTA_INVERT
         else:
-            cyc += passcost.DIV_DELTA_KEEP
-        cyc += passcost.DIV_DELTA_HALVE
+            cyc += tcost.DIV_DELTA_KEEP
+        cyc += tcost.DIV_DELTA_HALVE
     else:
-        cyc += passcost.DIV_HALF_BR  # $0E30 BVS $0E50: only the average is wanted
+        cyc += tcost.DIV_HALF_BR  # $0E30 BVS $0E50: only the average is wanted
     # ROL A puts bit7(d_hi) in the carry, ROR $0075/$0074 shift it back: a signed >>1
     t75, c2 = _ror(d_hi, (d_hi >> 7) & 1)
     t74b, _ = _ror(d_lo, c2)
@@ -206,19 +208,19 @@ def _finish_overflow(A, php_carry, t78, cyc):
     ang_lo = s & 0xFF
     cc = 1 if s > 0xFF else 0
     ang_hi = (ang_hi + _ARCTAN_HI[Y + 1] + cc) & 0xFF
-    cyc += passcost.DIV_NEXT + cross
+    cyc += tcost.DIV_NEXT + cross
     if b78_7:  # round 10 over ($0E61 BPL skip): add half-delta
         s = ang_lo + d_lo2
         ang_lo = s & 0xFF
         cc = 1 if s > 0xFF else 0
         ang_hi = (ang_hi + d_hi2 + cc) & 0xFF
-        cyc += passcost.DIV_ADD_HALF
+        cyc += tcost.DIV_ADD_HALF
     else:
-        cyc += passcost.DIV_ADD_SKIP
+        cyc += tcost.DIV_ADD_SKIP
     # LSR $008B ; ROR $008A  -> average
     ang_hi, c3 = _ror(ang_hi, 0)
     ang_lo, _ = _ror(ang_lo, c3)
-    return ang_lo, ang_hi, ratio, cyc + passcost.DIV_AVERAGE
+    return ang_lo, ang_hi, ratio, cyc + tcost.DIV_AVERAGE
 
 
 # ---------------------------------------------------------------------------
@@ -234,62 +236,62 @@ def _calc_angle(zp):
     y_lo, y_hi = zp[0x82], zp[0x85]
     sx, sy = zp[0x86], zp[0x88]
 
-    cyc = passcost.ANG_CMP
+    cyc = tcost.ANG_CMP
     if y_hi < x_hi:
         x_larger = True
-        cyc += passcost.ANG_X_LARGER
+        cyc += tcost.ANG_X_LARGER
     elif y_hi > x_hi:
         x_larger = False
-        cyc += passcost.ANG_Y_LARGER
+        cyc += tcost.ANG_Y_LARGER
     else:
         x_larger = y_lo < x_lo
-        cyc += passcost.ANG_EQ + (passcost.ANG_EQ_X if x_larger else passcost.ANG_EQ_Y)
+        cyc += tcost.ANG_EQ + (tcost.ANG_EQ_X if x_larger else tcost.ANG_EQ_Y)
 
     if x_larger:
-        cyc += passcost.ANG_MIN_Y
+        cyc += tcost.ANG_MIN_Y
         zp[0x5D], zp[0x5C] = y_hi, y_lo  # min = y
         zp[0x7A], zp[0x7B] = x_lo, x_hi  # max = x
         b_lo, b_hi, a_lo, a_hi, ncyc = _normalise(
-            zp, 0x80, 0x83, 0x82, 0x85, passcost.SCALE_LOOP
+            zp, 0x80, 0x83, 0x82, 0x85, tcost.SCALE_LOOP
         )
         ang_lo, ang_hi, ratio, dcyc = _divide_and_arctan(a_lo, a_hi, b_lo, b_hi)
-        cyc += ncyc + dcyc + passcost.ANG_SIGN
+        cyc += ncyc + dcyc + tcost.ANG_SIGN
         if not ((sx ^ sy) & 0x80):  # same sign -> negate angle
             ang_hi, ang_lo = _invert16(ang_hi, ang_lo)
-            cyc += passcost.ANG_SIGN_NEGATE
+            cyc += tcost.ANG_SIGN_NEGATE
         else:
-            cyc += passcost.ANG_SIGN_KEEP
+            cyc += tcost.ANG_SIGN_KEEP
         base = 0x40 if not (sx & 0x80) else 0xC0  # +90 or +270 degrees
-        cyc += passcost.ANG_QUAD + (
-            passcost.ANG_QUAD_LOW if base == 0x40 else passcost.ANG_QUAD_HIGH
+        cyc += tcost.ANG_QUAD + (
+            tcost.ANG_QUAD_LOW if base == 0x40 else tcost.ANG_QUAD_HIGH
         )
         ang_hi = (ang_hi + base) & 0xFF
     else:
-        cyc += passcost.ANG_MIN_X
+        cyc += tcost.ANG_MIN_X
         if (y_hi | y_lo) == 0:  # both zero
             zp[0x7E] = zp[0x8A] = zp[0x8B] = 0
-            return cyc + passcost.ANG_ZERO
-        cyc += passcost.ANG_NONZERO
+            return cyc + tcost.ANG_ZERO
+        cyc += tcost.ANG_NONZERO
         zp[0x5D], zp[0x5C] = x_hi, x_lo  # min = x
         zp[0x7A], zp[0x7B] = y_lo, y_hi  # max = y
         b_lo, b_hi, a_lo, a_hi, ncyc = _normalise(
-            zp, 0x82, 0x85, 0x80, 0x83, passcost.SCALE_LOOP_Y
+            zp, 0x82, 0x85, 0x80, 0x83, tcost.SCALE_LOOP_Y
         )
         ang_lo, ang_hi, ratio, dcyc = _divide_and_arctan(a_lo, a_hi, b_lo, b_hi)
-        cyc += ncyc + dcyc + passcost.ANG_SIGN
+        cyc += ncyc + dcyc + tcost.ANG_SIGN
         if (sx ^ sy) & 0x80:  # opposite sign -> negate angle
             ang_hi, ang_lo = _invert16(ang_hi, ang_lo)
-            cyc += passcost.ANG_SIGN_NEGATE
+            cyc += tcost.ANG_SIGN_NEGATE
         else:
-            cyc += passcost.ANG_SIGN_KEEP
+            cyc += tcost.ANG_SIGN_KEEP
         base = 0x00 if not (sy & 0x80) else 0x80  # +0 or +180 degrees
-        cyc += passcost.ANG_QUAD + (
-            passcost.ANG_QUAD_LOW if base == 0x00 else passcost.ANG_QUAD_HIGH
+        cyc += tcost.ANG_QUAD + (
+            tcost.ANG_QUAD_LOW if base == 0x00 else tcost.ANG_QUAD_HIGH
         )
         ang_hi = (ang_hi + base) & 0xFF
 
     zp[0x8A], zp[0x8B], zp[0x7E] = ang_lo, ang_hi, ratio
-    return cyc + passcost.ANG_QUAD_TAIL
+    return cyc + tcost.ANG_QUAD_TAIL
 
 
 def _normalise(zp, max_lo_a, max_hi_a, min_lo_a, min_hi_a, lap):
@@ -316,7 +318,7 @@ def _normalise(zp, max_lo_a, max_hi_a, min_lo_a, min_hi_a, lap):
     a_lo = min_lo
     b_lo = max_lo & 0xFC  # AND #$fc: drop scaling noise
     a_hi = min_hi
-    cyc = passcost.SCALE_SHIFT + laps * lap + passcost.SCALE_TAIL
+    cyc = tcost.SCALE_SHIFT + laps * lap + tcost.SCALE_TAIL
     return b_lo, b_hi, a_lo, a_hi, cyc
 
 
@@ -339,7 +341,7 @@ def _calc_hypotenuse(zp):
     zp[0x7C] = s & 0xFF
     cc = 1 if s > 0xFF else 0
     zp[0x7D] = (new_hi + zp[0x7B] + cc) & 0xFF
-    return passcost.HYP_HEAD + mcyc + passcost.HYP_TAIL
+    return tcost.HYP_HEAD + mcyc + tcost.HYP_TAIL
 
 
 # ---------------------------------------------------------------------------
@@ -352,22 +354,22 @@ def _vertical_angle(zp, z_hi, v_angle):
     zp[$7C]/zp[$7D] hold the horizontal distance; v_angle is the observer's
     objects_v_angle. Returns (signed vertical angle byte zp[$8D], cycles)."""
     sx = z_hi & 0xFF
-    cyc = passcost.VANG_HEAD
+    cyc = tcost.VANG_HEAD
     if sx & 0x80:  # negative -> make positive
         zlo = (-zp[0x80]) & 0xFF
         borrow = 1 if zp[0x80] != 0 else 0
         sx_abs = (-sx - borrow) & 0xFF
         zp[0x80] = zlo
-        cyc += passcost.VANG_NEG
+        cyc += tcost.VANG_NEG
     else:
         sx_abs = sx
-        cyc += passcost.VANG_POS
+        cyc += tcost.VANG_POS
     zp[0x83] = sx_abs  # x_hi = |rel z hi|
     zp[0x82] = zp[0x7C]  # y_lo = hyp_lo
     zp[0x85] = zp[0x7D]  # y_hi = hyp_hi
     zp[0x88] = 0  # signed_y = 0
     zp[0x86] = sx  # signed_x = original rel z hi
-    cyc += passcost.VANG_SETUP + _calc_angle(zp) + passcost.VANG_SHIFT
+    cyc += tcost.VANG_SETUP + _calc_angle(zp) + tcost.VANG_SHIFT
     # $50 = angle_lo - $20 ; A = angle_hi - v_angle ; PHP ; >>4 (with sign)
     lo = zp[0x8A] - 0x20
     t50 = lo & 0xFF
@@ -380,11 +382,11 @@ def _vertical_angle(zp, z_hi, v_angle):
         t50 = ((c << 7) | (t50 >> 1)) & 0xFF
     if neg:
         A = A | 0xF0
-        cyc += passcost.VANG_SIGN_NEG
+        cyc += tcost.VANG_SIGN_NEG
     else:
-        cyc += passcost.VANG_SIGN_POS
+        cyc += tcost.VANG_SIGN_POS
     zp[0x50] = t50  # $0050: the fine (low) byte of the vertical angle (screen y low)
-    return A & 0xFF, cyc + passcost.VANG_TAIL
+    return A & 0xFF, cyc + tcost.VANG_TAIL
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +395,7 @@ def _vertical_angle(zp, z_hi, v_angle):
 def _relative_xyz(zp, obj, obs_x, obs_y, obs_zf, obs_zh, tgt_x, tgt_y, tgt_zf, tgt_zh):
     """calculate_object_relative_x_and_y ($85C4) + _z ($85F5): the signed and
     absolute component distances of a target from an observer, and their cycles."""
-    cyc = passcost.REL_XY + passcost.REL_Z
+    cyc = tcost.REL_XY + tcost.REL_Z
     dx = (tgt_x - obs_x) & 0xFF  # $0C78 == 0 outside title screen
     zp[0x86] = dx
     zp[0x80] = 0
@@ -406,7 +408,7 @@ def _relative_xyz(zp, obj, obs_x, obs_y, obs_zf, obs_zh, tgt_x, tgt_y, tgt_zf, t
     zp[0x81] = v & 0xFF
     zp[0x84] = (tgt_zh - obs_zh - (1 if v < 0 else 0)) & 0xFF
     del obj
-    return cyc + passcost.REL_XY_ABS * ((dx >> 7) + (dy >> 7))
+    return cyc + tcost.REL_XY_ABS * ((dx >> 7) + (dy >> 7))
 
 
 def relative_angles(state, observer, target):
@@ -419,7 +421,7 @@ def relative_angles(state, observer, target):
     # cheaper to allocate than a 256-entry comprehension on this hot enemy-scan path.
     zp = collections.defaultdict(int)
     otype = state.obj_type[target]
-    cyc = passcost.REL_ANGLES + _relative_xyz(
+    cyc = tcost.REL_ANGLES + _relative_xyz(
         zp,
         target,
         state.obj_x[observer],
@@ -496,7 +498,9 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     # FOV gate ($18B8): A = c57 - $0A + (fov>>1) ; out of view if A >= fov.
     a = (ra["c57"] - 0x0A + (fov_width >> 1)) & 0xFF
     if a >= fov_width:
-        out["cycles"] = cyc + passcost.SEE_FOV_REJECT
+        rejected = cyc + passcost.SEE_FOV_REJECT  # the $8401 chain carries its writes
+        out["cycles"] = writeweight.cycles(rejected)
+        out["weight"] = writeweight.weight(rejected)
         return out
     out["in_fov"] = True
     cyc += passcost.SEE_FOV_PASS
@@ -590,7 +594,7 @@ def object_screen_span(state, target):
     if target == mem[mm.PLAYER_OBJECT]:  # $209F: the player is never drawn
         return False, 0, 0, 0, cyc + passcost.SPAN_PLAYER
     rel = relative_angles(state, mem[mm.PLAYER_OBJECT], target)
-    cyc += passcost.SPAN_ANGLES + rel["cycles"] + passcost.SPAN_SIZE
+    cyc += passcost.SPAN_ANGLES + writeweight.cycles(rel["cycles"]) + passcost.SPAN_SIZE
     zp = rel["_zp"]
     otype = state.obj_type[target]
     half = mm.OBJECT_SCREEN_HALF_ANGLE.get(otype, 0)  # $2112+7 is 0: no type 7
@@ -599,7 +603,9 @@ def object_screen_span(state, target):
         cyc += passcost.SPAN_SIZE_FLOOR
     mem[mm.OBJECT_SIZE_FLOOR] = 0  # $20B8
     zp[0x80] = half
-    cyc += _vertical_angle(zp, 0, mem[mm.OBJECTS_V_ANGLE + otype])[1]
+    cyc += writeweight.cycles(
+        _vertical_angle(zp, 0, mem[mm.OBJECTS_V_ANGLE + otype])[1]
+    )
     ang_lo, ang_hi = zp[0x8A], zp[0x8B]
     c57, c59 = rel["c57"], rel["c59"]
     cyc += passcost.SPAN_LEFT + passcost.SPAN_LEFT_HI

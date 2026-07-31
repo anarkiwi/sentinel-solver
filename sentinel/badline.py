@@ -176,9 +176,12 @@ def _place_run(clk, cycles, weight):
 def charge_run(clk, cycles, weight):
     """Spend ``cycles`` of a run no static map reaches, less what its writes refund.
 
-    A term whose loop outlives its map -- the $1CDD ray-march -- carries its own write
+    A term whose loop outlives its map -- the $1CDD ray-march, the $8401 chain past
+    $1887's own run, the $9630 body the $95E9 walk RTIs out of -- carries its own write
     weight (:mod:`sentinel.writeweight`) instead, so a window anywhere inside it gets
     back the ``weight / cycles`` its instructions drive rather than nothing at all.
+    The fixed-point residue in ``clk[4]`` is under a cycle a frame, so the frame loop
+    carries it on the state rather than dropping it with the clock.
     """
     end = clk[0] + cycles
     if end <= clk[1]:

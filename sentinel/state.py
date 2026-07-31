@@ -53,6 +53,7 @@ class State:
         "body_paid",
         "camera_shift",
         "camera_clear",
+        "steal_residue",
     )
 
     def __init__(
@@ -66,6 +67,7 @@ class State:
         body_paid=0,
         camera_shift=0,
         camera_clear=0,
+        steal_residue=0,
     ):
         self.mem = mem
         self.cycle_residual = cycle_residual  # cycles owed at the sub-pass resume point
@@ -78,6 +80,7 @@ class State:
         self.camera_clear = (
             camera_clear  # the residual $1FC2 waits for: the $2211 clear
         )
+        self.steal_residue = steal_residue  # badline.WEIGHT_SHIFT refund carried over
         self._bind()
 
     def _bind(self):
@@ -109,6 +112,7 @@ class State:
             self.body_paid,
             self.camera_shift,
             self.camera_clear,
+            self.steal_residue,
         )
 
     # ---- scalars --------------------------------------------------------

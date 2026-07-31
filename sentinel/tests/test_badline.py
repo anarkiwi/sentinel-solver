@@ -240,9 +240,9 @@ def test_the_marched_refund_is_the_per_frame_steal_the_machine_pays():
 
 def test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it():
     """An anchor's map covers only the run walked from it, so the gate's 274578-cycle
-    $1887 pays the full steal at all 25 windows against a 49-cycle map, and the frames
-    it coasts through open a clock that never leaves the unrefundable $9630 body.
-    Live inside that march the machine pays 1071.46 a frame: the ceiling is ~3.5 dear.
+    $1887 pays the full steal at all 25 windows against a 49-cycle map, and the walk from
+    $95E9 RTIs out of the split chain before the first window the $9630 body contains.
+    Which is why both are charged by their own write weight instead.
     """
     assert writeruns.LENGTH_AT[0x1887] < int(badline.EVENT_POS[0])
     clk = badline.frame_clock()
@@ -251,6 +251,9 @@ def test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it()
     clk = badline.frame_clock()
     badline.charge(clk, 0x95E9, passcost.IRQ_BODY)
     assert clk[2] == 4 and clk[3] == 0  # the body's own four windows, unrefunded
+    clk = badline.frame_clock()
+    badline.charge_run(clk, passcost.IRQ_BODY, writeweight.WEIGHT["IRQ_BODY"])
+    assert clk[2] == 4 and clk[4] > 0  # ... which the body's own weight now gives back
     totals = _complete_frames(_live()["9795_march"])
     mean = sum(k * v for k, v in totals.items()) / sum(totals.values())
     ceiling = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL

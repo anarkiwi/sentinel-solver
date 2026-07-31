@@ -128,3 +128,60 @@ def test_the_march_laps_write_weight_is_its_own_instructions(image):
             + neg * writeweight.WEIGHT["ADD_VECTOR_NEG"]
         ), neg
     assert _flat_lap(image, 0)[1] == 30 and _flat_lap(image, 3)[1] == 39
+
+
+def _straight(image, pc, cycles, branches=()):
+    """``(cycles, write weight)`` of the run at ``pc``, walked over the ROM."""
+    run = writemap.walk(image, pc, cycles, branches)
+    weight = 0
+    for offset, _pc, op in run:
+        writes = [c for c in writemap.OP_WRITE_CYCLES[op] if offset + c < cycles]
+        weight += len(writes) * (len(writes) + 1) // 2
+    return run[-1][0] + writemap.OP_CYCLES[run[-1][2]], weight
+
+
+# ``(head, term, the caller's own JSR inside it, the branch record)``, one run a term.
+TRIG_RUNS = (
+    (0x85C4, "REL_XY", 6, (True, True)),
+    (0x85F5, "REL_Z", 6, ()),
+    (0x9295, "ANG_MIN_Y", 0, ()),
+    (0x92A8, "ANG_MIN_X", 0, ()),
+    (0x92CA, "SCALE_TAIL", 0, ()),
+    (0x0D5B, "DIV_SUB", 0, ()),
+    (0x0E1F, "DIV_ARCTAN", 0, ()),
+    (0x0E35, "DIV_DELTA", 0, ()),
+    (0x0E70, "DIV_AVERAGE", 0, ()),
+    (0x934D, "VANG_SETUP", 0, ()),
+    (0x935E, "VANG_SHIFT", 0, ()),
+    (0x937F, "HYP_HEAD", 0, ()),
+    (0x9398, "HYP_TAIL", 0, ()),
+)
+
+
+@pytest.mark.oracle
+def test_the_trig_chains_write_weight_is_its_own_instructions(image):
+    """A $1887 query past its FOV gate outlives $1887's 49-cycle map, so the $8401
+    chain beneath it is priced by its own write weight -- and every term of it walks
+    the image to exactly the cycles and the write cycles ``writeweight`` claims."""
+    for pc, name, call, branches in TRIG_RUNS:
+        cycles = getattr(passcost, name) - call
+        weight = writeweight.WEIGHT[name] - (3 if call else 0)
+        assert _straight(image, pc, cycles, branches) == (cycles, weight), name
+    assert writeweight.pack("HYP_TAIL") == passcost.HYP_TAIL + (8 << writeweight.SHIFT)
+
+
+@pytest.mark.oracle
+def test_the_irq_bodys_write_weight_is_its_own_instructions(image):
+    """No static map reaches the $9630 body: the walk from $95E9 takes the split
+    chain's RTI instead.  Its weight is the body's own sequence, and the keyboard walk
+    that dominates it repeats a ROM-fixed number of times ($1363 LDX/$11D9 LDY)."""
+    entry = writemap.walk(image, 0x95E9, 81, (False, False, True, True))
+    assert entry[-1][1] == 0x9621  # the BEQ into $9630, taken on the raster IRQ
+    assert _straight(image, 0x95E9, 81)[1] == writeweight.IRQ_BODY_WRITES["$95E9"]
+    assert _straight(image, 0x8CF9, 63, (True,)) == (63, 3)  # one keyboard-matrix scan
+    assert _straight(image, 0x0F62, 15) == (15, 4)  # the $FFF4 call that runs it
+    scans = (image[0x11DA] + 1) + 2  # $11D9 LDY #$0E laps, plus $11A5 and $11B0
+    assert writeweight.IRQ_BODY_WRITES["$8CF9"] == scans * 3
+    assert writeweight.IRQ_BODY_WRITES["$0F62"] == scans * 4
+    assert writeweight.IRQ_BODY_WRITES["$1363"] == (image[0x1364] + 1) + 3 * (scans - 2)
+    assert writeweight.WEIGHT["IRQ_BODY"] == sum(writeweight.IRQ_BODY_WRITES.values())
