@@ -37,8 +37,9 @@ class SimClock:
                 self.state.body_stage,
                 self.state.body_index,
                 self.state.body_partial,
-                self.state.cycle_residual,
+                residual,
             ) = resume
+            self.state.cycle_residual = residual or 0
         self.plotting = False
 
     def image(self):
@@ -80,6 +81,24 @@ class EmuClock:
         return enemies.resume_from_stack(image, sp, page)
 
 
+def _exact_seed(emu, log, tries=40):
+    """Step frames until the marker catches the loop where the model can start exactly.
+
+    A position off the loop's straight lines is resumable but only to its segment's
+    head; one on them carries the cycles already spent as well."""
+    for waited in range(tries):
+        image = emu.full_image()
+        resume = emu.sub_pass(image)
+        if resume[4] is not None:
+            if waited:
+                log(f"[instrument] seeded {waited} frame(s) on, at an exact position")
+            return image, resume
+        emu.step_frame()
+    image = emu.full_image()
+    log(f"[instrument] no exact seed in {tries} frames; seeding mid-segment")
+    return image, emu.sub_pass(image)
+
+
 def _unfreeze(img):
     """The $0CE5-cleared byte that starts the cooldown clock (player has acted)."""
     return img[mm.PLAYER_NOT_ACTED] & 0x7F
@@ -98,8 +117,8 @@ def race(bm, max_frames, follow=False, log=print):
     frames_run = 0
     with bm.halted():
         emu.sync_to_frame()
-        seed = emu.full_image()
-        sim = SimClock(seed)
+        seed, resume = _exact_seed(emu, log)
+        sim = SimClock(seed, resume)
         unfrozen = _unfreeze(seed)
         emu.poke(mm.PLAYER_NOT_ACTED, unfrozen)
         sim.poke(mm.PLAYER_NOT_ACTED, unfrozen)

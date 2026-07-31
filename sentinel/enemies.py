@@ -233,7 +233,7 @@ def resume_from_stack(mem, sp, page):
     x = page[(sp + 2) & 0xFF]
     pc = page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)
     addr, live = _innermost_loop_address(pc, sp, page)
-    offset = _segment_offset(mem, pc, y) or 0
+    offset = _segment_offset(mem, pc, y)  # None where no straight line counts it
     if not LOOP_BODY[0] <= addr < LOOP_BODY[1]:
         if LOOP_DISPATCH[0] <= addr < LOOP_DISPATCH[1]:
             return PHASE_HEAD, BODY_ENTRY, 0, -1, offset
@@ -254,7 +254,7 @@ def resume_from_stack(mem, sp, page):
         index = (x if live else mem[SAVED_X]) if addr > first_call else mm.NUM_SLOTS - 1
     if stage in (BODY_SCAN, BODY_PARTIAL, BODY_TREE, BODY_ROTATE):
         partial = -1 if mem[PARTIAL_SLOT] & 0x80 else mem[PARTIAL_SLOT]
-    return PHASE_BODY, stage, index, partial, 0
+    return PHASE_BODY, stage, index, partial, None
 
 
 def paid(slot):
