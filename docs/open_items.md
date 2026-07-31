@@ -140,10 +140,10 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock prices a marching `$1887` to within 1-2%, not to the cycle
+## 8. The enemy clock still prices two `$1887` sub-routines by a mean
 
-**Wrong.** `driver.instrument --frames 3000 --follow` reports **278** CORE divergences on
-ls9795 and **173** on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
+**Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
+ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
 enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
 sim reaches a pass early — or the `$1805` rotation that follows from the same lead.
 
@@ -167,36 +167,41 @@ CORE field, and only on the two boards whose rays reach the board edge.
 `pass_phase` naming the resume point, and `consider_enemy_state` itself in ten stages with
 `body_stage`/`body_index`/`body_partial` naming a position between an `$1887` and the CORE
 write its answer causes ([architecture.md](architecture.md#consider_enemy_state-is-resumable-too)).
-Same-seed, over 3000 frames: ls9795 **329 -> 278**, ls335 **191 -> 173**, ls42 **0 -> 0**.
-The staging is visible in the trace: at ls9795 frame 84 the sim enters slot 5's body,
+ls42 stays clean throughout. The staging is visible in the trace: at ls9795 frame 84 the sim enters slot 5's body,
 applies `update_cd = 4` and suspends at `BODY_SCAN` slot 61 owing 50771 cycles; frames
 85-87 pay it with the ROM inside `$1CBF..$1CEB`, the same march; frame 88 commits the
 outcome. That is what the ROM does.
 
-**What the cost derivation fixed.** `SEE_PROBE` was **210** where the ROM spends **4589**:
-`$1C54 prepare_vector_from_angle` (3870) and `$933D` (627) were never counted. Bracketing
-every `$1887` on the 6502 stack in `sentinel.tests.oracle`, a 2-probe call's non-march part
-is 4456..4903 per probe over 12 boards. With that, `MARCH_OBJECT` 24 -> 28 and `MARCH_SLOPE`
-581 split into 335 (nibble 4/12) and 573 (the `$1D8A` quad), the model's `$16E6` cost
-against the ROM's own cycle count on ls9795 goes from **0.87 to 0.99** (60694 -> 69212
-against 70001 on the worst body) and the whole-round ratio from 0.888 to 0.981.
+**What the cost derivation fixed.** Four terms were means over routines that branch,
+and each is now computed from state both twins already hold:
 
-**Where it stops, exactly.** At the first ls9795 divergence (frame 88) the sim's slot-5 body
-costs 69212 where the ROM's costs 70001 — **789 cycles short, 1.1%**. Four frames later that
-is most of a pass, so the sim reaches slot 1 and writes `$16ED` while the ROM is still in the
-previous pass's `$31CA`. A frame is 15593 foreground cycles and the write points are ~450
-cycles apart, so a 1% error on a 70000-cycle body **cannot** place a write in the right
-frame. Two known sources, both from the same oracle sweep: `SEE_PROBE` is a mean over a
-4456..4903 spread, and `MARCH_OBJECT` is the depth-1 constant (342) where a deeper `$1E3F`
-object stack measures up to 479.
+* `SEE_PROBE` folded a 3870-cycle mean for `prepare_vector_from_angle $1C54`; `$1C54`
+  is now charged from its own branches, with `$0D03 multiply_byte_by_byte` at 96 + 4
+  per set bit of its multiplier and `$0E75`, `$1C9D`, `$0F9E`, `$0F4A`, `$0F3E` priced
+  by the paths the ports take.
+* `MARCH_OBJECT` was the depth-1 constant for `get_tile_z_from_object $1E3F`; the walk
+  is charged per stack level by the branch it takes.
+* `MARCH_STEP` lumped `$1CBB add_vector`, the `$1CEB`/`$1CF3` edge tests, `$1DF9` with
+  `$2BA8`, and `$1D0D check_flat_tile`; each is now charged at its own exit, a taken
+  branch 3 and 4 when it crosses a page (`$1CF1`/`$1CF9`->`$1D44`, `$1D18`/`$1D40`->`$1CE8`).
+* `MARCH_SLOPE` (one constant, then two) was a mean over `check_sloping_tile $1D46`,
+  whose cost is three `$1DF9` corner reads — each able to walk an object stack — plus,
+  on the `$1D8A` quad path, a `$0D03` multiply and the `$1007` invert.
 
-**Resolves.** Pricing `$1C54` and `$1E3F` by their own operands instead of by a mean —
-`$1C54`'s shift-adds are a function of the angle bytes the model already holds, and the
-object-stack walk is a loop the model already runs. Then the three-board gate.
+**Where it stops, exactly.** `SEE_GEOMETRY` (1128) and what is left of `SEE_PROBE`
+(719) are still means, over the same shape of code: `$8401
+calculate_object_relative_angles_and_distance` and `$933D
+calculate_object_relative_vertical_angle`, and under them `$9287 calculate_angle`
+(whose `$92C1`/`$92FF scale_using_x/y` is a **variable-length shift loop**), `$0D4A
+divide_and_arctan` with its ten conditional-subtract rounds and the `$1DF1` arctan
+interpolation, and `$937F calculate_hypotenuse` with its own `$0F4A`. Every one of
+them is ported bit-exactly in `relative.py` and again in `enemies_jit.py`, so every
+branch and every multiplier the price needs is already computed; the work is
+threading the cycles out of those seven functions in both twins, as was done for
+`$1C54`. Nothing here needs anything the 64 KB image does not carry.
 
-**Not the atomic body.** It was, and it is fixed; the staging above is worth 51 events on
-ls9795 and 18 on ls335 and no more, because the model reaches the wrong pass whether or not
-the body's writes are staged inside it.
+**Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
+which staging inside the body cannot correct.
 
 **Not the resync.** Carrying the sim's clock across a follow-mode resync instead of
 resetting it moves ls9795 415 -> 397 only.
@@ -304,7 +309,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-prices-a-marching-1887-to-within-1-2-not-to-the-cycle) landed, so
+  [8](#8-the-enemy-clock-still-prices-two-1887-sub-routines-by-a-mean) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
