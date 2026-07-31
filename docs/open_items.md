@@ -98,31 +98,42 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Five views route a handful of lines to the wrong DDA
+## 5. Two views draw fewer polygons than the ROM; two route lines differently
 
 **Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 10 of the 15 golden
-views; on the other five a few lines per pass reach a different rasteriser than the machine
-sends them to, and the edge tables they leave differ.
+views. The other five split into two separate faults, and `$2F17` is **not** either of them.
 
-**Measured.** `golden_render_cost.json` carries the ROM's `$2377`/`$23DC`/`$2F58`/`$2FA1`/
-`$3113`/`$316D`/`$2EE4`/`$3002` hit counts and `test_fill_geometry_matches_the_rom_loop_counts`
-compares the model's own. Where they differ they differ small and structurally:
+**Measured — it is not the `$0B40` test.** `$2D93 convert_angles_into_double_coordinates`,
+which computes the `screen_x` high byte that `$2E3F`/`$2F17` read, is exact: fuzzed 4000 random
+(`$0BA0`, `$A800`, `$0011`, `$0029`) against the real `$2D93`, **0 mismatches**. So the model
+and the machine agree on every value the wide/narrow test is made of.
 
-| view | how the model differs |
-| --- | --- |
-| 2024,16,0 | `shallow` +2 |
-| 335,0,0 | `edges` −8, `sections` −2, `steep` −48, `wide_steep` −48, `span_bytes` −58 |
-| 0,136,248 | `span_rows` +41, `steep` +81, `shallow` −9 |
-| 42,160,240 | `sections` +3, `wide_steep` +284, `shallow` −79, `span_bytes` −3162 |
-| 2024,184,244 | `sections` +3, `wide_steep` +185, `steep` −469, `span_bytes` −909 |
+**Measured — the two faults, by counting each `process_lines` route** (`$2E4F` outer,
+`$2E5E` inner-steep, `$2E89` direct rasterise, `$2ECC` point) against the model's own:
 
-The two worst share a signature: three more `$3002` entries than the ROM makes, more
-`process_wide_line` iterations, fewer narrow ones, and fewer filled bytes — lines taking the
-wide path where the machine takes a narrow one, which then writes different columns into
-`$AD00`/`$AE00`. On 42,160,240 `span_rows` is *exactly* right (1521) while `span_bytes` is 32%
-low, so the polygons' row ranges are right and only the columns in them are wrong. That points
-at `$2F17`'s `$0041`/`$0042` test and the screen_x high bytes `$2D93`/`$3079` feed it, not at
-the DDAs themselves. Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
+| view | outer | direct | point | lines total |
+| --- | --- | --- | --- | --- |
+| 2024,184,244 | +3 | −10 | −2 | **−9** |
+| 335,0,0 | −2 | 0 | 0 | **−4** |
+| 42,160,240 | +3 | −3 | 0 | 0 |
+| 0,136,248 | 0 | −1 | +2 | 0 |
+| 2024,16,0 | 0 | 0 | 0 | 0 |
+
+Two views (2024,184,244 and 335,0,0) process **fewer lines in total** — 9 and 4, i.e. two or
+three whole polygons the ROM prepares and the model does not. That is a polygon-count fault,
+upstream of any per-line routing. `plot_polygon $2AA9`'s second wide-buffer pass was the obvious
+seat and is **excluded**: `span_fill`'s `$2337` clip-right path stores a row *length* into
+`$002C` rather than a flag, and `$2ABC` accepts only exactly 1, so a clipped row must still buy
+the other section. Both facts are now modelled (the model had a truth test and no store) and
+neither moves any of the five views, so whatever prepares those polygons is elsewhere.
+
+The other two (42,160,240 and 0,136,248) process the same number of lines but send three of
+them, and one, down a different branch, with no line count changing — a genuine routing
+difference on `$2E3D`/`$2E45`, i.e. `$006C` or a `$0B40` a *previous* polygon left behind. The
+model's `sxh` is indexed by corner and reset per polygon; the ROM's `$0B40` is indexed by
+plottable slot and never reset, and adjacent tiles share slots.
+
+Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
 
 **Also not derived.**
 
@@ -144,8 +155,9 @@ the DDAs themselves. Frame cost is 0.93-1.00× (median 0.973, mean absolute erro
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Dumping `$0041`/`$0042` per line on 42,160,240 against the ROM's, to find which
-lines the model sends wide that the machine keeps narrow.
+**Resolves.** Counting `$2D6C` entries per tile against the ROM's on 2024,184,244 to find which
+tiles prepare fewer polygons, and keying the model's `sxh` by plottable slot rather than by
+corner to settle the routing one.
 
 ## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 

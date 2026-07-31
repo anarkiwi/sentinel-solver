@@ -704,7 +704,7 @@ def _plot_polygon(
             cyc += passcost.PP_RTS
             break
         cyc += passcost.PP_CLIP_TEST
-        if not nothing and flags[sect]:
+        if not nothing and flags[sect] == 1:  # $2ABC CMP #$01, not a truth test
             cyc += passcost.PP_RTS
             break
         cyc += passcost.PP_CLIPPED + passcost.BUFVARS
