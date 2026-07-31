@@ -280,6 +280,22 @@ def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
         assert abs(modelled - m["passes"]) <= 4, (board, modelled, m["passes"])
 
 
+def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
+    """The one live $1FFC on ls9795: the model's span is the ROM's own $0C62/$0C69,
+    it charges exactly one replot, and the stall brackets the machine's measured wall.
+    """
+    monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
+    rec = _live_cycles()["strip_replot"]
+    state = Game.typed(rec["board"]).state
+    state.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    enemies.advance_frames(state, rec["model_charge_frame"] - 2)
+    on, left, columns, _cyc = relative.object_screen_span(state, rec["target"])
+    assert on and (left, columns) == (rec["rom_left"], rec["rom_columns"])
+    frames = projector.strip_replot_frames(state, rec["target"], left, columns)
+    stall = frames * passcost.PAL_FRAME_CYCLES / passcost.FOREGROUND_CYCLES
+    assert 0.9 <= stall / rec["machine_wall_frames"] <= 1.25, stall
+
+
 def test_the_frame_budget_decomposition_matches_the_live_frame():
     """Every cycle of a live frame is one of the model's four terms, measured apart.
 

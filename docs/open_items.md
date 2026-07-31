@@ -110,9 +110,18 @@ the filled-rows/y-extent ratio spans both sides of 1, `H` is 0 on views where th
 fills heavily (every corner `screen_y` below the inner band), and per-tile fill spans nearly two
 orders of magnitude.
 
+**And the exact backend is itself dear on a live state.** One `$1FFC` strip replot caught on
+the machine at `$1F9F` (ls9795, slot 3, the ROM's own span 37/3) takes **22 whole frames** to
+the next `$1289`. On that captured image the proxy charges 387392 cycles, 1.12x, but
+`RENDER_COST_BACKEND=py65` charges **534090**, 1.54x — which the machine cannot have spent in
+22 PAL frames (24277 a frame against 19656). Calibrating the proxy against that backend
+inherits the error. Fixture `strip_replot`, measured from
+[8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is).
+
 **Resolves.** Stateful emulation of the whole `plot_world` fill sequence in render order, the
 interleaved object polygons included. Short of that the only honest levers are
-`projector.PER_SCANLINE`/`PER_PIXEL`.
+`projector.PER_SCANLINE`/`PER_PIXEL` — and first, the `$2993`/`$245B` context
+`oracle.update_object_cost` builds, since that is what "exact" is being measured against.
 
 ## 6. The py65 exact backend skips transfer settles
 
@@ -187,14 +196,29 @@ nothing but the clock can move, over 1200 frames: ls42 **21354** machine passes 
 **21363**, ls335 **9410** against **9408**. Nine passes and two — under 0.01 a frame,
 either sign.
 
-**It is the frames the machine does not pass at all.** ls9795 drifts 90 passes over the
-same 1200, and none of it is a rate: 1045 of the 1200 frames tie exactly, the drift is
-flat across a 275-frame stretch, and the whole 90 arrives in a handful of events shaped
-like frames 498 and 499 — machine **0** passes, sim 16 and 17. The machine reaches no
-`$1289` for two whole frames; the model stalls for its own three (`cycle_residual`
--58348) but two frames late. That is the `$1FFC` strip replot through
-`projector.strip_replot_frames`, landing at the wrong frame and for the wrong length —
-the same replot the frame-129 rotation turned out to be.
+**A quiet frame is usually not a replot.** ls9795 reaches no `$1289` on **445 of 700**
+live frames, in runs of 3, 4 and 7 — and a checkpoint on `$1805`/`$1F9F`/`$1FFC`/`$2625`
+fires in none of them. Those are simply passes longer than a frame: one `$1887` march is
+64080 cycles and the pass before the frame-129 rotation is a single **274578**-cycle
+query, four and eighteen frames of foreground. Only **one** run in 700 frames is a replot.
+
+**Measured — the replot is billed in the right pass.** That one run is frames 112..151, 40
+frames, with `$1805`, `$1F9F`, `$1FFC` and `$2625` all inside frame **130**. The model
+enters the same 274578-cycle march during the same frame 111, drains it, and charges its
+own single replot — 389179 cycles, slot 3, span (37, 3) — in frame **129**. One frame, and
+it is not a mis-billing: it is that the march ahead of it is ~1% short, which lands the
+finish on the other side of a frame boundary. Over 400 frames the model charges **exactly
+one** replot against the machine's exactly one `$2625`, so nothing is double-billed, and
+the span it computes is the ROM's own `$0C62`/`$0C69` byte for byte.
+
+**Measured — the length, and a backend that is dearer than the machine.** Caught at
+`$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
+`$1289`. `strip_replot_frames`' proxy charges 387392 cycles = 24.6 frames of stall,
+**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=py65` backend, on the
+same captured image, returns **534090** cycles = 34.0 frames, **1.54x**. The machine cannot
+have spent 534090 cycles in 22 PAL frames — that is 24277 a frame against the frame's
+19656 — so the *exact* backend's render context is dear, and the proxy calibrated against
+it inherits that. Both belong to [5](#5-terrain-fill-cost-cannot-close-per-tile), not here.
 
 `~17 cycles a frame` was therefore never there. The budget is right to under 4 and the
 clock to under 0.01 of a pass a frame; what is left is a render cost and its timing, plus,
@@ -490,12 +514,13 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** The `$1FFC` replot's own frame: when the machine stops passing, for how long,
-and how that lines up with the pass in which the model charges it. Its price is
-`projector.strip_replot_frames` and so is [5](#5-terrain-fill-cost-cannot-close-per-tile)'s
-problem; its *timing* is this one's. Plus a `body_spent` resume so a follow-mode resync
-inside `$1887` does not restart the query. Not the frame budget and not the clock — both
-are now measured directly and neither has room for what this item is chasing.
+**Resolves.** Not the frame budget, not the clock and not the replot's placement — all
+three are now measured directly against the machine and none has room for what this item
+is chasing. What is left on this side is a `body_spent` resume so a follow-mode resync
+inside `$1887` does not restart the query, and the ~1% on the `$1887` march that decides
+which side of a frame boundary a 274578-cycle query finishes on. The replot's *price* —
+proxy 1.12x and py65 1.54x of a machine wall measured at 22 frames — is
+[5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
 
 ## 9. The human line does not replay to a win through the live executor
 
