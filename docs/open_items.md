@@ -120,18 +120,25 @@ and the machine agree on every value the wide/narrow test is made of.
 | 2024,16,0 | 0 | 0 | 0 | 0 |
 
 Two views (2024,184,244 and 335,0,0) process **fewer lines in total** — 9 and 4, i.e. two or
-three whole polygons the ROM prepares and the model does not. That is a polygon-count fault,
-upstream of any per-line routing. `plot_polygon $2AA9`'s second wide-buffer pass was the obvious
-seat and is **excluded**: `span_fill`'s `$2337` clip-right path stores a row *length* into
-`$002C` rather than a flag, and `$2ABC` accepts only exactly 1, so a clipped row must still buy
-the other section. Both facts are now modelled (the model had a truth test and no store) and
-neither moves any of the five views, so whatever prepares those polygons is elsewhere.
+three whole polygons the ROM prepares and the model does not, and counting `$2D6C` entries per
+tile localises it exactly: **2 prepares missing of 95** on 2024,184,244 and **1 of 21** on
+335,0,0, with 42,160,240 and 777,32,0 exact (73 and 117). Every tile agrees on *whether* it has
+polygons and the tile counts match (112 and 223), so no tile is skipped — the missing entries
+are second wide-buffer passes, i.e. `$2AA9`'s `$002C`/`$002D` decision on one or two polygons.
+`span_fill`'s `$2337` stores a row *length* into `$002C` rather than a flag and `$2ABC` accepts
+only exactly 1, so a clipped row must still buy the other section; both are now modelled (the
+model had a truth test and no store) and neither moves any view, so the remaining seat is one of
+the other three ways `$002C`/`$002D` can end a pass.
 
 The other two (42,160,240 and 0,136,248) process the same number of lines but send three of
-them, and one, down a different branch, with no line count changing — a genuine routing
-difference on `$2E3D`/`$2E45`, i.e. `$006C` or a `$0B40` a *previous* polygon left behind. The
-model's `sxh` is indexed by corner and reset per polygon; the ROM's `$0B40` is indexed by
-plottable slot and never reset, and adjacent tiles share slots.
+them, and one, down a different branch, with no line count changing — a routing difference on
+`$2E3D`/`$2E45`, i.e. `$006C` or a `$0B40` a *previous* polygon left behind. Keying the model's
+`sxh` by plottable slot, as the ROM does, was **tried and reverted**: it drops the exact views
+from 10 to 1 because `_section_line`'s 16-bit x delta then reads a stale high byte and `nsec`
+saturates at its 255 cap (`edges` +12103 against `sections` +54 on 777,32,0, ~224 extra edges a
+section). So the stale values *are* reachable somewhere the corner keying masks, and slot keying
+cannot land until that read is found. `$2DC9` never writing `$0B40` at all — the model clears it
+— is confirmed and is part of the same knot.
 
 Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
 
@@ -155,9 +162,9 @@ Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Counting `$2D6C` entries per tile against the ROM's on 2024,184,244 to find which
-tiles prepare fewer polygons, and keying the model's `sxh` by plottable slot rather than by
-corner to settle the routing one.
+**Resolves.** For the polygon count, the three remaining `$002C`/`$002D` exits on the two
+polygons named above. For the routing, finding which `_section_line` read sees a stale `$0B40`
+before slot keying can replace the corner keying.
 
 ## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 
