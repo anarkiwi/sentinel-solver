@@ -875,6 +875,54 @@ the within-frame phase does. (Comparing the *anchor's* routine against the machi
 overstates this — a term legitimately spans into its callee, `$16D6` into `$31CA` and `$95E9`
 into `$119F` — so it is the offset, not the routine, that carries the measurement.)
 
+**The phase is the frame's own `cycle_residual`, and it is read off the frame loop.**
+`advance_frame` re-pins `badline.frame_clock()` to the raster every frame, but the model's
+*work* boundary is not the raster boundary: the frame ends when the budget runs out part way
+through a term, and that whole term is charged to the frame that started it. The mismatch is
+carried as `state.cycle_residual` — a **budget** carry with no **clock** counterpart. The
+machine still owes that term's tail and runs it after the IRQ; the model does not, so the
+whole of the next frame's foreground sits on the clock exactly `cycle_residual` early. The
+frame *total* stays right because the residual telescopes frame to frame; only the placement
+moves.
+
+**Measured off the model alone, no emulator.** The model's own clock at frame end, against
+the 19656-cycle PAL frame it is pinned to, over 400 frames a board:
+
+| | ls0042 | ls0335 |
+|---|---|---|
+| `clk[0]` at frame end | 19241..19852 | 19208..20073 |
+| `(clk[0] - PAL) + residual` | -475..-1 | -473..-1 |
+| ... charging the tail first | **-1..-1** | **-1..-1** |
+
+Advancing the clock by `-cycle_residual` after the IRQ and before any fresh term makes the
+model's frame exactly one PAL frame plus the tail the raster caught, on every one of 800
+frames. The residue is the constant **-1**: `SHORT_IRQ_FRAME` is `4 x 119 + 1`, and that
+`SHORT_IRQ_WRAP` cycle is budgeted in `IRQ_CYCLES` but has no event to place it on.
+
+**Live, the same correction collapses the placement.** Adding the frame's seeded residual back
+to each window's measured placement error puts `$16D6`'s median at **+2** (ls0042) and **+4**
+(ls0335) with p90 +7 and +9 — `b` alone. Charging the tail for real and re-measuring:
+
+| `$16D6` placement error | min | p25 | med | p75 | max |
+|---|---|---|---|---|---|
+| as shipped | -760 | -483 | +5 | +146 | +409 |
+| charging the tail first | -213 | **+1** | **+4** | **+6** | +15 |
+
+Windows placed exactly go 3 -> **24** (23 of them priced right), and agreement 80.3 -> 81.6%
+(ls0042) and 79.5 -> 81.5% (ls0335). What is left is `b`, 2..7 cycles, which still decorrelates
+a 1..2-cycle write run.
+
+**Not kept: it double-places what `charge_run` already placed.** Gate 11/8/0 -> **15/8/0**.
+`_place_run` wraps a term that outlives the frame and places the windows of every frame it
+spans, so carrying that debt again pays them twice. The shape is in the sizes: the carry fires
+399/400 frames on ls0042 (median 176, max 435) and 396/400 on ls0335, but only **54/400** on
+ls9795, there with p90 **9495** and max **12554** — the frames a march ends in, and ls9795 is
+the board that regressed. Landing it wants the previous frame's clock overhang (`clk[0] - PAL`,
+which is negative exactly when a wrapping term already placed those frames) rather than
+`-cycle_residual`, which needs one state field; and then `b`, from an instruction-boundary map
+at the interrupted term's own offset — the same datum, since the tail cannot be refunded at all
+without knowing which term the raster caught.
+
 **So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
 callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can
 measure at all it prices **4.1 of 25 windows** (ls0042 4.1, ls0335 4.1, ls9795 4.2), all of
