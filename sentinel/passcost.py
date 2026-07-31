@@ -8,15 +8,18 @@ pass cost is a property of the state.  Per-term arithmetic: docs/architecture.md
 from sentinel import memmap as mm
 
 PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
-BADLINE_STEAL = 43  # a $30..$F7 line whose low 3 bits are YSCROLL ($D011 & 7 = 3)
+BADLINE_STEAL = 43  # the MODE of a $30..$F7 line whose low 3 bits are YSCROLL
 BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
+BADLINE_FRAME = 1071  # the frame's whole steal: 42.8 a badline, not the 43 mode
 SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
 SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
-IRQ_BODY = 2491  # the $9630 body: $95E9 202 + $119F 2156 + $1635/$FFC2/$FFC5 126 + 7
-IRQ_CYCLES = 4043  # 1075 + 477 + 2491: every FIXED cycle a frame denies the play loop
+IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted
+IRQ_GATE_SHUT = 7  # $9659 LDA $0CE5 4 + $965C BMI $9669 taken 3: no clock, no $1635
+IRQ_GATE_OPEN = 43  # ... nt 2 + $965E LDA/BMI 6 + JSR $130C 6 + the $1635 call 25
+IRQ_CYCLES = 3933  # 1071 + 477 + 2385, the fixed part: the gate and $8ED1 are per frame
 IRQ_SPRITES = 1490  # $1635 loses its $963A fast exit once $0C04 != 0
-FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less this frame's own $130C
+FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less the $9659 gate and the tick
 
 COOLDOWN_TICK_NO_CARRY = 21  # $130C LDA/CLC/ADC/STA 12 + $1315 BCC taken 3 + RTS 6
 COOLDOWN_TICK_GATE = 33  # + $1317 LDA 4 + BNE 3 + $1331 DEC 6 + RTS 6 - the taken BCC 1
@@ -24,6 +27,23 @@ COOLDOWN_TICK_WALK = 33  # the $131C walk's own entry 22 + $132B reload 6 + RTS 
 COOLDOWN_TICK_BYTE_STICK = 14  # $131E LDA 4 + CMP 2 + BCC taken 3 + DEX 2 + BPL 3
 COOLDOWN_TICK_BYTE_DEC = 20  # + $1325 DEC 7, less the taken BCC 1
 COOLDOWN_TICK_LAST = 1  # $0C20 leaves the walk by $1329 BPL not taken, one cycle short
+
+# $8ED1 note tick, one lap a voice, from its own branches ($8E86 then $8E92).
+SOUND_TICK_FIXED = 17  # $963D JSR 6 + the $FFC2 JMP 3 + $8ED1 LDX 2 + $8F0B RTS 6
+SOUND_VOICE_READ = 4  # $8ED3 LDA $8E86,X
+SOUND_VOICE_OFF = 6  # $8ED6 BEQ nt 2 + $8ED8 BMI $8F08 taken 4, page crossed
+SOUND_VOICE_SPENT = 3  # $8ED6 BEQ $8EEE taken: this note's timer is already out
+SOUND_VOICE_TICK = 11  # ... nt 2 + $8ED8 BMI nt 2 + $8EDA DEC $8E86,X 7
+SOUND_VOICE_MORE = 4  # $8EDD BNE $8F08 taken 4, page crossed: the note plays on
+SOUND_VOICE_NOTE = 24  # ... nt 2 + $8EDF..$8EEB: the $D404 write and the gate reload
+SOUND_GATE_READ = 4  # $8EEE LDA $8E92,X
+SOUND_GATE_OFF = 4  # $8EF1 BEQ $8F08 taken 4, page crossed
+SOUND_GATE_TICK = 9  # ... nt 2 + $8EF3 DEC $8E92,X 7
+SOUND_GATE_MORE = 4  # $8EF6 BNE $8F08 taken 4, page crossed
+SOUND_GATE_END = 25  # ... nt 2 + $8EF8..$8F05: silence the voice, $8E96,X = $80
+SOUND_VOICE_NEXT = 6  # $8F08 DEX 2 + $8F09 BPL $8ED3 taken 4, page crossed
+SOUND_VOICE_LAST = 4  # ... not taken 2: voice 0 leaves the lap
+SOUND_TICK_IDLE = 63  # all three voices idle -- what IRQ_BODY used to fold in
 
 PASS_HEAD = 25  # $1289..$129F: LDA 4 + BMI 2 + LSR 6 + LDA 4 + BPL 3 + the JSR 6
 PASS_TAIL = 117  # $12A2..$12C7 48 + the $34BA/$352C/$347D bodies 13 + 29 + 27

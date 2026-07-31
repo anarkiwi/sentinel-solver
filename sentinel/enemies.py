@@ -325,6 +325,7 @@ def _reduce_object_energy(state, target, enemy):
         cost = passcost.REDUCE_HEAD + passcost.REDUCE_PLAYER + passcost.REDUCE_BANK
         # $1A1A/$1A1F: the drained bar is replotted and the drain sound started
         cost += passcost.status_bar_cycles(state.energy) + passcost.TUNE_DRAIN
+        start_tune(state, mm.SOUND_DRAIN)
         return True, cost
     cost = passcost.REDUCE_HEAD + passcost.REDUCE_OBJECT + passcost.REDUCE_BANK
     otype = state.obj_type[target]
@@ -406,6 +407,7 @@ def _rotate_enemy(state, enemy):
     step = mem[mm.ROTATION_SPEED_TABLE + enemy]
     state.obj_h_angle[enemy] = (state.obj_h_angle[enemy] + step) & 0xFF
     mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = ROTATION_COOLDOWN_RELOAD
+    start_tune(state, mm.SOUND_ROTATE)  # $180F JSR $3470
     _initialise_enemy_meanie_variables(state, enemy)  # $1818
 
 
@@ -715,6 +717,7 @@ def _update_meanie(state, enemy, budget, index):
         step = MEANIE_ROTATE_STEP if not (c57 & 0x80) else (0x100 - MEANIE_ROTATE_STEP)
         state.obj_h_angle[meanie] = (state.obj_h_angle[meanie] + step) & 0xFF
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_ROTATE
+        start_tune(state, mm.SOUND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
         budget -= passcost.MEANIE_ROTATE + passcost.ROTATE_REDRAW
         return budget, BODY_DONE, 0
@@ -1023,13 +1026,79 @@ def cooldown_frame(state):
     $9659/$367f).  All integer -- no rounding to drift.  Returns its cycles, which the
     foreground loses from that frame's budget."""
     mem = state.mem
-    if mem[mm.PLAYER_NOT_ACTED] & 0x80:  # player has not yet acted -> no cooldown ticks
-        return 0
+    if mem[mm.PLAYER_NOT_ACTED] & 0x80:  # $965C BMI $9669: no $130C and no $1635 either
+        return passcost.IRQ_GATE_SHUT
+    cost = passcost.IRQ_GATE_OPEN
     acc = mem[mm.COOLDOWN_BRESENHAM] + mm.COOLDOWN_BRESENHAM_STEP
     mem[mm.COOLDOWN_BRESENHAM] = acc & 0xFF
     if acc > 0xFF:  # $1315 BCC skip -> only the carry runs the cooldown decrement
-        return tick_cooldowns(state)
-    return passcost.COOLDOWN_TICK_NO_CARRY
+        return cost + tick_cooldowns(state)
+    return cost + passcost.COOLDOWN_TICK_NO_CARRY
+
+
+def start_tune(state, tune):
+    """$3470 -> $8DB4: point a voice at ``tune``'s eight-byte $AC00 descriptor.
+
+    Only the three bytes :func:`sound_frame` reads are modelled -- the note timer
+    $8E86,X, the gate reload $8E8E,X and the voice flag $8E96,X -- the rest of $8DB4
+    is SID writes.  Its own cycles are already inside ROTATE/MEANIE_ROTATE/TUNE_DRAIN.
+    """
+    mem = state.mem
+    desc = mm.SOUND_TABLE + tune * 8
+    x = mem[desc]
+    mem[mm.SOUND_NOTE_LENGTH + x] = mem[mm.SOUND_LENGTHS + (mem[desc + 3] & 0x0F)]
+    mem[mm.SOUND_VOICE_FLAG + x] = (
+        mm.SOUND_VOICE_IDLE  # $8E4F BMI: an un-gated tune leaves the voice off
+        if mem[desc + 7] & 0x80
+        else mem[mm.SOUND_VOICE_ON + x]
+    )
+    mem[mm.SOUND_NOTE_TIMER + x] = mem[desc + 6]  # $8E7A: frames of the first note
+
+
+def sound_frame(state):
+    """The note tick $8ED1 for ONE video frame ($963D JSR $FFC2), and its cycles.
+
+    Three voices, X counting 2 down to 0.  A voice's note timer $8E86,X counts down a
+    frame a lap; at 0 it reloads the gate timer $8E92,X from $8E8E,X, and when THAT
+    runs out the voice is silenced ($8E96,X = $80).  $80 is the idle timer."""
+    mem = state.mem
+    cyc = passcost.SOUND_TICK_FIXED
+    for x in (2, 1, 0):
+        cyc += passcost.SOUND_VOICE_READ
+        note = mem[mm.SOUND_NOTE_TIMER + x]
+        gate_due = note == 0  # $8ED6 BEQ $8EEE: the note timer is already out
+        if gate_due:
+            cyc += passcost.SOUND_VOICE_SPENT
+        elif note & 0x80:  # $8ED8 BMI $8F08: an idle voice ticks nothing
+            cyc += passcost.SOUND_VOICE_OFF
+        else:
+            note -= 1
+            mem[mm.SOUND_NOTE_TIMER + x] = note
+            cyc += passcost.SOUND_VOICE_TICK
+            if note:
+                cyc += passcost.SOUND_VOICE_MORE
+            else:  # $8EDF: the note ends, the gate timer reloads
+                mem[mm.SOUND_GATE_TIMER + x] = mem[mm.SOUND_NOTE_LENGTH + x]
+                cyc += passcost.SOUND_VOICE_NOTE
+                gate_due = True
+        if not gate_due:
+            cyc += passcost.SOUND_VOICE_NEXT if x else passcost.SOUND_VOICE_LAST
+            continue
+        cyc += passcost.SOUND_GATE_READ
+        gate = mem[mm.SOUND_GATE_TIMER + x]
+        if gate == 0:
+            cyc += passcost.SOUND_GATE_OFF
+        else:
+            gate = (gate - 1) & 0xFF
+            mem[mm.SOUND_GATE_TIMER + x] = gate
+            cyc += passcost.SOUND_GATE_TICK
+            if gate:
+                cyc += passcost.SOUND_GATE_MORE
+            else:  # $8EF8: the gate runs out, the voice goes quiet
+                mem[mm.SOUND_VOICE_FLAG + x] = 0x80
+                cyc += passcost.SOUND_GATE_END
+        cyc += passcost.SOUND_VOICE_NEXT if x else passcost.SOUND_VOICE_LAST
+    return cyc
 
 
 def advance_frame_python(state, plotting=False):
@@ -1039,7 +1108,7 @@ def advance_frame_python(state, plotting=False):
     so an enemy the tick makes due rotates in the SAME frame, not the next one. Ticking
     after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
     """
-    irq = cooldown_frame(state)
+    irq = sound_frame(state) + cooldown_frame(state)
     if plotting:
         return
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq

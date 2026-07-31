@@ -183,5 +183,25 @@
    "sound_34xx": 89,
    "tail_12a2": 101
   }
+ },
+ "frozen_idle_rate": {
+  "_what": "clock frozen ($0CE5 bit7 set, so $9659 skips BOTH $130C and $1635) and every enemy gate shut: $1289 hits counted off a silent VICE checkpoint over 3000 video frames, beside passcost.idle_pass_cycles of the seed image. frames * (FOREGROUND_CYCLES - IRQ_GATE_SHUT - SOUND_TICK_IDLE) / pass_cycles must reproduce passes",
+  "boards": {
+   "0042": {
+    "frames": 3000,
+    "passes": 58271,
+    "pass_cycles": 805.88
+   },
+   "0335": {
+    "frames": 3000,
+    "passes": 51840,
+    "pass_cycles": 905.88
+   },
+   "9795": {
+    "frames": 3000,
+    "passes": 50715,
+    "pass_cycles": 925.88
+   }
+  }
  }
 }

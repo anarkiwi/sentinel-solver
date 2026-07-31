@@ -72,6 +72,19 @@ TREE_IN_LOS_TO_HEAD = 0x0C76  # bit6 == a tree lay in the LOS to a robot's head 
 # ---- the PRNG state -------------------------------------------------------
 PRND_STATE = 0x0C7B  # 5-byte LFSR state $0C7B-$0C7F (prnd $31CA)
 
+# ---- sound voices: $963D JSR $FFC2 runs the $8ED1 note tick every frame ----
+SOUND_NOTE_TIMER = 0x8E86  # $8E86..$8E88: frames left of this note ($80 == voice idle)
+SOUND_NOTE_LENGTH = 0x8E8E  # $8E8E..$8E90: the gate timer a new note reloads
+SOUND_GATE_TIMER = 0x8E92  # $8E92..$8E94: frames left before the voice is silenced
+SOUND_VOICE_FLAG = 0x8E96  # $8E96..$8E98: bit7 == the voice is off ($8EF8 sets it)
+SOUND_VOICE_IDLE = 0x80  # the resting note timer, MEASURED at landscape entry
+SOUND_TABLE = 0xAC00  # start_tune $3470 -> $8DB4: eight descriptor bytes a tune
+SOUND_LENGTHS = 0x8EC1  # $8E44: the gate reload, indexed by descriptor byte 3's nibble
+SOUND_VOICE_ON = 0x8EBE  # $8E72: the effect pointer a gated tune puts in $8E96,X
+SOUND_ROTATE = 0  # $1805/$1728: the turn a rotation and a meanie's own turn play
+SOUND_MEANIE = 1
+SOUND_DRAIN = 5  # $1A1D LDA #$05
+
 # ---- object types ---------------------------------------------------------
 T_ROBOT = 0  # also the player synthoid
 T_SENTRY = 1

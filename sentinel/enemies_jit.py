@@ -55,6 +55,17 @@ _BRESENHAM = mm.COOLDOWN_BRESENHAM
 _BRESENHAM_STEP = mm.COOLDOWN_BRESENHAM_STEP
 _GATE = mm.COOLDOWN_GATE
 _PRND = mm.PRND_STATE
+_SND_NOTE = mm.SOUND_NOTE_TIMER
+_SND_LENGTH = mm.SOUND_NOTE_LENGTH
+_SND_GATE = mm.SOUND_GATE_TIMER
+_SND_FLAG = mm.SOUND_VOICE_FLAG
+_SND_TABLE = mm.SOUND_TABLE
+_SND_LENGTHS = mm.SOUND_LENGTHS
+_SND_VOICE_ON = mm.SOUND_VOICE_ON
+_SND_IDLE = mm.SOUND_VOICE_IDLE
+_SND_ROTATE = mm.SOUND_ROTATE
+_SND_MEANIE = mm.SOUND_MEANIE
+_SND_DRAIN = mm.SOUND_DRAIN
 
 _DRAIN_CD = mm.ENEMIES_DRAINING_COOLDOWN
 _ROT_CD = mm.ENEMIES_ROTATION_COOLDOWN
@@ -326,6 +337,23 @@ _COOLDOWN_TICK_WALK = passcost.COOLDOWN_TICK_WALK
 _COOLDOWN_TICK_BYTE_STICK = passcost.COOLDOWN_TICK_BYTE_STICK
 _COOLDOWN_TICK_BYTE_DEC = passcost.COOLDOWN_TICK_BYTE_DEC
 _COOLDOWN_TICK_LAST = passcost.COOLDOWN_TICK_LAST
+_IRQ_GATE_SHUT = passcost.IRQ_GATE_SHUT
+_IRQ_GATE_OPEN = passcost.IRQ_GATE_OPEN
+
+_SOUND_TICK_FIXED = passcost.SOUND_TICK_FIXED
+_SOUND_VOICE_READ = passcost.SOUND_VOICE_READ
+_SOUND_VOICE_OFF = passcost.SOUND_VOICE_OFF
+_SOUND_VOICE_SPENT = passcost.SOUND_VOICE_SPENT
+_SOUND_VOICE_TICK = passcost.SOUND_VOICE_TICK
+_SOUND_VOICE_MORE = passcost.SOUND_VOICE_MORE
+_SOUND_VOICE_NOTE = passcost.SOUND_VOICE_NOTE
+_SOUND_GATE_READ = passcost.SOUND_GATE_READ
+_SOUND_GATE_OFF = passcost.SOUND_GATE_OFF
+_SOUND_GATE_TICK = passcost.SOUND_GATE_TICK
+_SOUND_GATE_MORE = passcost.SOUND_GATE_MORE
+_SOUND_GATE_END = passcost.SOUND_GATE_END
+_SOUND_VOICE_NEXT = passcost.SOUND_VOICE_NEXT
+_SOUND_VOICE_LAST = passcost.SOUND_VOICE_LAST
 
 _BODY_ENTRY = 0  # resume points inside $16E6, mirroring sentinel.enemies.BODY_*
 _BODY_MEANIE = 1
@@ -352,6 +380,19 @@ def _rd(mem, addr):
 @njit(cache=True, inline="always")
 def _wr(mem, addr, val):
     mem[addr] = np.uint8(val & 0xFF)
+
+
+@njit(cache=True)
+def _start_tune(mem, tune):
+    """$3470 -> $8DB4: point a voice at tune's $AC00 descriptor (the tick's bytes only)."""
+    desc = _SND_TABLE + tune * 8
+    x = _rd(mem, desc)
+    _wr(mem, _SND_LENGTH + x, _rd(mem, _SND_LENGTHS + (_rd(mem, desc + 3) & 0x0F)))
+    if _rd(mem, desc + 7) & 0x80:
+        _wr(mem, _SND_FLAG + x, _SND_IDLE)
+    else:
+        _wr(mem, _SND_FLAG + x, _rd(mem, _SND_VOICE_ON + x))
+    _wr(mem, _SND_NOTE + x, _rd(mem, desc + 6))
 
 
 @njit(cache=True, inline="always")
@@ -1036,6 +1077,7 @@ def _reduce_object_energy(mem, target, enemy):
         _wr(mem, _ENERGY, (_rd(mem, _ENERGY) - 1) & _ENERGY_MASK)
         _discharge_bank(mem, enemy)
         cost = np.int64(_REDUCE_HEAD + _REDUCE_PLAYER + _REDUCE_BANK + _TUNE_DRAIN)
+        _start_tune(mem, _SND_DRAIN)
         return True, cost + _status_bar_cycles(_rd(mem, _ENERGY))
     cost = np.int64(_REDUCE_HEAD + _REDUCE_OBJECT + _REDUCE_BANK)
     otype = _rd(mem, _OTYPE + target)
@@ -1277,6 +1319,7 @@ def _update_meanie(mem, zp, enemy, budget, index):
             step = 0x100 - _MEANIE_ROTATE_STEP
         _wr(mem, _OHANG + meanie, _rd(mem, _OHANG + meanie) + step)
         _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_ROTATE)
+        _start_tune(mem, _SND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
         return budget - np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW), _BODY_DONE, 0
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
@@ -1324,6 +1367,7 @@ def _rotate_enemy(mem, enemy):
     """rotate_enemy $1805: add the per-enemy step to the facing, reload $C8."""
     _wr(mem, _OHANG + enemy, _rd(mem, _OHANG + enemy) + _rd(mem, _ROT_SPEED + enemy))
     _wr(mem, _ROT_CD + enemy, _ROT_CD_RELOAD)
+    _start_tune(mem, _SND_ROTATE)  # $180F JSR $3470
     _initialise_enemy_meanie_variables(mem, enemy)  # $1818
 
 
@@ -1597,13 +1641,54 @@ def _update_enemies(mem, zp):
 @njit(cache=True)
 def _cooldown_frame(mem):
     """$130C: the per-frame Bresenham gate on update_enemy_cooldowns, and its cycles."""
-    if mem[_NOT_ACTED] & 0x80:  # player has not yet acted
-        return np.int64(0)
+    if mem[_NOT_ACTED] & 0x80:  # $965C BMI $9669: no $130C and no $1635 either
+        return np.int64(_IRQ_GATE_SHUT)
+    cost = np.int64(_IRQ_GATE_OPEN)
     acc = _rd(mem, _BRESENHAM) + _BRESENHAM_STEP
     _wr(mem, _BRESENHAM, acc)
     if acc > 0xFF:  # $1315 BCC skip
-        return _tick_cooldowns(mem)
-    return np.int64(_COOLDOWN_TICK_NO_CARRY)
+        return cost + _tick_cooldowns(mem)
+    return cost + np.int64(_COOLDOWN_TICK_NO_CARRY)
+
+
+@njit(cache=True)
+def _sound_frame(mem):
+    """$8ED1: the three-voice note tick the raster IRQ runs every frame, and its cycles."""
+    cyc = np.int64(_SOUND_TICK_FIXED)
+    for x in range(2, -1, -1):
+        cyc += np.int64(_SOUND_VOICE_READ)
+        note = _rd(mem, _SND_NOTE + x)
+        gate_due = note == 0
+        if gate_due:
+            cyc += np.int64(_SOUND_VOICE_SPENT)
+        elif note & 0x80:
+            cyc += np.int64(_SOUND_VOICE_OFF)
+        else:
+            note -= 1
+            _wr(mem, _SND_NOTE + x, note)
+            cyc += np.int64(_SOUND_VOICE_TICK)
+            if note:
+                cyc += np.int64(_SOUND_VOICE_MORE)
+            else:
+                _wr(mem, _SND_GATE + x, _rd(mem, _SND_LENGTH + x))
+                cyc += np.int64(_SOUND_VOICE_NOTE)
+                gate_due = True
+        if gate_due:
+            cyc += np.int64(_SOUND_GATE_READ)
+            gate = _rd(mem, _SND_GATE + x)
+            if gate == 0:
+                cyc += np.int64(_SOUND_GATE_OFF)
+            else:
+                gate -= 1
+                _wr(mem, _SND_GATE + x, gate)
+                cyc += np.int64(_SOUND_GATE_TICK)
+                if gate:
+                    cyc += np.int64(_SOUND_GATE_MORE)
+                else:
+                    _wr(mem, _SND_FLAG + x, 0x80)
+                    cyc += np.int64(_SOUND_GATE_END)
+        cyc += np.int64(_SOUND_VOICE_NEXT if x else _SOUND_VOICE_LAST)
+    return cyc
 
 
 @njit(cache=True)
@@ -1613,7 +1698,7 @@ def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial
     Returns the sub-pass resume point the last frame stopped at: the cycles it
     overspent, which segment of the pass owes them, and where inside $16E6."""
     for _ in range(n_frames):
-        irq = _cooldown_frame(mem)
+        irq = _sound_frame(mem) + _cooldown_frame(mem)
         if plotting:
             continue
         budget = residual + np.int64(_FOREGROUND_CYCLES) - irq
