@@ -1009,15 +1009,17 @@ runs `plot_tile $2A24` → `prepare_polygon $2D6C` / `process_line` / `span_fill
 tiles adding `$21AE`/`$8533`).
 
 `render_cost(state, view, observer, mode, window, rows)` = the exact `$2845` examine cycles +
-the emulated fill (`rendercost.py`, `objectcost.py`), over `FRAME_CYCLES`, memoized on
-`(scene_key, observer, h, v, mode, window, rows)`. It lands within 0.92-0.98× of the ROM on
-every golden view, at 0.14-0.21 ms an uncached call against the exact backend's ~1.3 s. With
+the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), over
+`FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode, window, rows)`. It lands within
+0.93-1.00× of the ROM on every golden view (median 0.973, mean absolute error 2.9%), at
+0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
 exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles)).
 
 | term | exactness |
 | --- | --- |
 | (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`), bar one `$0078`-stale branch a pass |
+| (a2) the walk: `$2625` prologue, `$26DE`, `$27D7`, `$276F`, `$295D` | each block by the branch it takes (`passcost.WALK_*`/`ROW_*`/`SCAN_*`/`PLOT_ROW_*`) |
 | (b) terrain fill | sequence emulated (`rendercost.py`); within 5% of the ROM on 11 of 15 golden views |
 | (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
 
@@ -1033,6 +1035,13 @@ bit read at `$2911`/`$2916`. Occlusion changes **only** the plot byte: `$291B` z
 still examined and pay the trig floor, removing roughly half the would-be-filled tiles. Object
 tiles (`$28F0 CMP #$C0`) bypass occlusion. The raytrace starts at the passed observer, not
 unconditionally at `state.player`.
+
+**The walk is priced, not skipped.** `_scan_visible` charges `$2625`'s prologue (172 cycles
+plus `$2684`'s quadrant case and the `$263C` pitch branch), `$26DE`'s per-row head and its
+`$2713`/`$2741` extra-tile loops, `$27D7`'s four scan loops with `$282E`/`$2836`'s column steps,
+the `$276F` observer-row tail, and `$295D`'s two half-laps — 0.6-3.0% of a pass, and one-signed
+while it was missing. The JSR into `$2845` is charged once, by `EXAM_CALL`, on whichever of the
+two paths reaches it.
 
 **Tile selection and the `$0180` gate are exact.** `_scan_visible` ports `$27D7` + `$26DE` +
 the observer-row tail `$276F` branch-for-branch off the byte-exact `$2845` result (the `$0C48`

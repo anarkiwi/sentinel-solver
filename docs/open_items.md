@@ -98,17 +98,19 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. The render model under-charges by the walk it does not price
+## 5. The render model's residual is a fill rate, not a missing routine
 
-**Wrong.** `render_cost` prices `$2845`, the terrain fill and the object fill, but not the
-`$26DE`/`$27D7` row scan, the `$295D` plot loop's own laps or `$2993`, so it under-charges
-every view.
+**Wrong.** `render_cost` reproduces the ROM's own plot_world cost to 0.93-1.00×, and the
+remainder is inside the fill's per-block rates rather than any unpriced routine.
 
-**Measured.** Against the golden's exact subtree split the model is 0.92-0.98× the ROM on all
-15 views (median 0.961, mean absolute error 4.2%) and the error is one-signed: it never
-over-charges. Flat PC-range attribution puts `$2625`-`$2844` at 4.1-7.8k cycles a pass,
-`$295D`-`$2A11` at 4.6-8.4k and `$2A12`'s own entry inside the modelled term — 2-3% of a pass,
-which is the residual's size and shape.
+**Measured.** Against the golden's exact subtree split: median 0.973, mean absolute error 2.9%,
+one view now above 1.0 (66,96,16 at 1.002), so the residual is no longer one-signed. Views with
+little fill close outright — 0,48,8 1.000, 335,64,16 0.998, 66,0,0 0.997, 42,0,0 0.991 — and
+what is left is proportional to fill volume, 3.6-11.8% of the fill term on the six heavy views.
+That points at the per-row and per-byte constants inside `span_fill` and the two DDAs, not at a
+routine nobody charged: pricing `$26DE`/`$27D7`/`$295D` took the error 4.2% -> 2.9% and closed
+the low-fill views, which is exactly what it should have done if it were the last whole term.
+Per-notch pan rms is 0.99 f over 288 notches, bias -0.62, and nothing in that gate was fitted.
 
 **Also not derived.**
 
@@ -119,16 +121,22 @@ which is the residual's size and shape.
   the examine term.
 - **`$0028`** (the `$29C7` half-column fraction) is modelled as 0, right for every `$2993` mode
   but not for an odd-width strip replot.
-- **Wide-polygon sections.** `$3002`'s section count and `$30BD`'s area walk are emulated, but
-  `$3030`'s two overflow guards are modelled as a loop rather than the ROM's re-entry, so a
-  line needing exactly that guard can get one section too many.
+- **Wide-polygon sections.** `$3030`'s two overflow guards are modelled as a loop rather than
+  the ROM's re-entry into `$3022`, so a line needing exactly that guard can take one section
+  too many.
+- **`$27CE`, the observer's own tile.** `$2793` forces its four corners off the edges of the
+  screen and plots it through `plot_checkerboard_tile`; the model charges the branch but not
+  that polygon, because two of its corners inherit a screen_y low byte from whichever row last
+  used the other `$0005` bank. It is never reached on any of the 15 golden views (the observer
+  tile's `screen_y_high >= 2` every time), so it is unmeasured rather than known-small.
 - **The object term without the game image.** `objectcost` needs the model geometry, so a
   checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** Pricing `$26DE`, `$27D7` and `$295D` from their own branches, the way `$2845`
-and the fill now are.
+**Resolves.** Counting `span_fill`'s rows and bytes and each DDA's iterations against the ROM's
+own `$2377`/`$23DC`/`$2F58`/`$3113` hit counts, to say whether the residual is a wrong rate or a
+geometry that produces too few of them.
 
 ## 6. The py65 exact backend skips transfer settles
 
