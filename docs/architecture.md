@@ -402,7 +402,7 @@ first cycle**, because BA only halts the CPU at its next read. A write run is at
 41, 42 or 43 and never 40 or 44. `sentinel/badline.py` is that law and
 `driver/badline.py` measures it live off `cpuhistory`; it derives all **6424** sampled
 badlines on five captures. The consequence is that the frame's *total* is a property of
-which instructions the raster caught — 1070.2 on ls0042 against 1072.5 on ls9795, and
+which instructions the raster caught — 1070.6 on ls0042 against 1071.8 on ls9795, and
 1066..1075 frame to frame — so no constant serves, and there is no longer one: the frame
 is charged `BADLINES_PER_FRAME * BADLINE_STEAL` up front and `badline.charge` **refunds**
 the write cycles each of the 25 windows actually lands on.
@@ -411,8 +411,8 @@ Placing those instructions is two queries, and both are answered.
 `badline.marker_position` is the frame origin: the raster IRQ is taken at an instruction
 boundary and the `$9630` marker sits `IRQ_ENTRY` + 81 cycles past it, so the marker's
 live 13509..13514 spread is the *tail of the interrupted instruction*, reproduced rather
-than absorbed (204 frames; the 8 that read one cycle short are each a branch, whose IRQ
-poll is a cycle earlier). `sentinel/writemap.py` is the other: a cost term is a
+than absorbed (204 frames; the ones that read short are each a TAKEN branch, which polls
+the IRQ two cycles in, so `badline.entry_cycles` takes its remaining 1 or 2 off the entry). `sentinel/writemap.py` is the other: a cost term is a
 contiguous ROM run, so it walks the run over the image — jennings' own 6510 tables, write
 cycles read off the addressing mode — and answers which instruction, and which write
 cycles, a given offset names. Measured against 6424 live BA windows, one capture taken

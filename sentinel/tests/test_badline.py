@@ -8,7 +8,8 @@ import collections
 import json
 import os
 
-from sentinel import badline, passcost, writeruns, writeweight
+from sentinel import badline, enemies, memmap as mm, passcost, writeruns, writeweight
+from sentinel.game import Game
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "live_badline.json")
 
@@ -22,6 +23,37 @@ def _complete_frames(board):
     """Per-frame totals of the frames that carry all 25 badlines."""
     floor = passcost.BADLINES_PER_FRAME * badline.MIN_STEAL
     return {int(k): v for k, v in board["per_frame_total"].items() if int(k) >= floor}
+
+
+def _machine_steal(name):
+    """The mean steal a frame of ``name``'s captures pays."""
+    totals = _complete_frames(_live()[name])
+    return sum(k * v for k, v in totals.items()) / sum(totals.values())
+
+
+def _model_steal(typed, frames):
+    """The mean steal the model charges itself over ``frames`` of board ``typed``.
+
+    The frame is charged the ceiling up front and each window refunds what it lands on,
+    so the steal is that ceiling less the refund the frame's own clock accrued.
+    """
+    clocks, real = [], badline.frame_clock
+
+    def spy(armed=True):
+        clock = real(armed)
+        if armed:
+            clocks.append(clock)
+        return clock
+
+    game = Game.typed(typed)
+    game.state.mem[mm.PLAYER_NOT_ACTED] = 0x00  # $12E1: the player has acted
+    badline.frame_clock = spy
+    try:
+        for _ in range(frames):
+            enemies.advance_frame_python(game.state)
+    finally:
+        badline.frame_clock = real
+    return badline.FRAME_STEAL_CEILING - sum(int(c[3]) for c in clocks) / frames
 
 
 def test_the_badline_window_is_the_25_lines_of_a_pal_frame():
@@ -67,6 +99,20 @@ def test_the_live_steal_never_leaves_the_derived_bounds():
         assert max(seen) == passcost.BADLINE_STEAL, name
 
 
+_MODEL_FRAMES = 600  # the model's own opening, the stretch the captures span
+_STEAL_TOLERANCE = 1.0  # the machine's mean over 20 captures carries about 0.5
+
+
+def test_the_models_own_frame_steal_is_the_one_the_machine_pays_on_each_board():
+    """Every board's model steal against the machine's own, over a comparable stretch
+    of the same board -- named by the typed number the capture entered, so the fixture's
+    "0335" is ``Game.typed(335)`` and not ``0x335``.  The machine's mean must come from
+    captures spread over the run: 15 consecutive frames carry an error of about 0.6."""
+    for name, typed in (("0042", 42), ("0335", 335), ("9795", 9795)):
+        machine, model = _machine_steal(name), _model_steal(typed, _MODEL_FRAMES)
+        assert abs(model - machine) < _STEAL_TOLERANCE, (name, model, machine)
+
+
 def test_the_frame_steal_is_state_dependent_so_no_constant_is_right():
     """The frame's own total moves board to board AND frame to frame, so the budget
     charges it off the model's own term stream rather than carrying a constant."""
@@ -86,12 +132,12 @@ _BRANCHES = frozenset(("BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ"))
 
 
 def _entries(field, offset=0):
-    """``(entry cycles, mnemonic) -> count`` over every capture's ``field``."""
+    """``(entry cycles, mnemonic, its own cost) -> count`` over every ``field``."""
     out = collections.Counter()
     for board in _live().values():
         for key, count in board[field].items():
-            gap, mnemonic = key.split()
-            out[(int(gap) - offset, mnemonic)] += count
+            gap, mnemonic, cost = key.split()
+            out[(int(gap) - offset, mnemonic, int(cost))] += count
     return out
 
 
@@ -104,25 +150,28 @@ def test_the_9630_anchor_is_instruction_aligned_and_its_spread_is_that_instructi
         assert len(positions) > 1 and positions[-1] - positions[0] <= 6, name
         boundaries = sorted(int(k) for k in board["irq_boundary"])
         assert boundaries[0] // badline.LINE_CYCLES == badline.RASTER_IRQ_LINE, name
-        placed = {badline.marker_position(b, br) for b in boundaries for br in (0, 1)}
+        placed = {
+            badline.marker_position(b, entry)
+            for b in boundaries
+            for branch in (0, 3, 4)
+            for entry in badline.entry_cycles(branch)
+        }
         assert set(positions) <= placed, (name, positions, sorted(placed))
 
 
-def test_the_interrupt_sequence_is_a_cycle_shorter_only_off_a_branch():
-    """The $9589 chain fires on rasters 53/93/133/173/213 and every entry is the
-    6510's own interrupt sequence past the boundary it caught -- 7 cycles, or 6 when
-    the instruction was a branch, whose IRQ poll comes a cycle earlier."""
+def test_the_interrupt_sequence_is_short_only_by_a_taken_branchs_own_cycles():
+    """The $9589 chain fires on rasters 53/93/133/173/213 and every live entry is the
+    6510's sequence past the boundary it caught: 7, or -- caught by a TAKEN branch's
+    two-cycle poll -- 6 off its 3 and 5 off the 4 of a page crossing, never else."""
     lines = set()
     for board in _live().values():
         lines |= {int(k) for k in board["irq_entry_line"]}
     assert lines == {53, 93, 133, 173, badline.RASTER_IRQ_LINE}
     seen = _entries("irq_entry_gap") + _entries("marker_gap", badline.MARKER_OFFSET)
-    assert {cycles for cycles, _ in seen} == {
-        badline.IRQ_ENTRY,
-        badline.IRQ_ENTRY_BRANCH,
-    }
-    short = {m for cycles, m in seen if cycles == badline.IRQ_ENTRY_BRANCH}
-    assert short and short <= _BRANCHES, short
+    for cycles, mnemonic, cost in seen:
+        taken = cost if mnemonic in _BRANCHES and cost > 2 else 0
+        assert cycles in badline.entry_cycles(taken), (cycles, mnemonic, cost)
+    assert {5, 6, badline.IRQ_ENTRY} == {cycles for cycles, _, _ in seen}
 
 
 def test_every_badline_window_lands_in_a_run_the_cost_model_anchors():
@@ -136,15 +185,21 @@ def test_every_badline_window_lands_in_a_run_the_cost_model_anchors():
     assert march["window_routine"]["$1CBB march"] > march["windows"] // 2
 
 
+_BRANCHED_ANCHORS = frozenset((0x0D05, 0x16BB, 0x193A, 0x1CCC))
+
+
 def test_the_offset_into_an_anchored_run_determines_the_steal():
-    """1081 distinct (anchor, offset) keys over five captures; 4 carry two steals, and
-    each of those is a branch the cost model already charges ($0D03's per-bit shift-add,
-    $1CBB's per-component negate, $191F's targeting walk)."""
+    """2718 distinct (anchor, offset) keys over five captures, 27 of them carrying two
+    steals -- and every one of those is a run whose branch the charging term itself
+    decides: $0D03's per-bit shift-add, $16B5's dispatch (the $16D6 JSR $31CA it either
+    takes or not), $191F's targeting walk, $1CBB's per-component negate."""
     keys = sum(b["anchor_keys"] for b in _live().values())
+    two = sum(b["ambiguous_keys"] for b in _live().values())
     ambiguous = {k: v for b in _live().values() for k, v in b["ambiguous"].items()}
-    assert keys > 1000
-    assert len(ambiguous) <= 4, ambiguous
-    assert set(ambiguous) <= {"$0D05+57", "$1CCC+33", "$193A+10"}, ambiguous
+    assert keys > 2000 and two * 50 < keys
+    assert all(len(v) == 2 for v in ambiguous.values()), ambiguous
+    anchors = {int(k.split("+")[0][1:], 16) for k in ambiguous}
+    assert anchors <= _BRANCHED_ANCHORS, ambiguous
 
 
 def test_the_frame_steal_is_the_law_applied_to_the_frames_instruction_stream():

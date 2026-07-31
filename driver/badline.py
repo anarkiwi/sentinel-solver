@@ -178,7 +178,7 @@ def marker_law(rows):
             continue
         boundary = rows[j][0] + rows[j][4]
         boundaries[boundary] += 1
-        gaps[f"{row[0] - boundary} {wm.MNEMONIC[rows[j][2]]}"] += 1
+        gaps[f"{row[0] - boundary} {wm.MNEMONIC[rows[j][2]]} {rows[j][4]}"] += 1
     return gaps, boundaries
 
 
@@ -186,14 +186,16 @@ def irq_entries(rows):
     """Every raster IRQ's entry, against the instruction boundary it was taken at.
 
     All five a frame vector through $95E9, so an entry is a step from outside the
-    handler into it; the gap is the 6510's own interrupt sequence.
+    handler into it; the gap is the 6510's own interrupt sequence.  Each is keyed by
+    the interrupted instruction's mnemonic AND its unstolen cost, which for a branch
+    names the case: 2 not taken, 3 taken, 4 taken across a page.
     """
     gaps, lines = collections.Counter(), collections.Counter()
     for prev, row in zip(rows, rows[1:]):
         if row[3] != HANDLER_LOW or prev[3] == HANDLER_LOW:
             continue
         boundary = prev[0] + prev[4]
-        gaps[f"{row[0] - boundary} {wm.MNEMONIC[prev[2]]}"] += 1
+        gaps[f"{row[0] - boundary} {wm.MNEMONIC[prev[2]]} {prev[4]}"] += 1
         lines[boundary // bl.LINE_CYCLES] += 1
     return gaps, lines
 
@@ -261,13 +263,31 @@ def frame_steal_check(rows, windows):
     return {"complete_frames": total, "frame_steal_agrees": agree}
 
 
-def capture(bm, count, frozen=False, warmup=0):
+def _capture_one(bm):
+    """One cpuhistory window, frame-anchored at the $9630 marker."""
+    with bm.halted():
+        bm.advance_instructions(1)
+        bm.run_until_pc(clock.FRAME_PC, timeout=6.0)
+        registers = bm.registers_get()
+        zeropage = list(bm.mem_get(0x0000, 0x00FF))
+        history = bm.cpuhistory_get(0xFFFF)
+        bm.advance_instructions(1)  # stamp the marker to fix the raster origin
+        marker = bm.cpuhistory_get(2)[-1].cycle
+        origin = (
+            marker
+            - registers[REG_RASTER] * bl.LINE_CYCLES
+            - registers[REG_RASTER_CYCLE]
+        ) % passcost.PAL_FRAME_CYCLES
+    return {"origin": origin, "zeropage": zeropage, "history": history}
+
+
+def capture(bm, count, frozen=False, warmup=0, stride=0):
     """``count`` cpuhistory windows, each frame-anchored at the $9630 marker.
 
-    ``warmup`` frames are run first, so a board can be caught in a long $1887 march
-    rather than in its opening idle passes.
+    ``warmup`` frames are run first, so a board can be caught mid-march.  Captures are
+    one frame apart and each spans several, so ``stride`` frames between them samples
+    the run rather than its head -- what a mean over the frame total needs.
     """
-    out = []
     with bm.halted():
         bm.run_until_pc(clock.FRAME_PC, timeout=6.0)
         if not frozen:
@@ -275,21 +295,11 @@ def capture(bm, count, frozen=False, warmup=0):
             bm.mem_set(mm.PLAYER_NOT_ACTED, bytes([acted & 0x7F]))
     if warmup:
         clock.run_frames(bm, warmup)
-    with bm.halted():
-        for _ in range(count):
-            bm.advance_instructions(1)
-            bm.run_until_pc(clock.FRAME_PC, timeout=6.0)
-            registers = bm.registers_get()
-            zeropage = list(bm.mem_get(0x0000, 0x00FF))
-            history = bm.cpuhistory_get(0xFFFF)
-            bm.advance_instructions(1)  # stamp the marker to fix the raster origin
-            marker = bm.cpuhistory_get(2)[-1].cycle
-            origin = (
-                marker
-                - registers[REG_RASTER] * bl.LINE_CYCLES
-                - registers[REG_RASTER_CYCLE]
-            ) % passcost.PAL_FRAME_CYCLES
-            out.append({"origin": origin, "zeropage": zeropage, "history": history})
+    out = []
+    for index in range(count):
+        if index and stride:
+            clock.run_frames(bm, stride)
+        out.append(_capture_one(bm))
     return out
 
 
@@ -387,6 +397,9 @@ def main(argv=None):
     ap.add_argument(
         "--warmup", type=int, default=0, help="frames to run before capturing"
     )
+    ap.add_argument(
+        "--stride", type=int, default=0, help="frames to run between captures"
+    )
     ap.add_argument("--out", help="write the report as JSON")
     args = ap.parse_args(argv)
     os.environ.setdefault("NO_RECORD", "1")
@@ -399,13 +412,20 @@ def main(argv=None):
             print(f"[badline] warp resource set skipped: {exc}")
         drv.enter_landscape(int(args.landscape.zfill(4), 16))
         report = analyse(
-            capture(drv.bm, args.captures, frozen=args.frozen, warmup=args.warmup)
+            capture(
+                drv.bm,
+                args.captures,
+                frozen=args.frozen,
+                warmup=args.warmup,
+                stride=args.stride,
+            )
         )
     finally:
         drv.close()
     report["landscape"] = args.landscape
     report["frozen"] = bool(args.frozen)
     report["warmup"] = args.warmup
+    report["stride"] = args.stride
     print(json.dumps(report, indent=1))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:

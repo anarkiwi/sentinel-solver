@@ -21,7 +21,8 @@ MIN_STEAL = BADLINE_STEAL - 2  # a write run is at most an RMW's or a JSR's two
 WEIGHT_SHIFT = 20  # fixed point the per-window refund of a weighted term accrues in
 RASTER_IRQ_LINE = 213  # $9589's $D5 entry: the once-a-frame $9630 body
 IRQ_ENTRY = 7  # the 6510 interrupt sequence, run at an instruction boundary
-IRQ_ENTRY_BRANCH = 6  # ... one less off a branch, whose IRQ poll is a cycle earlier
+IRQ_POLL_CYCLE = 2  # ... polled this far into the interrupted instruction, so a TAKEN
+# branch's own extra cycles (3, or 4 across a page) come off the entry: 6, or 5
 MARKER_OFFSET = 81  # $95E9 to $9630, the head of that body
 
 # Write cycles by opcode, indexed from its fetch: at most an RMW or JSR/push pair.
@@ -64,13 +65,25 @@ def steal(op, position, windows=None):
     return BADLINE_STEAL - write_run(op, window - position)
 
 
-def marker_position(boundary, branch=False):
+def entry_cycles(taken_branch=0):
+    """The interrupt sequences that can follow the instruction the raster caught.
+
+    ``taken_branch`` is its own cost when it is a TAKEN branch (3, or 4 across a page),
+    which polls two cycles in: a raster asserted by then starts the sequence there and
+    the branch's remaining cycles come off the entry; a later one pays the whole 7.
+    """
+    if taken_branch <= IRQ_POLL_CYCLE:
+        return (IRQ_ENTRY,)
+    return (IRQ_ENTRY, IRQ_ENTRY + IRQ_POLL_CYCLE - taken_branch)
+
+
+def marker_position(boundary, entry=IRQ_ENTRY):
     """Frame position of the $9630 marker for a raster IRQ taken at ``boundary``.
 
     The IRQ is taken at an instruction boundary, so the marker's own frame position is
-    that boundary plus a constant -- it is aligned, not blurred.
+    that boundary plus its own entry -- it is aligned, not blurred.
     """
-    return boundary + (IRQ_ENTRY_BRANCH if branch else IRQ_ENTRY) + MARKER_OFFSET
+    return boundary + entry + MARKER_OFFSET
 
 
 FRAME_ORIGIN = RASTER_IRQ_LINE * LINE_CYCLES  # the raster the $9589 $D5 entry programs

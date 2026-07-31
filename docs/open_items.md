@@ -404,6 +404,10 @@ which is above the physical maximum of 25 x 43.
 | ls9795 | 42.90 | **1072.5** | 1071..1075 |
 | ls9795 frozen | 42.88 | **1072.0** | 1069..1075 |
 
+Those three play means are the run's **head** — 10 captures a frame apart, ~15 distinct
+frames, standard error ~0.6. Sampled across the run they are 1070.6 / 1071.1 / 1071.8
+(*The ls335 gap was the measurement, not the model* below); the spread survives, the
+individual figures do not.
 The fitted 1071 was *above* ls0042's true steal and *below* the other two. The
 writers the window catches are named in the fixture and are dominated by `$31CA`'s LFSR
 (`ROL abs` at `$31D9`-`$31E5`, a dummy-plus-real pair, hence the 41s), then `$16D9 DEC
@@ -436,7 +440,9 @@ frame position is that boundary plus a constant. Over **204 live frames** on fiv
 captures the gap is **88** — `IRQ_ENTRY` 7 plus the 81 cycles `$95E9..$9630`, exactly
 `IRQ_BODY`'s own split — with **8** frames reading 87, and every one of those 8 is a
 **branch**, whose IRQ poll the NMOS core takes a cycle earlier (1292 short-IRQ entries
-say the same: 7, or 6 off a branch, 55 of 55). The boundaries land at frame position
+say the same: 7, or 6 off a branch, 55 of 55; a wider sample adds 5 off a branch that
+crosses a page, *The IRQ entry is 7, or a taken branch's own cycles less* below). The
+boundaries land at frame position
 **13421..13426** — raster 213 cycles 2..7 — and 13421+88 = 13509, 13426+88 = 13514, which
 is precisely the observed marker spread. So the spread is the tail of the interrupted
 instruction, and a model that knows the instruction stream *predicts* it
@@ -528,6 +534,10 @@ against the machine's own (`fixtures/live_badline.json`, complete frames only):
 | ls9795 loop | 1072.56 | — |
 | ls9795 inside the march | **1071.46** | **1074.76** (1075.00 in the 253 quiet frames) |
 
+(The two whole-run rows are head-of-run machine means against a model measured on another
+landscape; only the march row survives. See *The ls335 gap was the measurement, not the
+model* below.)
+
 So across a march the model runs **~3.5 cycles a frame short of foreground** — the sign that
 makes the sim late, which is what every one of the 19 and 14 `update_cd` events surviving then was.
 And it is not a placement question at all: `charge(clk, 0x1887, 274578)` walks a 49-cycle
@@ -604,8 +614,11 @@ machine's.
 | model per-frame steal | machine | ceiling only | + march weight | + trig and `$9630` |
 |---|---|---|---|---|
 | ls9795, inside the gate's march | **1071.46** | 1075.00 | 1071.78 | **1071.41** |
-| ls0042, whole run | **1070.22** | — | 1070.43 | **1070.23** |
+| ls0042, whole run | 1070.22 | — | 1070.43 | 1070.23 |
 | ls0335, whole run | 1072.08 | — | 1070.72 | 1070.44 |
+
+The two whole-run rows are **retracted**: neither column is that board. See *The ls335
+gap was the measurement, not the model* below.
 
 **Measured against the machine, frame-locked, 3000 frames, `--follow`, exact seeding:**
 
@@ -618,6 +631,69 @@ machine's.
 `test_human_clock`'s pinned counts are untouched (facing cadence 89, split cadence 87, facing
 errors 42, exact spans 117, facings 89, energies 86) and the rollout costs 11.4 → 11.5 ms
 (ls42), 12.2 → 12.3 (ls335) and 9.9 → 10.0 (ls9795) per 3000 `advance_frame`s, i.e. +1%.
+
+**The ls335 gap was the measurement, not the model.** The 1.64-cycle deficit the table
+above records for ls0335 does not exist, and neither column was that board's own steal:
+
+* The **model** column was measured on **another landscape**. The probe read its argument
+  as hex and handed it to `Game.typed`, which takes the number a player TYPES -- so
+  `Game.typed(int("335", 16))` generates the board typed 0821, seed `$0821`, not ls0335
+  (seed `$0335`), while printing "$0335". Those stand-in boards read 1070.25 and 1070.49
+  over 3000 frames, which is the table's 1070.23 and 1070.44; the boards themselves read
+  **1070.52** and **1071.32**.
+* The **machine** column came from 10 captures **one frame apart** at the head of the run.
+  A cpuhistory window spans 4-5 frames, so that mean rests on ~15 distinct frames whose own
+  per-frame total has sd 2.2 -- a standard error of ~0.6, and 1072.08 is a head-of-run
+  fluctuation.
+
+`driver/badline.py --stride` runs frames between captures, so the mean covers the run
+rather than its head. Machine (40 captures, +/- one standard error) against the model's
+own frame clock on the same board over its own first frames:
+
+| board | machine, stride 20 | machine, stride 50 | model, 800 frames | model, 3000 |
+|---|---|---|---|---|
+| ls0042 | 1070.68 +/- 0.19 | 1070.55 +/- 0.22 | 1070.51 | 1070.52 |
+| ls0335 | 1071.16 +/- 0.22 | 1071.11 +/- 0.21 | 1071.36 | 1071.32 |
+| ls9795 | 1071.87 +/- 0.18 | 1071.82 +/- 0.19 | 1072.02 | 1071.68 |
+
+**The model's per-frame steal is the machine's on all three boards, to within 0.25 cycles.**
+`test_the_models_own_frame_steal_is_the_one_the_machine_pays_on_each_board` pins each board
+against the fixture, which is now sampled 40 frames apart (20 captures a board, ~800 frames)
+and names the board by its typed number.
+
+Where each side's refund lands, per frame (machine from the fixture's own writers, model
+from the anchor its clock refunds at, both over the same three boards):
+
+| refund a frame | ls0042 | ls0335 | ls9795 |
+|---|---|---|---|
+| `$31CA` prnd | 2.69 / **3.39** | 1.74 / **1.42** | 0.38 / **0.37** |
+| the `$1887` chain | 0.09 / **0.13** | 1.24 / **1.28** | 1.99 / **1.90** |
+| the `$9630` body | 0.76 / **0.34** | 0.66 / **0.34** | 0.49 / **0.34** |
+| `$1289` pass head/tail | 0.41 / **0.44** | 0.20 / **0.29** | 0.07 / **0.14** |
+| `$16E6` body and the rest | 0.39 / **0.14** | 0.23 / **0.21** | 0.16 / **0.18** |
+| total | 4.35 / **4.45** | 4.08 / **3.63** | 3.09 / **2.96** |
+
+The one term whose sign is the same on every board is the `$9630` body: its weight is walked
+from `$95E9` with every branch falling through and refunds **0.34** a frame where the machine
+pays 0.49..0.76. That is what is left of the steal, and it is worth ~0.3 a frame on every
+board rather than 1.64 on one.
+
+**The IRQ entry is 7, or a taken branch's own cycles less.** The wider sample also carries
+entries of **5** cycles, which the 6/7 law had no case for. Keyed by the interrupted
+instruction's own unstolen cost, all 1940 live entries are one law and it is not a fit: 7
+past anything else, but a TAKEN branch polls the IRQ two cycles in, so a raster already
+asserted starts the sequence there -- **6** off its 3 cycles (108 of them), **5** off the 4
+of a page crossing (4) -- and one asserting after that poll lets the branch finish and pays
+7 (133 taken branches do). `badline.entry_cycles` is that law;
+`test_the_interrupt_sequence_is_short_only_by_a_taken_branchs_own_cycles` checks every entry
+against it. The static walk resolving windows with no branch record at all reads 93% across
+a run rather than the head-of-run sample's 95%.
+
+None of this is a model change: `entry_cycles` and `marker_position` are the frame-origin
+law and nothing charges through them, no term's cycles or weight move, and the gate is
+unchanged end to end — CORE **14 / 4 / 0** with the same first divergences (151, 613, none)
+over 3000 frames under exact seeding, `test_human_clock`'s pins held, and 6.5 / 7.7 / 8.9 ms
+per 3000 `advance_frame`s.
 
 **What is left.** ls335's four survivors and ten of ls9795's fourteen are still `update_cd`
 inside the `$17B2`/`$1AB0` scan. ls9795's other four are the same `$9730` buffer-flush
