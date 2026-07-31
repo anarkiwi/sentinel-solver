@@ -714,8 +714,8 @@ foreground work folded into a settle constant.
 | `$2170` | (in `do_hyperspace`) | kills on underflow | `actions.hyperspace` | `golden_actions` |
 | `$217F` | `player_survived_hyperspace` | sets `$0CDE` bit 6 when the jump left the platform tile | `actions.won` | read back out of live memory by the driver |
 | `$21AE` | `plot_stack_of_objects` | the per-tile object stack draw | `projector._inview_object_base` | `golden_projector` |
-| `$22AA` | `span_fill` | middle-of-polygon fill, 4 px/byte |  | object `span_fill` unmodelled ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
-| `$23D0` | `plot_middle_of_row` | per-row span emit | `projector` fill proxy | [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
+| `$22AA` | `span_fill` | middle-of-polygon fill, 8 cycles per byte, 4 px/byte | `rendercost._span_fill` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)) |
+| `$23D0` | `plot_middle_of_row` | per-row span emit; the `$23DB` branch offset selects the entry into a 31-store unrolled loop | `rendercost._span_fill` | `golden_render_cost` |
 | `$245B` | `populate_tile_visibility_bit_table` | raytraced occlusion into the `$3E80`/`$24DA` bitmap | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$24E2` | `trace_rays_from_observer_to_row_of_tiles` | the fixed-point DDA occlusion raytrace | `projector._occlusion_visible_py.trace` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$2565`/`$2570` | code-entry validation | the driver patches these to accept any code | `core.CODE_PATCHES` | `driver/test_core.py` |
@@ -732,7 +732,7 @@ foreground work folded into a settle constant.
 | `$295D` | `plot_row_of_tiles_or_block` | the plot loop over a row | `projector._project_scene_py` | `golden_projector` |
 | `$2993` | `initialise_buffer_variables` | selects the buffer window (`$29C4`) for a pan or the play view | `projector.BUF_WINDOW`, `pancost.PAN_MODE` | `golden_pan_cost` |
 | `$2A24` | `plot_tile` | gates only on `$0180 != 0` | `projector._project_scene_py` | `golden_projector` |
-| `$2A8A` | `plot_two_triangles` | a sloped tile is two triangles, a flat tile one quad | `projector._terrain_poly_base` | `golden_projector` |
+| `$2A8A` | `plot_two_triangles` | a sloped tile is two triangles, a flat tile one quad | `rendercost.fill_cycles` | `golden_render_cost` |
 | `$2ACC` | `generate_landscape` | the whole deterministic board pipeline | `landscape._generate_terrain` | `golden_landscape`; `driver.dump_stage2.verify` requires 1024/1024 tiles against the ROM's own generator |
 | `$2ACE` | `randomise_row_or_column_tile_z_table` | 81 throwaway `prnd` draws | `landscape._generate_terrain` | `golden_landscape` |
 | `$2AE6` | `set_landscape_vertical_scale` | `$0C08` ∈ [14..36]; landscape 0 is fixed 24 | `landscape._generate_terrain` | `golden_landscape` |
@@ -746,10 +746,10 @@ foreground work folded into a settle constant.
 | `$2BFB` | `middle_is_higher_than_last` | the spike comparison | `landscape._spike` | `golden_landscape` |
 | `$2C2C` | `average_tile_heights` | toroidal width-4 box filter | `landscape._smooth_line` | `golden_landscape` |
 | `$2C7C` | `calculate_tile_slope` | four corner heights → a 0..15 slope code (`$2CA8`-`$2D11`) | `landscape._tile_slope` | `golden_landscape` |
-| `$2D6C` | `prepare_polygon` | per-polygon edge setup, run twice per wide-buffer section | `projector._terrain_poly_base` | `golden_projector`; per-call floor only ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
-| `$2D93`/`$2DCF` | `convert_angles_into_screen_coordinates` | vertex angles → `$A7A0`/`$0B40` screen coordinates | `projector` conv term | `golden_render_cost` |
-| `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00` | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
-| `$2EB2`/`$2EB7` | (in `process_line`) | `STA $AD00,Y` / `STA $AE00,Y` — the only writes to the left/right edge tables, one row at a time | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
+| `$2D6C` | `prepare_polygon` | per-polygon vertex projection; the second wide-buffer section runs only when the first clipped an edge | `rendercost.fill_cycles` | `golden_render_cost` |
+| `$2D93`/`$2DCF` | `convert_angles_into_screen_coordinates` | vertex angles → `$A7A0`/`$0B40` screen coordinates | `rendercost.fill_cycles` | `golden_render_cost` |
+| `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00`, split into sections when a delta overflows a byte | `rendercost._edge`, `rendercost._section_line` | `golden_render_cost` |
+| `$2F5F`/`$2FAD` | (in `rasterise_polygon_edge`) | `STX $AD00`/`$AE00` — the only writes to the edge tables, one row at a time, the address low byte self-modified | `rendercost._edge` | `golden_render_cost` |
 | `$2F58` | (in `process_line`) | the steep inner loop | `projector` steep inner loop | `golden_render_cost` |
 | `$31CA` | `prnd` | 40-bit LFSR over `$0C7B-$0C7F`, 8 shuffles per call | `prng.Prng` | `golden_prng` |
 | `$339A` | `get_random_two_digit_bcd_number` | one `prnd` draw per call | `landscape._initialise_player_and_trees` | `golden_landscape` |
@@ -773,7 +773,7 @@ foreground work folded into a settle constant.
 | `$3D02` | hypotenuse coefficient table | reproduced closed-form, byte-exact | `relative._HYP` | closed form, byte-exact against the ROM table |
 | `$8401` | `calculate_object_relative_angles_and_distance` | relative x/y (`$85C4`), z (`$85F5`), then the angles | `relative.relative_angles` | `golden_relative` |
 | `$8475` | object transform loop | per-vertex `transform_vertex` | `projector.C_VERTEX` | `golden_render_cost` |
-| `$8533` | `plot_object` | the object model draw | `projector.C_VERTEX` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
+| `$8533` | `plot_object` | the object model draw | `projector.C_VERTEX` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)) |
 | `$888F` | `start_tune` | begins a tune, number in `$0CE7` | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
 | `$9287` | `calculate_angle` | bearing from a relative x/y pair | `relative._calc_angle` | `golden_relative` |
 | `$933D` | `calculate_object_relative_vertical_angle` | pitch from z and distance | `relative._vertical_angle` | `golden_relative` |
@@ -1006,16 +1006,17 @@ to plot is how many frames an action spends. `FRAME_CYCLES` = 19656 (PAL). Valid
 runs `plot_tile $2A24` → `prepare_polygon $2D6C` / `process_line` / `span_fill $22AA`, object
 tiles adding `$21AE`/`$8533`).
 
-`render_cost(state, view, observer, mode)` = examine floor + `prepare_polygon` floors + area
-fill proxy, over `FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode)`. With
+`render_cost(state, view, observer, mode)` = the exact `$2845` examine cycles + the emulated
+fill (`rendercost.py`) + the object floor, over `FRAME_CYCLES`, memoized on
+`(scene_key, observer, h, v, mode)`. One uncached call is ~0.1 ms. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
 exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles)).
 
 | term | exactness |
 | --- | --- |
-| (a) examine trig floor: `$2845` + `$9287` + `$937F` + `$933D` | count **exact**; cost `N * C_EXAMINE` (py65-derived) |
-| (b) terrain fill | plotted set **exact** (`$0180` gate); per-tile cycles approximate |
-| (c) object fill | plotted set **exact**; per-object base floor, `span_fill` unmodelled |
+| (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`), bar one `$0078`-stale branch a pass |
+| (b) terrain fill | sequence emulated (`rendercost.py`); within 5% of the ROM on 11 of 15 golden views |
+| (c) object fill | plotted set **exact**; per-object base floor, `plot_object`'s own polygons unmodelled |
 
 **Occlusion is exact.** `projector._occlusion_visible` is a byte-exact port validated
 tile-for-tile against the ROM `$3E80` bitmap: (1) temp height table `$25C4`, per tile
@@ -1039,29 +1040,31 @@ on-screen filter, `plot_tile` gating only on `$0180 != 0` and height-0 flat tile
 `$001B = $27D3 = [$00,$01,$21,$20]` by quadrant. The observer's own tile is drawn by
 `plot_checkerboard_tile $27CE`, outside the gate.
 
-**Fill** is `_terrain_poly_base` (a `prepare_polygon` floor) plus
-`sum(PER_SCANLINE*H + PER_PIXEL*H*W)` over kept tiles — an area proxy, not a fit. Vertex
-projection `$2DCF`/`$2D93` is ported cycle-exact (`screen_x` = high byte of
-`((h_angle16 + $0011:$0029) << 3)`), and the DDA edge walk reproduces the `$AD00`/`$AE00`
-writes byte-for-byte on every narrow polygon-section swept. Per-block costs come from the loop
-bodies: `process_line`'s steep inner loop `$2F58` is **23 cyc/row** (27 on a column step),
-iterating exactly 2 × filled rows for an inside polygon; `span_fill` middle 8 cyc/byte at
-4 px/byte; per-row edge plot `$23B5`/`$238C` ~55-70 cyc; rows walk `[$0052,$0051] = [48,240]`;
-off-band `prepare_polygon` ~600 cyc/call (`C_PREP_CALL`). The fill is **prepare-dominated** —
-some golden views fill zero pixels yet spend most of their terrain budget tracing edges for
-polygons that clip out of the band — because `prepare_polygon` runs per polygon × 2
-wide-buffer sections and a plotted tile is one quad or two triangles (`plot_two_triangles
-$2A8A`).
+**Fill is emulated, not priced by area** (`rendercost.fill_cycles`, one source compiled by
+numba and readable as `py_func`). Per tile in render order, `$2A24` picks a quad or two
+triangles off the slope nibble, `$2D6C` projects their vertices into the current vertical
+buffer (`screen_x` = high byte of `((h_angle16 + $0011:$0029) << 3)`, and the `$2D93` path when
+any vertex leaves the inner area), `$2DF2` walks the four lines, `$2EE4`/`$3002`/`$30BD`
+rasterise each into `$AD00`/`$AE00` with the ROM's own DDA, and `$22AA` walks
+`[$0004,$0006]` plotting two edge bytes and eight cycles per whole byte between them. Per-block
+cycles are `passcost.TILE_*`/`PREP_*`/`LINE_*`/`EDGE_*`/`STEEP_*`/`SHALLOW_*`/`WIDE_*`/`SPAN_*`,
+each the block's own instruction line.
 
-**The edge tables carry state across polygons.** `polygon_left_edge_table $AD00` and
-`polygon_right_edge_table $AE00` are **never cleared**: a linear scan of the image finds no
-clear loop over those pages, and the only writes are `process_line`'s own per-row
-`$2EB2 STA $AD00,Y` / `$2EB7 STA $AE00,Y`. A polygon clipping to a sliver therefore writes
-only some of the `[$0004,$0006]` rows, and `span_fill $22AA` — whose middle-fill length is
-`right_col − left_col` (`$22B7 LDA $AE00,X / $22BA CMP $AD00,X`) — reads columns a *previous*
-polygon left behind. So the fill is a cross-polygon stateful sequence, not a per-tile
-function, which is why the area proxy's residual cannot close:
-[open item 5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile).
+Two ROM facts the emulation forced, both wrong before: `prepare_polygon $2D6C` takes
+`$0025|$0005`, so a polygon's corners are `(col,row)` and its three neighbours — **not** the
+`$001B`-offset slot `plot_tile` reads the tile byte from; and `plot_row_of_tiles_or_block
+$295D` plots up from `$0037` to `$0003` and then back **down** from `$0038`, which is the
+order the `$0010` buffer toggle sees.
+
+**What the edge tables actually carry.** `polygon_left_edge_table $AD00` and
+`polygon_right_edge_table $AE00` are never cleared — the only writes are the DDA's own
+`$2F5F`/`$2FAD`/`$311F`/`$317E` — but that does **not** make the cost cross-polygon: a closed
+polygon has a left and a right edge on every row of its own `[$0004,$0006]`, so both tables are
+fully rewritten before `span_fill` reads them. Seeding `$AD00`/`$AE00` with the ROM image, all
+zeroes, all `$FF` or a mix changes plot_world's cycle count by **0** on ls0/42/335/777/2024.
+What is genuinely stateful is `$0010`: `plot_polygon $2AA9` runs the other vertical buffer
+whenever a polygon clipped an edge (`$002C`/`$002D` ≠ 1) and leaves `$0010` toggled for the
+next tile, so the model carries it across the whole pass.
 
 **Object term.** `plot_object $8533` → transform loop `$8475`: per vertex `transform_vertex`
 runs `calculate_sine_and_cosine` + two `multiply_byte_by_byte` + `$9287` + `$937F` + `$933D`,
@@ -1069,10 +1072,11 @@ charged as `C_VERTEX`, then per polygon the same `prepare_polygon`+`span_fill`. 
 come from engine facts `$9CA0`/`$9CA1` (verts) and `$9CAB`/`$9CAC` (polys): type 0=(29,27)
 1=(22,25) 2=(17,15) 3=(8,10) 4=(18,25) 5=(30,35) 6=(12,11) 7=(8,4). `_inview_object_base` sums
 a fixed per-object base over plotted object tiles' `$0100` stacks and, with object `span_fill`
-unmodelled, is a strict floor. Constants stay env-overridable (`RENDER_C_EXAMINE`,
-`RENDER_PER_SCANLINE`, `RENDER_PER_PIXEL`, `RENDER_C_VERTEX`, `RENDER_C_PREP_CALL`,
-`RENDER_SECTIONS`) but are ROM-derived: a perturbation smaller than the model's own error can
-flip a knife-edge board, so tuning them to win one is evidence of nothing.
+unmodelled, is a strict floor — the one term still fitted rather than emulated, and the whole
+of the model's remaining under-charge ([open item 5](open_items.md#5-object-fill-is-a-floor-the-terrain-fill-is-emulated)).
+`RENDER_C_VERTEX`/`RENDER_C_PREP_CALL`/`RENDER_SECTIONS` stay env-overridable but are
+ROM-derived: a perturbation smaller than the model's own error can flip a knife-edge board, so
+tuning them to win one is evidence of nothing.
 
 **Transfer settle `$357D`.**
 

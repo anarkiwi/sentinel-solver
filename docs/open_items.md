@@ -98,21 +98,36 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Terrain fill cost cannot close per tile
+## 5. Object fill is a floor; the terrain fill is emulated
 
-**Wrong.** `projector`'s fill term is an area proxy (`PER_SCANLINE*H + PER_PIXEL*H*W`) whose
-residual is systematic in scene busy-ness.
+**Wrong.** `_inview_object_base` charges a fixed per-object base (`C_VERTEX` per vertex plus a
+`prepare_polygon` call per polygon per section) and does not model `plot_object`'s own
+`process_line`/`span_fill`, so `render_cost` under-charges every view with an object in it.
 
-**Measured.** Mean error changes sign and grows across measured-cost quartiles, tracking how
-busy the scene is. It cannot close per tile: the `$AD00`/`$AE00` edge tables carry state across
-polygons ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)),
-the filled-rows/y-extent ratio spans both sides of 1, `H` is 0 on views where the ROM still
-fills heavily (every corner `screen_y` below the inner band), and per-tile fill spans nearly two
-orders of magnitude.
+**Measured.** Against the golden's subtree split, the terrain side is now emulated
+([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)) and the
+$2845 tree is cycle-exact, so the whole residual is the object term: total frame cost is
+0.91-0.98x the ROM on the 10 golden views with little or no object fill and 0.63-0.80x on the
+five carrying 130k-555k object cycles. The terrain fill itself is within 5% on 11 of the 15
+views; the remaining terrain error is on polygons whose vertices leave the inner area and drive
+`process_line`'s sectioning and `process_wide_line`, where the model's section count and the
+`$0043` x-step high byte are approximate.
 
-**Resolves.** Stateful emulation of the whole `plot_world` fill sequence in render order, the
-interleaved object polygons included. Short of that the only honest levers are
-`projector.PER_SCANLINE`/`PER_PIXEL`.
+**Why the object term cannot simply be emulated.** `plot_object $8533` transforms the model's
+vertices through `calculate_sine_and_cosine` and two `multiply_byte_by_byte` each, then runs
+the same `prepare_polygon`/`span_fill` the terrain does. That needs the vertex and face tables
+in the game image, which is copyrighted and not distributed; only the per-type vertex/polygon
+counts (`$9CA0`/`$9CA1`, `$9CAB`/`$9CAC`) are engine facts the model may carry. A ROM-gated
+object emulation would be exact only where `RENDER_COST_BACKEND=py65` already is.
+
+**Also not derived.** One `$2845` call a pass is ~90 cycles cheap because `divide_and_arctan`'s
+`$0E30 BVS` reads bit 6 of `$0078`, which the previous call left there;
+`relative._divide_and_arctan` starts it at 0 and cannot know better without whole-zero-page
+emulation. And `$0028` (the `$29C7` half-column fraction) is modelled as 0, which is right for
+every `$2993` mode but not for an odd-width strip replot.
+
+**Resolves.** Pricing `plot_object`'s polygons from the observer-relative model geometry,
+ROM-gated, and closing the wide-polygon sectioning residual.
 
 ## 6. The py65 exact backend skips transfer settles
 
