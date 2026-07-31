@@ -436,6 +436,48 @@ def test_the_drain_cost_model_matches_the_roms_own_1a08():
 
 
 @pytest.mark.oracle
+def test_the_sub_pass_position_is_read_back_off_the_stack_frame():
+    """Interrupt a real $16B5 anywhere and the model can name where the ROM is.
+
+    Pushes the $95E9 frame the raster IRQ would push, asks
+    ``enemies.resume_from_stack`` for the resume point, and checks it against the ROM's
+    own PC -- including the scan index, which survives a call in $0C58."""
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.generate_machine(0x9795)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+    direct = called = prnd = 0
+    for stop in range(1, 6000, 11):
+        state["stop"] = False
+        oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=state)
+        state["stop"] = False
+        oracle.call(cpu, mem, 0x16B5, state=state, maxins=stop)
+        pc, sp = cpu.pc, (cpu.sp - 6) & 0xFF  # the six bytes the interrupt pushes
+        frame = (cpu.y, cpu.x, cpu.a, cpu.p, pc & 0xFF, pc >> 8)
+        for i, val in enumerate(frame):
+            mem[0x0100 + ((sp + 1 + i) & 0xFF)] = val
+        phase, stage, index, _p = enemies.resume_from_stack(mem, sp, mem[0x100:0x200])
+        if 0x17B2 <= pc < 0x17CD:  # in the scan loop itself: Y is the live index
+            assert (phase, stage, index) == (
+                enemies.PHASE_BODY,
+                enemies.BODY_SCAN,
+                cpu.y,
+            )
+            direct += 1
+        elif stage == enemies.BODY_SCAN:  # under $1887: the index is the saved $0C58
+            assert phase == enemies.PHASE_BODY and index == mem[enemies.SAVED_Y]
+            called += 1
+        elif 0x31CA <= pc < 0x31F0:  # the prnd: the body is over, its result unstored
+            assert (phase, stage) == (enemies.PHASE_CURSOR, enemies.BODY_ENTRY)
+            prnd += 1
+        state["stop"] = False
+        oracle.call(cpu, mem, 0x16B5, state=state)  # let the round finish
+        mem[mm.CURSOR] = (mem[mm.CURSOR] - 1) & 7
+    assert direct and called and prnd
+
+
+@pytest.mark.oracle
 @pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
 def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     landscape, monkeypatch

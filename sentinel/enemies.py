@@ -77,6 +77,78 @@ BODY_MAKE_MEANIE = 9  # $197D consider_creating_meanie, reached from $184D
 BODY_DONE = -1  # the body reached its RTS; the pass may go on to $16D6
 
 
+# Where a raster interrupt can catch the play loop, as the resume points above name it.
+LOOP_HEAD = (0x1289, 0x12A2)  # the pass head, before its JSR $16B5
+LOOP_TAIL = (0x12A2, 0x12C8)  # the tail; $191F and the $34xx sound run under it
+LOOP_DISPATCH = (0x16B5, 0x16D6)  # $16B5's type dispatch, before the body
+LOOP_PRND = (0x16D9, 0x16E6)  # the cursor step; $31CA itself runs under $16D6
+LOOP_BODY = (0x16E6, 0x1887)  # consider_enemy_state, target_object and their tail
+_BODY_LADDER = (  # the first address of each stage, in ROM order
+    (0x16E6, BODY_ENTRY),
+    (0x16FF, BODY_MEANIE),
+    (0x1773, BODY_DISCHARGE),
+    (0x177D, BODY_HUNT),
+    (0x1795, BODY_HELD),
+    (0x17AC, BODY_SCAN),
+    (0x17CD, BODY_PARTIAL),
+    (0x17E0, BODY_TREE),
+    (0x17F9, BODY_ROTATE),
+    (0x1825, BODY_DONE),
+    (0x1852, BODY_MAKE_MEANIE),
+    (0x1876, BODY_DONE),
+)
+SAVED_X = 0x191E  # $1889 STX $191E: $1887 saves its caller's X here
+SAVED_Y = mm.TARGETED_OBJECT_SLOT  # $188C STY $0C58: ... and its caller's Y here
+PARTIAL_SLOT = 0x000F  # $17AE/$17C8: the head-only player the robot scan remembers
+
+
+def _innermost_loop_address(pc, sp, page):
+    """The deepest play-loop address the interrupt caught: the PC itself when it is
+    already in the loop's own code, else the return address of the call that left it."""
+    if LOOP_HEAD[0] <= pc < LOOP_BODY[1]:
+        return pc, True
+    off = (sp + 7) & 0xFF
+    while off < 0xFF:
+        ret = (page[off] | (page[(off + 1) & 0xFF] << 8)) + 1
+        if LOOP_HEAD[0] <= ret < LOOP_BODY[1]:
+            return ret, False
+        off += 1
+    return pc, False
+
+
+def resume_from_stack(mem, sp, page):
+    """The sub-pass position a $9630 halt exposes, as (phase, stage, index, partial).
+
+    The $95E9 frame holds Y, X, A, P, PCL, PCH from SP+1, and under it the foreground's
+    own return addresses; $1887 saves its caller's X and Y at $191E and $0C58, so the
+    scan indices survive a call as well."""
+    y = page[(sp + 1) & 0xFF]
+    x = page[(sp + 2) & 0xFF]
+    pc = page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)
+    addr, live = _innermost_loop_address(pc, sp, page)
+    if not LOOP_BODY[0] <= addr < LOOP_BODY[1]:
+        if LOOP_DISPATCH[0] <= addr < LOOP_DISPATCH[1]:
+            return PHASE_BODY, BODY_ENTRY, 0, -1
+        if LOOP_PRND[0] <= addr < LOOP_PRND[1]:
+            return PHASE_CURSOR, BODY_ENTRY, 0, -1
+        if 0x16D6 <= addr < LOOP_PRND[0]:  # the JSR $31CA: the prnd is still owed
+            return PHASE_BODY, BODY_DONE, 0, -1
+        return PHASE_HEAD, BODY_ENTRY, 0, -1  # head, tail, or off the loop entirely
+    stage = BODY_ENTRY
+    for first, st in _BODY_LADDER:
+        if addr >= first:
+            stage = st
+    index, partial = 0, -1
+    if stage == BODY_SCAN:
+        index = (y if live else mem[SAVED_Y]) if addr >= 0x17B2 else mm.NUM_SLOTS - 1
+    elif stage in (BODY_HUNT, BODY_TREE):
+        first_call = 0x1784 if stage == BODY_HUNT else 0x17E5
+        index = (x if live else mem[SAVED_X]) if addr > first_call else mm.NUM_SLOTS - 1
+    if stage in (BODY_SCAN, BODY_PARTIAL, BODY_TREE, BODY_ROTATE):
+        partial = -1 if mem[PARTIAL_SLOT] & 0x80 else mem[PARTIAL_SLOT]
+    return PHASE_BODY, stage, index, partial
+
+
 def paid(slot):
     """``State.body_index`` for "slot's $1887 is charged, its CORE write is not".
 
