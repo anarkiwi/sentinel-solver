@@ -206,10 +206,53 @@ query, four and eighteen frames of foreground. Only **one** run in 700 frames is
 frames, with `$1805`, `$1F9F`, `$1FFC` and `$2625` all inside frame **130**. The model
 enters the same 274578-cycle march during the same frame 111, drains it, and charges its
 own single replot — 389179 cycles, slot 3, span (37, 3) — in frame **129**. One frame, and
-it is not a mis-billing: it is that the march ahead of it is ~1% short, which lands the
-finish on the other side of a frame boundary. Over 400 frames the model charges **exactly
-one** replot against the machine's exactly one `$2625`, so nothing is double-billed, and
-the span it computes is the ROM's own `$0C62`/`$0C69` byte for byte.
+it is not a mis-billing: over 400 frames the model charges **exactly one** replot against
+the machine's exactly one `$2625`, so nothing is double-billed, and the span it computes is
+the ROM's own `$0C62`/`$0C69` byte for byte. What puts it a frame early is below.
+
+**NOT the march price: it is exact, three ways.** The frame-129 event turns on one
+`$16E6` — slot 3's, entered in frame 111 — whose `$17B2` scan spends a single 274578-cycle
+`$1887` on the player. Halting the machine at that very `$16E6` and capturing the live
+image:
+
+* **The body is cycle-exact.** jennings on the captured image runs `$16E6` in **280640**
+  cycles and `enemies.update_body` charges **280640**, with `$1F9F` stubbed on both sides.
+  The same round is in the headless comparison too — ls9795 round 90, slot 3, 280640
+  against 280640 — so `test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count`
+  now asserts its longest checked round exceeds 250000 and a long march cannot leave it.
+* **The real 6510 agrees with jennings instruction by instruction.** cpuhistory over the
+  live march, aligned against jennings' own stream of the same query, matches at **every**
+  site: 89941 instructions, no cost differs. (`$1DB9 BCC` reads 3 live against jennings'
+  2 only because the live sample never sees it not taken.)
+* **The frame budget the march really gets is the model's.** Taking each frame's
+  foreground as jennings' count for the instructions the live stream executed in it — no
+  threshold, no classification — eleven whole frames inside the march measure 15166..15591
+  where the model's own per-frame budget is 15174..15591; model minus machine sums to
+  **+12 cycles over 11 frames**.
+
+**Measured — what is left is ~1 cycle a frame.** The same alignment gives the machine's
+position *inside* the march at every frame boundary, against the model's
+`274578 + cycle_residual`: the model leads by **+81** cycles at the march's first frame
+boundary and **+97** at its fifteenth, i.e. ~1.1 a frame on top of ~80 already accumulated
+over frames 1..111. That lead is the whole event. Live, `$16E6` to `$17CD` is 354664 wall
+cycles (17.926 frames) and `$17F9` a further 4098 (18.138), so the machine crosses the
+frame boundary **between the scan's end and the rotate gate** and turns in frame 130; the
+model, ~100 cycles ahead, reaches `$17F9` with ~119 of budget still in frame 129 and turns
+there. Rotating with 119 cycles left is not a modelling error — the ROM's own `$1810`
+h_angle write is ~80 cycles past `$17F9` — so nothing about *where* the model suspends
+moves it. Only the ~100 cycles do.
+
+**Boundary — that lead is the badline steal, and it cannot be counted.** Per frame,
+19656 = foreground + 477 + the `$9630` body + steal, and the first three are counted off
+the image, so the residual is the steal. Live during the march, the per-badline excesses
+are 41x1, 42x9, 43x84, 44x6 over 100 badlines — **1073.75 a frame** against
+`BADLINE_FRAME` 1071, in a frame with `$D015` = 0 and therefore no sprite term. A badline
+costs 43 less however many of the three BA-window cycles the CPU spends writing, so its
+frame total is a property of *which instruction the raster caught*, and a budget model with
+no raster position cannot count it. 1071 is a frozen-rate fit and 1075 (25 x the 43 mode)
+would be another; either way the frame-129 rotation is decided by ~100 cycles accumulated
+over 129 frames, which is 0.8 a frame. **Zero divergence on ls9795 therefore needs the
+badline steal per frame, i.e. raster-accurate accounting, not a better cost term.**
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
@@ -514,11 +557,11 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** Not the frame budget, not the clock and not the replot's placement — all
-three are now measured directly against the machine and none has room for what this item
-is chasing. What is left on this side is a `body_spent` resume so a follow-mode resync
-inside `$1887` does not restart the query, and the ~1% on the `$1887` march that decides
-which side of a frame boundary a 274578-cycle query finishes on. The replot's *price* —
+**Resolves.** Not the frame budget, not the clock, not the replot's placement and not the
+march price — all four are now measured directly against the machine and none has room for
+what this item is chasing. What is left on this side is the **badline steal per frame**,
+which needs the raster position and the instruction it caught, and a `body_spent` resume so
+a follow-mode resync inside `$1887` does not restart the query. The replot's *price* —
 proxy 1.12x and py65 1.54x of a machine wall measured at 22 frames — is
 [5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
 
@@ -729,6 +772,11 @@ Each is a hypothesis and the measurement that killed it.
   probe that decides the board accepts a landing that is genuinely survivable, six probe
   models leave it lost, and the verdict moves with `ARBITRATE_ACTIONS` alone
   ([13](#13-arbitration-charges-an-option-with-its-continuations-mistakes)).
+- **The `$1887` march that decides ls9795's frame 129 is ~1% under-priced.** On the live
+  image captured at that very `$16E6`, jennings and `enemies.update_body` both give
+  **280640**; the real 6510 matches jennings at all 89941 instruction sites; and the
+  march's own frame budget measures 15166..15591 against the model's 15174..15591. The
+  model's whole lead is **+81 to +97 cycles** ([8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
 - **A relocation needs an energy floor above the ROM's own 3.** Floors of 5 and 8 leave every
   board that matters bit-identical — ls7414 won in 59 and ls8589 won in 46 at 3, 5 and 8;
   ls9364 lost 14 and ls6725 lost 6 at all three — and are strictly worse on two already-lost

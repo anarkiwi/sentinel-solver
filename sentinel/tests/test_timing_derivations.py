@@ -656,7 +656,10 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
 
     Gated, marching, rotating, held-target and draining rounds alike; a slot the play
     loop would not dispatch ($16BB/$16CC) has no body to compare.  The ROM falls through
-    into $16D6, so its call costs UPDATE_TAIL more; $1F9F/$3470 are stubbed with RTS."""
+    into $16D6, so its call costs UPDATE_TAIL more; $1F9F/$3470 are stubbed with RTS.
+
+    ls9795 reaches a round of eighteen frames' foreground, so the comparison covers a
+    whole long $1887 march and not only rounds a frame can finish."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
@@ -668,7 +671,7 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     cpu, mem, state = oracle.generate_machine(landscape)
     oracle.prime_enemy_driver(cpu, mem, state)
     mem[mm.PLAYER_NOT_ACTED] = 0
-    checked = 0
+    checked, longest = 0, 0
     for _ in range(400):
         state["stop"] = False
         oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=state)
@@ -685,7 +688,10 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
         if dispatched:
             assert model == rom, f"ls{landscape:04x} slot {x}: {model} != {rom}"
             checked += 1
+            longest = max(longest, rom)
     assert checked > 50
+    if landscape == 0x9795:  # eighteen frames of foreground in one round
+        assert longest > 250_000, longest
 
 
 @pytest.mark.oracle
