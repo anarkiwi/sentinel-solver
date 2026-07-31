@@ -401,7 +401,50 @@ ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 st
 # $1F9F update_object_on_screen: no screen span, no replot -- see relative.py $209B.
 REDRAW_CALL = 6  # $1F9F JSR $209B
 REDRAW_NONE = 23  # $1FA2 BCS $1F93 taken 3 + the $1F93 flag reset and RTS 20
-REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is the strip replot, unpriced
+REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is projector.strip_replot_frames
+# $1FA4..$1F9E, the replot's own line, with $0C6D/$0C4D clear ($1F95/$1F98 clear both on every exit) and $0C4E/$0C5F clear ($3588 rejects bit 7 of $0C4E, $359B zeroes $0C5F a frame).
+REDRAW_CLEAR_CALL = (
+    33  # $1FA4..$1FBF: $2099, the $0C6D BPL, LDX $211B, JSR $2211, $2119
+)
+REDRAW_CHUNK_HEAD = (
+    76  # $1FC2..$1FFC: the camera shift, JSR $29C7 and JSR $2625, callees apart
+)
+REDRAW_CHUNK_TAIL = (
+    44  # $1FFF..$201C: the $2003/$2008 camera restore and the $2015 width step
+)
+REDRAW_CHUNK_MORE = (
+    16  # $201C BEQ nt 2 + $201E..$2029 re-enter $1FC2 with the remainder
+)
+REDRAW_CHUNK_RESUME = (
+    2  # $1FEB BEQ nt 2 + $1FED STA $10 3, on each chunk after the first
+)
+REDRAW_TAIL = 106  # $202C..$206A: 68 straight + $992C 22 + $9A3C 16 ($204A BVC taken)
+REDRAW_FLUSH_LOOP = 32  # one flush: $207C LDY/JSR/DEC/BNE 17 + the $206F $96 step 15
+REDRAW_FLUSH_ENTRY = (
+    -13
+)  # $206C JMP $207C 3, less the first pass's step and the last BNE
+REDRAW_EXIT = 36  # $2085..$2092 6+4+3+3 + $1F93's flag reset and RTS 20
+BUF_WINDOW_CALL = (
+    79  # $29C7..$29F8, straight line: the strip's $0007/$0012/$0028 window
+)
+# clear_strip $2211, given 24 rows from $0019 ($1FB3/$1FB5) and $211B columns ($1FB7).
+CLEAR_ENTRY = 39  # $2211..$2231 with the column count under 32 ($2218 BCC taken)
+CLEAR_ENTRY_EXACT = 44  # ... exactly 32: $221E BNE not taken, back into $2220's A = $80
+CLEAR_ENTRY_WIDE = 43  # ... over 32: $1E holds count - 32 for a second pass per row
+CLEAR_ROWS = 24  # $1FB5 LDY #$18 -> $0057
+CLEAR_COLUMN = 93  # $2247's 8 bytes at 11 each (INY/LDA/STA) + DEX 2 + BNE 3
+CLEAR_ROW = 52  # $2233..$2283 around them, one pass ($2278 BMI taken)
+CLEAR_ROW_SPLIT = (
+    16  # ... two passes: $2278 BMI nt 2, $227A INC $71 5 + JMP 3, re-entry 6
+)
+CLEAR_TAIL = 5  # RTS 6, less the last row's untaken $2283 BNE
+# $9730, the buffer flush $207E runs once per $211B column, Y = $0008 = 0 from $1FE0.
+FLUSH = 4340  # $9730 prologue 63 + RTS 6 + 24 $975D rows at 178, less the last BNE
+FLUSH_SPLIT = 135  # a row whose $3A40 entry is nonzero: a second $9888 across the split
+FLUSH_WRAP = 1  # $9792 CPX #$19 rolls X over once when the first row is not row 0
+FLUSH_ROWS = 24  # $9759 LDA #$18 -> $0098
+FLUSH_BANKS = 25  # $9792 CPX #$19: $3A00/$3A20/$3A40 hold 25 screen rows
+FLUSH_SPLIT_ROWS = (4, 9, 14, 19, 24)  # the nonzero $3A40 entries
 SPAN_HEAD = 6  # $209B LDY $91 3 + CPY $0B 3
 SPAN_PLAYER = 12  # $209F BEQ $2110 taken 4, page crossed, + $2110 SEC/RTS 8
 SPAN_ANGLES = 8  # ... BEQ not taken 2 + $20A1 JSR $8401 6
@@ -424,6 +467,68 @@ SPAN_ZERO_WIDTH = 11  # $2103 BEQ $2110 taken 3 + SEC/RTS 8
 SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RTS 8
 SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
+
+# $283D picks the examine off $9AF6, the play-display flag: $3577 sets it $80 for the whole play loop and $117E (reset_game_state) clears it for generation and the preview; $9A51 is its only writer.
+EXAM_ENTRY_TRIG = 7  # $283D BIT $9AF6 4 + $2840 BPL $2845 taken 3
+EXAM_ENTRY_TABLE = 9  # ... BPL not taken 2 + $2842 JMP $37F2 3
+
+# $2845 check_if_tile_is_on_screen_and_calculate_screen_coordinates, by its branches; the trig it calls ($9287, $937F, $933D) is counted by relative.py off its own data.
+EXAM_CALL = 6  # the JSR, from $26D6/$270A/$271E/$2738/$274C and the $27D7 loops
+EXAM_HEAD = 44  # $2845..$2861: the slot index, the $007F reset and the column delta
+EXAM_COL_POS = 3  # $2863 BPL $2870 taken: the column delta is already positive
+EXAM_COL_NEG = 17  # ... not taken 2 + the $2865 16-bit negate 15
+EXAM_ROW = 19  # $2870..$287B: the row delta against the observer's row
+EXAM_ROW_POS = 3  # $287D BPL $288A taken
+EXAM_ROW_NEG = 17  # ... not taken 2 + the $287F negate 15
+EXAM_ANGLE = 9  # $288A STA $85 3 + $288C JSR $9287 6
+EXAM_STORE = 36  # $288F..$28A0 the two 16-bit stores and the JSR $937F 33 + $28A3 BIT 3
+EXAM_QUAD_NORTH = 13  # $28A5 BMI nt 2 + $28A7 BVS nt 2 + $28A9..$28AD 9
+EXAM_QUAD_EAST = 20  # ... BVS taken 3 + $28B0..$28B8 15
+EXAM_QUAD_SOUTH = 26  # $28A5 BMI taken 3 + $28BB BVS nt 2 + $28BD..$28C9 21
+EXAM_QUAD_WEST = 18  # ... BVS taken 3 + $28CC..$28D2 12, falling into $28D4
+EXAM_ADDR = 47  # $28D4..$28F0 calculate_tile_address through the CMP #$c0
+EXAM_OBJECT = 2  # $28F2 BCC not taken: the tile holds an object stack
+EXAM_OBJECT_STEP = 13  # $28F4 one level whose flags say another is below it
+EXAM_OBJECT_BOTTOM = 22  # the bottommost level 12 + $28FE its z_height and the JMP 10
+EXAM_GROUND = 37  # $28F2 BCC taken 4, page crossed, + $2906..$2919 the $3E80 bit 33
+EXAM_VISIBLE = 3  # $2919 BNE taken: the raytrace bit is set
+EXAM_HIDDEN = 7  # ... not taken 2 + $291B STA $0180,X 5: the plot byte is zeroed
+EXAM_VANGLE = 53  # $291E..$293F: relative z, JSR $933D, both stores, the $0007 CMP
+EXAM_OFF_LEFT = 3  # $2941 BCC leave taken: beyond the left edge of the buffer
+EXAM_ON_LEFT = 2  # ... not taken
+EXAM_NO_FRACTION = 3  # $2943 BNE taken: the high byte alone settles the left edge
+EXAM_FRACTION = 9  # ... not taken 2 + $2945 LDA $0BA0,Y 4 + CMP $0028 3
+EXAM_FRACTION_LEFT = 3  # $294A BCC leave taken
+EXAM_FRACTION_OK = 6  # ... not taken 2 + $294C LDA $A800,Y 4
+EXAM_RIGHT = 8  # $294F ROR $007F 5 + CMP $0012 3
+EXAM_OFF_RIGHT = 3  # $2953 BCC leave taken
+EXAM_ON_RIGHT = 7  # ... not taken 2 + $2955 INC $007F 5
+EXAM_TAIL = 14  # $2957 LDY $0F 3 + LDA $7F 3 + CLC 2 + RTS 6
+
+# $37F2, the play path's examine: the same plottables read off the per-position projection tables $3700 builds at ($A8)/($AA)/($AC)/($AE), less the view's $001F/$00B2/$00B0/$00B1 camera reference. No trig, and no object-stack walk.
+TAB_HEAD = 17  # $37F2..$37FB: the slot index and the $001C view-case BIT
+TAB_QUAD_NORTH = 13  # $37FD BMI nt 2 + $37FF BVS nt 2 + $3801..$3805 9
+TAB_QUAD_EAST = 20  # ... BVS taken 3 + $3808..$3810 15
+TAB_QUAD_SOUTH = (
+    25  # $37FD BMI taken 4, page crossed, + $3813 BVS nt 2 + $3815..$3820 19
+)
+TAB_QUAD_WEST = 17  # ... BVS taken 3 + $3823..$3828 10, falling into $382A
+TAB_ADDR = 123  # $382A..$3874: the tile address and the four table pointers 55, the four reads less the reference 53, the $0180 store and the CMP #$C0 15
+TAB_OBJECT = 3  # $3876 BCS taken: an object tile skips the raytrace bit
+TAB_GROUND = 24  # ... not taken 2 + $3878..$3882 the $3E80/$24DA bit 22
+TAB_VISIBLE = 3  # $3885 BNE taken: the raytrace bit is set
+TAB_HIDDEN = 7  # ... not taken 2 + $3887 STA $0180,X 5: the plot byte is zeroed
+TAB_SCREEN = 9  # $388A LDA #0 2 + LDY $A800,X 4 + CPY $0007 3
+TAB_OFF_LEFT = 3  # $3891 BCC leave taken: beyond the left edge of the buffer
+TAB_ON_LEFT = 2  # ... not taken
+TAB_NO_FRACTION = 3  # $3893 BNE taken: the high byte alone settles the left edge
+TAB_FRACTION = 9  # ... not taken 2 + $3895 LDY $0BA0,X 4 + CPY $0028 3
+TAB_FRACTION_LEFT = 3  # $389A BCC leave taken
+TAB_FRACTION_OK = 6  # ... not taken 2 + $389C LDY $A800,X 4
+TAB_RIGHT = 5  # $389F ROR A 2 + CPY $0012 3
+TAB_OFF_RIGHT = 3  # $38A2 BCC leave taken
+TAB_ON_RIGHT = 4  # ... not taken 2 + $38A4 ADC #$00 2
+TAB_TAIL = 16  # $38A6 LDY $0F 3 + STA $7F 3 + TAX 2 + CLC 2 + RTS 6
 
 
 def status_bar_cycles(energy, clk=None):
@@ -497,3 +602,356 @@ def idle_pass_cycles(mem):
             total += UPDATE_NOT_ENEMY
         total += UPDATE_TAIL_WRAP if x == 0 else UPDATE_TAIL
     return total / 8.0 + LOOP_PASS + exposure_cycles(mem)
+
+
+# plot_world's fill sequence block by block off the disassembly: the $2A24 tile dispatch, $2D6C prepare_polygon, $2EE4 the edge DDA and $22AA span_fill (sentinel/rendercost.py).
+TILE_ENTRY = 25  # $2A15..$2A1F the slot arithmetic 19 + BMI nt 2 + $2A24 LDA $0180,X 4
+TILE_SOUND = 35  # $2A12 JSR 6 + update_sound $352C's 29-cycle body
+TILE_EMPTY = 9  # $2A27 BEQ taken 3 + $2ACB RTS 6: the slot is zero, nothing plotted
+TILE_KEPT = 4  # ... BEQ not taken 2 + $2A29 CMP #$C0 2
+TILE_OBJECT = 18  # $2A2B BCC nt 2 + PHA 3 + JSR 6 + PLA 4 + JMP $21AE 3
+TILE_GROUND = 5  # $2A2B BCC taken 3 + $2A35 AND #$0F 2
+TILE_FLAT = 3  # $2A37 BEQ plot_checkerboard_tile taken
+TILE_EDGE_NIB = 25  # ... nt 2 + CMP #$0C 2 + BEQ 3 + $2A41..$2A49 the $0045 flag 18
+TILE_SLOPE_CALC = 25  # ... both compares failing 8 + BNE 3 + $2A69..$2A74 16, -2
+TILE_SLOPE_QUAD = 3  # $2A74 BEQ plot_quadrilateral_tile taken
+TILE_SLOPE_TRI = 28  # ... not taken 2 + $2A76..$2A86 the $2D39 flag and the colour 26
+TILE_SLOPE_TRI_ALT = 1  # $2A86 BCS not taken 2 + $2A88 ORA #$10 2, less the taken 3
+CHECKER_HEAD = 10  # $2A4B LDX #0 2 + $2A4D the tile-parity EOR 8
+CHECKER_EVEN = 3  # $2A53 BEQ plot_quadrilateral_tile taken
+CHECKER_ODD = 13  # ... not taken 2 + $2A55 LDX #8 2 + the $0C75 prnd copy 9
+QUAD_TILE = 15  # $2A5D the colour, $003B = 0 and the JMP into plot_polygon
+TWO_TRI_FIRST = 23  # $2A8A..$2A96: $0034, $003B = $80, the colour and the JSR
+TWO_TRI_SECOND = 22  # $2A99..$2AA7: the other colour and $003B |= $40
+PP_HEAD = 6  # $2AA9 LDY $0010 3 + CPY #$02 3
+PP_WIDE = 8  # $2AAD BCS not taken 2 + $2AAF JSR prepare_polygon 6
+PP_TALL = 9  # ... BCS taken 3 + $2AC3 JSR prepare_polygon 6
+PP_NOTHING = 3  # $2AB2/$2AC6 BCS taken: prepare_polygon found nothing to fill
+PP_SPAN = 8  # $2AB2 BCS not taken 2 + $2AB4 JSR span_fill 6
+PP_CLIP_TEST = (
+    12  # $2AB7 LDY 3 + LDA $2C,Y 4 + CMP #$01 2 + BEQ 3: the section is clean
+)
+PP_CLIPPED = 2  # ... BEQ not taken: the polygon ran off an edge, so the other section
+PP_RTS = 6  # $2ACB RTS
+BUFVARS = 75  # $2AC0 JSR 6 + $298D's own 7 + initialise_buffer_variables $2993 62
+PREP_HEAD = 9  # $2D6C LDA $25 3 + ORA $05 3 + BIT $3B 3
+PREP_QUAD = 40  # $2D72/$2D74 both branches falling through 4 + $2D76..$2D8E 36
+PREP_TRI_HEAD = 6  # $2D72 BMI taken 3 + $2D49 LDY $0045 3
+PREP_TRI_ONE = 3  # $2D4B BVC is_triangle_one taken
+PREP_TRI_TWO = 12  # ... not taken 2 + $2D4D..$2D53 the +$21 and the two INYs 10
+PREP_TRI_TAIL = 37  # $2D54..$2D6A the four vertex stores 28 + BNE 3 + $2D8E 6
+PREP_DATA_HEAD = 8  # $2DC9 LDA #0 2 + STA $6C 3 + LDY $17 3
+PREP_VERTEX = 61  # $2DCF one vertex inside the inner area, through the $2DF0 BPL
+PREP_VERTEX_LAST = 60  # ... the $2DF0 BPL not taken
+PREP_VERTEX_OUT = 31  # $2DCF..$2DE1 the sum 28 + the BCS into $2D93 3
+PREP_WIDE_HEAD = 8  # $2D93 LDA #$C0 2 + STA $6C 3 + LDY $17 3
+PREP_WIDE_VERTEX = 74  # $2D99 one vertex, its screen_x high byte non-negative
+PREP_WIDE_LAST = 73  # ... the $2DC4 BPL not taken
+PREP_WIDE_NEG = 1  # $2DBC BCC not taken 2 + $2DBE ORA #$F8 2, less the taken 3
+PREP_WIDE_JMP = 3  # $2DC6 JMP process_lines
+LINES_HEAD = 23  # $2DF2..$2E02: the row floor/ceiling, $001E and $007F
+LINE_HEAD = 45  # $2E04..$2E20: both vertices, the 16-bit y delta and the BPL
+LINE_DOWN = 3  # $2E20 BPL skip_inversion taken: the line already slopes downwards
+LINE_UP = 37  # ... not taken 2 + $2E22..$2E37 swap the ends and negate the delta 35
+LINE_MID = 6  # $2E39 STA $0076 3 + $2E3B BIT $006C 3
+LINE_INNER = 3  # $2E3D BVC line_is_entirely_within_inner_area taken
+LINE_OUTER = 12  # ... not taken 2 + $2E3F the two screen_x high bytes 8 + BEQ nt 2
+LINE_OUTER_INNER = 13  # ... with the $2E45 BEQ taken instead
+LINE_OUTER_STEEP = 9  # $2E47 LDA 3 + BNE taken 3 + $2E4F JMP process_line 3
+LINE_OUTER_FLAT = 11  # ... BNE nt 2 + $2E4B LDA 3 + BEQ nt 3 + $2E4F JMP 3
+LINE_OUTER_POINT = 8  # ... with the $2E4D BEQ consider_next_line taken
+LINE_STEEP = 23  # $2E52 LDA 3 + BEQ nt 2 + $2E56 zero both screen_x highs 12 + JMP 6
+LINE_SHALLOW = 6  # $2E52 LDA 3 + $2E54 BEQ process_horizontal_line taken 3
+LINE_IS_POINT = 6  # $2E61 LDA $000C 3 + $2E63 BEQ line_is_a_point taken 3
+LINE_RASTERISE = 56  # ... BEQ nt 2 + $2E65..$2E89 the eight copies and the JSR 54
+POINT_LINE = 20  # $2ECC..$2EDD: the two clamps, INC $001E and the JMP, both BCC taken
+POINT_LINE_FLOOR = 1  # $2ED1 BCC not taken 2 + $2ED3 STA $0031 3, less the taken 3 + 1
+POINT_LINE_CEIL = 1  # $2ED7 BCS not taken 2 + $2ED9 STA $0030 3, less the taken 3 + 1
+LINE_NEXT = 13  # $2E8C LDY 3 + INY 2 + CPY $17 3 + BEQ nt 2 + $2E93 JMP 3
+LINE_LAST = 11  # ... $2E91 BEQ check_if_polygon_is_point taken 3
+LINES_TAIL = 6  # $2E96 LDA $001E 3 + CMP $0017 3
+LINES_NOT_POINT = 3  # $2E9A BNE polygon_isn't_point taken
+LINES_ALL_POINTS = 13  # ... nt 2 + $2E9C LDA $0AE0,X 4 + BNE nt 2 + LDY 4 + $2EA4 CPY 3
+LINES_POINT_OFF = 3  # $2E9F/$2EA6/$2EAA leaving for polygon_isn't_point
+LINES_POINT_ROW = 31  # $2EAC..$2EBC: the single row, its two edges and $007F = 0
+LINES_DONE = 15  # $2EBE LDA 3 + BNE nt 2 + $2EC2 LDA/CMP 6 + BCC nt 2 + $2EC8 CLC 2
+LINES_NOTHING = 8  # leaving by $2EC0/$2EC6 for $2ECA SEC 2 + RTS 6, the tests apart
+LINES_RTS = 6  # $2EC9 RTS
+EDGE_CALL = 6  # $2E89/$3083/$30B7 JSR rasterise_polygon_edge
+EDGE_HEAD = 6  # $2EE4 LDA $003F 3 + $2EE6 BMI 3
+EDGE_ABOVE = 9  # $2EE8 BNE leave taken 3 + $2EE3 RTS 6
+EDGE_BOTTOM_TEST = 13  # $2EEA LDA 3 + CMP $51 3 + BCS nt 2 + CMP $04 3 + BCS nt 2
+EDGE_BOTTOM_OFF = 12  # $2EEC CMP $51 3 + BCS taken 3 + RTS 6, the $2EEA LDA apart
+EDGE_BOTTOM_KEEP = 3  # $2EF2 BCS not_new_bottom_row taken
+EDGE_BOTTOM_SET = 9  # $2EF4 CMP $52 3 + BCS taken 3 + $2EFA STA $04 3
+EDGE_BOTTOM_CLIP = 8  # ... BCS not taken 2 + $2EF8 LDA $52 3 + $2EFA STA $04 3
+EDGE_BOTTOM_LOW = 9  # $2EE6 BMI taken 3 + $2EF8 LDA 3 + $2EFA STA 3
+EDGE_TOP_TEST = 13  # $2EFC LDA $3E 3 + BMI nt 2 + BNE nt 2 + $2F02 LDA $1A 3 + CMP 3
+EDGE_TOP_OFF = 9  # $2EFE BMI leave taken 3 + RTS 6
+EDGE_TOP_BELOW = 9  # $2F06 BCC leave taken 3 + RTS 6
+EDGE_TOP_KEEP = 3  # $2F0A BCC not_new_top_row taken
+EDGE_TOP_SET = 9  # $2F0C CMP $51 3 + BCC taken 3 + $2F15 STA $06 3
+EDGE_TOP_CLIP = 12  # ... BCC not taken 2 + $2F10 LDA/SEC/SBC 7 + $2F15 STA $06 3
+EDGE_TOP_HIGH = 13  # $2F00 BNE taken 3 + $2F10 LDA/SEC/SBC 7 + STA 3
+EDGE_WIDE_TEST = 8  # $2F17 LDA $41 3 + ORA $42 3 + BNE not taken 2
+EDGE_WIDE = 12  # ... BNE taken 3 + $2EE0 JMP 3 + the $30BD LDA/SEC 6
+EDGE_DX = 15  # $2F1D LDA/SEC/SBC 8 + BCS taken 3 + $2F2F STA $0D 3 + LDX 2, -1
+EDGE_DX_NEG = 15  # ... BCS nt 2 + $2F24 EOR/CLC/ADC 6 + STA 3 + LDX 2 + BNE 3, -1
+EDGE_SLOPE = 14  # $2F33 LDY $0D 3 + CPY $0C 3 + LDY $1A 3 + LDA $02 3 + the BCS 2
+STEEP_SETUP = 34  # $2F3D..$2F55: three self-modifies 12, the DDA seed 16 and the JMP 6
+STEEP_ROW = 23  # $2F58 ADC/BCC 6 + $2F5F STX/DEC/BEQ 12 + $2F67 DEY/BNE 5
+STEEP_COLUMN = 1  # $2F58 BCC not taken 2 + SBC $0C 3 + INX/DEX 2, less the taken 3
+STEEP_LAST = 4  # the last row leaves by $2F68 BNE nt 2 + $2F6A STY $7F 3 + RTS 6, -5
+STEEP_BOTTOM = 5  # $2F65 BEQ taken 3 + $2F6D LDY/BEQ 5 + $2F6A 9, less the row tail 12
+SHALLOW_SETUP = 55  # $2F71..$2F9E: the four self-modifies 27, the DDA seed 22 and 6
+SHALLOW_STEP = 13  # $2FA1 INX/DEX 2 + ADC $0C 3 + BCC 3 + $2FB0 DEY/BNE 5
+SHALLOW_STORE = 4  # $2FAD STX abs, on the columns the branch offset does not skip
+SHALLOW_ROW = 8  # $2FA4 BCC nt 2 + SBC 3 + DEC $2FAE 6 + BEQ nt 2, less the taken 3
+SHALLOW_LAST = 7  # the last column leaves by $2FB1 BNE nt 2 + $2FB3 JMP/STY/RTS 12, -7
+SHALLOW_BOTTOM = 5  # $2FAB BEQ taken 3 + $2F6D LDY/BEQ 5 + $2F6A 9, less the tail 12
+OUTSIDE_ENTRY = 20  # $2FB6/$2FDC INC 6 + LDX/STX abs 8 + LDX $18 3 + the JMP 3
+OUTSIDE_STEEP_ROW = 8  # $2FCB DEC abs 6 + $2FCE BEQ not taken 2
+OUTSIDE_STEEP_NEXT = 5  # $2FD0 DEY 2 + $2FD1 BNE taken 3
+OUTSIDE_STEEP_ACC = 6  # $2FC4 ADC $0D 3 + $2FC6 BCC taken 3
+OUTSIDE_STEEP_COLUMN = 4  # ... BCC nt 2 + $2FC8 SBC 3 + $2FCA INX/DEX 2, less the 3
+OUTSIDE_STEEP_END = 13  # $2FD0 DEY 2 + BNE nt 2 + $2FD3 JMP 3 + $2F6C RTS 6
+OUTSIDE_STEEP_BACK = 10  # $2FCE BEQ taken 3, less nt 2, + $2FD6 DEC 6 + $2FD9 JMP 3
+STEEP_ENTER = 5  # $2FD9 lands on the storing loop's $2F67 DEY 2 + BNE taken 3
+STEEP_ENTER_END = 13  # ... BNE not taken 2 instead + $2F6A STY $7F 3 + RTS 6
+OUTSIDE_SHALLOW_STEP = 13  # $2FF6 DEY/BNE 5 + $2FEA INX/DEX 2 + ADC $0C 3 + BCC taken 3
+OUTSIDE_SHALLOW_ROW = 10  # ... BCC nt 2 + SBC 3 + $2FF1 DEC 6 + BEQ nt 2, less the 3
+OUTSIDE_SHALLOW_END = 13  # $2FF6 DEY 2 + BNE nt 2 + $2FF9 JMP 3 + $2F6C RTS 6
+OUTSIDE_SHALLOW_BACK = 10  # $2FF4 BEQ taken 3, less nt 2, + $2FFC DEC 6 + JMP 3
+SECTION_HEAD = 36  # $3002 STX/LDA/STA 8 + the 16-bit x delta 22 + $3019 JSR $1007 6
+SECTION_INVERT = 24  # invert_A_and_a_fraction_if_negative $1007, either way
+SECTION_TEST = 9  # $301C STA $75 3 + ORA $76 3 + $3020 BEQ skip_calculating 3
+SECTION_HALVE = 26  # $3022 one halving lap: both 16-bit shifts, the ROL $40 and the BNE
+SECTION_SCALE = 16  # $3030..$303A the two overflow tests, both BEQ not taken
+SECTION_SEED = 51  # $303C..$305F the sign restore, the start-vertex copies and the BEQ
+SECTION_STEP = 63  # $3061..$3083 walk one section's end back along the line + the JSR
+SECTION_LOOP = 8  # $3086 DEC $0040 5 + BNE process_sections_loop 3
+SECTION_END = 61  # $308A..$30B7 the final section's own vertex copies and the JSR
+SECTION_TAIL = 3  # $30BA JMP consider_next_line
+WIDE_HEAD = 14  # $30BF..$30C8 the 16-bit x delta 12 + the BPL 2, the $30BD LDA apart
+WIDE_DIR = 16  # $30CA/$30DA the step direction and $30E0 STY/STA 6
+WIDE_SLOPE = 14  # $30E4 LDY $0D 3 + CPY $0C 3 + LDY $1A 3 + LDA $02 3 + the BCS 2
+WIDE_STEEP_SETUP = 55  # $30EE..$3110: the self-modifies, the DDA seed and both JMPs
+WIDE_STEEP_ROW = 20  # $311F the store 4 + DEC $3120 6 + BEQ nt 2 + $3127 DEC/BNE 8
+WIDE_STEEP_STEP = 6  # $3113 ADC $000D 3 + $3115 BCC set_row taken 3
+WIDE_STEEP_COLUMN = 11  # ... nt 2 + SBC 3 + INX/DEX 2 + CPX $0076 3 + CLC/BEQ nt 4, -3
+WIDE_STEEP_AREA_H = 15  # $311D BEQ taken 3 + $3140 INC/DEC $0041 5 + JSR 6 + JMP 3, -2
+WIDE_STEEP_AREA_V = (
+    14  # $3125 BEQ taken 3 + $312E DEC $3E 5 + BPL 3 + BNE 3, less the 0
+)
+WIDE_STEEP_AREA_BACK = 12  # $3135 BNE nt 2 + $3137 DEC 6 + JSR 6 + JMP 3, less the 5
+WIDE_SHALLOW_SETUP = 55  # $3148..$316A, the same shape as the steep setup
+WIDE_SHALLOW_STEP = (
+    18  # $316D INX/DEX 2 + CPX/CLC/BEQ nt 7 + $317E store 4 + DEC/BNE 8, -3
+)
+WIDE_SHALLOW_ROW = (
+    8  # $3175 BCC nt 2 + SBC 3 + DEC $317F 6 + BEQ nt 2, less the taken 3
+)
+WIDE_SHALLOW_AREA_H = 15  # $3171 BEQ taken 3 + $319A INC/DEC 5 + JSR 6 + JMP 3, -2
+WIDE_SHALLOW_AREA_V = 14  # $317C BEQ taken 3 + $3188 DEC 5 + BPL 3 + BNE 3
+WIDE_SHALLOW_AREA_BACK = 12  # $318F BNE nt 2 + DEC 6 + JSR 6 + JMP 3, less the 5
+WIDE_AREA_CALL = 6  # $310D/$3167/$313A/$3142/$3194/$319C JSR $31A4
+WIDE_AREA_OUT = 33  # $31A4 with $003E non-zero: nothing to plot in this area
+WIDE_AREA = 40  # ... $0041 zero: the line's own x is the edge
+WIDE_AREA_LEFT = 45  # ... $0041 negative: clip to column 0
+WIDE_AREA_RIGHT = 43  # ... $0041 positive: clip to column $FF
+WIDE_LEAVE = 9  # $312B/$3185 JMP leave 3 + $2F6C RTS 6
+SPAN_CALL = 6  # $2AB4/$2AC8 JSR span_fill
+SPAN_ENTRY = 25  # $22AA the two flags 7 + $22B0 the middle row 10 + $22B7 LDA/CMP 8
+SPAN_BACKFACE = 9  # $22BD BCC leave taken 3 + $2310 RTS 6
+SPAN_ADDRESS = 55  # $22BF..$22DE the buffer address for the polygon's first row
+SPAN_COLOURS = 24  # $22E0..$2306 with $0C7A bit 7 clear, the $22E5 BPL taken
+SPAN_SUPPRESSED = 45  # ... bit 7 set ($8538, a distant object): $22E7..$22F1 21 more
+SPAN_START = 12  # $2308 LDY $06 3 + STY $1A 3 + CPY $04 3 + the BCS 3
+SPAN_START_EMPTY = 8  # ... BCS not taken 2 + $2310 RTS 6, less the taken 3
+SPAN_ROW_TEST = 12  # $2377 LDA $AE00,Y 4 + CMP $AD00,Y 4 + BCS nt 2 + $237F TAX 2
+SPAN_ROW_EMPTY = 9  # $237D BCC leave taken 3 + $2310 RTS 6
+SPAN_LEFT_EDGE = 12  # $2380 SBC $35 3 + BCS nt 2 + CMP $61 3 + BCC nt 2 + $2388 ASL 2
+SPAN_OFF_LEFT = 3  # $2382 BCC set_polygon_extends_to_left taken
+SPAN_OFF_RIGHT_ROW = 3  # $2384 BCS plot_row_clipped_to_right taken
+SPAN_EXTENDS = 8  # $232B/$2331 LDA #0 2 + STA 3 + BEQ move_to_next_row 3
+SPAN_RIGHT_PIXEL = 4  # $2389 AND #$F8 2 + $238B TAY 2
+SPAN_PLOT_RIGHT = 26  # $238C..$239C the byte's pixel, the read-modify-write and the STY
+SPAN_CLIP_RIGHT = 11  # $2337 LDA $61 3 + ASL 2 + STA $56 3 + STA $2C 3 + the BNE 3
+SPAN_READ_LEFT = 12  # $239E LDY $1A 3 + LDA $AD00,Y 4 + TAX 2 + $23A4 CMP $36 3
+SPAN_LEFT_TEST = 9  # $23A6 BCS nt 2 + SEC 2 + SBC $35 3 + BCC nt 2 + $23AD ASL 2, -2
+SPAN_SAME_BYTE = 39  # $23B1 CPY/BCS 6 + $2355..$236F the two pixels merged 33
+SPAN_PLOT_LEFT = 34  # $23B1 CPY/BCS 5 + $23B5..$23CF the pixel and the middle base 29
+SPAN_CLIP_LEFT = 27  # $2340..$2353: the base two pixels left of the buffer and the BNE
+SPAN_MIDDLE = 13  # $23D0..$23DA the unrolled-loop length and the always-taken BCC
+SPAN_BYTE = 8  # one $23DC..$2456 LDY #imm 2 + STA ($70),Y 6: four filled pixels
+SPAN_NEXT = 17  # $2458 JMP 3 + $2311 LDY/CPY/BEQ nt 8 + $2317 TYA/AND/BNE 6
+SPAN_NEXT_GROUP = 21  # ... $231A BNE not taken 2 + $231C the buffer step 18 + the BNE 3
+SPAN_LAST = 12  # $2311 LDY $1A 3 + CPY $04 3 + BEQ taken 3 + RTS 6, the $2458 JMP apart
+SPAN_ROW_STEP = 10  # $2372 INC $0072 5 + $2374 DEY 2 + STY $1A 3
+
+# plot_stack_of_objects $21AE, plot_object $8533 and its $8475 transform loop, block by block (sentinel/objectcost.py); the trig and the $0D03 multiplies are counted from their own data.
+STACK_HEAD = 8  # $21AE AND #$3F 2 + STA $0C6C 4 + LDX #0 2
+STACK_LEVEL = 15  # $21B5 one level of the height walk, its $21BE BCS taken
+STACK_LAST = 14  # ... the bottommost level, BCS not taken
+STACK_COUNT = 6  # $21C0 DEX 2 + STX $0C6B 4
+STACK_ONE = 3  # $21C4 BEQ plot_objects_loop taken: one object in the tile
+STACK_MANY = 2  # ... not taken
+STACK_BELOW_TEST = (
+    33  # $21C6..$21DB the 16-bit z compare with the player, the BMI apart
+)
+STACK_ABOVE = 3  # $21D7 BMI plot_objects_above_player taken
+STACK_LEVEL_TYPE = (
+    11  # $21DD LDA type 4 + CMP #6 2 + BEQ 3, an object level with the eye
+)
+STACK_BELOW = (
+    21  # $21E4 JSR 6 + LDY 4 + DEC 6 + BMI nt 2 + LDX 4 + BPL 3, the JSR apart
+)
+STACK_RESCAN = 13  # $21F4 one lap: LDA 4 + AND 2 + TAY 2 + DEX 2 + BNE 3
+STACK_ABOVE_HEAD = 4  # $21FF LDY $0C6C
+STACK_PLOT = 17  # $2202 LDA 4 + AND 2 + TAY 2 + DEC 6 + BPL 3, the JSR apart
+STACK_RTS = 6  # $2210 RTS
+
+# plot_world's walk: the $2625 prologue, the $26DE row loop, the $27D7 row scan and the $295D plot loop, each block by its own branches (sentinel/projector.py).
+WALK_SETUP = 172  # $2625..$26C7 looking north with a non-negative v_angle
+WALK_SETUP_QUAD = (0, 5, 9, 3)  # $2684's four view cases, north/east/south/west
+WALK_SETUP_PITCH = 1  # $263C BPL not taken 2 + $263E ORA #$F0 2, less the taken 3
+WALK_ROWS = 17  # $26C9..$26D6: row $1F, the $0C48 hint into $0032 and $0005 = 0
+WALK_HINT = 7  # $26D9 LDA $0032 3 + STA $0C48 4
+ROW_HEAD = 25  # $26DE the $0005 flip 8 + $26E4 the $0037/$0038 copy 12 + $26EF DEC 5
+ROW_LAST = 11  # $26F1 BMI leave_with_carry_clear taken 3 + $26FC CLC 2 + RTS 6
+ROW_MORE = 8  # ... not taken 2 + $26F3 LDY $0026 3 + CPY $001D 3
+ROW_NEAR = 3  # $26F7 BNE move_to_nearer_row taken
+ROW_OBSERVER = 5  # ... not taken 2 + $26F9 JMP consider_plotting_observer_row 3
+ROW_SCAN = 6  # $26D6/$26FE JSR find_visible_extent_of_row_of_tiles
+ROW_START_SAME = 9  # $2701 LDY 3 + CPY $0037 3 + $2705 BEQ consider_end_of_row 3
+ROW_START_AFTER = 4  # ... BEQ not taken 2 + $2707 BCC not taken 2
+ROW_START_AFTER_TAIL = 3  # $2711 BEQ consider_end_of_row
+ROW_START_BEFORE = 19  # $2707 BCC taken 3 + $2713..$271B the bank flip and INC $0026 16
+ROW_START_BEFORE_TAIL = 16  # $2725 STY 3 + DEC $0026 5 + the bank flip back 8
+ROW_EXTRA = (
+    8  # one extra tile: DEY/INY 2 + CPY 3 + BNE taken 3, the JSR being the examine's
+)
+ROW_EXTRA_LAST = 7  # ... the BNE not taken
+ROW_END_SAME = 9  # $272F LDY 3 + CPY $0038 3 + $2733 BEQ plot_row 3
+ROW_END_BEFORE = 4  # ... BEQ not taken 2 + $2735 BCS not taken 2
+ROW_END_BEFORE_TAIL = 3  # $273F BEQ plot_row
+ROW_END_AFTER = 19  # $2735 BCS taken 3 + $2741..$2749 16
+ROW_END_AFTER_TAIL = 16  # $2753 STY 3 + DEC $0026 5 + the bank flip back 8
+ROW_PLOT = 16  # $275D JSR $295D 6 + BIT $0C1B 4 + BPL taken 3 + $276A JMP 3
+OBS_ROW_HEAD = 8  # $276F LDY $0037 3 + INY 2 + CPY $0003 3
+OBS_ROW_START = 9  # $2774 BNE nt 2 + $2776 STY $0038 3 + JMP plot_observer_row 3, +1
+OBS_ROW_TEST = 13  # ... BNE taken 3 + $277B LDY 3 + DEY/DEY 4 + CPY $0003 3
+OBS_ROW_END = 8  # $2781 BNE not taken 2 + $2783 INY 2 + STY $0037 3, +1
+OBS_ROW_SKIP = 3  # $2781 BNE skip_plotting_observer_row taken
+OBS_ROW_PLOT = (
+    24  # $2786 the two examine calls' own LDYs 6 + JSR $295D 6, the JSRs apart
+)
+OBS_TILE = (
+    19  # $2793 LDA/STA $0005 5 + INC $0026 5 + LDY $0003 3, the examine's JSR apart
+)
+OBS_TILE_TEST = 6  # $279E LDA $0AE0,Y 4 + CMP #$02 2
+OBS_TILE_OFF = 11  # $27A3 BCS taken 3 + $27D1 CLC 2 + RTS 6
+OBS_TILE_ON = (
+    72  # ... not taken 2 + $27A5..$27CC forcing the tile's four corners 64 + 6
+)
+OBS_TILE_TAIL = 8  # $27D1 CLC 2 + RTS 6
+SCAN_HEAD = 3  # $27D7 LDY $0032, the $27D9 JSR being the examine's own
+SCAN_OFF = 3  # $27DC BEQ find_first_visible_tile_at_start_loop taken
+SCAN_VISIBLE = 4  # ... not taken 2 + $27DE CMP #$80 2
+SCAN_CROPPED = 3  # $27E0 BEQ tile_is_cropped_to_right taken
+SCAN_WHOLE = 2  # ... not taken
+SCAN_INC = 9  # $2836..$283B increase_tile_column, falling into $283D's own entry
+SCAN_INC_END = 24  # ... $2839 BEQ taken: the JSR 6 + the head 10 + $282C SEC/RTS 8
+SCAN_DEC = 10  # $282E LDY 3 + BEQ nt 2 + DEY 2 + JMP $283D 3
+SCAN_DEC_END = 20  # ... BEQ taken: the JSR 6 + LDY 3 + BEQ 3 + $282C 8
+SCAN_END_HEAD = 6  # $27E2 LDA $0024 3 + STA $0032 3
+SCAN_END_WHOLE = 7  # $27E9 BCS nt 2 + CMP #$81 2 + $27ED BEQ find_end_of_row_loop 3
+SCAN_END_CROP = 9  # ... BEQ nt 2 + CMP #$80 2 + $27F1 BEQ reached_end_of_row 3, +2
+SCAN_END_GAP = 8  # ... $27F1 BEQ not taken 2: fall into find_first_visible_tile_at_end
+SCAN_END_STOP = 3  # $27E9 BCS reached_end_of_row taken
+SCAN_GAP_LOOP = 5  # $27F6 BCS nt 2 + $27F8 BEQ find_first_visible_tile_at_end_loop 3
+SCAN_GAP_HIT = 4  # ... BEQ not taken
+SCAN_GAP_STOP = 3  # $27F6 BCS reached_end_of_row taken
+SCAN_END_TAIL = 12  # $27FA LDA $0024 3 + STA $0033 3 + RTS 6
+SCAN_CROP_HEAD = 6  # $27FF LDA $0024 3 + STA $0033 3
+SCAN_CROP_MORE = 4  # $2806 BCS nt 2 + $2808 CMP #$80 2
+SCAN_CROP_AGAIN = 3  # $280A BEQ tile_is_cropped_to_right taken
+SCAN_CROP_EXIT = 9  # ... nt 2 + CMP #0 2 + JMP $2825 3 + the $2825 BEQ not taken 2
+SCAN_CROP_LEFT = 10  # ... with the $2825 BEQ into the start-of-row loop taken 3
+SCAN_CROP_STOP = 3  # $2806 BCS reached_start_of_row taken
+SCAN_START_LOOP = (
+    5  # $2814 BCS nt 2 + $2816 BEQ find_first_visible_tile_at_start_loop 3
+)
+SCAN_START_HIT = 4  # ... BEQ not taken
+SCAN_START_STOP = 3  # $2814 BCS reached_end_of_row taken
+SCAN_START_SETUP = 12  # $2818 the $0033 store 6 + the $0032 hint back into $0024 6
+SCAN_LEFT_LOOP = (
+    5  # $2823 BCS nt 2 + $2825 BEQ find_first_visible_tile_at_start_of_row 3
+)
+SCAN_LEFT_HIT = 4  # ... BEQ not taken
+SCAN_LEFT_STOP = 3  # $2823 BCS reached_start_of_row taken
+SCAN_LEFT_TAIL = 12  # $2827 LDA $0024 3 + STA $0032 3 + RTS 6
+PLOT_ROW_HEAD = 6  # $295D LDA $0037 3 + STA $0025 3
+PLOT_ROW_FRONT = 27  # $2961 one ascending lap, both compares, the JSR and the $296C INC
+PLOT_ROW_TURN = 14  # $2961 CMP 3 + BCS nt 2 + CMP $0003 3 + BCS taken 3 + $2973 LDA 3
+PLOT_ROW_DONE = 12  # $2961 CMP $0038 3 + BCS leave taken 3 + $298C RTS 6
+PLOT_ROW_BACK = 31  # $2975 one descending lap, its three compares and the JSR
+PLOT_ROW_BACK_END = (
+    26  # ... $2980 CMP $0003 3 + BCC leave taken 3 + RTS 6, less the JSR 9
+)
+PLOT_ROW_BACK_LOW = 21  # ... $297C CMP $0037 3 + BCC leave taken 3 + RTS 6 instead
+PLOT_ROW_BACK_EMPTY = 13  # $2975 SEC 2 + SBC 2 + $2978 BMI leave taken 3 + RTS 6
+
+SC8_CALL = 6  # $848F JSR calculate_sine_and_cosine $0F70
+SC8_POS = 3  # $0F70 BPL positive_sine taken
+SC8_NEG = 4  # ... not taken 2 + $0F72 EOR #$40 2
+SC8_BODY = 20  # $0F74..$0F80: the sign byte, the 9-bit shift and the table index
+SC8_NOCLAMP = 3  # $0F81 BPL skip_ceiling taken
+SC8_CLAMP = 4  # ... not taken 2 + $0F83 LDA #$7F 2
+SC8_TABLE = 13  # $0F85 TAY 2 + the two $AC80 reads 8 + $0F8C BIT $0067 3
+SC8_SAME = 16  # $0F8E BMI nt 2 + BVS nt 2 + $0F92 STA/STX/RTS 12
+SC8_SWAP = 17  # ... $0F90 BVS taken 3 instead
+SC8_NEG_SAME = 18  # $0F8E BMI taken 3 + $0F97 BVS taken 3 + $0F92 12
+SC8_NEG_SWAP = 17  # ... $0F97 BVS not taken 2 + $0F99 12
+
+OBJ_CALL = 6  # $21E4/$2202 JSR plot_object $8533
+OBJ_RELATIVE = 6  # $8533 JSR calculate_object_relative_angles_and_distance $8401
+OBJ_DISTANCE = 11  # $8536 LDA $7D 3 + CMP #$0F 2 + ROR $0C7A 6: distant => no edges
+OBJ_TRANSFORM = 28  # $853D JSR 6 + $8475..$8483 the vertex bounds 22
+OBJ_VERTEX_ANGLE = 15  # $8485..$848C the vertex's apparent angle
+OBJ_VERTEX_COS = 13  # $8492..$8499 the radius and the cosine, the $0D03 JSR apart
+OBJ_VERTEX_COS_SIGN = 8  # $849E STA 3 + LDA #0 2 + BIT $0067 3
+OBJ_COS_POSITIVE = 3  # $84A4 BVC cosine_is_positive taken
+OBJ_COS_NEGATIVE = 32  # ... not taken 2 + JSR $1009 invert_A_and_a_fraction 30
+OBJ_VERTEX_Y = 25  # $84A9..$84B8 the radial component, the $84BA BPL apart
+OBJ_Y_POSITIVE = 3  # $84BA BPL y_is_positive taken
+OBJ_Y_NEGATIVE = 17  # ... not taken 2 + the $84BC 16-bit negate 15
+OBJ_VERTEX_X = 33  # $84C7..$84DD the tangential component and the JSR $9287
+OBJ_VERTEX_SCREEN_X = 35  # $84E0..$84F3 both 16-bit stores and the JSR $937F
+OBJ_VERTEX_Z = 14  # $84F6..$84FE the doubled height, the $8500 BCC apart
+OBJ_Z_POSITIVE = 3  # $8500 BCC z_is_positive taken
+OBJ_Z_NEGATIVE = 32  # ... not taken 2 + JSR $1009 30
+OBJ_VERTEX_VANGLE = 31  # $8505..$8516 the observer-relative z and the JSR $933D
+OBJ_VERTEX_STORE = 19  # $8519..$8524 the two screen_y stores
+OBJ_VERTEX_NEXT = 21  # $8525..$852F INC/INC/LDY/CPY 16 + BEQ nt 2 + JMP 3
+OBJ_VERTEX_LAST = 25  # ... $852D BEQ taken 3 + $8532 RTS 6 instead of the JMP
+OBJ_PASS_HEAD = 14  # $8540..$8548 $003B = $40, $0053 = 0 and $0C47 = 0
+OBJ_SHAPE = 7  # $854B LDX 3 + LDA $9CB6,X 4
+OBJ_CONVEX = 3  # $8550 BEQ plot_object_pass_loop taken: one pass covers the object
+OBJ_CONCAVE = 4  # ... not taken 2 + $8552 LSR A 2
+OBJ_MEANIE = 10  # $8553 BCS nt 2 + $8555 LDA $005A 3 + ADC #$C0 2 + JMP 3
+OBJ_UPRIGHT = 7  # $8553 BCS taken 3 + $855C LDA $0C5C 4
+OBJ_UPRIGHT_Z = 5  # $855F BNE plot_object_in_one_pass_if_negative taken 3 + EOR #$80 2
+OBJ_UPRIGHT_LOW = 6  # ... not taken 2 + $8561 LDA $0C5B 4
+OBJ_UPRIGHT_FLAT = 3  # $8564 BEQ plot_object_pass_loop taken
+OBJ_UPRIGHT_HALVE = 6  # ... not taken 2 + $8566 LSR A 2 + $8567 EOR #$80 2
+OBJ_ONE_PASS = 3  # $8569 BPL plot_object_pass_loop taken
+OBJ_TWO_PASS = 7  # ... not taken 2 + $856B LDA #2 2 + STA $0053 3
+OBJ_POLY_HEAD = 14  # $856F..$8576 the polygon bounds for this pass
+OBJ_POLY_TEST = 13  # $8579 STY 3 + LDA $A1A0,Y 4 + LDX $0053 3 + $8580 BEQ 3
+OBJ_POLY_PASS = 9  # ... BEQ not taken 2 + $8582 EOR $0C47 4 + $8585 BMI 3
+OBJ_POLY_SETUP = 41  # $8587..$85A2 the colour, $0017, the vertex pointer and the JSR
+OBJ_POLY_NEXT = 8  # $85A4 INY 2 + CPY $004F 3 + BCC plot_object_polygons_loop 3
+OBJ_POLY_DONE = 12  # ... BCC not taken 2 + $85A9 DEC $0053 5 + BMI/BEQ 3, +2
+OBJ_PASS_AGAIN = 11  # $85AB BEQ nt 2 + $85AF LDA #$80 2 + STA $0C47 4 + BMI 3
+OBJ_TAIL = 25  # $85B6..$85C3 reset $003C, clear $0C7A bit 7, restore Y and RTS

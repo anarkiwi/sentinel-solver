@@ -234,7 +234,7 @@ def test_the_priced_redraw_brackets_every_live_rotation_redraw():
                 continue
             for h_angle in range(0, 256, 8):
                 state.obj_h_angle[state.mem[mm.PLAYER_OBJECT]] = h_angle
-                cycles, columns, _l = relative.update_object_on_screen_cycles(
+                cycles, columns, _l, _s = relative.update_object_on_screen_cycles(
                     state, slot
                 )
                 if columns == 0:
@@ -291,11 +291,12 @@ def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
     state = Game.typed(rec["board"]).state
     state.mem[mm.PLAYER_NOT_ACTED] = 0x00
     enemies.advance_frames(state, rec["model_charge_frame"] - 2)
-    on, left, columns, _cyc = relative.object_screen_span(state, rec["target"])
+    on, left, columns, span, _cyc = relative.object_screen_span(state, rec["target"])
     assert on and (left, columns) == (rec["rom_left"], rec["rom_columns"])
-    frames = projector.strip_replot_frames(state, rec["target"], left, columns)
+    frames = projector.strip_replot_frames(state, rec["target"], left, columns, span)
     stall = frames * passcost.PAL_FRAME_CYCLES / passcost.FOREGROUND_CYCLES
-    assert 0.9 <= stall / rec["machine_wall_frames"] <= 1.25, stall
+    # both backends now read UNDER the machine's wall: the $2625 fill proxy is item 5's
+    assert 0.85 <= stall / rec["machine_wall_frames"] <= 1.05, stall
 
 
 def test_the_frame_budget_decomposition_matches_the_live_frame():
@@ -672,7 +673,7 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
     monkeypatch.setattr(
-        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0)
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
     )
     monkeypatch.setattr(passcost, "ROTATE", passcost.ROTATE - 323 + 6)
     monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
@@ -728,16 +729,27 @@ def test_the_object_screen_span_is_exact_against_the_roms_own_209b(landscape):
             rom = _run(cpu, mem, mstate, 0x209B)
             rom_visible = not cpu.p & 0x01
             state = State(bytearray(mem))
-            visible, left, columns, cycles = relative.object_screen_span(state, slot)
+            visible, left, columns, span, cycles = relative.object_screen_span(
+                state, slot
+            )
             assert (cycles, visible) == (rom, rom_visible), (slot, h_angle)
             if visible:
-                assert (left, columns) == (mem[0x0C62], mem[0x0C69])
+                assert (left, columns, span) == (
+                    mem[0x0C62],
+                    mem[0x0C69],
+                    mem[0x211B],
+                )
                 seen.add("visible")
                 continue
             seen.add("player" if slot == player else "reject")
             rom = _run(cpu, mem, mstate, 0x1F9F)
             state = State(bytearray(mem))
-            assert relative.update_object_on_screen_cycles(state, slot) == (rom, 0, 0)
+            assert relative.update_object_on_screen_cycles(state, slot) == (
+                rom,
+                0,
+                0,
+                0,
+            )
     assert seen == {"visible", "reject", "player"}
 
 
@@ -758,10 +770,11 @@ def _run(cpu, mem, mstate, addr):
 @pytest.mark.oracle
 @pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
 def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
-    """RENDER_COST_BACKEND=py65 prices the $1FFC replot by running the real $1F9F.
+    """RENDER_COST_BACKEND=py65 prices $1FA4..$1F9E by running the real $1F9F.
 
-    The proxy prices the same camera through the same $29C7 window, so the two must
-    agree to well inside the factor the un-windowed proxy was out by (1.3..2.8x)."""
+    The proxy prices the same camera through the same $29C7 window and adds the $2211
+    strip clear, the $9730 buffer flush and $1F9F's own line, all off the uncapped
+    $211B span; the residual left is the $2625 area-fill proxy's."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
 
     mem = bytearray(_oracle().generate(landscape))
@@ -773,15 +786,15 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
         for slot in range(8):
             if state.obj_flags[slot] & 0x80:
                 continue
-            visible, left, cols, _cyc = relative.object_screen_span(state, slot)
+            visible, left, cols, span, _cyc = relative.object_screen_span(state, slot)
             if not visible:
                 continue
             monkeypatch.setenv("RENDER_COST_BACKEND", "py65")
-            exact = projector.strip_replot_frames(state, slot, left, cols)
+            exact = projector.strip_replot_frames(state, slot, left, cols, span)
             monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
-            proxy = projector.strip_replot_frames(state, slot, left, cols)
+            proxy = projector.strip_replot_frames(state, slot, left, cols, span)
             assert exact > 1.0  # the replot is always many frames, never a redraw
-            assert 0.8 < proxy / exact < 1.3
+            assert 0.98 <= proxy / exact <= 1.00
             checked += 1
             break
         if checked >= 2:
@@ -789,11 +802,71 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
     assert checked >= 1
 
 
-def test_the_strip_buffer_window_is_the_roms_own_29c7():
-    """$29C7 halves the $0C69 column count into $0007 and folds it into $0012.
+def _rom_replot_line(state, target):
+    """The ROM's own $1FA4..$1F9E on ``target``, less every $1FFC JSR $2625 under it."""
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.machine_from_image(state.mem)
+    plot = [0]
+    inside = [None, 0]
 
-    A 40-column A is the whole play screen, which is $2993 mode 0's own pair."""
+    def trace(pc):
+        if inside[0] is None:
+            if pc == oracle.PLOT_WORLD:
+                inside[0], inside[1] = cpu.sp, cpu.processorCycles
+        elif cpu.sp > inside[0]:
+            plot[0] += cpu.processorCycles - inside[1]
+            inside[0] = None
+
+    frames = oracle.update_object_cost(
+        cpu, mem, mstate, target, trace=trace, from_pc=oracle.REPLOT_LINE
+    )
+    return round(frames * oracle.FRAME_CYCLES) - plot[0], mem
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_strip_replot_line_is_the_roms_own_1fa4(landscape):
+    """$1FA4..$1F9E priced from state, cycle for cycle, less the $2625 chunks.
+
+    The $2211 clear and the $207E $9730 flush both run over the uncapped $211B span,
+    the $29C7 window and the $1FC2 camera shift once per <=20-column chunk."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    mem = bytearray(_oracle().generate(landscape))
+    state = State(mem)
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for h_angle in range(0, 256, 8):
+        state.obj_h_angle[player] = h_angle
+        for slot in range(8):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            visible, left, cols, span, _cyc = relative.object_screen_span(state, slot)
+            if not visible:
+                continue
+            rom, rom_mem = _rom_replot_line(state, slot)
+            assert (rom_mem[0x211B], rom_mem[0x211C]) == (span, left)
+            chunks = projector.replot_chunks(left, span)
+            assert chunks[0][1] == cols
+            model = projector.strip_line_cycles(
+                span, len(chunks), state.mem[projector.SCREEN_SCROLL]
+            )
+            assert model == rom, (h_angle, slot, span, model, rom)
+            checked += 1
+            break
+        if checked >= 2:
+            break
+    assert checked >= 2
+
+
+def test_the_strip_buffer_window_is_the_roms_own_29c7():
+    """$29C7 halves the $0C69 column count into $0007, folds it into $0012 and rotates
+    the halving's carry into $0028, so an odd strip drops the left column's near half.
+
+    A 40-column A is the whole play screen, which is $2993 mode 0's own triple."""
     assert projector.strip_window(40) == projector.BUF_WINDOW[projector.PLAY_MODE]
     for columns in range(1, 21):
-        left, right = projector.strip_window(columns)
+        left, right, frac = projector.strip_window(columns)
         assert (left, right) == (columns >> 1, ((columns >> 1) >> 1) ^ 0x80)
+        assert frac == (0x80 if columns & 1 else 0x00)
+        assert projector._window_columns((left, right, frac)) == columns

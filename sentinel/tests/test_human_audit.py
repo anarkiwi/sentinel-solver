@@ -14,8 +14,8 @@ _BREACH335 = [23, 24, 28, 44, 45, 56, 95, 137]  # 52 retired by the phase-split 
 # 94 became 95 when $1F9F's on-screen strip replot ($1FFC) started stalling the clock.
 # 56 joined with the derived pass cadence: the enemy clock over that span now runs at
 # the board's real rate, so the model puts the human inside a cone it had missed.
-# 18 joined when UTURN_FRAMES went 74 -> 77 (pooled n=9): its budget is aim + HOP_FRAMES and the extra 3 f crosses the drain window. A model false positive, like the rest.
-_GATE335 = [17, 18, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
+# 18 joined when UTURN_FRAMES went 74 -> 77 and left again when the examine moved to the play machine's own $37F2: its budget is aim + HOP_FRAMES, and either way it is the drain window's edge that decides, not the step.
+_GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
 # was [30, 32, 34, 50, 51, 77, 84, 92, 94, 95] against the flat survival floor; pricing
 # exposure as the $0C20 RATE accepts seven of those human creates (docs/architecture.md)
 _FIRE335 = [32, 34, 77]

@@ -253,6 +253,13 @@ _REDRAW = (
     "instruction by instruction against the ROM's own $209B/$1F9F"
 )
 _GUARD = "wall-clock guard; unmeasured"
+_REPLOT_LINE = "test_the_strip_replot_line_is_the_roms_own_1fa4"
+
+
+def _line(note):
+    """A counted piece of $1FA4..$1F9E, the strip replot's own line around $2625."""
+    return entry(_PC, DERIVED, note, _REPLOT_LINE)
+
 
 REGISTRY = {
     "FRAME_TICKS": _u(_AC, "unit scalar; no test pins it to a ROM primitive"),
@@ -359,11 +366,35 @@ REGISTRY = {
     "REDRAW_PLOT_ENTRY": entry(
         _PC,
         DERIVED,
-        "$1FA2 BCS not taken. Past it $1F9F re-points the camera at the object and "
-        "replots its <=20-column strip through $1FFC JSR $2625, which "
-        "projector.strip_replot_frames prices at that shifted camera -- exactly "
-        "under RENDER_COST_BACKEND=py65, else through the render_cost proxy",
+        "$1FA2 BCS not taken. Past it lies $1FA4..$1F9E -- the $2211 clear, the "
+        "$1FFC JSR $2625 chunks at the $1FC2 camera and the $9730 flush -- which "
+        "projector.strip_replot_frames prices, exactly under "
+        "RENDER_COST_BACKEND=py65, else with the render_cost proxy for $2625",
         "test_the_object_screen_span_is_exact_against_the_roms_own_209b",
+    ),
+    "REDRAW_CLEAR_CALL": _line("$1FA4..$1FBF, up to and including the JSR $2211"),
+    "REDRAW_CHUNK_HEAD": _line("$1FC2..$1FFC, the camera shift and the two JSRs"),
+    "REDRAW_CHUNK_TAIL": _line("$1FFF..$201C, the camera restore and the width step"),
+    "REDRAW_CHUNK_MORE": _line("$201C..$2029, re-entering $1FC2 with the remainder"),
+    "REDRAW_CHUNK_RESUME": _line("$1FEB/$1FED on every chunk after the first"),
+    "REDRAW_TAIL": _line("$202C..$206A, with $992C 22 and $9A3C 16 counted in"),
+    "REDRAW_FLUSH_LOOP": _line("$206F..$2083, one $207E JSR $9730 flush's own loop"),
+    "REDRAW_FLUSH_ENTRY": _line("$206C JMP $207C, less the first step and last BNE"),
+    "REDRAW_EXIT": _line("$2085..$2092 and the $1F93 flag reset and RTS"),
+    "CHUNK_CYCLES": entry(
+        _PR,
+        DERIVED,
+        "one $1FC2..$201C strip chunk: REDRAW_CHUNK_HEAD + REDRAW_CHUNK_TAIL + the "
+        "BUF_WINDOW_CALL its $1FE5 JSR $29C7 buys",
+        _REPLOT_LINE,
+    ),
+    "SCREEN_SCROLL": entry(
+        _PR,
+        DERIVED,
+        "$0095, the first screen bank $2043 copies into $0097 for the $9730 flush "
+        "loop; $9730's own row window skips bank $0095 - 1, so the count of $3A40 "
+        "page-straddling banks it copies, and its cost, follow from it",
+        _REPLOT_LINE,
     ),
     "_REDRAW_CALL": _d(_ENJ, "jit alias of passcost.REDRAW_CALL"),
     "_REDRAW_NONE": _d(_ENJ, "jit alias of passcost.REDRAW_NONE"),

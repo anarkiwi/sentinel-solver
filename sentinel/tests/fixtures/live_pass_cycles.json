@@ -282,7 +282,7 @@
   }
  },
  "strip_replot": {
-  "_what": "the one $1FFC strip replot ls9795 reaches in 400 live frames, caught by running to $1F9F until the call that takes the on-screen branch: the ROM's own $0C62/$0C69 span at that moment, and $9630 frames from that $1F9F to the next $1289. proxy_cycles and py65_cycles are projector.strip_replot_frames' two backends on the captured image; the machine cannot spend py65_cycles in machine_wall_frames (that would need 24277 a frame against the frame's 19656), so the exact backend's render context is dear -- open on item 5, not item 8",
+  "_what": "the one $1FFC strip replot ls9795 reaches in 400 live frames, caught by running to $1F9F until the call that takes the on-screen branch: the ROM's own $0C62/$0C69 span at that moment, and $9630 frames from that $1F9F to the next $1289. proxy_cycles and py65_cycles are projector.strip_replot_frames' two backends on the captured image. Both now read UNDER the machine's wall (0.90 and 0.92 of it); the exact backend's earlier 1.54x was its $9AF6/$37F2 examine and its $2993/$245B context, both since fixed. What is left is the $2625 area fill, open on item 5",
   "board": 9795,
   "target": 3,
   "rom_left": 37,
@@ -290,7 +290,7 @@
   "machine_wall_frames": 22,
   "machine_2625_frame": 130,
   "model_charge_frame": 129,
-  "proxy_cycles": 387392,
-  "py65_cycles": 534090
+  "proxy_cycles": 332100,
+  "py65_cycles": 338644
  }
 }

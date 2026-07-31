@@ -34,6 +34,10 @@ EXTRA_ANCHORS = {
     "UPDATE_CURSOR_WRAP": 0x16D9,
     "SOUND_VOICE_LAST": 0x8F08,
     "REMOVE_GROUND": 0x1EEF,
+    "WIDE_STEEP_COLUMN": 0x3115,  # the $3115 BCC not taken; its comment names $0076
+    "WIDE_AREA": 0x31A4,  # $31A4's other branches; their comments name $0041
+    "WIDE_AREA_LEFT": 0x31A4,
+    "WIDE_AREA_RIGHT": 0x31A4,
 }
 # Constants that are not cost terms: their comment's address is incidental.
 NOT_A_RUN = frozenset(

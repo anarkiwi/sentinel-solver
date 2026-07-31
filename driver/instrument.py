@@ -13,7 +13,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from sentinel import enemies, memmap as mm, statecmp as sc
+from sentinel import enemies, memmap as mm, projector, statecmp as sc
 from sentinel.state import State
 from driver import clock, core
 
@@ -21,9 +21,46 @@ RENDERS = os.path.join(core.boot.ROOT, "renders")
 FRAME_PC = (
     clock.FRAME_PC
 )  # once-per-frame raster-IRQ top marker (the frame-step anchor)
-
-
+REPLOT_RETURN = 0x1FFF  # $1FFC JSR $2625, update_object_on_screen's strip replot
+_ROW_LOOP = range(0x26D9, 0x26F0)  # $26EF DEC $26 unspent: the next row is $0026 - 1
+_PLOT_ROW_RETURNS = (0x2760, 0x2793)  # the two JSR $295D, so $0025 names a live tile
+_PLOT_SETUP = range(
+    0x2625, 0x26D6
+)  # $26C9 has not seeded $0026: the whole pass is owed
 REG_SP = 4  # registers_get id of the stack pointer
+CAMERA_FRACTION = 0x1F  # $1FD0 the fine angle, zeroed again at $2003
+
+
+def stack_frames(page, sp):
+    """The interrupted PC and every return address under the $95E9 frame.
+
+    $95E9 pushes Y, X and A over the hardware P/PCH/PCL, so the foreground's PC is at
+    SP+5/6 and its JSR chain runs up the page from SP+7 as (lo, hi) of return-1."""
+    out = [page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)]
+    for a in range((sp + 7) & 0xFF, 0xFF, 2):
+        out.append(((page[a] | (page[a + 1] << 8)) + 1) & 0xFFFF)
+    return out
+
+
+def replot_debt(state, frames):
+    """The cycles an interrupted $1FFC JSR $2625 still owes, 0 when there is none.
+
+    plot_world's progress is its own zero page: $0026 is the row it has walked down
+    to and $0025 the column $295D is plotting, which :func:`projector.replot_owed`
+    turns into the unspent tail of the very pass the model would otherwise recharge."""
+    if REPLOT_RETURN not in frames:
+        return 0
+    inside = frames[: frames.index(REPLOT_RETURN)]
+    if any(a in _PLOT_SETUP for a in inside):
+        row = 0xFF
+    else:
+        row = state.mem[projector.PLOT_ROW] - any(a in _ROW_LOOP for a in inside)
+    return projector.replot_owed(
+        state,
+        row,
+        state.mem[projector.PLOT_COLUMN],
+        any(a in _PLOT_ROW_RETURNS for a in inside),
+    )
 
 
 class SimClock:
@@ -31,22 +68,31 @@ class SimClock:
 
     def __init__(self, image, resume=None):
         self.state = State.from_mem(image)
-        if resume is not None:  # the machine was mid-pass; occupy the same position
-            (
-                self.state.pass_phase,
-                self.state.body_stage,
-                self.state.body_index,
-                self.state.body_partial,
-                residual,
-            ) = resume
-            self.state.cycle_residual = residual or 0
         self.plotting = False
+        self.replot_tail = None
+        if resume is not None:
+            self.seat(resume)
+
+    def seat(self, resume):
+        """Occupy the sub-pass position and cycle the machine itself is at."""
+        (
+            self.state.pass_phase,
+            self.state.body_stage,
+            self.state.body_index,
+            self.state.body_partial,
+            residual,
+        ) = resume
+        self.state.cycle_residual = residual or 0
 
     def image(self):
         return self.state.mem
 
     def step_frame(self):
         enemies.advance_frame(self.state, plotting=self.plotting)
+        # $2005: the frame the replot debt clears is the frame $2625 returns in.
+        if self.replot_tail and self.state.body_stage != enemies.BODY_DONE:
+            self.replot_tail()
+            self.replot_tail = None
 
     def poke(self, addr, val):
         self.state.mem[addr] = val & 0xFF
@@ -63,6 +109,11 @@ class EmuClock:
 
     def image(self):
         return self.bm.mem_get(0x0000, sc.MAX_ADDR)
+
+    def frames_on_stack(self):
+        """:func:`stack_frames` for the foreground this $9630 halt interrupted."""
+        sp = self.bm.registers_get()[REG_SP] & 0xFF
+        return stack_frames(self.bm.mem_get(0x0100, 0x01FF), sp)
 
     def sync_to_frame(self):
         self.bm.run_until_pc(FRAME_PC, timeout=6.0)
@@ -91,35 +142,66 @@ class Seed:
     the machine's own cycle.  Else it starts at ``addr``, the head of the segment the
     machine is inside, and that segment's spent cycles are the seed's own error."""
 
-    def __init__(self, resume, waited, pc, addr, caught):
+    def __init__(self, resume, waited, pc, addr, caught, debt=0):
         self.resume, self.waited, self.pc, self.addr = resume, waited, pc, addr
         self.caught = caught  # (pc, loop addr) at the frame that asked for this seed
+        self.debt = debt  # the unspent $1FFC replot this position carries, if any
         self.exact = resume[4] is not None
 
     def note(self):
+        owed = (
+            f", owing {self.debt / projector.FRAME_CYCLES:.1f}f of replot"
+            if self.debt
+            else ""
+        )
         if self.exact:
-            return f"seeded exact (+/-0 cycles) at ${self.pc:04X}"
+            return f"seeded exact (+/-0 cycles) at ${self.pc:04X}{owed}"
         return (
             f"seeded at ${self.addr:04X} head, machine at ${self.pc:04X}: "
-            f"+/- unbounded (no countable marker in {self.waited} frames)"
+            f"+/- unbounded (no countable marker in {self.waited} frames){owed}"
         )
+
+
+def _replot_resume(state, emu):
+    """The resume a halt inside the $1FFC replot occupies, its cycle debt and its tail.
+
+    plot_world's own $0025/$0026 price the unspent tail, so the position is countable
+    where :func:`enemies.stack_position` has no straight line: the body is done and the
+    prnd is not ($1884 JMP $16D6), and $1FFF..$2008 restores the camera on the way."""
+    debt = replot_debt(state, emu.frames_on_stack())
+    if not debt:
+        return None, 0, None
+    resume = (enemies.PHASE_BODY, enemies.BODY_DONE, 0, -1, -int(round(debt)))
+    return resume, debt, lambda: _restore_camera(state)
 
 
 def _seed(emu, exact=True, tries=SEED_TRIES):
     """Step frames until the marker catches the loop at the machine's exact cycle.
 
     A position off the ROM's straight lines resumes only to its segment's head, which
-    injects that segment's spent cycles; waiting for a countable one is the only
-    seeding with no error of its own."""
+    injects that segment's spent cycles; the $1FFC replot is the one such position
+    :func:`_replot_resume` can count, so it never has to be waited out."""
     waited, caught = 0, None
     while True:
         image = emu.full_image()
         resume, pc, addr = emu.position(image)
         caught = caught or (pc, addr)
+        sim = SimClock(image)
+        replot, debt, tail = _replot_resume(sim.state, emu)
+        resume = replot or resume
         if resume[4] is not None or not exact or waited >= tries:
-            return image, Seed(resume, waited, pc, addr, caught)
+            sim.seat(resume)
+            sim.replot_tail = tail
+            return sim, Seed(resume, waited, pc, addr, caught, debt)
         emu.step_frame()
         waited += 1
+
+
+def _restore_camera(state):
+    """$2003/$2008: undo the $1FC2 strip shift of the camera's own bearing."""
+    state.mem[CAMERA_FRACTION] = 0
+    saved = state.mem[projector.CAMERA_SAVED]
+    state.obj_h_angle[state.mem[projector.CAMERA_OBJECT]] = saved
 
 
 def _unfreeze(img):
@@ -140,10 +222,10 @@ def race(bm, max_frames, follow=False, log=print, exact_seed=True):
     raced = 0
     with bm.halted():
         emu.sync_to_frame()
-        seed, first_seed = _seed(emu, exact_seed, max_frames)
+        sim, first_seed = _seed(emu, exact_seed, max_frames)
+        seed = sim.image()
         seeds.append(first_seed)
         frames_run = first_seed.waited
-        sim = SimClock(seed, first_seed.resume)
         unfrozen = _unfreeze(seed)
         emu.poke(mm.PLAYER_NOT_ACTED, unfrozen)
         sim.poke(mm.PLAYER_NOT_ACTED, unfrozen)
@@ -179,14 +261,13 @@ def race(bm, max_frames, follow=False, log=print, exact_seed=True):
                 core_events.append(event)
                 if not follow:
                     break
-                live, nxt = _seed(emu, exact_seed, max_frames - frames_run)
+                sim, nxt = _seed(emu, exact_seed, max_frames - frames_run)
                 event["caught"] = nxt.caught
                 frames_run += nxt.waited
-                sim = SimClock(live, nxt.resume)
                 seeds.append(nxt)
                 seg_start = frames_run
                 if len(seeds) <= 16:
-                    log(f"[instrument] CORE at frame {f}; {seeds[-1].note()}")
+                    log(f"[instrument] CORE at frame {f}; {nxt.note()}")
     return {
         "first": first,
         "core_events": core_events,

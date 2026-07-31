@@ -25,6 +25,7 @@ GENERATE = 0x2ACC  # generate_landscape (terrain + provisional objects)
 GENERATE_END = 0x2B21  # terrain-build end, before the preview render tail
 INIT_ENEMIES = 0x1420  # place Sentinel + sentries
 INIT_PLAYER = 0x1450  # place player + trees
+PLAY_DISPLAY_FLAG = 0x9AF6  # $9A51's byte, $80 for the whole play loop ($3577)
 
 # memory regions present in the image (everything else = fresh, zeroed RAM).
 LOADED = [
@@ -84,6 +85,14 @@ def _wrap(mem):
     return cpu, mem, state
 
 
+def wrap_image(image):
+    """A play machine over ``image`` exactly as given, with no ROM overlay.
+
+    For resuming a snapshot of an already-set-up machine, where an overlay would undo
+    the setup: :func:`machine_from_image` rewrites every LOADED region."""
+    return _wrap(bytearray(image))
+
+
 def _rom_image():
     if not available():
         raise FileNotFoundError(f"{IMG} missing: place the game memory image there")
@@ -108,12 +117,14 @@ def machine_from_image(src):
     Per-enemy state INSIDE a LOADED region does not: ``ROTATION_SPEED_TABLE`` ($9D37)
     and ``COOLDOWN_BRESENHAM`` ($1335) are overwritten by the image, so a caller seeding
     a recorded clock must rewrite them after this returns or the ROM rotates by the
-    wrong step and every comparison is silently invalid.
+    wrong step and every comparison is silently invalid.  ``PLAY_DISPLAY_FLAG`` is one
+    of those, and is restored here because the image was dumped before play began.
     """
     img = _rom_image()
     mem = bytearray(src)
     for a, b in LOADED:
         mem[a : b + 1] = img[a : b + 1]
+    mem[PLAY_DISPLAY_FLAG] = 0x80
     return _wrap(mem)
 
 
@@ -143,6 +154,25 @@ PLOT_WORLD = 0x2625  # plot_world
 FRAME_CYCLES = 19656.0  # PAL frame
 
 
+def prepare_render_context(cpu, mem, state, buffer_mode=0):
+    """Put the machine in the state ``play_landscape_loop $357D`` leaves before its
+    ``$2625``, and run that entry's own prologue in the ROM's order ($35BA-$35C0):
+    ``$245B`` occlusion, ``$3700`` projection tables, ``$2993`` buffer variables.
+    The raytrace leaves $0035/$0036 as $1ECC/$2597 march state, so $2993 comes last."""
+    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
+        mem[addr] = 0
+    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
+    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
+    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window ($994b/$994d)
+    mem[PLAY_DISPLAY_FLAG] = 0x80  # $3577: $283D sends every examine to $37F2
+    call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    state["stop"] = False
+    call(cpu, mem, 0x3700, state=state)  # per-position projection tables $37F2 reads
+    state["stop"] = False
+    call(cpu, mem, 0x2993, a=buffer_mode, state=state)  # initialise_buffer_variables
+    state["stop"] = False
+
+
 def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
     """Run the real plot_world ($2625) once headless with the raytraced occlusion
     table ($245B) active, from the player at (h_angle, v_angle); return the exact
@@ -151,14 +181,7 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
     mem[0x006E] = player
     mem[0x09C0 + player] = h_angle & 0xFF  # objects_h_angle
     mem[0x0140 + player] = v_angle & 0xFF  # objects_v_angle
-    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
-        mem[addr] = 0
-    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
-    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
-    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window ($994b/$994d)
-    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
-    state["stop"] = False
-    call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    prepare_render_context(cpu, mem, state)
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -177,22 +200,20 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
 UPDATE_OBJECT_ON_SCREEN = 0x1F9F
 
 
-def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
+REPLOT_LINE = 0x1FA4  # $1FA2 BCS not taken: the strip replot proper, past $209B
+
+
+def update_object_cost(
+    cpu, mem, state, target, maxins=20_000_000, trace=None, from_pc=None
+):
     """Run the real $1F9F once headless on ``target`` and return its frame cost.
 
-    Same render context as :func:`render_frame_cost` -- $1F9F's own $1FC2 re-points
-    the camera at the object's strip and $1FFC replots it, so the view is the ROM's,
-    not the caller's. ``trace``, when given, is called with every PC executed."""
+    Same render context as :func:`render_frame_cost`; $1FC2 re-points the camera at
+    the object's strip, so the view is the ROM's. ``from_pc`` starts counting there
+    (``REPLOT_LINE`` drops $209B); ``trace`` is called with every PC executed."""
     player = mem[0x000B]
     mem[0x006E], mem[0x0091] = player, target
-    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
-        mem[addr] = 0
-    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
-    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
-    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
-    call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
-    state["stop"] = False
-    call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
+    prepare_render_context(cpu, mem, state)
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -205,6 +226,8 @@ def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
     while cpu.pc != ret and steps < maxins:
         if trace is not None:
             trace(cpu.pc)
+        if cpu.pc == from_pc:
+            c0, from_pc = cpu.processorCycles, None
         cpu.step()
         steps += 1
     return (cpu.processorCycles - c0) / FRAME_CYCLES
@@ -224,6 +247,7 @@ def generate_machine(landscape):
     call(cpu, mem, INIT_ENEMIES, state=state)
     state["stop"] = False
     call(cpu, mem, INIT_PLAYER, state=state)
+    mem[PLAY_DISPLAY_FLAG] = 0x80  # $3577, as the ROM leaves it entering $357D
     return cpu, mem, state
 
 

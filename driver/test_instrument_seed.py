@@ -26,6 +26,9 @@ class StubEmu:
     def full_image(self):
         return bytearray(0x10000)
 
+    def frames_on_stack(self):
+        return []  # no $1FFC replot in flight
+
     def position(self, _image):
         return self.positions[min(self.frame, len(self.positions) - 1)]
 
@@ -35,7 +38,7 @@ class StubEmu:
 
 def test_the_seed_waits_for_a_marker_whose_cycle_it_can_count():
     emu = StubEmu([INEXACT, INEXACT, EXACT])
-    _image, seed = instrument._seed(emu)
+    _sim, seed = instrument._seed(emu)
     assert seed.exact and seed.waited == 2 and emu.frame == 2
     assert seed.resume[4] == 25 and "+/-0 cycles" in seed.note()
     assert seed.caught == (0x1D16, 0x17B7)  # where the frame that asked for it was
@@ -43,7 +46,7 @@ def test_the_seed_waits_for_a_marker_whose_cycle_it_can_count():
 
 def test_an_uncountable_run_reports_its_uncertainty_rather_than_absorbing_it():
     emu = StubEmu([INEXACT])
-    _image, seed = instrument._seed(emu, tries=3)
+    _sim, seed = instrument._seed(emu, tries=3)
     assert not seed.exact and seed.waited == 3
     note = seed.note()
     assert "unbounded" in note and "$17B7" in note and "$1D16" in note
@@ -51,7 +54,7 @@ def test_an_uncountable_run_reports_its_uncertainty_rather_than_absorbing_it():
 
 def test_the_control_seeds_wherever_the_marker_falls():
     emu = StubEmu([INEXACT, EXACT])
-    _image, seed = instrument._seed(emu, exact=False)
+    _sim, seed = instrument._seed(emu, exact=False)
     assert not seed.exact and seed.waited == 0 and emu.frame == 0
 
 

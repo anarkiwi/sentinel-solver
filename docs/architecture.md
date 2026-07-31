@@ -296,6 +296,7 @@ in the jennings oracle:
 | `MEANIE_SCAN_*` | `$198F` walks the search counter, not a slot index | 26 / 34 / +42 |
 | `ROTATE` | `$1805..$1884`, its `$1AF4`/`$1973`/`$3470` callees at 31/32/`TUNE_ROTATE` | 454 |
 | `REDRAW_CALL`/`REDRAW_NONE` | `$1881 JSR $1F9F` `update_object_on_screen`, off-screen | 6 / 23 |
+| `REDRAW_*`/`CLEAR_*`/`FLUSH*` | `$1FA4..$1F9E` on screen: the clear, the chunk loop, the flush | 1..4340 |
 | `SPAN_*` | `$209B calculate_object_screen_span`, branch by branch | 1..33 |
 
 A rotation is the single most expensive thing a gated enemy does and none of it is the
@@ -310,23 +311,39 @@ ls9795, cycle-exact against the ROM's own `$209B`/`$1F9F`
 (`test_the_object_screen_span_is_exact_against_the_roms_own_209b`). All 16 live
 rotations in `fixtures/live_pass_cycles.json` (1576..1843) are that branch.
 
-An object that *does* have a span is a different animal: `$1FC2` re-points the camera at
-the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle) and `$1FFC JSR $2625` replots it,
-0.40..0.85 M cycles on ls9795 — 250..500x the branch above, and a `plot_world` cost, not
-an enemy-clock one. `projector.strip_replot_frames` prices it at that shifted camera —
-never the player's own — and through the strip's own buffer window: `$1FE5 JSR $29C7`
-takes `$0C69` and sets `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
+An object that *does* have a span is a different animal: `$1FA4..$1F9E` clears the strip,
+replots it and flushes it to the screen, 0.40..0.85 M cycles on ls9795 — 250..500x the
+branch above, and a `plot_world` cost, not an enemy-clock one.
+`projector.strip_replot_frames` prices the whole of it:
+
+| `$1F9F` calls | what it costs | driven by |
+|---|---|---|
+| `$1FBA JSR $2211` `clear_strip` | `2232 * span + 1292` (24 rows x 8 bytes a column) | `$211B`, the **uncapped** span |
+| `$1FE5 JSR $29C7` | 79, a straight line | once per chunk |
+| `$1FFC JSR $2625` | `render_cost` at the `$1FC2` camera, through the strip window | `$0C69`, capped at 20 |
+| `$207E JSR $9730` | `4340 + 135 * splits + wrap`, 4880..5016 a call | `$211B` calls, `$0095` for the price |
+
+`$209B` caps `$0C69` at 20 (`$2105`) but leaves the whole span in `$0C6A`/`$211B`, so a
+wider object replots in two chunks (`$201E`/`$2021` re-enter `$1FC2` with the remainder,
+each chunk at its own camera shift) while the clear and the flush run once over the whole
+span — `projector.replot_chunks` splits it the same way. `$1FC2` re-points the camera at
+each strip (`$09C0,X += $0C62/2`, `$001F` the fine angle), and `$1FE5 JSR $29C7` narrows
+the buffer to it: `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
 `$2993` sets from its table for a full-screen mode, so `projector.strip_window` feeds it
-straight to `render_cost`. `RENDER_COST_BACKEND=py65` instead runs the real `$1F9F` and is
-exact (19..29 frames on ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized); without
-the window the proxy priced all 40 columns and was 1.3..2.8x dear, which showed up as the
-clock over-stalling. `enemies` charges the result in cycles.
+straight to `render_cost`. `$9730` copies 24 of the 25 `$3A00` screen banks, skipping bank
+`$0095 - 1`, and a bank with a nonzero `$3A40` entry straddles two buffer pages and buys a
+second `$9888` — so the flush price follows from `$0095` alone. Every term is counted
+instruction by instruction and is exact against the ROM's own `$1F9F`
+(`test_the_strip_replot_line_is_the_roms_own_1fa4`); with `RENDER_COST_BACKEND=py65` the
+`$2625` term is the real one too and the whole thing is exact (19..29 frames on
+ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized). `enemies` charges the result in
+cycles.
 
 The numba twin cannot call the renderer, so `enemies_jit._advance` **stops** on an
-on-screen `$1F9F`, hands back the object and its left column with the frames still owed,
-and `enemies.advance_frames` prices the replot and resumes — the same number, charged at
-the same point in the pass, which `test_jit_matches_python_across_an_on_screen_redraw`
-holds to byte and residual identity.
+on-screen `$1F9F`, hands back the object, its left column, its chunk width and its span
+with the frames still owed, and `enemies.advance_frames` prices the replot and resumes —
+the same number, charged at the same point in the pass, which
+`test_jit_matches_python_across_an_on_screen_redraw` holds to byte and residual identity.
 
 `$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
 pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
@@ -755,8 +772,8 @@ foreground work folded into a settle constant.
 | `$2170` | (in `do_hyperspace`) | kills on underflow | `actions.hyperspace` | `golden_actions` |
 | `$217F` | `player_survived_hyperspace` | sets `$0CDE` bit 6 when the jump left the platform tile | `actions.won` | read back out of live memory by the driver |
 | `$21AE` | `plot_stack_of_objects` | the per-tile object stack draw | `projector._inview_object_base` | `golden_projector` |
-| `$22AA` | `span_fill` | middle-of-polygon fill, 4 px/byte |  | object `span_fill` unmodelled ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
-| `$23D0` | `plot_middle_of_row` | per-row span emit | `projector` fill proxy | [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
+| `$22AA` | `span_fill` | middle-of-polygon fill, 8 cycles per byte, 4 px/byte | `rendercost._span_fill` | `golden_render_cost` |
+| `$23D0` | `plot_middle_of_row` | per-row span emit; the `$23DB` branch offset selects the entry into a 31-store unrolled loop | `rendercost._span_fill` | `golden_render_cost` |
 | `$245B` | `populate_tile_visibility_bit_table` | raytraced occlusion into the `$3E80`/`$24DA` bitmap | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$24E2` | `trace_rays_from_observer_to_row_of_tiles` | the fixed-point DDA occlusion raytrace | `projector._occlusion_visible_py.trace` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$2565`/`$2570` | code-entry validation | the driver patches these to accept any code | `core.CODE_PATCHES` | `driver/test_core.py` |
@@ -768,12 +785,14 @@ foreground work folded into a settle constant.
 | `$27CE` | `plot_checkerboard_tile` | the observer's own tile, outside the `$0180` gate | `projector._scan_visible` | `golden_projector` |
 | `$27D3` | `offset_to_tile_table` | `[$00,$01,$21,$20]` — the drawn-tile offset by quadrant | `projector._project_scene_py` | `golden_projector` |
 | `$27D7` | `find_visible_extent_of_row_of_tiles` | the plotted span of a row | `projector._scan_visible.find_extent` | `golden_projector` |
+| `$283D` | — | `BIT $9AF6`: the examine is `$2845` with the flag clear, `$37F2` with it set | `projector._project`, `passcost.EXAM_ENTRY_*` | `golden_render_cost`, generated with `$9AF6` = `$80` |
 | `$2845` | `check_if_tile_is_on_screen_and_calculate_screen_coordinates` | the per-tile examine (trig floor) | `projector._project`, `C_EXAMINE` | `golden_projector` |
 | `$28D4` | `calculate_tile_address` | render-path tile addressing | `memmap.tidx` | `golden_landscape` |
 | `$295D` | `plot_row_of_tiles_or_block` | the plot loop over a row | `projector._project_scene_py` | `golden_projector` |
-| `$2993` | `initialise_buffer_variables` | selects the buffer window (`$29C4`) for a pan or the play view | `projector.BUF_WINDOW`, `pancost.PAN_MODE` | `golden_pan_cost` |
+| `$2993` | `initialise_buffer_variables` | selects the buffer window (`$29C4`) for a pan or the play view; zeroes `$0028`/`$0029` | `projector.BUF_WINDOW`, `pancost.PAN_MODE` | `golden_pan_cost` |
+| `$29C7` | `initialise_buffer_variables_for_updating` | the strip's own window: `$0007`/`$0012` from `$0C69`, the halving's carry into `$0028`, and `$0011`/`$0029`/`$0035`/`$0061` | `projector.strip_window`, `rendercost.buffers` | `test_the_strip_buffer_window_is_the_roms_own_29c7` |
 | `$2A24` | `plot_tile` | gates only on `$0180 != 0` | `projector._project_scene_py` | `golden_projector` |
-| `$2A8A` | `plot_two_triangles` | a sloped tile is two triangles, a flat tile one quad | `projector._terrain_poly_base` | `golden_projector` |
+| `$2A8A` | `plot_two_triangles` | a sloped tile is two triangles, a flat tile one quad | `rendercost.fill_cycles` | `golden_render_cost` |
 | `$2ACC` | `generate_landscape` | the whole deterministic board pipeline | `landscape._generate_terrain` | `golden_landscape`; `driver.dump_stage2.verify` requires 1024/1024 tiles against the ROM's own generator |
 | `$2ACE` | `randomise_row_or_column_tile_z_table` | 81 throwaway `prnd` draws | `landscape._generate_terrain` | `golden_landscape` |
 | `$2AE6` | `set_landscape_vertical_scale` | `$0C08` ∈ [14..36]; landscape 0 is fixed 24 | `landscape._generate_terrain` | `golden_landscape` |
@@ -787,11 +806,12 @@ foreground work folded into a settle constant.
 | `$2BFB` | `middle_is_higher_than_last` | the spike comparison | `landscape._spike` | `golden_landscape` |
 | `$2C2C` | `average_tile_heights` | toroidal width-4 box filter | `landscape._smooth_line` | `golden_landscape` |
 | `$2C7C` | `calculate_tile_slope` | four corner heights → a 0..15 slope code (`$2CA8`-`$2D11`) | `landscape._tile_slope` | `golden_landscape` |
-| `$2D6C` | `prepare_polygon` | per-polygon edge setup, run twice per wide-buffer section | `projector._terrain_poly_base` | `golden_projector`; per-call floor only ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
-| `$2D93`/`$2DCF` | `convert_angles_into_screen_coordinates` | vertex angles → `$A7A0`/`$0B40` screen coordinates | `projector` conv term | `golden_render_cost` |
-| `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00` | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
-| `$2EB2`/`$2EB7` | (in `process_line`) | `STA $AD00,Y` / `STA $AE00,Y` — the only writes to the left/right edge tables, one row at a time | `projector` edge-walk term | `golden_render_cost`; [5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile) |
+| `$2D6C` | `prepare_polygon` | per-polygon vertex projection; the second wide-buffer section runs only when the first clipped an edge | `rendercost.fill_cycles` | `golden_render_cost` |
+| `$2D93`/`$2DCF` | `convert_angles_into_screen_coordinates` | vertex angles → `$A7A0`/`$0B40` screen coordinates | `rendercost.fill_cycles` | `golden_render_cost` |
+| `$2DF2`/`$3002` | `process_line` | the DDA edge walk writing `$AD00`/`$AE00`, split into sections when a delta overflows a byte | `rendercost._edge`, `rendercost._section_line` | `golden_render_cost` |
+| `$2F5F`/`$2FAD` | (in `rasterise_polygon_edge`) | `STX $AD00`/`$AE00` — the only writes to the edge tables, one row at a time, the address low byte self-modified | `rendercost._edge` | `golden_render_cost` |
 | `$2F58` | (in `process_line`) | the steep inner loop | `projector` steep inner loop | `golden_render_cost` |
+| `$2FB6`/`$2FDC` | (in `rasterise_polygon_edge`) | the second entry for a line starting above the inner area: walk those rows without storing, then rejoin at `$2F67`/`$2FB0`, one column step ahead of the first store | `rendercost._edge` | `golden_render_cost` |
 | `$31CA` | `prnd` | 40-bit LFSR over `$0C7B-$0C7F`, 8 shuffles per call | `prng.Prng` | `golden_prng` |
 | `$339A` | `get_random_two_digit_bcd_number` | one `prnd` draw per call | `landscape._initialise_player_and_trees` | `golden_landscape` |
 | `$33ED` | `seed_prnd_from_landscape_number` | seeds `state[0..1]` from the typed number as packed BCD | `landscape.seed_for`, `core.landscape_from_digits` | `golden_prng`, `test_landscape_numbering.py` |
@@ -809,12 +829,15 @@ foreground work folded into a settle constant.
 | `$365A`/`$365D` | (in the main loop) | the `JSR pan_viewpoint` call site and the pan-done PC | `kbd_aim.PC_PAN_DONE` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$3682` | (in the main loop) | skips the enemy clock while `$0CE5` bit 7 is set | `playerbase._frozen`, `actions._mark_player_acted` | `test_settle_accuracy.py` |
 | `$3684` | scroll loop | ticks cooldowns while scrolling; mutually exclusive with `$9663` | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is) |
-| `$3700` | grid angle/hypotenuse pass | fixed per-settle foreground work | `projector.SETTLE_FIXED_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$3700` | grid projection-table build | per **position**, all 1024 tiles, into `$BC00`/`$C000`/`$C400`/`$C800`; `$35BD` runs it once per play redraw and no pan or strip rebuilds it | `projector.SETTLE_FIXED_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$37F2` | — | the play path's examine: the same plottables off `$3700`'s table less the camera reference `$001F`/`$00B0`/`$00B1`/`$00B2`, no trig and no object-stack walk | `projector._project`, `passcost.TAB_*` | `golden_render_cost`, cycle-exact on all 15 views |
 | `$3B00`/`$3C01` | arctan coefficient tables | reproduced closed-form, byte-exact | `relative._ARCTAN_LO`/`_HI` | closed form, byte-exact against the ROM table |
 | `$3D02` | hypotenuse coefficient table | reproduced closed-form, byte-exact | `relative._HYP` | closed form, byte-exact against the ROM table |
 | `$8401` | `calculate_object_relative_angles_and_distance` | relative x/y (`$85C4`), z (`$85F5`), then the angles | `relative.relative_angles` | `golden_relative` |
 | `$8475` | object transform loop | per-vertex `transform_vertex` | `projector.C_VERTEX` | `golden_render_cost` |
-| `$8533` | `plot_object` | the object model draw | `projector.C_VERTEX` | `golden_render_cost`; object `span_fill` unmodelled ([5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile)) |
+| `$8533` | `plot_object` | the object model draw | `objectcost.object_cycles` | `golden_object_cost`, every vertex byte-exact; `projector._inview_object_base`'s floor without the game image |
+| `$0F70` | `calculate_sine_and_cosine` | \|sin\| and \|cos\| from the `$AC80` quarter-turn table | `objectcost._sin_cos` | `golden_object_cost` |
+| `$9939`/`$994F` | the pan raster window | `$0051`/`$0052` from `$994B`/`$994D`: a pitch notch plots 64 rows, a bearing notch 192 | `pancost.PAN_ROWS` | `golden_pan_cost` |
 | `$888F` | `start_tune` | begins a tune, number in `$0CE7` | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
 | `$9287` | `calculate_angle` | bearing from a relative x/y pair | `relative._calc_angle` | `golden_relative` |
 | `$933D` | `calculate_object_relative_vertical_angle` | pitch from z and distance | `relative._vertical_angle` | `golden_relative` |
@@ -1043,20 +1066,39 @@ to plot is how many frames an action spends. `FRAME_CYCLES` = 19656 (PAL). Valid
 0/42/66/335/777/2024) with the raytraced occlusion table active.
 
 `plot_world $2625` is an equirectangular rasteriser walking the 32×32 grid furthest-to-nearest
-(`$26DE` counts `$0026` 31→0; per row `$27D7` finds the span via `$2845`; each plotted tile
+(`$26DE` counts `$0026` 31→0; per row `$27D7` finds the span via `$283D`; each plotted tile
 runs `plot_tile $2A24` → `prepare_polygon $2D6C` / `process_line` / `span_fill $22AA`, object
 tiles adding `$21AE`/`$8533`).
 
-`render_cost(state, view, observer, mode)` = examine floor + `prepare_polygon` floors + area
-fill proxy, over `FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode)`. With
+**The examine is chosen, not fixed.** `$283D BIT $9AF6 / BPL $2845 / JMP $37F2` picks it, and
+`$9AF6` has exactly one writer: `$9A51`, called with `#$00` from `$117E` (`reset_game_state`,
+so generation and the preview) and with `#$80` from `$3577`, the instruction before
+`play_landscape_loop $357D`. It is therefore `$80` for the whole of play and every examine
+goes to `$37F2` — a read of the four projection tables `$3700` builds at `$BC00`/`$C000`/
+`$C400`/`$C800`, less the camera reference `$001F`/`$00B2` and `$00B0`/`$00B1`, with no trig
+and no object-stack walk. `$3700` is **per position**, not per view: `$35BD` runs it once on a
+play redraw and neither a pan notch nor a strip replot rebuilds it, which is what makes a pan
+cheap. The two examines produce byte-identical plottables — the same `$9287`/`$937F` results,
+computed once instead of per grid point — so only the cycles differ, and `_project` prices
+both side by side and returns the one `state.mem[$9AF6]` selects. The oracle harness generated
+its goldens with `$9AF6` = 0, i.e. under a machine configuration the game never runs in;
+`oracle.prepare_render_context` now sets `$80` and runs `$3700`, and that alone cut every
+golden view's plot_world cost by 0.23-0.85×.
+
+`render_cost(state, view, observer, mode, window, rows)` = the exact `$283D` examine cycles +
+the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), over
+`FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode, window, rows, ref_lo)`. It lands
+within 0.93-1.01× of the ROM on every golden view (median 0.966, mean absolute error 3.4%), at
+0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
-exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles)).
+exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
 
 | term | exactness |
 | --- | --- |
-| (a) examine trig floor: `$2845` + `$9287` + `$937F` + `$933D` | count **exact**; cost `N * C_EXAMINE` (py65-derived) |
-| (b) terrain fill | plotted set **exact** (`$0180` gate); per-tile cycles approximate |
-| (c) object fill | plotted set **exact**; per-object base floor, `span_fill` unmodelled |
+| (a) examine tree: `$283D` → `$37F2` in play, `$2845` + `$9287` + `$937F` + `$933D` otherwise | count and cycles **exact** (`passcost.TAB_*`/`EXAM_*`) on 12 of the 15 golden views, the other three within 0.1% |
+| (a2) the walk: `$2625` prologue, `$26DE`, `$27D7`, `$276F`, `$295D` | each block by the branch it takes (`passcost.WALK_*`/`ROW_*`/`SCAN_*`/`PLOT_ROW_*`) |
+| (b) terrain fill | sequence emulated (`rendercost.py`); loop counts exact on 14 of 15 golden views, cycles 0.92-0.96× the ROM's own fill subtree |
+| (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
 
 **Occlusion is exact.** `projector._occlusion_visible` is a byte-exact port validated
 tile-for-tile against the ROM `$3E80` bitmap: (1) temp height table `$25C4`, per tile
@@ -1071,6 +1113,13 @@ still examined and pay the trig floor, removing roughly half the would-be-filled
 tiles (`$28F0 CMP #$C0`) bypass occlusion. The raytrace starts at the passed observer, not
 unconditionally at `state.player`.
 
+**The walk is priced, not skipped.** `_scan_visible` charges `$2625`'s prologue (172 cycles
+plus `$2684`'s quadrant case and the `$263C` pitch branch), `$26DE`'s per-row head and its
+`$2713`/`$2741` extra-tile loops, `$27D7`'s four scan loops with `$282E`/`$2836`'s column steps,
+the `$276F` observer-row tail, and `$295D`'s two half-laps — 0.6-3.0% of a pass, and one-signed
+while it was missing. The JSR into `$2845` is charged once, by `EXAM_CALL`, on whichever of the
+two paths reaches it.
+
 **Tile selection and the `$0180` gate are exact.** `_scan_visible` ports `$27D7` + `$26DE` +
 the observer-row tail `$276F` branch-for-branch off the byte-exact `$2845` result (the `$0C48`
 furthest-row hint is 0 in every fresh play state). Three facts make it exact: the plot range is
@@ -1080,40 +1129,117 @@ on-screen filter, `plot_tile` gating only on `$0180 != 0` and height-0 flat tile
 `$001B = $27D3 = [$00,$01,$21,$20]` by quadrant. The observer's own tile is drawn by
 `plot_checkerboard_tile $27CE`, outside the gate.
 
-**Fill** is `_terrain_poly_base` (a `prepare_polygon` floor) plus
-`sum(PER_SCANLINE*H + PER_PIXEL*H*W)` over kept tiles — an area proxy, not a fit. Vertex
-projection `$2DCF`/`$2D93` is ported cycle-exact (`screen_x` = high byte of
-`((h_angle16 + $0011:$0029) << 3)`), and the DDA edge walk reproduces the `$AD00`/`$AE00`
-writes byte-for-byte on every narrow polygon-section swept. Per-block costs come from the loop
-bodies: `process_line`'s steep inner loop `$2F58` is **23 cyc/row** (27 on a column step),
-iterating exactly 2 × filled rows for an inside polygon; `span_fill` middle 8 cyc/byte at
-4 px/byte; per-row edge plot `$23B5`/`$238C` ~55-70 cyc; rows walk `[$0052,$0051] = [48,240]`;
-off-band `prepare_polygon` ~600 cyc/call (`C_PREP_CALL`). The fill is **prepare-dominated** —
-some golden views fill zero pixels yet spend most of their terrain budget tracing edges for
-polygons that clip out of the band — because `prepare_polygon` runs per polygon × 2
-wide-buffer sections and a plotted tile is one quad or two triangles (`plot_two_triangles
-$2A8A`).
+**Fill is emulated, not priced by area** (`rendercost.fill_cycles`, one source compiled by
+numba and readable as `py_func`). Per tile in render order, `$2A24` picks a quad or two
+triangles off the slope nibble, `$2D6C` projects their vertices into the current vertical
+buffer (`screen_x` = high byte of `((h_angle16 + $0011:$0029) << 3)`, and the `$2D93` path when
+any vertex leaves the inner area), `$2DF2` walks the four lines, `$2EE4`/`$3002`/`$30BD`
+rasterise each into `$AD00`/`$AE00` with the ROM's own DDA, and `$22AA` walks
+`[$0004,$0006]` plotting two edge bytes and eight cycles per whole byte between them. Per-block
+cycles are `passcost.TILE_*`/`PREP_*`/`LINE_*`/`EDGE_*`/`STEEP_*`/`SHALLOW_*`/`WIDE_*`/`SPAN_*`,
+each the block's own instruction line.
 
-**The edge tables carry state across polygons.** `polygon_left_edge_table $AD00` and
-`polygon_right_edge_table $AE00` are **never cleared**: a linear scan of the image finds no
-clear loop over those pages, and the only writes are `process_line`'s own per-row
-`$2EB2 STA $AD00,Y` / `$2EB7 STA $AE00,Y`. A polygon clipping to a sliver therefore writes
-only some of the `[$0004,$0006]` rows, and `span_fill $22AA` — whose middle-fill length is
-`right_col − left_col` (`$22B7 LDA $AE00,X / $22BA CMP $AD00,X`) — reads columns a *previous*
-polygon left behind. So the fill is a cross-polygon stateful sequence, not a per-tile
-function, which is why the area proxy's residual cannot close:
-[open item 5](open_items.md#5-terrain-fill-cost-cannot-close-per-tile).
+Two ROM facts the emulation forced, both wrong before: `prepare_polygon $2D6C` takes
+`$0025|$0005`, so a polygon's corners are `(col,row)` and its three neighbours — **not** the
+`$001B`-offset slot `plot_tile` reads the tile byte from; and `plot_row_of_tiles_or_block
+$295D` plots up from `$0037` to `$0003` and then back **down** from `$0038`, which is the
+order the `$0010` buffer toggle sees.
 
-**Object term.** `plot_object $8533` → transform loop `$8475`: per vertex `transform_vertex`
-runs `calculate_sine_and_cosine` + two `multiply_byte_by_byte` + `$9287` + `$937F` + `$933D`,
-charged as `C_VERTEX`, then per polygon the same `prepare_polygon`+`span_fill`. Model sizes
-come from engine facts `$9CA0`/`$9CA1` (verts) and `$9CAB`/`$9CAC` (polys): type 0=(29,27)
-1=(22,25) 2=(17,15) 3=(8,10) 4=(18,25) 5=(30,35) 6=(12,11) 7=(8,4). `_inview_object_base` sums
-a fixed per-object base over plotted object tiles' `$0100` stacks and, with object `span_fill`
-unmodelled, is a strict floor. Constants stay env-overridable (`RENDER_C_EXAMINE`,
-`RENDER_PER_SCANLINE`, `RENDER_PER_PIXEL`, `RENDER_C_VERTEX`, `RENDER_C_PREP_CALL`,
-`RENDER_SECTIONS`) but are ROM-derived: a perturbation smaller than the model's own error can
-flip a knife-edge board, so tuning them to win one is evidence of nothing.
+**The fill's geometry is pinned, not just its cost.** `rendercost` counts what the ROM's own
+loops count — `span_fill` rows and filled bytes, and each of the four DDAs' iterations — into
+the `rows`/`flags` scratch it already threads, and `golden_render_cost.json` carries the
+matching `$2377`/`$23DC`/`$2F58`/`$2FA1`/`$3113`/`$316D`/`$2EE4`/`$3002` hit counts. **14 of 15
+golden views reproduce all eight exactly** (`test_fill_geometry_matches_the_rom_loop_counts`),
+which turns a cost residual into a geometry one and is what found the `CLC` below. The
+fifteenth is an object vertex angle, not the fill
+([open item 5](open_items.md#5-one-object-vertex-angle-is-ten-units-out)).
+
+**A line that starts above the inner area steps before it stores.** `$2EE4`'s two narrow DDAs
+each have a second entry — `$2FB6` steep, `$2FDC` shallow — that walks the rows above the
+buffer without storing, and neither rejoins its storing loop at the store. `$2FD9` lands on
+`$2F67` (`DEY`, then `$2F58` accumulates) and `$2FFF` on `$2FB0` (`DEY`, then `$2FA1` steps),
+so the first row stored already carries one column step. Entering at the store instead put
+every column one row late and wrote one row past the polygon's bottom; that is worth a couple
+of filled bytes a view, and it is the whole residual on 335,0,0 and 42,160,240.
+
+**A strip's window is three bytes, not two.** `$29C7` halves `$0C69` into `$0007`, folds that
+into `$0012` and rotates the halving's carry into **`$0028`**, so an odd-width strip drops the
+left column's near half at `$2948`/`$3898`; it also leaves `$0029` (the low byte of the
+`$0011` angle offset, `$80` when `$0035 & 4`), which `$2DD5`/`$2DA0` add to every vertex before
+`$2DDD` folds in `$0011`. `$1FCC`/`$1FCF` set a third: `$001F` is `$80` when the strip's left
+column is odd. `$2993` zeroes all three for every full-screen mode, which is why holding them
+at 0 was invisible until a strip was priced. With them modelled the strip's examine count
+matches the ROM's on ls0042 and ls0335 exactly and is one out on ls9795, and `render_cost` is
+0.98-0.99× the ROM's own `$2625`. The rest of `$1FA4..$1F9E` — the `$2211` clear, the `$29C7`
+window, the chunk loop and the `$9730` flush — is counted, not proxied, and is **exact**, so
+`strip_replot_frames` as a whole is 0.98-1.00× the ROM's own `$1F9F`.
+
+**The harness is audited against a live in-play machine, byte for byte.** Two goldens have
+now been generated under a configuration the game never runs in, so the harness is a suspect,
+not ground truth. The audit: record every address the `$357D` render prologue and `plot_world`
+read **before writing** (7874 of them across ls0042/ls0335/ls9795), then diff the harness
+machine against a 64 KB dump taken 120 frames into live play on ls9795. Nine addresses differ,
+and only three carry a branch: `$9AF6` (fixed above), `$0C48` — live `$0F`, and `$26D9` stores
+it back every pass, so `_setup` reads it off the state rather than a constant, worth 15
+examines and 0.4% on that view — and `$0078`, which no longer reaches the examine at all
+([5](open_items.md#5-one-object-vertex-angle-is-ten-units-out)). Of the rest, `$006E` is the
+caller's own camera slot, `$352C` is the deliberate `update_sound` stub, `$AD01`/`$AE01` are
+the edge tables (provably worth 0 cycles), and `$0C7A` (`$22E2 BIT`, the far-object dither) and
+`$141F` (`$843B BNE`) take the same branch in both.
+
+**`$2993` runs after `$245B`, not before.** The raytrace calls `get_object_details $1ECC` per
+ray, which zeroes `$0034`-`$0036`, and `$2597` then accumulates the march fraction into
+`$0035`; `$0036` is left at 0. So after `populate_tile_visibility_bit_table` the buffer
+variables are march state, not the `$29BE`/`$29C1` table. Every ROM entry to `plot_world`
+re-initialises them first — `$35C0 JSR $1090` calls `$2993` for the play redraw, `$994F` for a
+pan notch, `$1FE5 JSR $29C7` for a strip — so the model is right to read the table, and it was
+the oracle harness that had the two calls the wrong way round. With `$0036` = 0 every row's
+left edge reads as right of the buffer, so the polygons before the first `$0010` toggle plotted
+no bytes and clipped, re-paritying `$0010` for the rest of the pass: that alone was the whole
+residual on 0,136,248 and 2024,184,244.
+
+**The two wide DDAs clear the carry every lap.** `$311C` and `$3170` `CLC` between the SBC and
+the next ADC, so `process_wide_line`'s accumulator never carries in; the two narrow loops
+(`$2F58`, `$2FA1`) have no such CLC and do carry. Modelling the wide pair like the narrow pair
+walked them off the ROM's rows.
+
+**What the edge tables actually carry.** `polygon_left_edge_table $AD00` and
+`polygon_right_edge_table $AE00` are never cleared — the only writes are the DDA's own
+`$2F5F`/`$2FAD`/`$311F`/`$317E` — but that does **not** make the cost cross-polygon: a closed
+polygon has a left and a right edge on every row of its own `[$0004,$0006]`, so both tables are
+fully rewritten before `span_fill` reads them. Seeding `$AD00`/`$AE00` with the ROM image, all
+zeroes, all `$FF` or a mix changes plot_world's cycle count by **0** on ls0/42/335/777/2024.
+What is genuinely stateful is `$0010`: `plot_polygon $2AA9` runs the other vertical buffer
+whenever a polygon clipped an edge (`$002C`/`$002D` ≠ 1) and leaves `$0010` toggled for the
+next tile, so the model carries it across the whole pass.
+
+**`$002C`/`$002D` is not a flag pair.** `span_fill` sets both to 1 at `$22AA` and has four
+stores that end a pass: `$232B` and `$2340` put 0 in `$002D` — the row's right edge, or its
+clipped left edge, lies left of the buffer — `$2331` puts 0 in `$002C` when the left edge lies
+right of it, and `$2337`, the clip-right path, puts `$0061 ASL` in `$002C`, a row *length* and
+`$E0` for the play buffer. `$2AB9` reads `$002C,Y` with Y = `$0010` and `$2ABC` compares against
+1, so the length reads as clipped exactly like a 0 does. Modelling `$2337` as a no-op left a
+polygon clipped only on its right at `$002C` = 1 and cost it its second section.
+
+**Object term.** `plot_stack_of_objects $21AE` walks the tile's stack — the levels at or below
+the eye bottom-up, then the rest top-down — and `plot_object $8533` draws each: `$8401` for the
+observer-relative angles and distance, `$8475` to transform every model vertex, then `$856F`
+over the object's polygons through the same `plot_polygon $2AA9` the terrain uses. Per vertex
+`$0F70` reads |sin| and |cos| out of the `$AC80` quarter-turn table, two `$0D03` multiplies
+scale the radius, and `$9287`/`$937F`/`$933D` give the screen coordinates — all already
+cycle-counted in `relative.py`. A concave model (`$9CB6`) is drawn in two passes chosen by its
+orientation (`$854D`), and a distant object (`$8536 CMP #$0F`) sets `suppress_lines $0C7A` bit 7
+for its own polygons, which `span_fill` pays 21 cycles more for and `$85BE` clears after.
+
+`objmodel.py` reads the geometry — `$9CA0`/`$9CAB` bounds, `$9DE0`/`$9F20`/`$A060` per vertex,
+`$A1A0`/`$A2E0`/`$A420` per polygon, `$AC80` — from `out/sentinel_stage2.bin`, the same
+gitignored image the oracle tests use; nothing of it is carried in the repo. With the image
+present every transformed vertex is byte-identical to the ROM's
+(`test_objectcost.py`, `golden_object_cost.json`) and `plot_object`'s own cost lands within a
+few percent. **Without the image, or without numba**, `_inview_object_base` charges the old
+per-object floor instead (`C_VERTEX` per vertex plus a `prepare_polygon` call per polygon per
+section), which is a strict under-charge; that is the only fidelity difference between the two
+modes and it is the one term still fitted rather than emulated.
 
 **Transfer settle `$357D`.**
 
@@ -1287,6 +1413,23 @@ rather than absorbed. `--seed-any` is the control that reseeds wherever the mark
 | ls0042 | 0 / 1 of 1 | 0 / 1 of 1 | 3000 of 3000 |
 | ls0335 | 24 / 3 of 25 | **14** / 15 of 15 | 2917 of 3000 |
 | ls9795 | 116 / 4 of 117 | **18** / 19 of 19 | 2516 of 3000 |
+
+**A seed inside a replot resumes it rather than recharging it.** `$1FFC JSR $2625` runs 21
+frames on ls9795 and a resync lands inside one often (80 of ls9795's 142 CORE events before
+this). The 64 KB image cannot say so, but the `$95E9` frame can: `instrument.stack_frames`
+reads the interrupted PC at SP+5/6 and the JSR chain above it, and a `$1FFF` return means the
+foreground is in the replot. plot_world's progress is then its own zero page — `$0026` the row
+`$26EF` has walked down to, `$0025` the column `$295D` is plotting, `$0007`/`$0012` the
+`$29C7` window and `$006E` the camera slot, whose `$09C0` is the bearing `$1FC2` already
+shifted. `projector.replot_owed` walks the same `$26DE` loop `render_cost` prices, splits it
+at that row and tile, and returns the suffix. `$2211` ran at `$1FBA`, before the chunk loop,
+so none of the clear is owed; everything after the interrupted `$2625` is — `$1FFF..$201C`,
+any chunk `$0C6A - $0C69` still leaves (at the `$211A` camera the `$2005` restore puts back)
+and the whole `$9730` flush over `$211B`. `seed_sim` charges the sum as a cycle debt, resumes
+at `$1884`'s `JMP $16D6` (`pass_phase` `PHASE_BODY`, `body_stage` `BODY_DONE`: the body is
+done, the prnd is not) and applies the `$2003`/`$2008` camera restore on the frame that debt
+clears. What it is worth, and what it still owes, is
+[open_items.md 8](open_items.md#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is).
 
 **Status:** no CORE divergence within 1200 frames on ls42;
 `driver/test_enemy_sim_divergence.py::test_enemy_sim_frame_locked_to_live_ls42` gates 600 frames

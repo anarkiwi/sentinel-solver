@@ -135,6 +135,11 @@ def _scene_cases():
         yield state, f"ls{ls}+objects"
 
 
+def _same(a, b):
+    """Compare two project_scene results: tiles/counts by value, ``fill`` elementwise."""
+    return a[:3] == b[:3] and np.array_equal(a[3], b[3]) and a[4] == b[4]
+
+
 @pytest.mark.parametrize("ls", LANDSCAPES)
 def test_project_scene_jit_matches_python(ls):
     """Full tiles list (every key) and n_examine, over the golden boards and views."""
@@ -144,15 +149,16 @@ def test_project_scene_jit_matches_python(ls):
         quadrants.add(setup["quadrant"])
         ref = projector._project_scene_py(state, setup, state.player)
         got = projector._project_scene_jit(state, setup, state.player)
-        assert got == ref, f"{ls} {key}"
+        assert _same(got, ref), f"{ls} {key}"
     assert quadrants == {0, 1, 2, 3}
     for ls_g, h, v in test_projector.VIEWS:
         if ls_g != ls:
             continue
         setup = projector._setup(state, h, v, state.player)
-        assert projector._project_scene_jit(
-            state, setup, state.player
-        ) == projector._project_scene_py(state, setup, state.player)
+        assert _same(
+            projector._project_scene_jit(state, setup, state.player),
+            projector._project_scene_py(state, setup, state.player),
+        )
 
 
 def test_project_scene_jit_matches_python_with_object_tiles():
@@ -164,7 +170,7 @@ def test_project_scene_jit_matches_python_with_object_tiles():
     seen_object_tile = False
     for setup, key in _views(state):
         ref = projector._project_scene_py(state, setup, state.player)
-        assert projector._project_scene_jit(state, setup, state.player) == ref, key
+        assert _same(projector._project_scene_jit(state, setup, state.player), ref), key
         seen_object_tile |= any(t["tile_byte"] >= mm.OBJECT_TILE for t in ref[0])
     assert seen_object_tile, "no plotted object tile in any view"
 
@@ -188,9 +194,10 @@ def test_project_scene_jit_matches_python_per_observer():
     for observer in observers:
         for h in (0x00, 0x60, 0xB0):
             setup = projector._setup(state, h, 0x04, observer)
-            assert projector._project_scene_jit(
-                state, setup, observer
-            ) == projector._project_scene_py(state, setup, observer)
+            assert _same(
+                projector._project_scene_jit(state, setup, observer),
+                projector._project_scene_py(state, setup, observer),
+            )
 
 
 def test_project_scene_dispatcher_matches_without_jit(monkeypatch):
@@ -200,23 +207,27 @@ def test_project_scene_dispatcher_matches_without_jit(monkeypatch):
     monkeypatch.setattr(projector, "_HAVE_JIT", False)
     projector._OCCLUSION_CACHE.clear()
     fallback = projector.project_scene(state, 0x30, 0x08)
-    assert jit == fallback
+    assert _same(jit, fallback)
     tile = jit[0][0]
     assert isinstance(jit[1], int) and isinstance(tile["h"], int)
     assert isinstance(tile["w"], float) and isinstance(tile["tile"], tuple)
 
 
 def test_env_constants_stay_tunable(monkeypatch):
-    """_SCREEN_H/_W_SCALE/_W_SCREEN/_ROW_HINT reach the kernel as arguments."""
+    """_SCREEN_H/_W_SCALE/_W_SCREEN and the $0C48 row hint reach the kernel as
+    arguments -- the hint off the state byte $26CD reads, not a module constant."""
     state = landscape.generate(42)
     setup = projector._setup(state, 0x50, 0x04, state.player)
     base = projector._project_scene_jit(state, setup, state.player)
     monkeypatch.setattr(projector, "_W_SCREEN", 1)
     monkeypatch.setattr(projector, "_SCREEN_H", 4)
     tuned = projector._project_scene_jit(state, setup, state.player)
-    assert tuned != base
+    assert tuned[0] != base[0]
     assert all(t["w"] <= 1 and t["h"] <= 4 for t in tuned[0])
-    assert tuned == projector._project_scene_py(state, setup, state.player)
-    monkeypatch.setattr(projector, "_ROW_HINT", 0x11)
+    assert _same(tuned, projector._project_scene_py(state, setup, state.player))
+    state.mem[mm.FURTHEST_ROW_HINT] = 0x11
+    setup = projector._setup(state, 0x50, 0x04, state.player)
+    assert setup["row_hint"] == 0x11
     hinted = projector._project_scene_jit(state, setup, state.player)
-    assert hinted == projector._project_scene_py(state, setup, state.player)
+    assert hinted[1] != base[1]  # the hint really moves the scan, in both twins
+    assert _same(hinted, projector._project_scene_py(state, setup, state.player))
