@@ -236,6 +236,7 @@ _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
 _CORE = "driver.core"
 _TICK_EVIDENCE = "test_the_cooldown_tick_prices_every_live_130c_sample"
+_BODY_ORACLE = "test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count"
 
 
 def _tick(note):
@@ -335,6 +336,22 @@ REGISTRY = {
         "test_rotate_redraw_matches_the_live_object_redraw",
     ),
     "_ROTATE_REDRAW": _d(_ENJ, "jit alias of passcost.ROTATE_REDRAW"),
+    "PARTIAL_ARM": entry(
+        _PC,
+        DERIVED,
+        "$17D5..$17DE: the JSR $1973 that re-arms a meanie hunt on a head-only "
+        "player, counted instruction by instruction against the per-round $16E6 oracle",
+        _BODY_ORACLE,
+    ),
+    "TARGET_WAIT": entry(
+        _PC,
+        DERIVED,
+        "$1833/$183D: target_object's exit while the draining cooldown still counts "
+        "down, counted against the per-round $16E6 oracle",
+        _BODY_ORACLE,
+    ),
+    "_PARTIAL_ARM": _d(_ENJ, "jit alias of passcost.PARTIAL_ARM"),
+    "_TARGET_WAIT": _d(_ENJ, "jit alias of passcost.TARGET_WAIT"),
     "COOLDOWN_TICK_NO_CARRY": _tick("$130C to the $1315 BCC and RTS"),
     "COOLDOWN_TICK_GATE": _tick("+ the $1317 read and the $1331 $0C50 decrement"),
     "COOLDOWN_TICK_WALK": _tick("$131C entry + the $132B reload + RTS"),
