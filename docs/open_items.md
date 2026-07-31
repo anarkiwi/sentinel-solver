@@ -219,10 +219,29 @@ as `TILE_SCAN_FIXED` (10, which is `$1AB0`'s own entry and exit), and the `$17F9
 gate is 14 when it holds (`$1800 BCC` not taken + `$1802 JMP $16D6`) against the charged
 `ROTATE_GATE` 12. Nothing here needs anything the 64 KB image does not carry.
 
-**Also still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723,
-the mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the
-oracle stubs it because it writes the render buffer — so it is the one `$16B5` term the
-per-round oracle cannot check, and it is spent once per rotation.
+**No longer a mean: the rotation's redraw.** `$1F9F update_object_on_screen` **does** run
+headless — it needs no render context on the branch the enemy clock takes. It calls
+`$209B calculate_object_screen_span` first, which takes the object's bearing and distance
+from `$8401`, re-arctans its `$2112` half-angle over that distance through `$933D`, and
+turns bearing +- half-angle into the left column `$0C62` and the width `$0C69`. With no
+span on the 40-column screen it returns carry set and `$1FA2` exits at `$1F93` without
+touching the render buffer: 1568..1858 cycles, now counted from state by
+`relative.update_object_on_screen_cycles` and cycle-exact against the ROM's own
+`$209B`/`$1F9F` on ls0042/ls0335/ls9795, every occupied slot at every 8th player facing.
+All 16 live rotations (1576..1843) are that branch, as is every rotation the headless
+enemy driver takes over 2000 rounds on ls9795 and ls0335.
+
+**What is left is a `plot_world`, not a redraw.** When the object *does* have a span,
+`$1FC2` re-points the camera at the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle)
+and `$1FFC JSR $2625` replots it: 0.40..0.85 M cycles on ls9795 against 0.76..2.67 M for
+the same board's whole screen, i.e. 20..40 frames of foreground for one rotation. It is
+a function of the strip's own scene, not of the player's facing — four facings that put
+the same object at four different columns cost the identical 841221 cycles, because the
+camera shift cancels the column shift. That branch is real (the ROM only suppresses it
+mid-replot, at `$1AF4`/`$1B00`, where an on-screen object aborts the whole enemy update),
+it is reachable at 8% of facings on ls9795, and it is not charged: pricing it is
+`projector.render_cost`'s problem, and `relative.update_object_on_screen_cycles` returns
+the column width so a caller with the render model can.
 
 **Not `$0078`.** `$0D4A` does **not** clear `$0078` before round 10: `$0DF1 ROR $78` rotates
 the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so bit 0 of the
@@ -260,7 +279,7 @@ rewritten it, and the plotting readers touch no field the schema carries.
 
 **Resolves.** Charging `$17CD..$17E8` and the held `$17F9` gate at their instruction
 counts, and then re-running the per-round `$16B5` oracle until it is exact on every
-non-rotating round; after that, `ROTATE_REDRAW`.
+non-rotating round; after that, the `$1FFC` strip replot.
 
 ## 9. The human line does not replay to a win through the live executor
 
