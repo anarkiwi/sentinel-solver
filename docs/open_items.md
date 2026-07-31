@@ -143,11 +143,13 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock: what is left is the redraw and the frame budget
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**128** events) and on ls335 (**31**). ls42 is clean: **0 over 3000 frames**. Every
-event is an enemy's `update_cd` reading 4 in the machine where the sim still reads 1 — one
-`$16ED` reload the sim reaches a frame late — or the `$1805` rotation that follows from it.
-Neither the `$1887` chain nor `$16E6`'s own line is the cause any more: both are now
-cycle-exact against the ROM (below), and what is left is charged per frame, not per pass.
+ls9795 (**112** events, the first at frame 129) and on ls335 (**12**, the first at 478).
+ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
+machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
+the `$1805` rotation that follows from it. Neither the `$1887` chain nor `$16E6`'s own line
+is the cause any more: both are cycle-exact against the ROM, and the per-frame clock is now
+counted rather than fitted (below). What is left is `ROTATE_REDRAW`'s mean and, for
+follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -300,18 +302,29 @@ follow events **31 -> 12**, ls9795's **128 -> 112**, ls42 still 0 over 3000 fram
 it is gated on `$8E96,X` bit7 and no tune a play frame starts clears it. `$9633 BPL` is not a
 branch in play either — `$0CDF` reads 0 at every marker, so `$9635 INC` runs every frame.
 
-**Where the march resume stops, exactly.** A marker inside `$16E6` is usually inside an
-`$1887` query, and the machine's position *within* that query is fully recoverable from the
-image: `$001E` is the probe counter, and the whole geometry runs out of the zero-page window
-`$0050..$008B` that `relative.can_see_object` itself mirrors. The missing piece is not a byte
-— it is a **resume point in the model**. `can_see_object` is atomic in the cost accounting:
-`_scan_for_robot` charges one `_see_cost(see)` per slot, and the only mid-body markers are
-`index` (the next slot to query) and `paid(slot)` (its query charged, its write pending).
-There is no state part-way through a query, so crediting a partial one would put the model
-somewhere its own loop can never be. The sub-step costs are already priced individually
-(`ADD_VECTOR`, `STEP_EDGE`, `TILE_*`, `FLAT_*`, `SLOPE_*`), so what a fix needs is a step
-index threaded through `can_see_object` and the body stages — a resumable march, not a new
-measurement.
+**The march resume is a FOLLOW-MODE fix only, and its unit is cycles, not steps.** Two
+corrections to what this item used to claim. First, the seed is never inside `$1887`:
+`instrument._exact_seed` waits for a marker whose position `_segment_offset` can count, and
+every `PHASE_BODY` position returns `None`, so the *first* divergence on all three boards is
+measured from an exact non-body seed and the march resume cannot move it. It moves the
+**resyncs**, which is where ls9795's 1-frame median gap comes from.
+
+Second, the resume unit is not a step index. The raster IRQ preempts the ROM at an
+*instruction* boundary, not at an `$1CE8` sub-step boundary, so the position to reconstruct
+is "cycles spent inside this `$1887`" and the model can occupy any of them: give `State` a
+`body_spent`, have the query charge `min(cost, budget)` and suspend at the same
+`(stage, index)`, and re-run it on resume charging `cost - body_spent`. The query is a pure
+function of state that nothing between frames disturbs, so the re-run is exact; its only
+memory effects are `$0014`/`$0C56`/`$0CDD`/`$0C76`, which must move from per-probe writes to
+locals written once the query completes, or the re-run's `$1CDF LSR $0C56` shifts twice. That
+needs no change to `sentinel/los.py` at all.
+
+What it does need is `c`, the cycles the machine has already spent, and that IS recoverable:
+`$001E` is the probe counter, `$0C58` the target, and the ray's own accumulators sit at
+`$0034..$003C`. `check_for_line_of_sight_to_tile` already takes `max_steps` and leaves the
+marched position in its `Vector`, so a **binary search on `max_steps`** against the machine's
+`$0034..$003C` finds the interrupted sub-step and reads its cycles off the same call — no
+instrumented march, no step index threaded anywhere. **Not implemented.**
 
 **Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
 mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
@@ -325,12 +338,13 @@ five raster interrupts — the `$9589` split table programs `$D012` for lines 53
 and 213, and only the line-213 entry passes the `$961E` compare into the `$9630` body. Every
 short entry is `SHORT_IRQ` exactly, and the body is `IRQ_BODY` **plus the four badlines its
 own window (lines 213..~255) encloses plus the `$130C` the model bills to the foreground** —
-which is precisely what the 2683..2705 / 3079..3153 spread in `full_9630_wall` is, and why
-`IRQ_CYCLES` was already the right split rather than a mean. Two counted cycles were
-genuinely missing and are now charged: the one split entry a frame whose `$9603 BPL` wraps
-the index costs 1 more (the fixture's own `short_wall` histogram is 3:1 over 119:120), and
-the cooldown walk's last byte leaves by an untaken `$1329 BPL`. What is left inside the body
-is `$FFC2`/`$FFC5` and `$119F`, together ≤ 9 cycles a frame.
+which is what the 2683..2705 / 3079..3153 spread in `full_9630_wall` is. The **+9 within each
+of those clusters was real**, and it is the note tick above; `$119F` is a flat 2162 counted on
+the image and its live 2291/2334 wall is that plus the four or five badlines its own window
+happens to enclose. Two counted cycles were genuinely missing and are now charged: the one
+split entry a frame whose `$9603 BPL` wraps the index costs 1 more (the fixture's own
+`short_wall` histogram is 3:1 over 119:120), and the cooldown walk's last byte leaves by an
+untaken `$1329 BPL`.
 
 **NOT `$3470` either.** `start_tune` ends in `JMP $FFF1`, and with the KERNAL banked out
 (`$01 = $25`) `$FFF1` is the game's own RAM: the image carries `JMP $8D81` there. Counted on
@@ -373,9 +387,9 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** `$1F9F` counted rather than averaged, and a **resumable `can_see_object`** —
-a march the model can suspend mid-ray, which is the one resume point the reconstruction has
-nowhere to put the machine's position into.
+**Resolves.** `$1F9F` counted rather than averaged (which is what the ls42 and ls335 residual
+now is: 4 rotations in 1000 ls42 frames at a ±150-cycle mean), and a `body_spent` resume so
+a follow-mode resync inside `$1887` does not restart the query.
 
 ## 9. The human line does not replay to a win through the live executor
 
