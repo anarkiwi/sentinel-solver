@@ -170,17 +170,49 @@ def test_the_trig_chains_write_weight_is_its_own_instructions(image):
     assert writeweight.pack("HYP_TAIL") == passcost.HYP_TAIL + (8 << writeweight.SHIFT)
 
 
+_SCAN = (True, True)  # $8F7A BEQ $8F95 into $8CF9, and its $8D1F BEQ: no key is down
+_LAP = _SCAN + (True, True)  # ... $1373 BNE $1383, $1384 BPL $136D: one $1363 lap
+# ``(head, cycles, weight, branch record)`` a run: the split the body takes live.
+IRQ_BODY_RUNS = (
+    (0x95E9, 153, 18, (False, False, True, True, False) + (True,) * 5 + (False,)),
+    (0x9640, 24, 0, (False, False, False, True)),
+    (
+        0x9669,
+        2200,
+        185,
+        (False, True)
+        + _SCAN
+        + (True,)
+        + _SCAN
+        + (True,)
+        + (True, True, True, False)
+        + _LAP * 14
+        + _SCAN
+        + (True, False)
+        + (False, False, True),
+    ),
+)
+
+
 @pytest.mark.oracle
 def test_the_irq_bodys_write_weight_is_its_own_instructions(image):
-    """No static map reaches the $9630 body: the walk from $95E9 takes the split
-    chain's RTI instead.  Its weight is the body's own sequence, and the keyboard walk
-    that dominates it repeats a ROM-fixed number of times ($1363 LDX/$11D9 LDY)."""
-    entry = writemap.walk(image, 0x95E9, 81, (False, False, True, True))
-    assert entry[-1][1] == 0x9621  # the BEQ into $9630, taken on the raster IRQ
-    assert _straight(image, 0x95E9, 81)[1] == writeweight.IRQ_BODY_WRITES["$95E9"]
+    """The $9630 body is one path: $95E9 to the $963D tick, $9640 to the $9659 gate,
+    and $9669 through $119F's seventeen keyboard scans to the $969F RTI.  Walked over
+    the image it is exactly IRQ_BODY's cycles and exactly IRQ_BODY's write weight."""
+    total, weight = badline.IRQ_ENTRY, 0
+    for pc, cycles, want, branches in IRQ_BODY_RUNS:
+        assert _straight(image, pc, cycles, branches) == (cycles, want), hex(pc)
+        total += cycles
+        weight += want
+    # $9640 ends on the $9652 BEQ, whose own taken cycle the opcode table omits
+    assert total + 1 == passcost.IRQ_BODY
+    assert weight == writeweight.WEIGHT["IRQ_BODY"]
+    tail = writemap.walk(image, 0x9669, 2200, IRQ_BODY_RUNS[2][3])
+    assert tail[-1][1] == 0x969F and len(tail) == 739  # the RTI closes the body
     assert _straight(image, 0x8CF9, 63, (True,)) == (63, 3)  # one keyboard-matrix scan
     assert _straight(image, 0x0F62, 15) == (15, 4)  # the $FFF4 call that runs it
     scans = (image[0x11DA] + 1) + 2  # $11D9 LDY #$0E laps, plus $11A5 and $11B0
+    assert sum(1 for _, pc, _ in tail if pc == 0x8CF9) == scans
     assert writeweight.IRQ_BODY_WRITES["$8CF9"] == scans * 3
     assert writeweight.IRQ_BODY_WRITES["$0F62"] == scans * 4
     assert writeweight.IRQ_BODY_WRITES["$1363"] == (image[0x1364] + 1) + 3 * (scans - 2)

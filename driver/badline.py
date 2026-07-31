@@ -103,11 +103,17 @@ def solve_window(samples):
 
 ROUTINES = (
     (0x0D03, "$0D03 mul/div/trig"),
+    (0x0F62, "$119F kbd walk"),  # $0F62 -> $FFF4 -> $8F78 -> $8CF9, the CIA1 scan
+    (0x0F70, "$0D03 mul/div/trig"),
     (0x1010, "other"),
+    (0x119F, "$119F kbd walk"),
+    (0x1223, "other"),
     (0x1289, "$1289 pass head/tail"),
     (0x12C8, "other"),
     (0x130C, "$130C cooldown tick"),
     (0x1336, "other"),
+    (0x1363, "$119F kbd walk"),
+    (0x138D, "other"),
     (0x16B5, "$16B5 dispatch/prnd/cursor"),
     (0x16E6, "$16E6 body"),
     (0x1887, "$1887 see"),
@@ -127,13 +133,18 @@ ROUTINES = (
     (0x3600, "other"),
     (0x8401, "$8401 relative"),
     (0x8600, "other"),
-    (0x8CF0, "$8CF0 kbd scan + note tick"),
+    (0x8CF9, "$119F kbd walk"),
+    (0x8D24, "other"),
+    (0x8ED1, "$8ED1 note tick"),  # ... and $8F0C, the $FFC5 idle-voice walk
+    (0x8F78, "$119F kbd walk"),
+    (0x8F98, "other"),
     (0x9200, "other"),
     (0x9287, "$9287 angle"),
     (0x93B0, "other"),
     (0x9508, "$9508 status bar"),
     (0x95E9, "$95E9 raster IRQ"),
     (0x96A1, "other"),
+    (0xFFF4, "$119F kbd walk"),
 )
 MODEL_SOURCES = ("passcost.py", "los.py", "relative.py", "enemies.py")
 HANDLER_LOW, HANDLER_HIGH = 0x95E9, 0x96A0

@@ -545,8 +545,9 @@ write map, so every window inside the march is charged the full 43 whatever its 
 Of the machine's own 3.48 cycles a frame of refund there, **3.09** lands on the march's own
 writes (`$1CBF`, `$1CFF`, `$1CD6`, `$1D4C`, `$1DF9`, `$0D07`, `$2BB9` …) and 0.42 inside the
 `$9630` body, on the `$8CFC`/`$8D01`/`$8D0D` CIA1 strobes the `$119F` keyboard walk drives
-(called the sound engine here until the walk was read: `driver.badline`'s routine table buckets
-`$8CF9` with `$8ED1`) — and the `$95E9` walk RTIs out of the short-IRQ chain, so the model
+(called the sound engine here until the walk was read; `driver.badline`'s routine table now
+names `$0F62`/`$119F`/`$1363`/`$8CF9`/`$8F78` the keyboard walk and leaves `$8ED1` the note
+tick) — and the `$95E9` walk RTIs out of the short-IRQ chain, so the model
 refunded none of it either.
 `test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it` pins all of it.
 
@@ -591,7 +592,7 @@ places, and neither is the march. **The `$95E9` body is the bigger one.** Its wr
 walked from `$95E9`, and with every branch falling through that walk takes the split chain's
 `$962D JMP $969A` and RTIs after 380 cycles — before the *first* of the four windows the
 body contains (offsets 389/893/1397/1901 from the raster IRQ), so `charge` refunded
-**nothing at all** for the whole body. It is not a sound engine: the 2162 cycles of `$119F`
+**nothing at all** for the whole body. It is not a sound engine: the 2156 cycles of `$119F`
 are `$1363`'s keyboard walk, seventeen `$8CF9` CIA1 matrix scans reached through `$0F62`,
 and the walk cannot be placed statically because the body's length moves 450 cycles frame to
 frame (the `$130C` tick, the `$8ED1` branches). So it is charged like a march: `charge_run`
@@ -673,10 +674,72 @@ from the anchor its clock refunds at, both over the same three boards):
 | `$16E6` body and the rest | 0.39 / **0.14** | 0.23 / **0.21** | 0.16 / **0.18** |
 | total | 4.35 / **4.45** | 4.08 / **3.63** | 3.09 / **2.96** |
 
-The one term whose sign is the same on every board is the `$9630` body: its weight is walked
-from `$95E9` with every branch falling through and refunds **0.34** a frame where the machine
-pays 0.49..0.76. That is what is left of the steal, and it is worth ~0.3 a frame on every
-board rather than 1.64 on one.
+The one term whose sign is the same on every board is the `$9630` body: it refunds **0.34** a
+frame where the machine pays 0.49..0.76. That is what is left of the steal, and it is worth
+~0.3 a frame on every board rather than 1.64 on one.
+
+**Measured — the body's weight is its real path's, and the gap is the interrupt's own cycle.**
+The suspect was the fall-through walk. It is not that. `cpuhistory` over **188** raster bodies
+on ls0042, ls0335 and ls9795 (20 captures a board, 40 frames apart, each verified on the board
+it claims by regenerating `$0400-$07FF`) reads **one path**, the same on every board and every
+frame, branch for branch:
+
+| run | cycles | write weight | |
+|---|---|---|---|
+| the 6510 interrupt sequence | 7 | — | three pushes, before the `$95E9` fetch |
+| `$95E9`..the `$963D` JSR | 153 | 18 | `$9621 BEQ $9630` taken, `$9633 BPL` not, and `$FFC5`'s three idle voices |
+| the `$8ED1` note tick | 63..130 | charged apart | `sound_frame` |
+| `$9640`..`$9652 BEQ` | 25 | 0 | four reads; the `$9652 BEQ $9659` taken |
+| the `$9659` gate | 7, 64, 76 or ~470..550 | charged apart | `cooldown_frame`, `$130C`, `$1635` |
+| `$9669`..the `$969F` RTI | 2200 | 185 | `$130B` is 0, so `$9671 BEQ` runs `$119F` every frame |
+
+7 + 153 + 25 + 2200 = **2385** = `passcost.IRQ_BODY`, and 18 + 185 = **203**, the weight
+`writeweight` already carried. So the composed weight was never the fall-through walk's; it is
+the real path's, and `writemap.walk` from `$9669` with that path's branch record reproduces all
+**739** instructions of the tail. `test_the_irq_bodys_write_weight_is_its_own_instructions` now
+walks all three runs end to end instead of checking the pieces by repetition count. Nothing is
+double-counted or missed at the `$8ED1`/`$9659` boundaries either: the tick is exactly
+`$963D`..`$9640` and the gate exactly `$9659`..`$9669`, on 188 of 188 bodies.
+
+**The four windows land 375..380 cycles past the `$95E9` fetch.** Measured, the body's four BA
+windows sit at **375..380 / 879..884 / 1383..1388 / 1887..1892** from the `$95E9` opcode fetch
+— the recorded 389/893/1397/1901 are from raster 213 cycle 0, and the difference is `b`, the
+cycles from the raster assert to the instruction boundary the IRQ is taken at (2..7, mean 3.4;
+the model's clock assumes 0). All four fall inside `$119F`'s seventeen `$8CF9` matrix scans,
+and the machine's refund is two single-cycle stores in them: `$8CFC STA $DC02` and
+`$8D0D STA $DC00`. Placing the four in the body's own write map, in ROM order, with the
+machine's own `b`, reproduces the machine **body for body**:
+
+| board | bodies | machine | placed at the machine's `b` | bodies agreeing exactly |
+|---|---|---|---|---|
+| ls0042 | 68 | 0.735 | **0.721** | 67 of 68 |
+| ls0335 | 60 | 0.617 | **0.617** | 60 of 60 |
+| ls9795 | 60 | 0.467 | **0.433** | 59 of 60 |
+
+**So the residual is one datum, `b`, and it is not usable.** The refund is a knife edge on it —
+placed at a fixed `b`, per frame:
+
+| `b` | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| ls0042 | 0.04 | 0.28 | 0.63 | **1.28** | 0.02 | 0.22 |
+| ls0335 | 0.00 | 0.23 | 0.48 | **1.15** | 0.38 | 0.00 |
+| ls9795 | 0.05 | 0.25 | 0.45 | **0.92** | 0.28 | 0.07 |
+
+— and `b` is the interrupted instruction's own remaining cycles, which the model has no way to
+count: it charges the body first and hands the frame's foreground what is left, so it holds no
+instruction boundary at the raster. Averaging the placement over `b` uniform on 2..7 gives
+0.48 / 0.40 / 0.32, still short of 0.735 / 0.617 / 0.467 because the machine's `b` concentrates
+at 2..3, and that distribution is assumed rather than derived. The uniform-density `charge_run`
+the body has now **is** that expectation, taken over a phase spread wide against the 121-cycle
+scan lap; its only correctable bias is that 18 of the 203 sits in the 185 cycles ahead of the
+tick that no window can reach, worth 0.004 a frame.
+
+**And closing the body alone would break the totals.** The model's whole-frame steal is already
+inside 0.25 of the machine on all three boards (1070.52 against 1070.55..1070.68, 1071.32
+against 1071.11..1071.16, 1071.68 against 1071.82..1071.87), because `$31CA`'s own refund runs
++0.70 high on ls0042 and −0.32 low on ls0335. Adding the body's +0.40 / +0.28 / +0.13 would put
+ls0042 and ls9795 outside it. Whatever eventually carries the body's phase has to carry
+`$31CA`'s at the same time.
 
 **The IRQ entry is 7, or a taken branch's own cycles less.** The wider sample also carries
 entries of **5** cycles, which the 6/7 law had no case for. Keyed by the interrupted
@@ -972,7 +1035,7 @@ and 213, and only the line-213 entry passes the `$961E` compare into the `$9630`
 short entry is `SHORT_IRQ` exactly, and the body is `IRQ_BODY` **plus the four badlines its
 own window (lines 213..~255) encloses plus the `$130C` the model bills to the foreground** —
 which is what the 2683..2705 / 3079..3153 spread in `full_9630_wall` is. The **+9 within each
-of those clusters was real**, and it is the note tick above; `$119F` is a flat 2162 counted on
+of those clusters was real**, and it is the note tick above; `$119F` is a flat 2156 counted on
 the image and its live 2291/2334 wall is that plus the four or five badlines its own window
 happens to enclose. Two counted cycles were genuinely missing and are now charged: the one
 split entry a frame whose `$9603 BPL` wraps the index costs 1 more (the fixture's own
