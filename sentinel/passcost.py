@@ -75,7 +75,8 @@ REDUCE_BOULDER = 23  # ... BNE $1A44 taken 3 + $1A44..$1A4B 13 + CLC 2
 REDUCE_BANK = 29  # $1A4F PHP 3 + LDY 3 + LDA 4 + CLC/ADC 4 + STA 5 + PLP 4 + RTS 6
 REMOVE_STACKED = 86  # $1EEF for an object standing on another: the flags go back
 REMOVE_GROUND = 94  # ... on bare ground: the tile byte is rebuilt from the z nibble
-TUNE = 323  # $3470 start_tune, the sound a drain makes; also inside ROTATE
+TUNE_ROTATE = 323  # $3470 tune 0 (and the meanie's 1): $FFF1 is JMP $8D81, in RAM
+TUNE_DRAIN = 431  # $1A1D LDA #$05: the drain's tune walks a longer $AC28 descriptor
 
 # plot_status_bar $9508 pads to fixed columns, so its cost is a function of the energy.
 STATUS_CHAR = 38  # $9579 JSR 6 + PHA/LDX/CLC/ADC/STA/INC/PLA/RTS 32

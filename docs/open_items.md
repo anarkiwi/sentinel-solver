@@ -235,27 +235,47 @@ five regions that were means or were not charged at all:
   charged per slot walked, per lap by the test that lap failed, and per `$1272` draw (445,
   plus 440 for each draw masking to `$1F`).
 
-**Where it stops now.** At ls9795 frame 66 the sim reaches the *same* consider exactly one
-frame after the machine while its cumulative pass count matches, so the residual is a few
-hundred cycles a frame, not a pass — it is in the per-frame budget and in the one term the
-per-round oracle cannot see, not in the body it can.
+**NOT the pass line either.** The same raster clock times one whole play-loop pass live:
+consecutive `$1289` hits, less the interrupts the window contains and the badlines outside
+them, against `passcost`'s own model of that pass. On ls42, ls335 and ls9795 the model is
+**exact** (ls9795: 222 of 299 consecutive passes exact, the rest a one-badline or
+one-interrupt edge in the probe's own window arithmetic, plus a ±2 stamp jitter). The head,
+the dispatch, the prnd, the cursor, the `$12A2` tail and the `$191F` exposure walk are
+therefore all right as charged.
+
+**Where it stops now.** Body exact against the ROM per round, pass exact against the machine
+per pass, frame exact against the raster clock — and ls9795 still reaches the same `$16ED`
+reload one frame late. The only term inside a pass that none of those three instruments can
+see is `$1F9F`, which every rotation, drain and discharge spends and which is charged a mean;
+it is worked separately. After that the next candidate is the resync itself: 65% of ls9795
+frames interrupt inside `$16E6` (the census above), and a seed or a follow-mode resync taken
+there restarts that body from its head, because RAM does not carry the sub-pass position —
+the interrupted PC, X and Y are on the `$95E9` stack frame, not in the schema.
 
 **Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
 mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
 stubs it because it writes the render buffer — and it is spent by **every** `$1876` exit: a
 turn's redraw, a drain's and a discharge's. Three paths now carry a ±150-cycle mean.
 
-**Still a mean: the frame budget.** `FOREGROUND_CYCLES` = 15614 is `PAL_FRAME_CYCLES` less a
-constant `IRQ_CYCLES`, but the live `$9630` handler is not constant: `full_9630_wall` in
-`fixtures/live_pass_cycles.json` records 2683..2705 on ordinary frames and 3079..3153 on the
-frames whose `$130C` runs the 24-byte walk, and `foreground_cpu_per_frame` spans
-15124..15593 with a 15575 median against the model's 15593 cheap-frame value. The badline
-steal inside the handler is hardware, but `$95E9`, `$119F` and `$1635` are all in the image,
-so the handler's own line is countable and is not counted.
+**NOT the frame budget.** `registers_get` returns the VIC raster line (id 53) and the cycle
+within it (id 54), so `line * 63 + cyc` is an exact intra-frame stamp and the handler can be
+timed directly: `$95E9` entry to the `$969A` exit, over ls42/ls335/ls9795. A frame takes
+five raster interrupts — the `$9589` split table programs `$D012` for lines 53, 93, 133, 173
+and 213, and only the line-213 entry passes the `$961E` compare into the `$9630` body. Every
+short entry is `SHORT_IRQ` exactly, and the body is `IRQ_BODY` **plus the four badlines its
+own window (lines 213..~255) encloses plus the `$130C` the model bills to the foreground** —
+which is precisely what the 2683..2705 / 3079..3153 spread in `full_9630_wall` is, and why
+`IRQ_CYCLES` was already the right split rather than a mean. Two counted cycles were
+genuinely missing and are now charged: the one split entry a frame whose `$9603 BPL` wraps
+the index costs 1 more (the fixture's own `short_wall` histogram is 3:1 over 119:120), and
+the cooldown walk's last byte leaves by an untaken `$1329 BPL`. What is left inside the body
+is `$FFC2`/`$FFC5` and `$119F`, together ≤ 9 cycles a frame.
 
-**Still a mean: `$3470`.** `start_tune` ends in `JMP $FFF1`, a vector outside the 64 KB
-image, so it cannot be counted at all. `TUNE` keeps the live 323 the rotation measures and
-the drain's own tune at `$1A1F` is charged the same number.
+**NOT `$3470` either.** `start_tune` ends in `JMP $FFF1`, and with the KERNAL banked out
+(`$01 = $25`) `$FFF1` is the game's own RAM: the image carries `JMP $8D81` there. Counted on
+the image it is 323 for tune 0 (a rotation) and 1 (a meanie's turn) — the same number the
+live rotation measures — and **431** for tune 5, the one a drain starts at `$1A1F`, which
+was charged 323.
 
 **Not `$0078`.** `$0D4A` does **not** clear `$0078` before round 10: `$0DF1 ROR $78` rotates
 the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so bit 0 of the
@@ -291,9 +311,8 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** Counting the `$9630` handler's own line per frame instead of charging a
-constant, which needs a live cycle probe the driver does not have yet; and then `$1F9F`,
-which needs the render context the oracle cannot give it.
+**Resolves.** `$1F9F` counted rather than averaged, and a seed that carries the sub-pass
+position off the `$95E9` stack frame instead of restarting the interrupted pass at its head.
 
 ## 9. The human line does not replay to a win through the live executor
 

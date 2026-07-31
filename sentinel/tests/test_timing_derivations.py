@@ -226,10 +226,10 @@ def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
     straight = 32 + 12  # $1805..$1822 and $187B..$1884, the four JSR opcodes apart
     jsrs = 4 * 6  # $1AF4, $1973, $3470 and the $1881 JSR $1F9F charged separately
     assert passcost.MEANIE_INIT == parts["1973"]
-    assert passcost.TUNE == parts["3470"]  # $3470 vectors through $FFF1, off the image
+    assert passcost.TUNE_ROTATE == parts["3470"]  # counted below, corroborated live
     assert (
         passcost.ROTATE
-        == straight + jsrs + parts["1af4"] + parts["1973"] + passcost.TUNE
+        == straight + jsrs + parts["1af4"] + parts["1973"] + passcost.TUNE_ROTATE
     )
 
 
@@ -353,6 +353,31 @@ def test_the_split_loop_charges_every_segment_exactly_once():
 
 
 @pytest.mark.oracle
+@pytest.mark.parametrize(
+    "tune,want",
+    ((0, "TUNE_ROTATE"), (1, "TUNE_ROTATE"), (5, "TUNE_DRAIN")),
+)
+def test_the_tune_cost_is_counted_off_the_image(tune, want):
+    """$3470 ends in JMP $FFF1, which the image carries as JMP $8D81 in the game's RAM.
+
+    So the tune is countable after all: index 0 (a rotation) and 1 (a meanie's turn)
+    cost TUNE_ROTATE, and index 5 -- the tune a drain starts at $1A1F -- costs more."""
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.generate_machine(0x0042)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    with open(oracle.IMG, "rb") as fh:
+        img = fh.read()
+    mem[0x3470] = img[0x3470]  # un-stub start_tune
+    for addr in range(0xE000, 0x10000):  # the vector page the ROM banks in
+        mem[addr] = img[addr]
+    state["stop"] = False
+    c0 = cpu.processorCycles
+    oracle.call(cpu, mem, 0x3470, a=tune, state=state)
+    assert cpu.processorCycles - c0 == getattr(passcost, want)
+
+
+@pytest.mark.oracle
 def test_the_status_bar_cost_is_a_function_of_the_energy_byte():
     """$9508 pads to fixed columns, so passcost recomputes it from the energy alone."""
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
@@ -370,18 +395,20 @@ def test_the_status_bar_cost_is_a_function_of_the_energy_byte():
 
 
 @pytest.mark.oracle
-def test_the_drain_cost_model_matches_the_roms_own_1a08(monkeypatch):
+def test_the_drain_cost_model_matches_the_roms_own_1a08():
     """$1A08 priced per target kind against the real 6502: player, robot, tree, boulder.
 
-    $3470 is stubbed by the oracle (it vectors off the image); $9508 is not."""
+    $9508 and $3470 are un-stubbed for it: both are countable on the image."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
-    monkeypatch.setattr(passcost, "TUNE", 6)
     cpu, mem, state = oracle.generate_machine(0x0335)
     oracle.prime_enemy_driver(cpu, mem, state)
     with open(oracle.IMG, "rb") as fh:
-        mem[0x9508] = fh.read()[0x9508]
+        img = fh.read()
+    mem[0x9508], mem[0x3470] = img[0x9508], img[0x3470]
+    for addr in range(0xE000, 0x10000):
+        mem[addr] = img[addr]
     base = State.from_mem(bytes(mem))
     kinds = {}
     for slot in range(mm.NUM_SLOTS):
