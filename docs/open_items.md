@@ -799,8 +799,8 @@ covariance with the machine's own per-frame steal is ~0. Its **mean** is right, 
 the whole-run steals match to 0.25 cycles, and its per-frame value is noise — which is what
 random-walks the phase out to +/-100 cycles over the 60..290 frames between events. The gate
 run confirms the term: flat steal (1072 / 1071) reads ls9795 14 -> **10** and ls0335 4 ->
-**14** first at 479, so the events are the steal's and no constant serves both boards.
-Diagnostic only; nothing is kept.
+**10** (first at 479, was 613), so the events are the steal's and no constant serves both
+boards. Diagnostic only; nothing is kept.
 
 **Not the frame origin.** `b`, the 2..7 cycles from the raster assert to the instruction
 boundary the IRQ is taken at, is not the missing datum. Shifting the whole event list by a
