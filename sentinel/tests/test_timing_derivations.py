@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from driver import kbd_aim
-from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
+from sentinel import actioncost, aimcost, badline, enemies, enemies_jit, memmap as mm
 from sentinel import pancost, passcost, playerbase, projector, relative
 from sentinel.game import Game
 
@@ -174,6 +174,11 @@ def test_revolution_frames_is_a_full_cone_revolution():
         assert all(t >= 256 for t in turned.values()), (landscape, turned)
 
 
+# The frame budget is the counted foreground less the steal sentinel.badline charges;
+# a rate estimate off the constants alone can only use its ceiling.
+_CEILING = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
+_FLOOR = passcost.BADLINES_PER_FRAME * (passcost.BADLINE_STEAL - 2)
+
 _LIVE_PASS_RATE = os.path.join(
     os.path.dirname(__file__), "fixtures", "live_pass_rate.json"
 )
@@ -187,7 +192,7 @@ def test_irq_cycles_matches_the_live_pass_rate():
     for digits, rec in boards.items():
         st = Game.typed(int(digits)).state
         counts = [int(k) for k in rec["idle_passes_per_frame"]]
-        budget = passcost.FOREGROUND_CYCLES - passcost.SOUND_TICK_IDLE
+        budget = passcost.FOREGROUND_CYCLES - _CEILING - passcost.SOUND_TICK_IDLE
         modelled = budget / passcost.idle_pass_cycles(st.mem)
         assert min(counts) <= modelled <= max(counts), (
             f"ls{digits}: modelled {modelled:.2f} passes/frame outside the live "
@@ -260,24 +265,21 @@ def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
     assert passcost.BADLINE_STEAL == max(int(k) for k in irq["badline_steal"])
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
     assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
-    per = passcost.BADLINE_FRAME / passcost.BADLINES_PER_FRAME
-    assert passcost.BADLINE_STEAL - 1 < per <= passcost.BADLINE_STEAL
-    assert (
-        passcost.IRQ_CYCLES
-        == passcost.BADLINE_FRAME + passcost.SHORT_IRQ_FRAME + passcost.IRQ_BODY
-    )
+    assert passcost.IRQ_CYCLES == passcost.SHORT_IRQ_FRAME + passcost.IRQ_BODY
+    for board in irq["frame_budget"]["boards"].values():  # the steal is counted apart
+        assert board["steal"] <= _CEILING + 1
 
 
 def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
     """With the clock frozen the $9659 gate shuts, the note tick idles and every pass
     is the idle one, so the frame budget IS the live $1289 rate -- on three boards."""
     rec = _live_cycles()["frozen_idle_rate"]["boards"]
-    budget = (
-        passcost.FOREGROUND_CYCLES - passcost.IRQ_GATE_SHUT - passcost.SOUND_TICK_IDLE
-    )
+    fixed = passcost.IRQ_GATE_SHUT + passcost.SOUND_TICK_IDLE
     for board, m in rec.items():
-        modelled = m["frames"] * budget / m["pass_cycles"]
-        assert abs(modelled - m["passes"]) <= 4, (board, modelled, m["passes"])
+        rate = m["frames"] / m["pass_cycles"]
+        least = (passcost.FOREGROUND_CYCLES - _CEILING - fixed) * rate
+        most = (passcost.FOREGROUND_CYCLES - _FLOOR - fixed) * rate
+        assert least - 4 <= m["passes"] <= most + 4, (board, least, most, m["passes"])
 
 
 def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
@@ -313,9 +315,9 @@ def test_the_frame_budget_decomposition_matches_the_live_frame():
         body = passcost.IRQ_BODY + gate + tick + m["jsr_ffc2"]
         assert abs(body - m["body"]) <= 1, (board, body, m["body"])
         assert m["jsr_ffc5"] == 56 and m.get("jsr_1635", 25) == 25, board
-        gaps.append(m["steal"] - passcost.BADLINE_FRAME)
-        assert m["steal"] <= passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL + 1
-    assert 1.5 <= min(gaps) and max(gaps) <= 4.5, gaps
+        gaps.append(_CEILING - m["steal"])
+        assert m["steal"] <= _CEILING + 1
+    assert -1 <= min(gaps) and max(gaps) <= 6, gaps  # -0.2: the split reads a 44
 
 
 def test_the_model_pass_rate_tracks_the_machine_with_the_state_resynced():
@@ -500,7 +502,9 @@ def test_the_drain_cost_model_matches_the_roms_own_1a08():
             mem[mm.OBJECTS_FLAGS + slot] = flags
         mem[mm.TARGETED_OBJECT_SLOT] = slot
         st = State.from_mem(bytes(mem))
-        _drained, model = enemies._reduce_object_energy(st, slot, 0)
+        _drained, model = enemies._reduce_object_energy(
+            st, slot, 0, badline.frame_clock(False)
+        )
         state["stop"] = False
         c0 = cpu.processorCycles
         oracle.call(cpu, mem, 0x1A08, state=state)
@@ -536,9 +540,14 @@ def test_the_note_tick_cost_and_writes_match_the_roms_own_8ed1():
         for addr in addrs:
             mem[addr] = rng.choice([0x80, 0, 1, 2, 12, rng.randrange(256)])
         st = State.from_mem(bytes(mem))
-        model = enemies.sound_frame(st)
+        model = enemies.sound_frame(st, badline.frame_clock(False))
         jit = State.from_mem(bytes(mem))
-        assert enemies_jit._sound_frame(np.frombuffer(jit.mem, dtype=np.uint8)) == model
+        assert (
+            enemies_jit._sound_frame(
+                np.frombuffer(jit.mem, dtype=np.uint8), badline.frame_clock(False)
+            )
+            == model
+        )
         state["stop"] = False
         c0 = cpu.processorCycles
         oracle.call(cpu, mem, 0x8ED1, state=state)
@@ -677,7 +686,10 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
         x = mem[mm.CURSOR]
         st = State.from_mem(bytes(mem))
         dispatched = st.obj_type[x] in mm.ENEMY_TYPES and not st.obj_flags[x] & 0x80
-        model = enemies.UNBOUNDED - enemies.update_body(st, enemies.UNBOUNDED)[0]
+        model = (
+            enemies.UNBOUNDED
+            - enemies.update_body(st, enemies.UNBOUNDED, badline.frame_clock(False))[0]
+        )
         c0 = cpu.processorCycles
         state["stop"] = False
         oracle.call(cpu, mem, 0x16E6, x=x, state=state)

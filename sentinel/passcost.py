@@ -5,20 +5,25 @@ what is left, so passes per frame = (FRAME_CYCLES - IRQ_CYCLES) / pass cost, and
 pass cost is a property of the state.  Per-term arithmetic: docs/architecture.md.
 """
 
-from sentinel import memmap as mm
+from sentinel import badline, memmap as mm
 
-PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
-BADLINE_STEAL = 43  # 40 VIC c-accesses + the 3-cycle AEC lag: the MAXIMUM, not a mode
-BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
-BADLINE_FRAME = 1071  # THE ONE FIT LEFT: sentinel.badline, open_items.md 8
-SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
+# The VIC-II raster geometry and the split-IRQ length live in sentinel.badline.
+from sentinel.badline import (  # noqa: F401  pylint: disable=unused-import
+    BADLINE_STEAL,
+    BADLINES_PER_FRAME,
+    PAL_FRAME_CYCLES,
+    SHORT_IRQ,
+)
+
 SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
 SHORT_IRQ_FRAME = SHORT_IRQS_PER_FRAME * SHORT_IRQ + SHORT_IRQ_WRAP  # 477, exact live
 IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted
 IRQ_GATE_SHUT = 7  # $9659 LDA $0CE5 4 + $965C BMI $9669 taken 3: no clock, no $1635
 IRQ_GATE_OPEN = 43  # ... nt 2 + $965E LDA/BMI 6 + JSR $130C 6 + the $1635 call 25
-IRQ_CYCLES = BADLINE_FRAME + SHORT_IRQ_FRAME + IRQ_BODY  # 3933, the frame's fixed part
+IRQ_CYCLES = (
+    SHORT_IRQ_FRAME + IRQ_BODY
+)  # 2862; the badline steal is counted, not fitted
 IRQ_SPRITES = 1490  # $1635 past its $0C04 exit; live it took the 25-cycle one, 500/500
 FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less the $9659 gate and the tick
 
@@ -421,28 +426,40 @@ SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
 
-def status_bar_cycles(energy):
+def status_bar_cycles(energy, clk=None):
     """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""
+    clk = badline.frame_clock(armed=False) if clk is None else clk
     fifteens, rest = divmod(energy, 15)
     threes, unit = divmod(rest, 3)
-    total = STATUS_HEAD + (fifteens + threes) * STATUS_BLOCK + 2 * STATUS_BLOCK_DONE
-    total += STATUS_UNIT_NONE if unit == 0 else STATUS_UNIT
+    total = badline.charge(clk, 0x9508, STATUS_HEAD)
+    total += badline.charge(
+        clk, 0x9515, (fifteens + threes) * STATUS_BLOCK + 2 * STATUS_BLOCK_DONE
+    )
+    if unit == 0:
+        total += badline.charge(clk, 0x9543, STATUS_UNIT_NONE)
+    else:
+        total += badline.charge(clk, 0x9547, STATUS_UNIT)
     chars = 1 + 2 * (fifteens + threes + (1 if unit else 0))
-    total += STATUS_PAD * max(1, STATUS_PAD_END - chars) - 1
-    return total + STATUS_MID + STATUS_PAD * STATUS_PAD_LAPS - 1 + STATUS_TAIL
+    total += badline.charge(
+        clk, 0x9551, STATUS_PAD * max(1, STATUS_PAD_END - chars) - 1
+    )
+    total += badline.charge(clk, 0x955D, STATUS_MID)
+    total += badline.charge(clk, 0x9551, STATUS_PAD * STATUS_PAD_LAPS - 1)
+    return total + badline.charge(clk, 0x956E, STATUS_TAIL)
 
 
-def exposure_cycles(mem):
+def exposure_cycles(mem, clk=None):
     """$191F for the current board: the 8-slot walk plus prologue/epilogue.
 
     X counts 7 down to 0 and stops early only when an enemy targeting the player has
     exposure bit 7 set ($1948 BMI $194D)."""
+    clk = badline.frame_clock(armed=False) if clk is None else clk
     player = mem[mm.PLAYER_OBJECT]
-    total = EXPOSURE_FIXED
+    total = badline.charge(clk, 0x191F, EXPOSURE_FIXED)
     for x in range(7, -1, -1):
         last = EXPOSURE_LAST if x == 0 else 0
         if mem[mm.OBJECTS_FLAGS + x] & 0x80:
-            total += EXPOSURE_EMPTY - last
+            total += badline.charge(clk, 0x1925, EXPOSURE_EMPTY - last)
             continue
         otype = mem[mm.OBJECTS_TYPE + x]
         if otype == mm.T_SENTRY:
@@ -450,19 +467,19 @@ def exposure_cycles(mem):
         elif otype == mm.T_SENTINEL:
             slot = EXPOSURE_SENTINEL
         else:
-            total += EXPOSURE_OTHER - last
+            total += badline.charge(clk, 0x1925, EXPOSURE_OTHER - last)
             continue
         if mem[mm.ENEMIES_TARGETED_OBJECT + x] != player:
-            total += slot - last
+            total += badline.charge(clk, 0x1925, slot - last)
             continue
-        slot += EXPOSURE_TARGETS_PLAYER
+        total += badline.charge(clk, 0x1925, slot)
         if mem[mm.ENEMIES_DRAINING_COOLDOWN + x] == 0:
-            total += slot - last
+            total += badline.charge(clk, 0x193A, EXPOSURE_TARGETS_PLAYER - last)
             continue
-        slot += EXPOSURE_DRAINING
+        total += badline.charge(clk, 0x193A, EXPOSURE_TARGETS_PLAYER)
         if mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + x] & 0x80:
-            return total + slot + 1  # the walk stops here
-        total += slot - last
+            return total + badline.charge(clk, 0x193F, EXPOSURE_DRAINING + 1)
+        total += badline.charge(clk, 0x193F, EXPOSURE_DRAINING - last)
     return total
 
 

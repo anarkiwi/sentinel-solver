@@ -74,3 +74,17 @@ def test_a_branch_the_term_charges_decides_the_ambiguous_window(image):
     charges -- and that decision is exactly what splits the one ambiguous offset."""
     assert writemap.steal_at(image, 0x0D05, 57, []) == passcost.BADLINE_STEAL
     assert writemap.steal_at(image, 0x0D05, 57, [True]) == badline.MIN_STEAL
+
+
+@pytest.mark.oracle
+def test_the_shipped_write_map_is_what_the_image_generates(image):
+    """``sentinel.writeruns`` is generated, so it must equal a fresh walk of the ROM."""
+    from driver import writeruns as gen  # pylint: disable=import-outside-toplevel
+    from sentinel import writeruns  # pylint: disable=import-outside-toplevel
+
+    with open(os.path.join(os.path.dirname(__file__), "..", "passcost.py")) as fh:
+        rows = gen.table(image, fh.read())
+    assert tuple(a for a, _, _ in rows) == writeruns.ANCHOR
+    assert tuple(c for _, c, _ in rows) == writeruns.LENGTH
+    assert tuple(w for _, _, w in rows) == writeruns.RUNS
+    assert writeruns.RUN[writeruns.START[0x31CA] + 26] == 2  # $31D9 ROL abs

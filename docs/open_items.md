@@ -175,7 +175,7 @@ play loop. Means over 140 frames a board, `fixtures/live_pass_cycles.json`:
 |---|---|---|---|---|---|
 | four short IRQs | 477 | 477.00 | 477.00 | 477.00 | 477.00 |
 | `$9630` body | `IRQ_BODY` + gate + `$130C` + `$8ED1` | 2633.49 (2633.67) | 2645.73 (2646.07) | 2648.15 (2648.50) | 2454.34 (2455) |
-| badline steal | `BADLINE_FRAME` 1071 | 1072.91 | 1073.96 | 1073.93 | 1075.20 |
+| badline steal | 25 windows, priced apart | 1072.91 | 1073.96 | 1073.93 | 1075.20 |
 | foreground | the rest | 15472.54 | 15459.24 | 15456.96 | 15649.27 |
 
 The short interrupts are **exactly** 477 in every one of 500 frames. The body is within
@@ -184,7 +184,7 @@ The short interrupts are **exactly** 477 in every one of 500 frames. The body is
 `SOUND_TICK_IDLE` 63 in all 80 frozen frames, and no `$130C` and no `$1635` at all when
 frozen — the `$9659` gate, as `IRQ_GATE_SHUT` says.
 
-So the whole frame-budget error is `BADLINE_FRAME`. This split's own steal column is an
+So the whole frame-budget error was the badline steal. This split's own steal column is an
 **upper bound** — it charges any delta over the opcode's *table* minimum to the VIC, so a
 taken branch on a badline reads 44 and ls9795-frozen reads 1075.20, above the physical
 25 x 43. The exact steal, per instruction rather than per table, is 1070.2 / 1072.1 /
@@ -269,7 +269,7 @@ The 44s this item used to quote were an artefact: a static opcode table charged 
 branch's or a crossed page's own extra cycle to the VIC. So was ls9795-frozen's 1075.20,
 which is above the physical maximum of 25 x 43.
 
-**The frame total is state-dependent, so `BADLINE_FRAME` cannot be right.** Exactly:
+**The frame total is state-dependent, so no constant can be right.** Exactly:
 
 | board | per badline | per frame | complete-frame range |
 |---|---|---|---|
@@ -278,7 +278,7 @@ which is above the physical maximum of 25 x 43.
 | ls9795 | 42.90 | **1072.5** | 1071..1075 |
 | ls9795 frozen | 42.88 | **1072.0** | 1069..1075 |
 
-`BADLINE_FRAME` 1071 is *above* ls0042's true steal and *below* the other two. The
+The fitted 1071 was *above* ls0042's true steal and *below* the other two. The
 writers the window catches are named in the fixture and are dominated by `$31CA`'s LFSR
 (`ROL abs` at `$31D9`-`$31E5`, a dummy-plus-real pair, hence the 41s), then `$16D9 DEC
 $0090`, the `$1289`/`$12A2` loop's `LSR`/`ASL`/`JSR`, and `$194D`/`$195F STY`. ls0042
@@ -287,8 +287,8 @@ runs ~19 passes a frame against ls9795's ~7, so it spends far more of the frame 
 serve three boards.
 
 **Probe — the steal IS the lever, and one number cannot pull it.** Setting the term to
-each board's own exact steal (`BADLINE_FRAME` **and** `IRQ_CYCLES`, which was a stale
-literal — editing `BADLINE_FRAME` alone had been inert, and is now computed):
+each board's own exact steal (the fitted `BADLINE_FRAME` **and** `IRQ_CYCLES`, which was a
+stale literal — editing the fit alone had been inert):
 
 | board | steal | first CORE | follow events |
 |---|---|---|---|
@@ -339,12 +339,65 @@ three ambiguous keys are a branch the charging term *already* decides — `$0D05
 `$0D03`'s per-bit shift-add (`MUL8_BIT`), `$1CCC+33` its per-component negate
 (`ADD_VECTOR_NEG`), `$193A+10` the `$191F` targeting walk (`EXPOSURE_TARGETS_PLAYER`).
 
-**What is actually missing** is one thing: `enemies.advance_frame` charges terms as bare
-cycle counts and never emits the `(anchor, cycles)` stream, so nothing calls
-`badline.frame_steal`. Threading an anchor through the cost functions — `enemies.py`,
-`los.py`, `relative.py` and both numba twins — is mechanical and is the whole remaining
-job. Until it is done `BADLINE_FRAME` stays the one fitted term in the frame budget and
-is labelled so; the fallback is the lump, and the resolved part above is exact.
+**Done — the fit is retired and the steal is charged per window.** Every cost term now
+reports the ROM address it is counted from: `badline.charge(clk, $XXXX, cycles)` through
+`enemies.py`, `relative.py`'s `$1887` and both numba twins, against
+`sentinel/writeruns.py` — the per-anchor write-cycle map, regenerated from the image by
+`driver/writeruns.py` (307 anchors, 1312 write cycles, `$31CA`'s eight LFSR rounds and
+the pass head carrying the branch record the charging term itself decides).
+`badline.frame_clock` pins the frame at raster 213, places the 25 BA windows and the four
+split interrupts at their own raster positions, and hands `charge` the offset into the
+running term. `passcost.BADLINE_FRAME` is **gone**; the frame is charged
+`BADLINES_PER_FRAME * BADLINE_STEAL` (1075, the derived ceiling) up front and each window
+refunds the write run it lands on.
+
+| board | model steal, mean | machine |
+|---|---|---|
+| ls0042 | **1070.8** (1063..1075) | 1070.2 |
+| ls9795 | **1071.5** (1064..1075) | 1072.5 |
+
+**Measured against the machine, frame-locked, 3000 frames, `--follow`:**
+
+| board | CORE events | first CORE |
+|---|---|---|
+| ls0042 | 0 → **0** | none → none |
+| ls9795 | 111 → **116** | 129 → **130** |
+| ls0335 | 12 → **24** | 478 → **155** |
+
+ls9795's frame-129 rotation is gone: the model no longer turns enemy 3 a frame early, and
+the machine's own frame 130 is the first CORE. ls0335 moves to 155/24 — which is what the
+probe above predicted for its own true steal (1072 → 155/20), so the model is now right
+about the steal and ls0335's residue is elsewhere. ls0042 is untouched.
+
+**Placement matters and is not free.** Charging each window's steal at its own raster
+position (rather than the whole frame's up front) is physically right — the model's frame
+opens with 7056 badline-free cycles, rasters 251..50 — and it makes the model measurably
+*worse*: ls9795 111 → 350, ls0335 12 → 233, and `test_human_clock`'s pinned facing count
+89 → 79. With the clock neutralised the refactor is a byte-exact no-op against the old
+model on three boards, so that is placement, not a bug: the rest of the enemy clock is
+calibrated against the lump. The shipped form therefore keeps the lump's placement (the
+ceiling at the frame head) and derives only its *value*.
+
+**What the surviving events are, classified by the PC the raster IRQ interrupted** and by
+`resume_from_stack`'s own chain:
+
+| | ls9795 (116) | ls0335 (24) |
+|---|---|---|
+| the interrupted PC's routine | **68 "other"** — `$26EC`/`$2DEF`/`$2E7C`/`$2E08`, the strip replot and tile draw | **11 `$16E6` body**, 4 `$1887`, 3 `$9287`, 2 `$8401`, 2 `$31CA` |
+| the model's resume point | **88 `PHASE_BODY/BODY_DONE`** (off the loop entirely) | **17 `PHASE_BODY/BODY_SCAN`** |
+| resyncs that land on an exact-cycle resume | **3 of 116** | 2 of 24 |
+| the diverging field | `enemy[N].update_cd` 209 of 217, `obj[62].h_angle` 8 | `enemy[N].update_cd`, all |
+
+So the two boards fail for different reasons, and neither is the badline:
+
+* **ls9795 is the renderer.** Three fifths of its events catch the machine inside
+  `$26xx`/`$2Dxx`/`$2Exx` — code the model prices only as a whole-frame
+  `strip_replot_frames` stall. That is [5](#5-terrain-fill-cost-cannot-close-per-tile).
+* **ls0335 is the `$16E6` robot scan.** Seventeen of 24 resume at `BODY_SCAN` with the
+  machine inside `$17B2..$17C0` or the `$1887`/`$9287`/`$8401` chain beneath it — the see
+  cost, which the badline clock still charges as one opaque `$1887` term.
+* **Fewer than 3% of resyncs seed the model at the machine's exact cycle**; the rest seed
+  at a segment head, which injects up to a segment of phase at every event.
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next

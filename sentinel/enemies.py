@@ -36,7 +36,15 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
-from sentinel import memmap as mm, relative, actions, terrain, passcost, projector
+from sentinel import (
+    badline,
+    memmap as mm,
+    relative,
+    actions,
+    terrain,
+    passcost,
+    projector,
+)
 from sentinel.prng import Prng
 from sentinel.terrain import tile_byte, set_tile_byte
 
@@ -277,7 +285,7 @@ def enemy_slots(state):
 # ---------------------------------------------------------------------------
 # update_enemy_cooldowns $1317
 # ---------------------------------------------------------------------------
-def tick_cooldowns(state):
+def tick_cooldowns(state, clk):
     """$1317: on 2-of-3 rounds decrement the $0C50 gate; on the third, decrement
     every draining/rotation/update cooldown that is >= 2 (they stick at 1).
 
@@ -286,14 +294,16 @@ def tick_cooldowns(state):
     mem = state.mem
     if mem[mm.COOLDOWN_GATE] != 0:
         mem[mm.COOLDOWN_GATE] = (mem[mm.COOLDOWN_GATE] - 1) & 0xFF
-        return passcost.COOLDOWN_TICK_GATE
-    cost = passcost.COOLDOWN_TICK_WALK - passcost.COOLDOWN_TICK_LAST
+        return badline.charge(clk, 0x1317, passcost.COOLDOWN_TICK_GATE)
+    cost = badline.charge(
+        clk, 0x131C, passcost.COOLDOWN_TICK_WALK - passcost.COOLDOWN_TICK_LAST
+    )
     for addr in range(mm.ENEMIES_DRAINING_COOLDOWN, mm.ENEMIES_UPDATE_COOLDOWN + 8):
         if mem[addr] >= COOLDOWN_STICK:
             mem[addr] -= 1
-            cost += passcost.COOLDOWN_TICK_BYTE_DEC
+            cost += badline.charge(clk, 0x1325, passcost.COOLDOWN_TICK_BYTE_DEC)
         else:
-            cost += passcost.COOLDOWN_TICK_BYTE_STICK
+            cost += badline.charge(clk, 0x131E, passcost.COOLDOWN_TICK_BYTE_STICK)
     mem[mm.COOLDOWN_GATE] = 2
     return cost
 
@@ -308,65 +318,76 @@ def _discharge_bank(state, enemy):
     state.mem[a] = (state.mem[a] + 1) & 0xFF
 
 
-def _reduce_object_energy(state, target, enemy):
+def _reduce_object_energy(state, target, enemy, clk):
     """$1A08: drain `target`, returning (drained the player, cycles spent).
 
     The player loses one energy; a robot downgrades to a boulder, a boulder to a tree,
     a tree is removed.  Every drain that is not a kill banks one unit of energy on
     `enemy` ($1A4F/$1A4E) for later discharge as a tree."""
     mem = state.mem
+    head = badline.charge(clk, 0x1A08, passcost.REDUCE_HEAD)
     if target == mem[mm.PLAYER_OBJECT]:
         if state.energy == 0:
             # kill_player $1A00: drained with no energy left -> mark the player dead.
             mem[mm.PLAYER_DIED_BY_DRAINING] |= 0x80
-            return True, passcost.REDUCE_HEAD + passcost.REDUCE_KILL
+            return True, head + badline.charge(clk, 0x1A0D, passcost.REDUCE_KILL)
         state.energy = state.energy - 1
         _discharge_bank(state, enemy)
-        cost = passcost.REDUCE_HEAD + passcost.REDUCE_PLAYER + passcost.REDUCE_BANK
+        cost = head + badline.charge(clk, 0x1A14, passcost.REDUCE_PLAYER)
+        cost += badline.charge(clk, 0x1A4F, passcost.REDUCE_BANK)
         # $1A1A/$1A1F: the drained bar is replotted and the drain sound started
-        cost += passcost.status_bar_cycles(state.energy) + passcost.TUNE_DRAIN
+        cost += passcost.status_bar_cycles(state.energy, clk)
+        cost += badline.charge(clk, 0x1A1D, passcost.TUNE_DRAIN)
         start_tune(state, mm.SOUND_DRAIN)
         return True, cost
-    cost = passcost.REDUCE_HEAD + passcost.REDUCE_OBJECT + passcost.REDUCE_BANK
+    cost = head + badline.charge(clk, 0x1A0D, passcost.REDUCE_OBJECT)
+    cost += badline.charge(clk, 0x1A4F, passcost.REDUCE_BANK)
     otype = state.obj_type[target]
     if otype == mm.T_ROBOT:
         mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $1A31
         state.obj_type[target] = mm.T_BOULDER
-        cost += passcost.REDUCE_ROBOT
+        cost += badline.charge(clk, 0x1A2D, passcost.REDUCE_ROBOT)
     elif otype == mm.T_TREE:
         stacked = state.obj_flags[target] >= 0x40  # $1EFF: the tile byte it restores
         actions.remove_object(state, target)
-        cost += passcost.REDUCE_TREE + (
-            passcost.REMOVE_STACKED if stacked else passcost.REMOVE_GROUND
+        cost += badline.charge(clk, 0x1EEF, passcost.REDUCE_TREE)
+        cost += badline.charge(
+            clk,
+            0x1EEF,
+            passcost.REMOVE_STACKED if stacked else passcost.REMOVE_GROUND,
         )
     else:  # boulder -> tree
         state.obj_type[target] = mm.T_TREE
-        cost += passcost.REDUCE_BOULDER
+        cost += badline.charge(clk, 0x1A44, passcost.REDUCE_BOULDER)
     _discharge_bank(state, enemy)
     return False, cost
 
 
-def _see_cost(see):
+def _see_cost(see, clk):
     """The $1887 cycles a :func:`relative.can_see_object` query cost the ROM."""
-    return see["cycles"]
+    return badline.charge(clk, 0x1887, see["cycles"])
 
 
-def _redraw_cost(state, target):
+def _redraw_cost(state, target, clk):
     """$187B STX $91 + $1881 JSR $1F9F: what redrawing `target` costs right now.
 
     Off screen ($209B carry set) that is the counted $1F9F alone; on screen it is
     that plus the $1FFC JSR $2625 replot of the strip, at the camera $1FC2 shifts to."""
     cycles, columns, left = relative.update_object_on_screen_cycles(state, target)
+    cycles = badline.charge(clk, 0x1F9F, cycles)
     if columns == 0:
         return cycles
     frames = projector.strip_replot_frames(state, target, left, columns)
+    # whole video frames of stall: PAL_FRAME_CYCLES already carries their own badlines
     return cycles + int(round(frames * passcost.PAL_FRAME_CYCLES))
 
 
-def _body_tail(state, target):
+def _body_tail(state, target, clk):
     """$1876..$1884: every exit that redraws the object it just touched ($187B STX
     $91 names it), and the $1F9F redraw that object's own screen span prices."""
-    return passcost.BODY_TAIL + _redraw_cost(state, target)
+    return badline.charge(clk, 0x1876, passcost.BODY_TAIL) + _redraw_cost(
+        state, target, clk
+    )
 
 
 def _exposure_byte(see):
@@ -380,7 +401,7 @@ def _exposure_byte(see):
 # ---------------------------------------------------------------------------
 # target_object $1825
 # ---------------------------------------------------------------------------
-def _target_object(state, enemy, target, exposure):
+def _target_object(state, enemy, target, exposure, clk):
     """$1825 up to its $184D branch: record the target and, once the draining
     cooldown counts down to 1, drain it if fully visible ($1838).  Returns the next
     stage -- BODY_MAKE_MEANIE when only the player's head is visible, else DONE --
@@ -388,26 +409,30 @@ def _target_object(state, enemy, target, exposure):
     mem = state.mem
     mem[mm.ENEMIES_TARGETED_OBJECT + enemy] = target
     mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + enemy] = exposure
-    cost = passcost.TARGET_HEAD
+    cost = badline.charge(clk, 0x1825, passcost.TARGET_HEAD)
     cd = mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy]
     if cd < 0x01:  # first sight -> arm the drain timer
         mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = DRAINING_COOLDOWN_RELOAD
-        return BODY_DONE, cost + passcost.TARGET_FIRST
+        return BODY_DONE, cost + badline.charge(clk, 0x1833, passcost.TARGET_FIRST)
     if cd != 0x01:  # still counting down
-        return BODY_DONE, cost + passcost.TARGET_WAIT
-    cost += passcost.TARGET_DUE
+        return BODY_DONE, cost + badline.charge(clk, 0x1833, passcost.TARGET_WAIT)
+    cost += badline.charge(clk, 0x183D, passcost.TARGET_DUE)
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
         killed = target == mem[mm.PLAYER_OBJECT] and state.energy == 0
-        cost += passcost.TARGET_DRAIN + _reduce_object_energy(state, target, enemy)[1]
+        cost += badline.charge(clk, 0x1843, passcost.TARGET_DRAIN)
+        cost += _reduce_object_energy(state, target, enemy, clk)[1]
         if killed:  # kill_player $1A00 unwinds the stack -> no update-cooldown reload
             return BODY_DONE, cost
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
         if target == mem[mm.PLAYER_OBJECT]:  # $184D: a drained player skips the redraw
-            return BODY_DONE, cost + passcost.TARGET_DRAIN_PLAYER
-        return BODY_DONE, cost + passcost.TARGET_DRAIN_OBJ + _body_tail(state, target)
+            return BODY_DONE, cost + badline.charge(
+                clk, 0x1884, passcost.TARGET_DRAIN_PLAYER
+            )
+        cost += badline.charge(clk, 0x184D, passcost.TARGET_DRAIN_OBJ)
+        return BODY_DONE, cost + _body_tail(state, target, clk)
     # $184D: only the head -> hunt a tree to convert
-    return BODY_MAKE_MEANIE, cost + passcost.TARGET_MEANIE
+    return BODY_MAKE_MEANIE, cost + badline.charge(clk, 0x1841, passcost.TARGET_MEANIE)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +452,7 @@ def _rotate_enemy(state, enemy):
 # ---------------------------------------------------------------------------
 # consider_enemy_state $16E6 (no-meanie path)
 # ---------------------------------------------------------------------------
-def _consider_enemy_state(state, enemy, budget, stage, index, partial):
+def _consider_enemy_state(state, enemy, budget, stage, index, partial, clk):
     """$16E6, resumable at its own write points.
 
     Spends ``budget`` and suspends where the ROM would be when the frame ran out --
@@ -439,16 +464,18 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             return budget, BODY_DONE, 0, -1
         if stage == BODY_ENTRY:
             if mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] >= COOLDOWN_STICK:
-                return budget - passcost.UPDATE_GATE_CLOSED, BODY_DONE, 0, -1
-            budget -= passcost.CONSIDER_ENTRY
+                gate = badline.charge(clk, 0x16E6, passcost.UPDATE_GATE_CLOSED)
+                return budget - gate, BODY_DONE, 0, -1
+            budget -= badline.charge(clk, 0x16E6, passcost.CONSIDER_ENTRY)
             mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_SCAN  # $16ED
             mem[mm.FOV_WIDTH] = FOV_SCAN  # $16F0
             # $16EA: an enemy that owns a meanie (top bit clear) runs its lifecycle
             if not (mem[mm.ENEMIES_MEANIE_OBJECT + enemy] & 0x80):
-                budget -= passcost.CONSIDER_MEANIE
+                budget -= badline.charge(clk, 0x16F7, passcost.CONSIDER_MEANIE)
                 stage, index = BODY_MEANIE, 0
                 continue
-            budget -= passcost.CONSIDER_NO_MEANIE + passcost.DISCHARGE_CALL
+            budget -= badline.charge(clk, 0x16FC, passcost.CONSIDER_NO_MEANIE)
+            budget -= badline.charge(clk, 0x1773, passcost.DISCHARGE_CALL)
             stage, index = BODY_DISCHARGE, 0
             continue
 
@@ -456,44 +483,45 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             return budget, stage, index, partial
 
         if stage == BODY_MEANIE:
-            budget, stage, index = _update_meanie(state, enemy, budget, index)
+            budget, stage, index = _update_meanie(state, enemy, budget, index, clk)
             continue
 
         if stage == BODY_DISCHARGE:
             # no_meanie ($1773): a discharge makes the enemy skip its drain ($177A)
-            discharged, dcost, slot = _consider_discharging_enemy_energy(state, enemy)
+            discharged, dcost, slot = _consider_discharging_enemy_energy(
+                state, enemy, clk
+            )
             budget -= dcost
             if discharged:  # $177A: the tail redraws, then the update is over
-                budget -= passcost.DISCHARGED + _body_tail(state, slot)
+                budget -= badline.charge(clk, 0x1778, passcost.DISCHARGED)
+                budget -= _body_tail(state, slot, clk)
                 return budget, BODY_DONE, 0, -1
-            budget -= passcost.NO_DISCHARGE
+            budget -= badline.charge(clk, 0x177D, passcost.NO_DISCHARGE)
             # $177F: only mid meanie-hunt does the enemy act on the considering flag
             if mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] & 0x80:
-                budget -= passcost.HUNT_CALL + passcost.TILE_SCAN_ENTRY
+                budget -= badline.charge(clk, 0x1784, passcost.HUNT_CALL)
+                budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
                 stage, index = BODY_HUNT, mm.NUM_SLOTS - 1
                 continue
-            budget -= passcost.HUNT_CLEAR
+            budget -= badline.charge(clk, 0x1782, passcost.HUNT_CLEAR)
             stage, index = BODY_HELD, 0
             continue
 
         if stage == BODY_HUNT:
             budget, index, tb = _find_drainable_boulder_or_tree(
-                state, enemy, budget, index
+                state, enemy, budget, index, clk
             )
             if tb == -2:  # suspended mid-scan
                 return budget, stage, index, partial
             if tb >= 0:
                 mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $178B
-                drain = _reduce_object_energy(state, tb, enemy)[1]  # $17EA
+                budget -= badline.charge(clk, 0x178B, passcost.HUNT_HIT)
+                budget -= badline.charge(clk, 0x17EA, passcost.DRAIN_CALL)
+                budget -= _reduce_object_energy(state, tb, enemy, clk)[1]  # $17EA
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                budget -= passcost.HUNT_HIT + passcost.DRAIN_CALL + drain
-                return (
-                    budget - passcost.DRAIN_TAIL - _body_tail(state, tb),
-                    BODY_DONE,
-                    0,
-                    -1,
-                )
-            budget -= passcost.HUNT_MISS
+                budget -= badline.charge(clk, 0x17ED, passcost.DRAIN_TAIL)
+                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1
+            budget -= badline.charge(clk, 0x1787, passcost.HUNT_MISS)
             mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (  # $1792
                 mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] >> 1
             )
@@ -503,65 +531,66 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
         if stage == BODY_HELD:
             # $178C: a held target is kept while visible AT ALL, dropped when not
             if mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] == 0:
-                budget -= passcost.HELD_NONE + passcost.SCAN_INIT
+                budget -= badline.charge(clk, 0x1795, passcost.HELD_NONE)
+                budget -= badline.charge(clk, 0x17AC, passcost.SCAN_INIT)
                 stage, index, partial = BODY_SCAN, mm.NUM_SLOTS - 1, -1
                 continue
             held = mem[mm.ENEMIES_TARGETED_OBJECT + enemy]
             see = relative.can_see_object(state, enemy, held, mm.T_ROBOT, FOV_SCAN)
             if index >= 0:
-                budget -= passcost.HELD_CALL + _see_cost(see)
+                budget -= badline.charge(clk, 0x179A, passcost.HELD_CALL)
+                budget -= _see_cost(see, clk)
                 if budget <= 0:
                     return budget, stage, paid(0), partial
             exposure = _exposure_byte(see)
             if exposure != 0:
-                budget -= passcost.HELD_KEPT
-                stage, cost = _target_object(state, enemy, held, exposure)
+                budget -= badline.charge(clk, 0x17A6, passcost.HELD_KEPT)
+                stage, cost = _target_object(state, enemy, held, exposure, clk)
                 budget, index = budget - cost, 0
                 continue
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # target lost
-            budget -= passcost.HELD_LOST + passcost.SCAN_INIT
+            budget -= badline.charge(clk, 0x17A2, passcost.HELD_LOST)
+            budget -= badline.charge(clk, 0x17AC, passcost.SCAN_INIT)
             stage, index, partial = BODY_SCAN, mm.NUM_SLOTS - 1, -1
             continue
 
         if stage == BODY_SCAN:
             budget, stage, index, partial = _scan_for_robot(
-                state, enemy, budget, index, partial
+                state, enemy, budget, index, partial, clk
             )
             continue
 
         if stage == BODY_PARTIAL:
-            budget -= passcost.SCAN_END_PARTIAL
+            budget -= badline.charge(clk, 0x17D1, passcost.SCAN_END_PARTIAL)
             # $17C4: fresh-arm the meanie hunt unless this player already failed one
             if partial != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
                 _initialise_enemy_meanie_variables(state, enemy)
-                budget -= passcost.PARTIAL_ARM
-                stage, cost = _target_object(state, enemy, partial, 0x40)
+                budget -= badline.charge(clk, 0x17D7, passcost.PARTIAL_ARM)
+                stage, cost = _target_object(state, enemy, partial, 0x40, clk)
                 budget, index, partial = budget - cost, 0, -1
                 continue
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= passcost.PARTIAL_KNOWN + passcost.TREE_CALL
-            budget -= passcost.TILE_SCAN_ENTRY
+            budget -= badline.charge(clk, 0x17D5, passcost.PARTIAL_KNOWN)
+            budget -= badline.charge(clk, 0x17E0, passcost.TREE_CALL)
+            budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
             stage, index, partial = BODY_TREE, mm.NUM_SLOTS - 1, -1
             continue
 
         if stage == BODY_TREE:
             budget, index, tb = _find_drainable_boulder_or_tree(
-                state, enemy, budget, index
+                state, enemy, budget, index, clk
             )
             if tb == -2:
                 return budget, stage, index, partial
             if tb >= 0:
                 mem[mm.TARGETED_OBJECT_SLOT] = tb
-                drain = _reduce_object_energy(state, tb, enemy)[1]
+                budget -= badline.charge(clk, 0x17E8, passcost.TREE_HIT)
+                budget -= badline.charge(clk, 0x17EA, passcost.DRAIN_CALL)
+                budget -= _reduce_object_energy(state, tb, enemy, clk)[1]
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                budget -= passcost.TREE_HIT + passcost.DRAIN_CALL + drain
-                return (
-                    budget - passcost.DRAIN_TAIL - _body_tail(state, tb),
-                    BODY_DONE,
-                    0,
-                    -1,
-                )
-            budget -= passcost.TREE_NONE
+                budget -= badline.charge(clk, 0x17ED, passcost.DRAIN_TAIL)
+                return budget - _body_tail(state, tb, clk), BODY_DONE, 0, -1
+            budget -= badline.charge(clk, 0x17E8, passcost.TREE_NONE)
             stage, index = BODY_ROTATE, 0
             continue
 
@@ -569,15 +598,19 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
             # no_drain ($17F9): rotate if the cooldown is low; the turn redraws it
             if mem[mm.ENEMIES_ROTATION_COOLDOWN + enemy] < COOLDOWN_STICK:
                 _rotate_enemy(state, enemy)
-                budget -= passcost.ROTATE_GATE + passcost.ROTATE
-                budget -= _redraw_cost(state, enemy)
+                budget -= badline.charge(clk, 0x17F9, passcost.ROTATE_GATE)
+                budget -= badline.charge(clk, 0x1805, passcost.ROTATE)
+                budget -= _redraw_cost(state, enemy, clk)
                 return budget, BODY_DONE, 0, -1
-            return budget - passcost.ROTATE_GATE_HELD, BODY_DONE, 0, -1
+            held = badline.charge(clk, 0x1802, passcost.ROTATE_GATE_HELD)
+            return budget - held, BODY_DONE, 0, -1
 
-        budget, stage, index = _consider_creating_meanie(state, enemy, budget, index)
+        budget, stage, index = _consider_creating_meanie(
+            state, enemy, budget, index, clk
+        )
 
 
-def _scan_for_robot(state, enemy, budget, index, partial):
+def _scan_for_robot(state, enemy, budget, index, partial, clk):
     """find_drainable_robot_loop ($17B2), resumable, one slot per unit.
 
     Scans slots 63..0 for the player or a robot; a fully-visible one is targeted,
@@ -588,40 +621,42 @@ def _scan_for_robot(state, enemy, budget, index, partial):
         if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
             y = -2 - index
             see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-            stage, cost = _target_object(state, enemy, y, _exposure_byte(see))
+            stage, cost = _target_object(state, enemy, y, _exposure_byte(see), clk)
             return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
             if partial >= 0:
                 return budget, BODY_PARTIAL, 0, partial
             mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $17E0
-            budget -= passcost.SCAN_END + passcost.TREE_CALL
-            return budget - passcost.TILE_SCAN_ENTRY, BODY_TREE, mm.NUM_SLOTS - 1, -1
+            budget -= badline.charge(clk, 0x17CD, passcost.SCAN_END)
+            budget -= badline.charge(clk, 0x17E0, passcost.TREE_CALL)
+            budget -= badline.charge(clk, 0x1AB0, passcost.TILE_SCAN_ENTRY)
+            return budget, BODY_TREE, mm.NUM_SLOTS - 1, -1
         if budget <= 0:
             return budget, BODY_SCAN, index, partial
         y = index
         index -= 1
         last = passcost.SCAN_LAST if y == 0 else 0  # $17CB BPL not taken
         see = relative.can_see_object(state, enemy, y, mm.T_ROBOT, FOV_SCAN)
-        budget -= _see_cost(see)
+        budget -= _see_cost(see, clk)
         # $17B7: a non-target tree in the sightline to this robot's HEAD hides it
         if see["tree_in_los_head"]:
-            budget -= passcost.SCAN_SLOT_HIDDEN - last
+            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_HIDDEN - last)
             continue
         exposure = _exposure_byte(see)
         if exposure == 0:  # $17BE/$17C0: not visible at all -> next slot
-            budget -= passcost.SCAN_SLOT_UNSEEN - last
+            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_UNSEEN - last)
             continue
         if exposure & 0x80:  # $17BA: fully visible (base reached) -> drain target
-            budget -= passcost.SCAN_SLOT_FULL
+            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_FULL)
             if budget <= 0:  # the ROM has not reached $1825 yet
                 return budget, BODY_SCAN, paid(y), partial
-            stage, cost = _target_object(state, enemy, y, exposure)
+            stage, cost = _target_object(state, enemy, y, exposure, clk)
             return budget - cost, stage, 0, -1
         if y == player:  # only the head is visible -> meanie candidate ($17C0)
             partial = y
-            budget -= passcost.SCAN_SLOT_PARTIAL - last
+            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_PARTIAL - last)
         else:
-            budget -= passcost.SCAN_SLOT_OTHER - last
+            budget -= badline.charge(clk, 0x17B2, passcost.SCAN_SLOT_OTHER - last)
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +672,7 @@ def _initialise_enemy_meanie_variables(state, enemy):
     mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40
 
 
-def _consider_creating_meanie(state, enemy, budget, index):
+def _consider_creating_meanie(state, enemy, budget, index, clk):
     """consider_creating_meanie $197D plus the $1852 tail of target_object, resumable.
 
     Walks the per-enemy search counter down looking for a tree within 10 tiles of the
@@ -661,7 +696,7 @@ def _consider_creating_meanie(state, enemy, budget, index):
             return budget, BODY_MAKE_MEANIE, index
         sc = mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy]
         if sc == 0:  # $198D: scanned everything -> no meanie this pass
-            budget -= passcost.MEANIE_SCAN_DONE
+            budget -= badline.charge(clk, 0x198F, passcost.MEANIE_SCAN_DONE)
             mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] = (
                 mem[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + enemy] + 1
             ) & 0xFF
@@ -674,25 +709,27 @@ def _consider_creating_meanie(state, enemy, budget, index):
         mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = sc - 1
         slot = sc - 1  # $199B DEY: the object index this iteration tests
         if state.obj_flags[slot] & 0x80:  # empty slot
-            budget -= passcost.MEANIE_SCAN_SLOT
+            budget -= badline.charge(clk, 0x198F, passcost.MEANIE_SCAN_SLOT)
             continue
         if state.obj_type[slot] != mm.T_TREE:  # not a tree
-            budget -= passcost.MEANIE_SCAN_OTHER
+            budget -= badline.charge(clk, 0x19AA, passcost.MEANIE_SCAN_OTHER)
             continue
-        budget -= passcost.MEANIE_SCAN_OTHER + passcost.MEANIE_SCAN_DX
+        budget -= badline.charge(clk, 0x19AA, passcost.MEANIE_SCAN_OTHER)
+        budget -= badline.charge(clk, 0x19B1, passcost.MEANIE_SCAN_DX)
         dx = (state.obj_x[player] - state.obj_x[slot]) & 0xFF
         if dx >= 0x80:
             dx = 0x100 - dx  # $19B5 abs
         if dx >= 0x0A:  # more than 10 tiles away in x
             continue
-        budget -= passcost.MEANIE_SCAN_DY
+        budget -= badline.charge(clk, 0x19C7, passcost.MEANIE_SCAN_DY)
         dy = (state.obj_y[player] - state.obj_y[slot]) & 0xFF
         if dy >= 0x80:
             dy = 0x100 - dy
         if dy >= 0x0A:  # more than 10 tiles away in y
             continue
         see = relative.can_see_object(state, enemy, slot, mm.T_TREE, FOV_CREATE_MEANIE)
-        budget -= passcost.MEANIE_SCAN_SEE + _see_cost(see)
+        budget -= badline.charge(clk, 0x19D9, passcost.MEANIE_SCAN_SEE)
+        budget -= _see_cost(see, clk)
         if not see["full"]:  # enemy hasn't a clear sight of the tree
             continue
         if budget <= 0:  # the ROM has not reached $19E1 yet
@@ -718,7 +755,7 @@ def _remove_meanie_and_reset_enemy(state, enemy):
     _remove_meanie(state, enemy)
 
 
-def _update_meanie(state, enemy, budget, index):
+def _update_meanie(state, enemy, budget, index, clk):
     """update_meanie $16F2, resumable: the enemy's meanie rotates toward the player
     and, once it is looking at a player it can still see, forcibly hyperspaces them.
 
@@ -732,7 +769,7 @@ def _update_meanie(state, enemy, budget, index):
         return budget, BODY_DONE, 0
     see = relative.can_see_object(state, meanie, target, mm.T_ROBOT, FOV_SCAN)
     if index >= 0:  # not yet charged
-        budget -= _see_cost(see)
+        budget -= _see_cost(see, clk)
         if budget <= 0:
             return budget, BODY_MEANIE, paid(0)
     if not see["in_fov"]:  # $1706: meanie not yet looking at the player -> rotate
@@ -742,8 +779,8 @@ def _update_meanie(state, enemy, budget, index):
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_MEANIE_ROTATE
         start_tune(state, mm.SOUND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
-        budget -= passcost.MEANIE_ROTATE
-        budget -= _redraw_cost(state, meanie)
+        budget -= badline.charge(clk, 0x1728, passcost.MEANIE_ROTATE)
+        budget -= _redraw_cost(state, meanie, clk)
         return budget, BODY_DONE, 0
     if target != mem[mm.PLAYER_OBJECT]:  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(state, enemy)
@@ -758,30 +795,34 @@ def _update_meanie(state, enemy, budget, index):
 # ---------------------------------------------------------------------------
 # do_hyperspace $2147 (create a robot on a random low tile + transfer/energy)
 # ---------------------------------------------------------------------------
-def _create_object(state, otype):
+def _create_object(state, otype, clk):
     """create_object $211D: the highest empty slot, typed `otype`, else None.
 
     Returns (slot, cycles): the walk is 11 a slot, the last one short by its
     untaken $2128 BPL."""
-    cost = passcost.CREATE_HEAD
+    cost = badline.charge(clk, 0x211D, passcost.CREATE_HEAD)
     for slot in range(mm.NUM_SLOTS - 1, -1, -1):
         if state.obj_flags[slot] & 0x80:
             state.obj_type[slot] = otype
-            return slot, cost + passcost.CREATE_HIT
-        cost += passcost.CREATE_SLOT - (passcost.CREATE_LAST if slot == 0 else 0)
-    return None, cost + passcost.CREATE_NONE
+            return slot, cost + badline.charge(clk, 0x212C, passcost.CREATE_HIT)
+        cost += badline.charge(
+            clk,
+            0x2122,
+            passcost.CREATE_SLOT - (passcost.CREATE_LAST if slot == 0 else 0),
+        )
+    return None, cost + badline.charge(clk, 0x212A, passcost.CREATE_NONE)
 
 
-def _random_tile_coord(prng):
+def _random_tile_coord(prng, clk):
     """$1272: a prnd draw masked to 0..31, rejecting 31 (the board's edge).
 
     Returns (coordinate, cycles); each rejected draw costs another prnd."""
-    cost = passcost.DRAW
+    cost = badline.charge(clk, 0x1272, passcost.DRAW)
     while True:
         v = prng.next() & 0x1F
         if v != 0x1F:
             return v, cost
-        cost += passcost.DRAW_REJECT
+        cost += badline.charge(clk, 0x1279, passcost.DRAW_REJECT)
 
 
 def _put_object_in_tile(state, slot, tx, ty, prng):
@@ -799,39 +840,40 @@ def _put_object_in_tile(state, slot, tx, ty, prng):
     state.obj_h_angle[slot] = ((rot & 0xF8) + 0x60) & 0xFF
 
 
-def _put_object_in_random_tile_below_z(state, slot, z, prng):
+def _put_object_in_random_tile_below_z(state, slot, z, prng, clk):
     """$1238: place `slot` on a random flat, empty tile no higher than `z`.
 
     After 256 misses the height ceiling `z` is raised; it fails once that ceiling
     reaches 12.  Returns (placed, cycles), each lap charged by the test it failed."""
     attempts = 0
-    cost = passcost.PLACE_HEAD
+    cost = badline.charge(clk, 0x1238, passcost.PLACE_HEAD)
     while True:
         attempts = (attempts - 1) & 0xFF
         if attempts == 0:  # $1242: 256 misses -> relax the height ceiling
             z = (z + 1) & 0xFF
             if z >= 0x0C:
-                return False, cost + passcost.PLACE_GIVE_UP
-            cost += passcost.PLACE_WRAP
-        cost += passcost.PLACE_LAP
-        tx, dx = _random_tile_coord(prng)
-        ty, dy = _random_tile_coord(prng)
+                return False, cost + badline.charge(clk, 0x1270, passcost.PLACE_GIVE_UP)
+            cost += badline.charge(clk, 0x1240, passcost.PLACE_WRAP)
+        cost += badline.charge(clk, 0x123E, passcost.PLACE_LAP)
+        tx, dx = _random_tile_coord(prng, clk)
+        ty, dy = _random_tile_coord(prng, clk)
         cost += dx + dy
         b = tile_byte(state, tx, ty)
         if b >= mm.OBJECT_TILE:  # tile already holds an object
-            cost += passcost.PLACE_OCCUPIED
+            cost += badline.charge(clk, 0x125B, passcost.PLACE_OCCUPIED)
             continue
         if b & 0x0F:  # not a flat tile
-            cost += passcost.PLACE_NOT_FLAT
+            cost += badline.charge(clk, 0x125F, passcost.PLACE_NOT_FLAT)
             continue
         if (b >> 4) >= z:  # tile too high
-            cost += passcost.PLACE_TOO_HIGH
+            cost += badline.charge(clk, 0x1269, passcost.PLACE_TOO_HIGH)
             continue
         _put_object_in_tile(state, slot, tx, ty, prng)
-        return True, cost + passcost.PLACE_HIT + passcost.PUT_IN_TILE
+        cost += badline.charge(clk, 0x126B, passcost.PLACE_HIT)
+        return True, cost + badline.charge(clk, 0x1F16, passcost.PUT_IN_TILE)
 
 
-def _consider_discharging_enemy_energy(state, enemy):
+def _consider_discharging_enemy_energy(state, enemy, clk):
     """consider_discharging_enemy_energy $1A5D: if `enemy` has banked drained energy,
     return one unit to the landscape as a TREE on a random flat tile no higher than
     the below-enemies ceiling ($0C06), and decrement the bank.  Returns True if a tree
@@ -839,23 +881,26 @@ def _consider_discharging_enemy_energy(state, enemy):
     update, $177A), the cycles the call cost, and the slot $1A7D leaves in $91."""
     mem = state.mem
     if mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == 0:
-        return False, passcost.DISCHARGE_NONE, -1  # $1A63: nothing to discharge
+        # $1A63: nothing to discharge
+        return False, badline.charge(clk, 0x1A5D, passcost.DISCHARGE_NONE), -1
     prng = Prng().load(mem)
-    slot, ccost = _create_object(state, mm.T_TREE)  # $1A67 create_object(type 2)
-    cost = passcost.DISCHARGE_CREATE + ccost
+    cost = badline.charge(clk, 0x1A65, passcost.DISCHARGE_CREATE)
+    slot, ccost = _create_object(state, mm.T_TREE, clk)  # $1A67 create_object(type 2)
+    cost += ccost
     if slot is None:
         prng.store(mem)
         return False, cost, -1
+    cost += badline.charge(clk, 0x1A6A, passcost.DISCHARGE_PLACE)
     placed, pcost = _put_object_in_random_tile_below_z(
-        state, slot, mem[mm.ENEMY_BELOW_Z], prng
+        state, slot, mem[mm.ENEMY_BELOW_Z], prng, clk
     )
     prng.store(mem)
-    cost += passcost.DISCHARGE_PLACE + pcost
+    cost += pcost
     if not placed:  # $1A70: no tile found -> abandon (slot stays flagged empty)
-        return False, cost + passcost.DISCHARGE_ABANDON, -1
+        return False, cost + badline.charge(clk, 0x1A70, passcost.DISCHARGE_ABANDON), -1
     a = mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy
     mem[a] = (mem[a] - 1) & 0xFF  # $1A7A DEC
-    return True, cost + passcost.DISCHARGE_DONE, slot
+    return True, cost + badline.charge(clk, 0x1A72, passcost.DISCHARGE_DONE), slot
 
 
 def do_hyperspace(state):
@@ -865,14 +910,15 @@ def do_hyperspace(state):
     condition against the player, hyperspacing *from* the platform completes the
     landscape ($2187)."""
     mem = state.mem
+    idle = badline.frame_clock(armed=False)  # the hyperspace's cycles are not budgeted
     prng = Prng().load(mem)
-    slot, _ccost = _create_object(state, mm.T_ROBOT)
+    slot, _ccost = _create_object(state, mm.T_ROBOT, idle)
     if slot is None:
         prng.store(mem)
         return
     player = mem[mm.PLAYER_OBJECT]
     z = (state.obj_z_height[player] + 1) & 0xFF
-    placed, _pcost = _put_object_in_random_tile_below_z(state, slot, z, prng)
+    placed, _pcost = _put_object_in_random_tile_below_z(state, slot, z, prng, idle)
     prng.store(mem)
     if not placed:  # $2159: no tile found -> the hyperspace is abandoned
         state.obj_flags[slot] |= 0x80
@@ -897,7 +943,7 @@ def _tile_top(state, x):
     return -1 if tb < mm.OBJECT_TILE else tb & 0x3F
 
 
-def _find_drainable_boulder_or_tree(state, enemy, budget, index):
+def _find_drainable_boulder_or_tree(state, enemy, budget, index, clk):
     """find_drainable_boulder_or_tree_on_stack ($1AB0), resumable, one slot per unit.
 
     Scanning slots 63..0, a boulder or a stacked object (flags >= $40) marks a
@@ -912,12 +958,17 @@ def _find_drainable_boulder_or_tree(state, enemy, budget, index):
                 "full"
             ]:
                 state.mem[mm.TARGETED_OBJECT_SLOT] = y
-                return budget - passcost.TILE_SCAN_HIT, index, y
-            budget -= passcost.TILE_SCAN_NEXT
-            budget += passcost.TILE_SCAN_LAST if x == 0 else 0
+                hit = badline.charge(clk, 0x1AE6, passcost.TILE_SCAN_HIT)
+                return budget - hit, index, y
+            budget -= badline.charge(
+                clk,
+                0x1AE6,
+                passcost.TILE_SCAN_NEXT - (passcost.TILE_SCAN_LAST if x == 0 else 0),
+            )
             continue
         if index < 0:  # $1AF2: the whole scan came up empty
-            return budget - passcost.TILE_SCAN_EXHAUSTED, index, -1
+            gone = badline.charge(clk, 0x1AF2, passcost.TILE_SCAN_EXHAUSTED)
+            return budget - gone, index, -1
         if budget <= 0:
             return budget, index, -2
         x = index
@@ -925,36 +976,39 @@ def _find_drainable_boulder_or_tree(state, enemy, budget, index):
         last = passcost.TILE_SCAN_LAST if x == 0 else 0  # $1AF0 BPL not taken
         flags = state.obj_flags[x]
         if flags & 0x80:  # empty slot
-            budget -= passcost.TILE_SCAN_EMPTY - last
+            budget -= badline.charge(clk, 0x1AB2, passcost.TILE_SCAN_EMPTY - last)
             continue
         if not (flags >= 0x40 or state.obj_type[x] == mm.T_BOULDER):
-            budget -= passcost.TILE_SCAN_OTHER - last
+            budget -= badline.charge(clk, 0x1AB7, passcost.TILE_SCAN_OTHER - last)
             continue
-        budget -= (
-            passcost.TILE_SCAN_STACKED if flags >= 0x40 else passcost.TILE_SCAN_LOOSE
-        ) + passcost.TILE_SCAN_TILE
+        if flags >= 0x40:
+            budget -= badline.charge(clk, 0x1AB9, passcost.TILE_SCAN_STACKED)
+        else:
+            budget -= badline.charge(clk, 0x1ABE, passcost.TILE_SCAN_LOOSE)
+        budget -= badline.charge(clk, 0x1AC2, passcost.TILE_SCAN_TILE)
         y = _tile_top(state, x)
         if y < 0:  # no object on the tile (shouldn't happen)
-            budget -= passcost.TILE_SCAN_NO_TILE - last
+            budget -= badline.charge(clk, 0x1AD3, passcost.TILE_SCAN_NO_TILE - last)
             continue
         otype = state.obj_type[y]
-        budget -= passcost.TILE_SCAN_TOP
+        budget -= badline.charge(clk, 0x1AD3, passcost.TILE_SCAN_TOP)
         if otype not in (mm.T_TREE, mm.T_BOULDER):
-            budget -= passcost.TILE_SCAN_WRONG_TOP - last
+            budget -= badline.charge(clk, 0x1ADD, passcost.TILE_SCAN_WRONG_TOP - last)
             continue
         see = relative.can_see_object(state, enemy, y, otype, FOV_SCAN)
-        budget -= _see_cost(see) + (
-            passcost.TILE_SCAN_SEE
-            if otype == mm.T_TREE
-            else passcost.TILE_SCAN_SEE_BOULDER
-        )
+        if otype == mm.T_TREE:
+            budget -= badline.charge(clk, 0x1ADD, passcost.TILE_SCAN_SEE)
+        else:
+            budget -= badline.charge(clk, 0x1ADF, passcost.TILE_SCAN_SEE_BOULDER)
+        budget -= _see_cost(see, clk)
         if not see["full"]:
-            budget -= passcost.TILE_SCAN_NEXT - last
+            budget -= badline.charge(clk, 0x1AE6, passcost.TILE_SCAN_NEXT - last)
             continue
         if budget <= 0:  # the ROM has not reached $1AEA yet
             return budget, paid(x), -2
         state.mem[mm.TARGETED_OBJECT_SLOT] = y
-        return budget - passcost.TILE_SCAN_HIT, index, y
+        hit = badline.charge(clk, 0x1AE6, passcost.TILE_SCAN_HIT)
+        return budget - hit, index, y
 
 
 # ---------------------------------------------------------------------------
@@ -966,18 +1020,18 @@ def _dec_cursor(state):
     mem[mm.CURSOR] = (c - 1) if c > 0 else 7
 
 
-def dispatch_cycles(state):
+def dispatch_cycles(state, clk):
     """$16B5..$16E6: the type dispatch and the $16CC absorbed test, which write
     nothing, so a frame boundary inside them leaves no trace."""
     otype = state.obj_type[state.mem[mm.CURSOR]]
     if otype == mm.T_SENTINEL:
-        return passcost.UPDATE_DISPATCH_SENTINEL
+        return badline.charge(clk, 0x16B5, passcost.UPDATE_DISPATCH_SENTINEL)
     if otype == mm.T_SENTRY:
-        return passcost.UPDATE_DISPATCH_SENTRY
-    return passcost.UPDATE_NOT_ENEMY
+        return badline.charge(clk, 0x16B5, passcost.UPDATE_DISPATCH_SENTRY)
+    return badline.charge(clk, 0x16B5, passcost.UPDATE_NOT_ENEMY)
 
 
-def update_body(state, budget):
+def update_body(state, budget, clk):
     """$16E6..$16D6: consider the enemy at the cursor, or discharge an absorbed one.
 
     Every state write $16B5 makes before the prnd is made here; a non-enemy slot
@@ -988,10 +1042,10 @@ def update_body(state, budget):
     if state.obj_type[x] not in mm.ENEMY_TYPES:  # $16BB sentry(1)/Sentinel(5) only
         return budget, True
     if state.obj_flags[x] & 0x80:  # $16CC BPL: absorbed -> discharge its bank only
-        budget -= passcost.UPDATE_ABSORBED
-        return budget - _consider_discharging_enemy_energy(state, x)[1], True
+        budget -= badline.charge(clk, 0x16CC, passcost.UPDATE_ABSORBED)
+        return budget - _consider_discharging_enemy_energy(state, x, clk)[1], True
     budget, stage, index, partial = _consider_enemy_state(
-        state, x, budget, state.body_stage, state.body_index, state.body_partial
+        state, x, budget, state.body_stage, state.body_index, state.body_partial, clk
     )
     if stage == BODY_DONE:
         state.body_stage, state.body_index, state.body_partial = BODY_ENTRY, 0, -1
@@ -1000,7 +1054,7 @@ def update_body(state, budget):
     return budget, False
 
 
-def update_cursor(state):
+def update_cursor(state, clk):
     """$16D9: store the advanced $16D6 prnd stream and decrement the cursor (7->0
     wrap).  Returns the cycles after the prnd, which UPDATE_PRND already charged."""
     mem = state.mem
@@ -1009,7 +1063,9 @@ def update_cursor(state):
     prng.next()
     prng.store(mem)
     _dec_cursor(state)
-    return passcost.UPDATE_CURSOR_WRAP if x == 0 else passcost.UPDATE_CURSOR
+    if x == 0:
+        return badline.charge(clk, 0x16D9, passcost.UPDATE_CURSOR_WRAP)
+    return badline.charge(clk, 0x16D9, passcost.UPDATE_CURSOR)
 
 
 UNBOUNDED = 1 << 40  # a budget no single $16E6 can outrun: the isolated-round path
@@ -1019,10 +1075,11 @@ def update_enemies(state):
     """$16B5 whole: dispatch, body, prnd and cursor, for the isolated round.
 
     The frame loop runs the three parts apart -- see :func:`advance_frame_python`."""
-    cost = dispatch_cycles(state)
-    left, _done = update_body(state, UNBOUNDED)
+    clk = badline.frame_clock(armed=False)  # the isolated round places no badline
+    cost = dispatch_cycles(state, clk)
+    left, _done = update_body(state, UNBOUNDED, clk)
     cost += UNBOUNDED - left
-    return cost + passcost.UPDATE_PRND + update_cursor(state)
+    return cost + passcost.UPDATE_PRND + update_cursor(state, clk)
 
 
 def step(state):
@@ -1032,7 +1089,7 @@ def step(state):
     py65 oracle (tests/oracle.step_enemy_round) captures the golden with -- a valid
     transition-function unit, but NOT the running game's cadence.  Real-time advance goes
     through :func:`advance_frames` (the two decoupled ROM clocks)."""
-    tick_cooldowns(state)
+    tick_cooldowns(state, badline.frame_clock(armed=False))
     update_enemies(state)
 
 
@@ -1041,7 +1098,7 @@ def step(state):
 # ---------------------------------------------------------------------------
 
 
-def cooldown_frame(state):
+def cooldown_frame(state, clk):
     """The cooldown clock for ONE video frame -- $130C called once per frame (raster
     $9663, or the scroll loop $3684 while scrolling; the two are mutually exclusive via
     $0CD8, so exactly one $130C per frame).  Advance the integer Bresenham accumulator
@@ -1051,13 +1108,13 @@ def cooldown_frame(state):
     foreground loses from that frame's budget."""
     mem = state.mem
     if mem[mm.PLAYER_NOT_ACTED] & 0x80:  # $965C BMI $9669: no $130C and no $1635 either
-        return passcost.IRQ_GATE_SHUT
-    cost = passcost.IRQ_GATE_OPEN
+        return badline.charge(clk, 0x9659, passcost.IRQ_GATE_SHUT)
+    cost = badline.charge(clk, 0x965E, passcost.IRQ_GATE_OPEN)
     acc = mem[mm.COOLDOWN_BRESENHAM] + mm.COOLDOWN_BRESENHAM_STEP
     mem[mm.COOLDOWN_BRESENHAM] = acc & 0xFF
     if acc > 0xFF:  # $1315 BCC skip -> only the carry runs the cooldown decrement
-        return cost + tick_cooldowns(state)
-    return cost + passcost.COOLDOWN_TICK_NO_CARRY
+        return cost + tick_cooldowns(state, clk)
+    return cost + badline.charge(clk, 0x130C, passcost.COOLDOWN_TICK_NO_CARRY)
 
 
 def start_tune(state, tune):
@@ -1079,49 +1136,54 @@ def start_tune(state, tune):
     mem[mm.SOUND_NOTE_TIMER + x] = mem[desc + 6]  # $8E7A: frames of the first note
 
 
-def sound_frame(state):
+def _voice_next(x):
+    """$8F08 DEX/BPL: voice 0 leaves the lap by the untaken branch."""
+    return passcost.SOUND_VOICE_NEXT if x else passcost.SOUND_VOICE_LAST
+
+
+def sound_frame(state, clk):
     """The note tick $8ED1 for ONE video frame ($963D JSR $FFC2), and its cycles.
 
     Three voices, X counting 2 down to 0.  A voice's note timer $8E86,X counts down a
     frame a lap; at 0 it reloads the gate timer $8E92,X from $8E8E,X, and when THAT
     runs out the voice is silenced ($8E96,X = $80).  $80 is the idle timer."""
     mem = state.mem
-    cyc = passcost.SOUND_TICK_FIXED
+    cyc = badline.charge(clk, 0x963D, passcost.SOUND_TICK_FIXED)
     for x in (2, 1, 0):
-        cyc += passcost.SOUND_VOICE_READ
+        cyc += badline.charge(clk, 0x8ED3, passcost.SOUND_VOICE_READ)
         note = mem[mm.SOUND_NOTE_TIMER + x]
         gate_due = note == 0  # $8ED6 BEQ $8EEE: the note timer is already out
         if gate_due:
-            cyc += passcost.SOUND_VOICE_SPENT
+            cyc += badline.charge(clk, 0x8ED6, passcost.SOUND_VOICE_SPENT)
         elif note & 0x80:  # $8ED8 BMI $8F08: an idle voice ticks nothing
-            cyc += passcost.SOUND_VOICE_OFF
+            cyc += badline.charge(clk, 0x8ED6, passcost.SOUND_VOICE_OFF)
         else:
             note -= 1
             mem[mm.SOUND_NOTE_TIMER + x] = note
-            cyc += passcost.SOUND_VOICE_TICK
+            cyc += badline.charge(clk, 0x8ED8, passcost.SOUND_VOICE_TICK)
             if note:
-                cyc += passcost.SOUND_VOICE_MORE
+                cyc += badline.charge(clk, 0x8EDD, passcost.SOUND_VOICE_MORE)
             else:  # $8EDF: the note ends, the gate timer reloads
                 mem[mm.SOUND_GATE_TIMER + x] = mem[mm.SOUND_NOTE_LENGTH + x]
-                cyc += passcost.SOUND_VOICE_NOTE
+                cyc += badline.charge(clk, 0x8EDF, passcost.SOUND_VOICE_NOTE)
                 gate_due = True
         if not gate_due:
-            cyc += passcost.SOUND_VOICE_NEXT if x else passcost.SOUND_VOICE_LAST
+            cyc += badline.charge(clk, 0x8F08, _voice_next(x))
             continue
-        cyc += passcost.SOUND_GATE_READ
+        cyc += badline.charge(clk, 0x8EEE, passcost.SOUND_GATE_READ)
         gate = mem[mm.SOUND_GATE_TIMER + x]
         if gate == 0:
-            cyc += passcost.SOUND_GATE_OFF
+            cyc += badline.charge(clk, 0x8EF1, passcost.SOUND_GATE_OFF)
         else:
             gate = (gate - 1) & 0xFF
             mem[mm.SOUND_GATE_TIMER + x] = gate
-            cyc += passcost.SOUND_GATE_TICK
+            cyc += badline.charge(clk, 0x8EF3, passcost.SOUND_GATE_TICK)
             if gate:
-                cyc += passcost.SOUND_GATE_MORE
+                cyc += badline.charge(clk, 0x8EF6, passcost.SOUND_GATE_MORE)
             else:  # $8EF8: the gate runs out, the voice goes quiet
                 mem[mm.SOUND_VOICE_FLAG + x] = 0x80
-                cyc += passcost.SOUND_GATE_END
-        cyc += passcost.SOUND_VOICE_NEXT if x else passcost.SOUND_VOICE_LAST
+                cyc += badline.charge(clk, 0x8EF8, passcost.SOUND_GATE_END)
+        cyc += badline.charge(clk, 0x8F08, _voice_next(x))
     return cyc
 
 
@@ -1132,27 +1194,32 @@ def advance_frame_python(state, plotting=False):
     so an enemy the tick makes due rotates in the SAME frame, not the next one. Ticking
     after the passes costs a whole rotation of phase. ``plotting`` suppresses the sweep.
     """
-    irq = sound_frame(state) + cooldown_frame(state)
+    clk = badline.frame_clock()  # the raster IRQ pins the frame's phase every frame
+    irq = badline.charge(clk, 0x95E9, passcost.IRQ_BODY) - passcost.IRQ_BODY
+    irq += sound_frame(state, clk) + cooldown_frame(state, clk)
     if plotting:
         return
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
+    budget -= badline.FRAME_STEAL_CEILING  # the 25 windows, refunded by charge()
     phase = state.pass_phase
     while budget > 0:
         if phase == PHASE_HEAD:
-            budget -= passcost.PASS_HEAD + dispatch_cycles(state)
+            budget -= badline.charge(clk, 0x1289, passcost.PASS_HEAD)
+            budget -= dispatch_cycles(state, clk)
             phase = PHASE_BODY
             if budget <= 0:
                 break
         if phase == PHASE_BODY:
-            budget, done = update_body(state, budget)
+            budget, done = update_body(state, budget, clk)
             if not done:  # the frame ran out INSIDE $16E6; resume there next frame
                 break
-            budget -= passcost.UPDATE_PRND
+            budget -= badline.charge(clk, 0x16D6, passcost.UPDATE_PRND)
             phase = PHASE_CURSOR
             if budget <= 0:
                 break
-        budget -= update_cursor(state) + passcost.PASS_TAIL
-        budget -= passcost.exposure_cycles(state.mem)
+        budget -= update_cursor(state, clk)
+        budget -= badline.charge(clk, 0x12A2, passcost.PASS_TAIL)
+        budget -= passcost.exposure_cycles(state.mem, clk)
         phase = PHASE_HEAD
     state.cycle_residual = budget
     state.pass_phase = phase

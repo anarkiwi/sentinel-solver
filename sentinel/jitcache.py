@@ -8,7 +8,7 @@ A digest of those constants in ``NUMBA_CACHE_DIR`` makes a constant change a new
 import hashlib
 import os
 
-from sentinel import passcost
+from sentinel import passcost, writeruns
 
 
 def _digest():
@@ -18,7 +18,10 @@ def _digest():
         for n, v in vars(passcost).items()
         if not n.startswith("_") and isinstance(v, (int, float))
     )
-    return hashlib.blake2b(repr(items).encode(), digest_size=8).hexdigest()
+    hasher = hashlib.blake2b(repr(items).encode(), digest_size=8)
+    hasher.update(writeruns.RUN.tobytes())  # the badline clock's tables inline too
+    hasher.update(repr(writeruns.ANCHOR).encode())
+    return hasher.hexdigest()
 
 
 def install():

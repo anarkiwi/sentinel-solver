@@ -5,13 +5,19 @@ until its first READ cycle, so the steal is ``BADLINE_STEAL`` less the consecuti
 cycles the CPU happens to be performing at the window's first cycle.
 """
 
-from sentinel import passcost
+import numpy as np
 
+from sentinel import writeruns
+
+PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
+BADLINE_STEAL = 43  # 40 VIC c-accesses + the 3-cycle AEC lag: the MAXIMUM, not a mode
+BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
+SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
 LINE_CYCLES = 63  # PAL 6569: 19656 = 312 x 63
 BADLINE_FIRST_LINE = 51  # raster $33, the first $30..$F7 line with low 3 bits = YSCROLL
 BADLINE_LINE_STEP = 8
 BADLINE_WINDOW_CYCLE = 11  # solved live: the one cycle that derives every sampled steal
-MIN_STEAL = passcost.BADLINE_STEAL - 2  # a write run is at most an RMW's or a JSR's two
+MIN_STEAL = BADLINE_STEAL - 2  # a write run is at most an RMW's or a JSR's two
 RASTER_IRQ_LINE = 213  # $9589's $D5 entry: the once-a-frame $9630 body
 IRQ_ENTRY = 7  # the 6510 interrupt sequence, run at an instruction boundary
 IRQ_ENTRY_BRANCH = 6  # ... one less off a branch, whose IRQ poll is a cycle earlier
@@ -41,7 +47,7 @@ def window_positions(line_cycle=BADLINE_WINDOW_CYCLE):
     """Frame positions of the BA window on each badline, measured from raster 0."""
     return tuple(
         (BADLINE_FIRST_LINE + BADLINE_LINE_STEP * i) * LINE_CYCLES + line_cycle
-        for i in range(passcost.BADLINES_PER_FRAME)
+        for i in range(BADLINES_PER_FRAME)
     )
 
 
@@ -54,7 +60,7 @@ def steal(op, position, windows=None):
     window = min((w for w in windows if w >= position), default=None)
     if window is None:
         return None
-    return passcost.BADLINE_STEAL - write_run(op, window - position)
+    return BADLINE_STEAL - write_run(op, window - position)
 
 
 def marker_position(boundary, branch=False):
@@ -64,6 +70,79 @@ def marker_position(boundary, branch=False):
     that boundary plus a constant -- it is aligned, not blurred.
     """
     return boundary + (IRQ_ENTRY_BRANCH if branch else IRQ_ENTRY) + MARKER_OFFSET
+
+
+FRAME_ORIGIN = RASTER_IRQ_LINE * LINE_CYCLES  # the raster the $9589 $D5 entry programs
+SHORT_IRQ_LINES = (53, 93, 133, 173)  # the $9589 table's other four entries
+NO_EVENT = 1 << 40  # past every event: a clock with no windows left to place
+FRAME_STEAL_CEILING = BADLINES_PER_FRAME * BADLINE_STEAL  # every window a full steal
+CLOCK_FIELDS = 4  # position, next event, event index, steal so far
+
+
+def frame_events(line_cycle=BADLINE_WINDOW_CYCLE):
+    """``(offset from the raster IRQ, is a split IRQ)`` of everything that displaces
+    the foreground, in frame order: 25 BA windows and the four split interrupts."""
+    windows = [
+        ((w - FRAME_ORIGIN) % PAL_FRAME_CYCLES, 0) for w in window_positions(line_cycle)
+    ]
+    short = [
+        ((line * LINE_CYCLES - FRAME_ORIGIN) % PAL_FRAME_CYCLES, 1)
+        for line in SHORT_IRQ_LINES
+    ]
+    return tuple(sorted(windows + short))
+
+
+EVENT_POS = np.array([p for p, _ in frame_events()] + [NO_EVENT], dtype=np.int64)
+EVENT_SHORT_IRQ = np.array([k for _, k in frame_events()] + [0], dtype=np.int64)
+N_EVENTS = len(EVENT_POS) - 1
+
+
+def frame_clock(armed=True):
+    """A clock at the raster IRQ, its events re-armed; ``armed`` False places none."""
+    clk = np.zeros(CLOCK_FIELDS, dtype=np.int64)
+    clk[1] = EVENT_POS[0] if armed else NO_EVENT
+    clk[2] = 0 if armed else N_EVENTS
+    return clk
+
+
+def run_at(anchor, offset):
+    """Consecutive write cycles ``offset`` cycles into the run counted from ``anchor``."""
+    start = writeruns.START[anchor]
+    if start < 0 or offset >= writeruns.LENGTH_AT[anchor]:
+        return 0
+    return int(writeruns.RUN[start + offset])
+
+
+def _place(clk, anchor, cycles):
+    """The slow half of :func:`charge`: the events this term's cycles reach."""
+    pos, index, refund = clk[0], clk[2], 0
+    end = pos + cycles
+    while EVENT_POS[index] < end:
+        if EVENT_SHORT_IRQ[index]:
+            pos += SHORT_IRQ
+            end += SHORT_IRQ
+        else:
+            spend = BADLINE_STEAL - run_at(anchor, EVENT_POS[index] - pos)
+            refund += BADLINE_STEAL - spend
+            pos += spend
+            end += spend
+        index += 1
+    clk[0], clk[1], clk[2] = end, EVENT_POS[index], index
+    clk[3] += refund
+    return cycles - refund
+
+
+def charge(clk, anchor, cycles):
+    """Spend ``cycles`` of the run at ``anchor``, less what its writes refund.
+
+    The frame is charged ``FRAME_STEAL_CEILING`` up front, so a window landing on a
+    write run gives its cycles back here; one landing on a read costs nothing more.
+    """
+    end = clk[0] + cycles
+    if end <= clk[1]:
+        clk[0] = end
+        return cycles
+    return _place(clk, anchor, cycles)
 
 
 def frame_steal(instructions, windows=None):
@@ -80,5 +159,5 @@ def frame_steal(instructions, windows=None):
         while index + 1 < len(stream) and stream[index + 1][0] <= window:
             index += 1
         position, op = stream[index]
-        total += passcost.BADLINE_STEAL - write_run(op, window - position)
+        total += BADLINE_STEAL - write_run(op, window - position)
     return total

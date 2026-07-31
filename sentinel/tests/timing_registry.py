@@ -320,7 +320,7 @@ REGISTRY = {
     ),
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
-    "PAL_FRAME_CYCLES": _d(_PC, "PAL 6569: 312 raster lines x 63 cycles"),
+    "PAL_FRAME_CYCLES": _d(_BL, "PAL 6569: 312 raster lines x 63 cycles"),
     "LINE_CYCLES": entry(
         _BL,
         DERIVED,
@@ -346,10 +346,10 @@ REGISTRY = {
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,
-        "BADLINE_FRAME + the four short raster interrupts + IRQ_BODY. The handler is "
-        "COUNTED off the image (KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, "
-        "so py65 walks it); only the VIC-II DMA steal is hardware, and BADLINE_FRAME is "
-        "the frozen-clock $1289 rate on three boards to under a pass in 50000 "
+        "the four short raster interrupts + IRQ_BODY, both COUNTED off the image "
+        "(KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, so py65 walks it). "
+        "The VIC-II DMA steal is no longer in it: sentinel.badline charges each of the "
+        "25 windows off the term the model is executing there "
         "(fixtures/live_pass_cycles.json frozen_idle_rate)",
         "test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count",
     ),

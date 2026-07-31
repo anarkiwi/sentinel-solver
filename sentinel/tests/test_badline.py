@@ -68,9 +68,8 @@ def test_the_live_steal_never_leaves_the_derived_bounds():
 
 
 def test_the_frame_steal_is_state_dependent_so_no_constant_is_right():
-    """The frame's own total moves board to board AND frame to frame, and BADLINE_FRAME
-    -- the one fitted term left in the budget -- sits inside the range on every board.
-    """
+    """The frame's own total moves board to board AND frame to frame, so the budget
+    charges it off the model's own term stream rather than carrying a constant."""
     floor = passcost.BADLINES_PER_FRAME * badline.MIN_STEAL
     ceiling = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
     means = {}
@@ -79,7 +78,8 @@ def test_the_frame_steal_is_state_dependent_so_no_constant_is_right():
         assert len(totals) > 1, f"{name}: the frame total is a single value"
         assert floor <= min(totals) and max(totals) <= ceiling, name
         means[name] = sum(k * v for k, v in totals.items()) / sum(totals.values())
-    assert min(means.values()) < passcost.BADLINE_FRAME < max(means.values()), means
+    assert max(means.values()) - min(means.values()) > 1, means
+    assert not hasattr(passcost, "BADLINE_FRAME")
 
 
 _BRANCHES = frozenset(("BPL", "BMI", "BVC", "BVS", "BCC", "BCS", "BNE", "BEQ"))
@@ -153,3 +153,40 @@ def test_the_frame_steal_is_the_law_applied_to_the_frames_instruction_stream():
     for name, board in _live().items():
         assert board["complete_frames"] > 0, name
         assert board["frame_steal_agrees"] == board["complete_frames"], name
+
+
+def test_the_frame_clock_places_every_window_and_split_irq_at_its_own_raster():
+    """The clock is pinned at the raster IRQ, so the frame opens with the four badlines
+    the $9630 body contains and then 7056 cycles of foreground with none at all."""
+    events = badline.frame_events()
+    assert len(events) == passcost.BADLINES_PER_FRAME + len(badline.SHORT_IRQ_LINES)
+    assert sum(1 for _, short in events if short) == len(badline.SHORT_IRQ_LINES)
+    assert list(events) == sorted(events)
+    origin = badline.FRAME_ORIGIN
+    first = [p for p, short in events if not short][:4]
+    assert first == [
+        (219 + 8 * i) * badline.LINE_CYCLES + 11 - origin for i in range(4)
+    ]
+    gap = [p for p, short in events if not short][4] - first[-1]
+    assert gap == (51 + 312 - 243) * badline.LINE_CYCLES
+
+
+def test_charge_refunds_the_write_run_the_window_lands_on():
+    """The frame pays BADLINE_STEAL for all 25 up front, so a window over $31CA's own
+    ROL abs pair comes back two cycles and one over a read comes back none."""
+    clk = badline.frame_clock()
+    window = int(badline.EVENT_POS[0])
+    assert badline.run_at(0x31CA, window) == 2  # the LFSR's dummy-plus-real write
+    assert badline.charge(clk, 0x31CA, window + 1) == window - 1
+    assert clk[3] == 2
+    clk = badline.frame_clock()
+    assert badline.charge(clk, 0x0000, window + 1) == window + 1  # an unmapped run
+    assert clk[3] == 0
+
+
+def test_an_unarmed_clock_charges_nothing_so_the_isolated_round_is_unchanged():
+    """``step`` and ``update_enemies`` price a routine, not a frame, so their clock
+    places no window and every term costs exactly what passcost says."""
+    clk = badline.frame_clock(False)
+    assert badline.charge(clk, 0x31CA, passcost.PRND) == passcost.PRND
+    assert clk[3] == 0

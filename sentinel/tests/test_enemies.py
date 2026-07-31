@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, enemies, memmap as mm
+from sentinel import badline, landscape, enemies, memmap as mm
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_enemies.json")
@@ -130,13 +130,13 @@ def test_cooldown_cadence_is_one_in_three():
     enemy = enemies.enemy_slots(state)[0]
     m[mm.ENEMIES_ROTATION_COOLDOWN + enemy] = 9
     # gate 0 -> decrement now, reload gate to 2; then two rounds of no decrement.
-    enemies.tick_cooldowns(state)
+    enemies.tick_cooldowns(state, badline.frame_clock(False))
     assert m[mm.ENEMIES_ROTATION_COOLDOWN + enemy] == 8
     assert m[mm.COOLDOWN_GATE] == 2
-    enemies.tick_cooldowns(state)
-    enemies.tick_cooldowns(state)
+    enemies.tick_cooldowns(state, badline.frame_clock(False))
+    enemies.tick_cooldowns(state, badline.frame_clock(False))
     assert m[mm.ENEMIES_ROTATION_COOLDOWN + enemy] == 8  # unchanged for two rounds
-    enemies.tick_cooldowns(state)
+    enemies.tick_cooldowns(state, badline.frame_clock(False))
     assert m[mm.ENEMIES_ROTATION_COOLDOWN + enemy] == 7
 
 
@@ -145,7 +145,7 @@ def test_cooldown_sticks_at_one():
     m = state.mem
     m[mm.COOLDOWN_GATE] = 0
     m[mm.ENEMIES_DRAINING_COOLDOWN] = 1
-    enemies.tick_cooldowns(state)
+    enemies.tick_cooldowns(state, badline.frame_clock(False))
     assert m[mm.ENEMIES_DRAINING_COOLDOWN] == 1  # 1 does not decrement to 0
 
 
@@ -165,14 +165,19 @@ def test_reduce_object_energy_downgrades():
     # a tree is removed, a boulder becomes a tree, a robot becomes a boulder.
     tree = state.slot_of_type(mm.T_TREE)
     d0 = state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy]
-    assert enemies._reduce_object_energy(state, tree, enemy)[0] is False
+    assert (
+        enemies._reduce_object_energy(state, tree, enemy, badline.frame_clock(False))[0]
+        is False
+    )
     assert state.is_empty(tree)
     # every non-kill drain banks one unit of energy to discharge later as a tree.
     assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 1) & 0xFF
     # player loses one energy (and banks another discharge unit).
     e0 = state.energy
     player = state.mem[mm.PLAYER_OBJECT]
-    drained, cost = enemies._reduce_object_energy(state, player, enemy)
+    drained, cost = enemies._reduce_object_energy(
+        state, player, enemy, badline.frame_clock(False)
+    )
     assert drained is True and state.energy == e0 - 1 and cost > 0
     assert state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] == (d0 + 2) & 0xFF
 
@@ -182,7 +187,12 @@ def test_consider_discharging_scatters_tree():
     enemy = enemies.enemy_slots(state)[0]
     # nothing banked -> no discharge.
     state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 0
-    assert enemies._consider_discharging_enemy_energy(state, enemy)[0] is False
+    assert (
+        enemies._consider_discharging_enemy_energy(
+            state, enemy, badline.frame_clock(False)
+        )[0]
+        is False
+    )
     # one unit banked -> one new tree placed, bank decremented.
     trees0 = sum(
         1
@@ -190,7 +200,12 @@ def test_consider_discharging_scatters_tree():
         if not state.is_empty(s) and state.obj_type[s] == mm.T_TREE
     )
     state.mem[mm.ENEMIES_ENERGY_TO_DISCHARGE + enemy] = 1
-    assert enemies._consider_discharging_enemy_energy(state, enemy)[0] is True
+    assert (
+        enemies._consider_discharging_enemy_energy(
+            state, enemy, badline.frame_clock(False)
+        )[0]
+        is True
+    )
     trees1 = sum(
         1
         for s in range(mm.NUM_SLOTS)
@@ -207,11 +222,21 @@ def test_drain_at_zero_energy_kills_player():
     state.mem[mm.PLAYER_DIED_BY_DRAINING] = 0
     # draining the player with energy left just decrements and does not kill.
     state.energy = 1
-    assert enemies._reduce_object_energy(state, player, enemy)[0] is True
+    assert (
+        enemies._reduce_object_energy(state, player, enemy, badline.frame_clock(False))[
+            0
+        ]
+        is True
+    )
     assert state.energy == 0
     assert not (state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80)
     # draining again at zero energy sets the death flag (kill_player $1A00).
-    assert enemies._reduce_object_energy(state, player, enemy)[0] is True
+    assert (
+        enemies._reduce_object_energy(state, player, enemy, badline.frame_clock(False))[
+            0
+        ]
+        is True
+    )
     assert state.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80
 
 
