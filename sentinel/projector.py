@@ -10,7 +10,7 @@ import os
 
 import numpy as np
 
-from sentinel import passcost, relative, terrain, memmap as mm
+from sentinel import passcost, relative, rendercost, terrain, memmap as mm
 
 try:
     from sentinel import projector_jit
@@ -88,7 +88,7 @@ def _tile_height(state, tx, ty):
     return state.obj_z_height[slot], tb, levels
 
 
-_QUAD_CYCLES = (
+_EXAM_QUAD = (
     passcost.EXAM_QUAD_NORTH,
     passcost.EXAM_QUAD_EAST,
     passcost.EXAM_QUAD_SOUTH,
@@ -124,7 +124,7 @@ def _project(state, setup, col, row, vis=None):
     sx_lo = (zp[0x8A] - setup["ref_lo"]) & 0xFF  # screen x ($2891), carry stays set
     sx_hi = (zp[0x8B] - setup["ref_hi"]) & 0xFF
     cyc += passcost.EXAM_STORE + relative._calc_hypotenuse(zp)  # $937F -> zp[$7C]/$7D
-    cyc += _QUAD_CYCLES[setup["quadrant"]] + passcost.EXAM_ADDR
+    cyc += _EXAM_QUAD[setup["quadrant"]] + passcost.EXAM_ADDR
     tx, ty = _tile_xy(setup["quadrant"], col, row)
     height, tile_byte, levels = _tile_height(state, tx, ty)
     if levels:  # $28F2: an object tile walks its stack and skips the raytrace bit
@@ -490,20 +490,36 @@ def _project_scene_py(state, setup, observer):
         return cached
 
     s1b = _OFFSET_TO_TILE[setup["quadrant"]]
-    # plot_tile ($2A24) reads $0180 slot (($0025|$0005)+$001B)&$3F: drawn tile is examine (col+offc,row+offr); $001B=$27D3[quad], bit0=col, bit5=bank(row+1).
+    # plot_tile ($2A24) reads $0180 slot (($0025|$0005)+$001B)&$3F: drawn tile is examine (col+offc,row+offr); $001B=$27D3[quad], bit0=col, bit5=bank(row+1). prepare_polygon $2D6C takes $0025|$0005 instead, so a polygon's corners are (col,row) and its neighbours, not the offset slot's.
     offc, offr = s1b & 1, (s1b >> 5) & 1
     tiles = []
+    fill = np.zeros(
+        (sum(hi - lo for _r, lo, hi in rows), rendercost.TILE_COLS), np.int64
+    )
+    nfill = 0
+    c3 = setup["c3"]
     for row, lo, hi in rows:
         re = (row + offr) & 0xFF
-        for col in range(lo, hi):  # plot range [$0037, $0038); $0038 excluded
+        # plot_row_of_tiles_or_block $295D: up from $0037 to $0003, then down from $0038.
+        order = list(range(lo, min(hi, c3))) + list(range(hi - 1, max(lo, c3) - 1, -1))
+        for col in order:
             ce = (col + offc) & 0xFF
             res = proj(ce, re)
             tb = res[4]
+            tx, ty = _tile_xy(setup["quadrant"], ce, re)
+            if tb and tb < mm.OBJECT_TILE and not visible[ty][tx]:
+                tb = 0  # $291B zeroes $0180 for hidden non-object tiles
+            fill[nfill, rendercost.T_BYTE] = tb
+            fill[nfill, rendercost.T_PARITY] = (col ^ row) & 1
+            for k, (cc, rr) in enumerate(
+                ((col, row), (col, row + 1), (col + 1, row + 1), (col + 1, row))
+            ):
+                q = proj(cc, rr)
+                b = rendercost.T_CORNER + 4 * k
+                fill[nfill, b : b + 4] = q[0], q[1], q[2], q[3]
+            nfill += 1
             if tb == 0:  # $0180 slot zero: nothing to plot ($2A27 BEQ)
                 continue
-            tx, ty = _tile_xy(setup["quadrant"], ce, re)
-            if tb < mm.OBJECT_TILE and not visible[ty][tx]:
-                continue  # $291B zeroes $0180 for hidden non-object tiles
             c1, r1 = min(ce + 1, _LAST), min(re + 1, _LAST)
             corners = (res, proj(c1, re), proj(ce, r1), proj(c1, r1))
             ys = [_signed16(c[3], c[2]) for c in corners]
@@ -526,7 +542,7 @@ def _project_scene_py(state, setup, observer):
                     "w": max(min(span, _W_SCREEN), 0),
                 }
             )
-    return tiles, n_examine, exam_cycles
+    return tiles, n_examine, exam_cycles, fill[:nfill]
 
 
 def _project_scene_jit(state, setup, observer):
@@ -543,7 +559,7 @@ def _project_scene_jit(state, setup, observer):
     su[projector_jit.S_OBS_ZF] = state.obj_z_frac[observer]
     su[projector_jit.S_LEFT] = setup["buf_left"]
     su[projector_jit.S_RIGHT] = setup["buf_right"]
-    out, spans, n, n_examine, exam_cycles = projector_jit.project_scene(
+    out, spans, n, n_examine, exam_cycles, fill = projector_jit.project_scene(
         np.frombuffer(state.mem, dtype=np.uint8),
         su,
         _occlusion_memo(state, observer)[1],
@@ -569,15 +585,15 @@ def _project_scene_jit(state, setup, observer):
         }
         for r, span in zip(out[:n].tolist(), spans[:n].tolist())
     ]
-    return tiles, int(n_examine), int(exam_cycles)
+    return tiles, int(n_examine), int(exam_cycles), fill
 
 
 def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None):
-    """Return (tiles, n_examine, exam_cycles) under ``mode``'s $2993 buffer window.
+    """Return (tiles, n_examine, exam_cycles, fill) under ``mode``'s $2993 window.
 
     The plotted tile set and the $2845 examination count and cycles are all exact.
-    Non-object tiles the occlusion table hides are examined but dropped; each kept tile
-    carries its H and W.
+    Non-object tiles the occlusion table hides are examined but dropped from ``tiles``;
+    ``fill`` keeps every tile of the plot range in render order for :mod:`rendercost`.
     """
     if observer is None:
         observer = state.player
@@ -587,11 +603,23 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window
     return _project_scene_py(state, setup, observer)
 
 
+def fill_frames(setup, fill, mode, columns=None):
+    """rendercost.fill_cycles over a projected scene, in the buffer ``mode`` selects."""
+    bufs, sect = rendercost.buffers(mode, columns)
+    return rendercost.fill_cycles(
+        fill,
+        len(fill),
+        (setup["quadrant"] - 2) & 0xFF,  # $004B ($267B)
+        (setup["quadrant"] * 4) & 0xFF,  # $0066 ($2673)
+        sect,
+        bufs,
+        rendercost.SCREEN_TOP,
+        rendercost.SCREEN_BOTTOM,
+    )
+
+
 FRAME_CYCLES = 19656.0  # PAL frame
 BASE_CYCLES = float(os.environ.get("RENDER_BASE_CYCLES", "0"))
-PER_SCANLINE = float(os.environ.get("RENDER_PER_SCANLINE", "60"))  # term (b) edge/row
-PER_PIXEL = float(os.environ.get("RENDER_PER_PIXEL", "1.75"))  # term (b) span_fill byte
-
 # term (c) plot_object ($8533) base floor (docs/architecture.md); object fill = residual.
 C_VERTEX = float(os.environ.get("RENDER_C_VERTEX", "2200"))  # transform_vertex trig
 C_PREP_CALL = float(os.environ.get("RENDER_C_PREP_CALL", "625"))  # off-band prepare
@@ -628,21 +656,6 @@ def _inview_object_base(state, tiles):
                 break
             slot = flags & 0x3F
     return total
-
-
-def _terrain_poly_base(tiles):
-    """prepare_polygon ($2D6C) floor over the plotted TERRAIN tiles: a flat tile is one
-    quad, a sloped one two triangles (plot_two_triangles $2A8A), each prepared once per
-    wide-buffer section ($0010 < 2 at $2AAB). Charged whether or not the polygon lands
-    in the fill band -- an off-band polygon still clips, which the area term prices 0.
-    A non-object tile byte carries its own slope nibble, so this needs no terrain read.
-    """
-    npoly = 0
-    for tile in tiles:
-        tb = tile["tile_byte"]
-        if tb < mm.OBJECT_TILE:
-            npoly += 2 if tb & 0x0F else 1
-    return npoly * SECTIONS * C_PREP_CALL
 
 
 _EXACT_WARNED = [False]
@@ -687,13 +700,20 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None):
     obs = state.player if observer is None else observer
 
     def make():
-        tiles, _n_examine, exam_cycles = project_scene(state, h, v, obs, mode, window)
-        area = sum(PER_SCANLINE * t["h"] + PER_PIXEL * t["h"] * t["w"] for t in tiles)
-        base = _terrain_poly_base(tiles) + _inview_object_base(state, tiles)
-        return (BASE_CYCLES + exam_cycles + area + base) / FRAME_CYCLES
+        setup = _setup(state, h, v, obs, mode, window)
+        tiles, _n, exam_cycles, fill = project_scene(state, h, v, obs, mode, window)
+        columns = None if window is None else _window_columns(window)
+        fill_cycles = fill_frames(setup, fill, mode, columns)
+        base = _inview_object_base(state, tiles)
+        return (BASE_CYCLES + exam_cycles + fill_cycles + base) / FRAME_CYCLES
 
     key = (scene_key(state), obs, h, v, mode, window)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)
+
+
+def _window_columns(window):
+    """The $0C69 column count a :func:`strip_window` pair came from ($29C9 halves it)."""
+    return window[0] * 2
 
 
 def strip_window(columns):

@@ -135,7 +135,7 @@ def test_pan_notch_selects_the_same_tiles_as_the_rom():
     """
     for key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)
-        tiles, n_examine, _exam_cycles = projector.project_scene(
+        tiles, n_examine, _exam, _fill = projector.project_scene(
             state, ph, pv, None, pancost.PAN_MODE[d]
         )
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine}"

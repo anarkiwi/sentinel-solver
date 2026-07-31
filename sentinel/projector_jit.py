@@ -28,6 +28,9 @@ _N = mm.N
 _NUM_SLOTS = mm.NUM_SLOTS
 _OBJECT_TILE = mm.OBJECT_TILE
 _LAST = mm.N - 2  # $1E: last tile with all four corners on the board
+_FILL_COLS = (
+    18  # rendercost.TILE_COLS: tile byte, parity, four corners of xlo/xhi/ylo/yhi
+)
 
 # $2845's own branch costs, inlined as njit globals (see passcost.EXAM_*).
 _EX_CALL = passcost.EXAM_CALL
@@ -507,18 +510,38 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
     cap = (_N + 1) * (_N + 1)
     out = np.zeros((cap, 11), dtype=np.int64)
     ws = np.zeros(cap, dtype=np.float64)
+    fill = np.zeros((cap, _FILL_COLS), dtype=np.int64)
     n = 0
+    nfill = 0
+    c3 = su[S_C3]
     for i in range(nrows):
         re = (rrow[i] + offr) & 0xFF
-        for col in range(rlo[i], rhi[i]):  # plot range [$0037, $0038)
+        lo, hi = rlo[i], rhi[i]  # $295D plots up to $0003, then back down from $0038
+        nfront = max(0, min(hi, c3) - lo)
+        for k in range(hi - lo):
+            col = lo + k if k < nfront else hi - 1 - (k - nfront)
+            if k >= nfront and col < c3:
+                break
             ce = (col + offc) & 0xFF
             i0 = _cached(mem, zp, su, vis, cres, seen, ce, re)
             tile_byte = cres[i0, re, 4]
+            tx, ty = _tile_xy(su[S_QUAD], ce, re)
+            if tile_byte != 0 and tile_byte < _OBJECT_TILE and vis[ty, tx] == 0:
+                tile_byte = 0  # $291B zeroes $0180 for hidden non-object tiles
+            fill[nfill, 0] = tile_byte
+            fill[nfill, 1] = (col ^ rrow[i]) & 1
+            for k4 in range(4):
+                cc = col + (1 if k4 >= 2 else 0)
+                rr = rrow[i] + (1 if 1 <= k4 <= 2 else 0)
+                ic = _cached(mem, zp, su, vis, cres, seen, cc, rr)
+                b = 2 + 4 * k4
+                fill[nfill, b] = cres[ic, rr, 0]
+                fill[nfill, b + 1] = cres[ic, rr, 1]
+                fill[nfill, b + 2] = cres[ic, rr, 2]
+                fill[nfill, b + 3] = cres[ic, rr, 3]
+            nfill += 1
             if tile_byte == 0:  # $0180 slot zero: nothing to plot ($2A27 BEQ)
                 continue
-            tx, ty = _tile_xy(su[S_QUAD], ce, re)
-            if tile_byte < _OBJECT_TILE and vis[ty, tx] == 0:
-                continue  # $291B zeroes $0180 for hidden non-object tiles
             c1 = min(ce + 1, _LAST_TILE)
             r1 = min(re + 1, _LAST_TILE)
             i1 = _cached(mem, zp, su, vis, cres, seen, c1, re)
@@ -548,4 +571,4 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
             out[n, 10] = bot - top
             ws[n] = span
             n += 1
-    return out, ws, n, cnt[0], cnt[1]
+    return out, ws, n, cnt[0], cnt[1], fill[:nfill]

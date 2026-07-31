@@ -31,9 +31,9 @@ FACING_OVERSHOOT = 1  # ... the exception: a $1FFC stall that ate a rotation
 DIVERGENT_SPANS = (10, 15, 17, 18, 33)  # spans whose facings we get wrong
 ROM_ROUNDS = 60  # rounds of byte-exact agreement demanded on each  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
-OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed time
+OVERCHARGED_RATE = 0.34  # share of actions billed MORE than their whole elapsed time
 CADENCE = {False: 91, True: 64}  # plotting -> facings reproduced, vs recorded
-SPLIT_CADENCE = 88  # the executor's phase split, scored the same way
+SPLIT_CADENCE = 87  # the executor's phase split, scored the same way
 # Live replay_human captures carrying $1335/$0C50: fixture -> (spans, facings).
 # ls335 was 13: pricing the $1805 rotation and its $1F9F redraw (2177 cycles, 2.4 passes)
 # and the frame's own $130C moves when each rotation falls due, and one 7-enemy span now

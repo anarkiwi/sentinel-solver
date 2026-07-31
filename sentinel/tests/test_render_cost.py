@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, memmap as mm, projector, terrain
+from sentinel import landscape, projector, rendercost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
@@ -111,7 +111,7 @@ def _check(data):
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles, n_examine, exam_cycles = projector.project_scene(state, h, v)
+        tiles, n_examine, exam_cycles, _fill = projector.project_scene(state, h, v)
         assert n_examine == rec["n_examine"], f"{key} examines {n_examine} != {rec}"
         assert len(tiles) == rec["n_filled"], f"{key} plots {len(tiles)} != {rec}"
         # The $2845 tree is cycle-exact bar one $0078-stale branch a pass (open item 5).
@@ -120,7 +120,9 @@ def _check(data):
             rec["cycles"] / projector.FRAME_CYCLES
         )  # fill term approx: see residual doc
         got = projector.render_cost(state, {"h_angle": h, "v_angle": v})
-        assert 0.30 * want <= got <= 2.4 * want, f"{key} frames {got:.1f} vs {want:.1f}"
+        assert (
+            0.55 * want <= got <= 1.15 * want
+        ), f"{key} frames {got:.1f} vs {want:.1f}"
 
 
 @pytest.mark.oracle
@@ -264,11 +266,17 @@ def test_transfer_tune_is_96_frames():
     assert tune_frames(0x19) == 96 == projector.TUNE_TRANSFER_FRAMES
 
 
+def _fill_cycles(state, h, v, mode=projector.PLAY_MODE):
+    """The fill model's own cycles for one view."""
+    setup = projector._setup(state, h, v, state.player, mode)
+    fill = projector.project_scene(state, h, v, None, mode)[3]
+    return projector.fill_frames(setup, fill, mode)
+
+
 def test_offband_tiles_still_cost_their_prepare_polygon_calls():
-    """The area proxy prices a tile whose corners all fall outside the fill band at
-    zero H, hence zero cost -- but the ROM still runs prepare_polygon ($2D6C) per
-    polygon per section to clip it. Views exist where EVERY plotted tile is off-band
-    and the 6502 spends 100k+ cycles; the terrain polygon floor is what covers them."""
+    """A tile whose polygon clips out of the fill band has zero screen area but still
+    runs prepare_polygon per section; views exist where EVERY plotted tile is off-band
+    and the 6502 spends 100k+ cycles, so the fill model must price them above zero."""
     zero_area = []
     for key, rec in sorted(json.load(open(GOLDEN)).items()):
         ls, h, v = (int(x) for x in key.split(","))
@@ -278,22 +286,48 @@ def test_offband_tiles_still_cost_their_prepare_polygon_calls():
             continue
         zero_area.append(key)
         assert rec["terrain_fill_cycles"] > 0, f"{key}: golden claims no fill"
-        base = projector._terrain_poly_base(tiles)
-        assert base > 0, f"{key}: off-band view priced at zero"
+        assert _fill_cycles(state, h, v) > 0, f"{key}: off-band view priced at zero"
         assert projector.render_cost(state, {"h_angle": h, "v_angle": v}) > 0
     assert zero_area, "no all-off-band view in the sweep to guard"
 
 
-def test_terrain_polygon_floor_counts_two_triangles_for_a_sloped_tile():
-    """plot_two_triangles ($2A8A) splits a sloped tile into two polygons and a flat one
-    stays a single quad, each prepared once per wide-buffer section ($2AAB)."""
-    mixed = 0
-    for ls, h, v in VIEWS:
+def test_fill_model_tracks_the_measured_terrain_fill():
+    """rendercost emulates $2A24 -> $22AA in render order, so its cycles track the
+    golden's own terrain-fill subtree rather than an area proxy."""
+    ratios = []
+    for key, rec in sorted(json.load(open(GOLDEN)).items()):
+        ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)
-        tiles = projector.project_scene(state, h, v)[0]
-        flat = [t for t in tiles if t["tile_byte"] < mm.OBJECT_TILE]
-        n_sloped = sum(1 for t in flat if terrain.resolve_ground(state, *t["tile"])[1])
-        want = (len(flat) + n_sloped) * projector.SECTIONS * projector.C_PREP_CALL
-        assert projector._terrain_poly_base(tiles) == want, f"{ls},{h},{v}"
-        mixed += 0 < n_sloped < len(flat)
-    assert mixed, "no swept view mixes flat and sloped tiles: the split is untested"
+        want = rec["terrain_fill_cycles"]
+        if want < 20_000:  # a view with almost no fill has no ratio worth pinning
+            continue
+        got = _fill_cycles(state, h, v)
+        ratios.append(got / want)
+        assert 0.45 <= got / want <= 1.35, f"{key}: {got} vs {want}"
+    assert len(ratios) >= 8
+    ratios.sort()
+    assert 0.85 <= ratios[len(ratios) // 2] <= 1.15
+
+
+def test_fill_model_numba_twin_matches_python():
+    """rendercost is one source: the compiled kernel and ``py_func`` must agree."""
+    seen = 0
+    for key in sorted(json.load(open(GOLDEN))):
+        ls, h, v = (int(x) for x in key.split(","))
+        state = landscape.generate(ls)
+        setup = projector._setup(state, h, v, state.player)
+        fill = projector.project_scene(state, h, v)[3]
+        bufs, sect = rendercost.buffers(projector.PLAY_MODE)
+        args = (
+            fill,
+            len(fill),
+            (setup["quadrant"] - 2) & 0xFF,
+            (setup["quadrant"] * 4) & 0xFF,
+            sect,
+            bufs,
+            rendercost.SCREEN_TOP,
+            rendercost.SCREEN_BOTTOM,
+        )
+        assert rendercost.fill_cycles(*args) == rendercost.fill_cycles.py_func(*args)
+        seen += 1
+    assert seen > 10

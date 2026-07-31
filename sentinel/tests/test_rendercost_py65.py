@@ -78,15 +78,10 @@ def test_default_backend_is_proxy():
     st = landscape.generate(0)
     assert projector._exact_render_cost(st, 0, 0, None) is None
     view = {"h_angle": 0, "v_angle": 0}
-    tiles, _n, exam = projector.project_scene(st, 0, 0)
-    area = sum(
-        projector.PER_SCANLINE * t["h"] + projector.PER_PIXEL * t["h"] * t["w"]
-        for t in tiles
-    )
-    base = projector._terrain_poly_base(tiles) + projector._inview_object_base(
-        st, tiles
-    )
-    expect = (exam + area + base) / projector.FRAME_CYCLES
+    tiles, _n, exam, fill = projector.project_scene(st, 0, 0)
+    setup = projector._setup(st, 0, 0, st.player)
+    total = exam + projector.fill_frames(setup, fill, projector.PLAY_MODE)
+    expect = (total + projector._inview_object_base(st, tiles)) / projector.FRAME_CYCLES
     assert projector.render_cost(st, view) == pytest.approx(expect)
 
 
