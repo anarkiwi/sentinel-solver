@@ -1269,6 +1269,24 @@ python -m driver.instrument 42 --frames 1200     # --follow keeps racing past a 
 Boots under warp with no recording (`NO_RECORD=1`), unfreezes the enemy clock on both sides by
 clearing `$0CE5` bit7, then frame-locks and prints the per-tier first-divergence report.
 `--follow` reseeds the sim from live memory on each CORE divergence and continues.
+`--frames` bounds the **machine** frames a race spans, seeding waits included.
+
+**The seed carries no error of its own.** `enemies.resume_from_stack` counts the machine's
+position off the ROM's own straight lines — `$1289` through the `$16B5` dispatch, `$16D9`'s
+cursor step, `$12A2`'s tail with its `$191F` walk and sound bodies, `$31CA` per LFSR lap — and
+returns no offset for a position *inside a call*, because the cycles already spent in an
+`$1887` march, an `$1AB0` walk or a `$1FFC JSR $2625` replot are data-dependent and nothing
+observes them. Seeding there starts the model at the call's head and injects everything the
+machine has spent in it. `instrument._seed` therefore steps frames until the `$9630` marker
+catches the loop on a line it *can* count, so every seed is the machine's own cycle; a seed
+that still cannot be made exact is reported per event ("seeded at `$XXXX` head, +/- unbounded")
+rather than absorbed. `--seed-any` is the control that reseeds wherever the marker falls.
+
+| board | `--seed-any`: CORE / exact seeds | waiting: CORE / exact seeds | frames raced |
+|---|---|---|---|
+| ls0042 | 0 / 1 of 1 | 0 / 1 of 1 | 3000 of 3000 |
+| ls0335 | 24 / 3 of 25 | **14** / 15 of 15 | 2917 of 3000 |
+| ls9795 | 116 / 4 of 117 | **18** / 19 of 19 | 2516 of 3000 |
 
 **Status:** no CORE divergence within 1200 frames on ls42;
 `driver/test_enemy_sim_divergence.py::test_enemy_sim_frame_locked_to_live_ls42` gates 600 frames

@@ -152,11 +152,13 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock is not the residual: the replot's frame is
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**111** events, the first at frame 129) and on ls335 (**12**, the first at 478).
+ls9795 (**18** events, the first at frame 130) and on ls335 (**14**, the first at 156).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
 the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
-measured, and none of it is the cause.
+measured, and none of it is the cause.  Those counts are from a seed that carries no error of
+its own; the 116/24 this item used to quote were **partly the instrument's own seeding**, see
+*The seed's own error* below.
 
 **Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
 own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
@@ -378,26 +380,47 @@ model on three boards, so that is placement, not a bug: the rest of the enemy cl
 calibrated against the lump. The shipped form therefore keeps the lump's placement (the
 ceiling at the frame head) and derives only its *value*.
 
+**The seed's own error, and its removal.** `resume_from_stack` counts the machine's position
+off the ROM's own straight lines and returns no offset for a position *inside a call*, so a
+resync there started the model at the call's head and injected everything the machine had
+already spent in it. Measured over the gate's own 3000-frame races (`--seed-any`, the shipped
+behaviour): **4 of 117** ls9795 seeds and **3 of 25** ls0335 seeds were at the machine's exact
+cycle. `instrument._seed` now steps frames until the `$9630` marker catches the loop on a line
+it can count, and reports any seed it cannot make exact per event instead of absorbing it:
+
+| board | CORE, seeding anywhere | CORE, seeding exactly | exact seeds | frames raced |
+|---|---|---|---|---|
+| ls0042 | 0 | **0** | 1 of 1 | 3000 of 3000 |
+| ls0335 | 24 | **14** | 15 of 15 | 2917 of 3000 |
+| ls9795 | 116 | **18** | 19 of 19 | 2516 of 3000 |
+
+Per raced frame that is 0.0387 -> 0.0072 on ls9795 and 0.0080 -> 0.0048 on ls0335, so it is
+not the shorter race. ls42 stays clean. The waiting is the cost: a stretch in which no marker
+lands on a countable line is skipped, up to **296 frames** on ls9795 — one `$17B2` scan whose
+`$1887` marches run ~4.6 M cycles, during which every frame boundary falls inside a call.
+Those are the segments that genuinely cannot be resolved to a cycle: an `$1887` march (the
+missing datum is cycles already spent in the query) and a `$1FFC JSR $2625` replot (the
+missing datum is `plot_world`'s own progress, [5](#5-terrain-fill-cost-cannot-close-per-tile)).
+
 **What the surviving events are, classified by the PC the raster IRQ interrupted** and by
-`resume_from_stack`'s own chain:
+`resume_from_stack`'s own chain, every one of them from an exact seed:
 
-| | ls9795 (116) | ls0335 (24) |
+| the model's resume point | ls9795 (18) | ls0335 (14) |
 |---|---|---|
-| the interrupted PC's routine | **68 "other"** — `$26EC`/`$2DEF`/`$2E7C`/`$2E08`, the strip replot and tile draw | **11 `$16E6` body**, 4 `$1887`, 3 `$9287`, 2 `$8401`, 2 `$31CA` |
-| the model's resume point | **88 `PHASE_BODY/BODY_DONE`** (off the loop entirely) | **17 `PHASE_BODY/BODY_SCAN`** |
-| resyncs that land on an exact-cycle resume | **3 of 116** | 2 of 24 |
-| the diverging field | `enemy[N].update_cd` 209 of 217, `obj[62].h_angle` 8 | `enemy[N].update_cd`, all |
+| `$17B7` — `$17B2`'s scan slot, machine under `$1887` | **8** (`$1893`, `$189D`, `$1916`x2, `$191D`, `$1D16`, `$17B7`, `$85DE`) | **9** (`$1887`'s line, `$1D8A`, `$85FE`, `$92DB`, `$9306`) |
+| `$17E8` — `$1AB0`'s tree/boulder walk | 2 (`$1AB5`, `$1ABE`) | 2 (`$1AB5`x2) |
+| `$1884` — the `$1876` redraw tail, inside a strip replot | 4 (`$26EC`, `$2DD6`, `$0D17`, `$9301`) | 0 |
+| the body's and the loop's own lines | 4 (`$16F4`, `$17B0`, `$17B2`, `$31D8`) | 3 (`$1773`, `$17B2`, `$17BC`) |
 
-So the two boards fail for different reasons, and neither is the badline:
-
-* **ls9795 is the renderer.** Three fifths of its events catch the machine inside
-  `$26xx`/`$2Dxx`/`$2Exx` — code the model prices only as a whole-frame
-  `strip_replot_frames` stall. That is [5](#5-terrain-fill-cost-cannot-close-per-tile).
-* **ls0335 is the `$16E6` robot scan.** Seventeen of 24 resume at `BODY_SCAN` with the
-  machine inside `$17B2..$17C0` or the `$1887`/`$9287`/`$8401` chain beneath it — the see
-  cost, which the badline clock still charges as one opaque `$1887` term.
-* **Fewer than 3% of resyncs seed the model at the machine's exact cycle**; the rest seed
-  at a segment head, which injects up to a segment of phase at every event.
+* **Both boards are now the same defect: the `$1887` see cost.** Ten of ls9795's fourteen
+  `update_cd` events and eleven of ls0335's fourteen catch the machine inside `$17B2`'s or
+  `$1AB0`'s scan, in the `$1887`/`$18E6`/`$1CDD`/`$8401`/`$9287` chain the clock charges as
+  one opaque term. ls9795's renderer share is gone — 68 of 116 became 4 of 18.
+* **Those 4 are not a clock error at all.** All four, and only they, diverge in
+  `obj[62].h_angle`, and all four resume at `$1884`: `$1FC2` adds `$0C62/2` to the *player's*
+  own `$09C0` for the duration of the strip replot (`projector.strip_replot_frames` prices
+  that shifted camera but writes nothing), so the machine reads 18 above the model at frame
+  130 and the schema calls a restored transient a CORE divergence.
 
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
@@ -409,8 +432,8 @@ have spent 534090 cycles in 22 PAL frames — that is 24277 a frame against the 
 it inherits that. Both belong to [5](#5-terrain-fill-cost-cannot-close-per-tile), not here.
 
 `~17 cycles a frame` was therefore never there. The budget is right to under 4 and the
-clock to under 0.01 of a pass a frame; what is left is a render cost and its timing, plus,
-for follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
+clock to under 0.01 of a pass a frame; what is left is a render cost and its timing, and the
+`$1887` see cost the surviving events name.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -607,8 +630,9 @@ prnd and the tail's sound; ls42 has none.
 resume owes `total - elapsed`: `projector.strip_replot_frames` gives the total, and nothing
 gives the elapsed without modelling how far `plot_world` has walked its own render order —
 [5](#5-terrain-fill-cost-cannot-close-per-tile). Charging the whole replot again over-charges
-by the elapsed part and charging nothing is what happens now; neither is exact, so neither
-ships.
+by the elapsed part and charging nothing under-charges by the rest; neither is exact, so the
+instrument does neither — it **waits** the replot out and seeds after it, and says so
+(*The seed's own error* above). That is what removed the 84 of 111.
 
 **No longer a mean: the rotation's redraw.** `$1F9F update_object_on_screen` **does** run
 headless — it needs no render context on the branch the enemy clock takes. It calls
@@ -725,12 +749,13 @@ rewritten it, and the plotting readers touch no field the schema carries.
 
 **Resolves.** Not the frame budget, not the clock, not the replot's placement and not the
 march price — all four are now measured directly against the machine and none has room for
-what this item is chasing. What is left on this side is the **badline steal per frame**,
-which needs the raster position and the instruction it caught, and the **replot resume**,
-which needs `$2625`'s own progress; a `body_spent` resume is measured to move neither
-board. The replot's *price* —
-proxy 1.12x and py65 1.54x of a machine wall measured at 22 frames — is
-[5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
+what this item is chasing. Not the seed either: it now starts at the machine's own cycle on
+every board, and that took ls9795 116 -> 18 and ls0335 24 -> 14 without a constant moving.
+What is left, and both boards now say the same thing, is the **`$1887` see cost inside
+`$17B2`/`$1AB0`** — 10 of ls9795's 14 `update_cd` events and 11 of ls0335's 14. The replot's
+*price* — proxy 1.12x and py65 1.54x of a machine wall measured at 22 frames — is
+[5](#5-terrain-fill-cost-cannot-close-per-tile)'s, and the `obj[62].h_angle` events are
+`$1FC2`'s camera shift, not a clock error at all.
 
 ## 9. The human line does not replay to a win through the live executor
 

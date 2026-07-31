@@ -265,6 +265,17 @@ def resume_from_stack(mem, sp, page):
     return PHASE_BODY, stage, index, partial, None
 
 
+def stack_position(mem, sp, page):
+    """:func:`resume_from_stack` plus the two addresses that say how exact it is.
+
+    ``(resume, pc, addr)``: the PC the raster IRQ interrupted and the play-loop address
+    it maps to.  A resume whose cycle offset is ``None`` starts the model at ``addr``
+    while the machine is somewhere at or after it, and ``pc`` names where."""
+    pc = page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)
+    addr, _live = _innermost_loop_address(pc, sp, page)
+    return resume_from_stack(mem, sp, page), pc, addr
+
+
 def paid(slot):
     """``State.body_index`` for "slot's $1887 is charged, its CORE write is not".
 
