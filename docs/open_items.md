@@ -277,10 +277,30 @@ median gap **19 -> 86** frames; ls42 stays at 0 throughout.
   is what rules the redraw out of everything earlier and into this.
 * ls335's first event is now frame 194, a single `enemy[2].update_cd`: still one pass of
   phase, not a wrong cost. What is left of the seed is the **body** — a marker that catches
-  the loop inside `$16E6` resumes at the interrupted `$1887` query's start, because no
-  straight line counts a march — and the `$9630` head's own 5-9 cycle variation
-  (`$FFC2`/`$FFC5` and `$119F`), which over a run that long is itself worth about a pass:
-  the size of the tie it decides.
+  the loop inside `$16E6` resumes at the interrupted `$1887` query's start, for the reason
+  below.
+
+**NOT the `$9630` head.** Its two vectored calls, `$963A JSR $FFC5` and `$963D JSR $FFC2`,
+land in the sound engine's three-voice tick at `$8F0C` and `$8ED1` — in RAM the image
+carries, and measured live at a constant **72 and 63** on ls335 and ls9795 alike, because in
+play the voices are idle (`$8E86..$8E88` = `80 80 80`). Its one state-dependent branch is
+`$9633 BPL`, and `$0CDF` — a sound timer nothing reloads during play — sits at **0 at every
+marker**, so the `$9635 INC` path is taken every frame and is already what `IRQ_BODY` counts.
+What is left is +9 on a minority of body interrupts, unlocated and worth 2-3 cycles a frame:
+about a third of a pass over the 194 frames of the ls335 tie, not the pass I earlier claimed.
+
+**Where the march resume stops, exactly.** A marker inside `$16E6` is usually inside an
+`$1887` query, and the machine's position *within* that query is fully recoverable from the
+image: `$001E` is the probe counter, and the whole geometry runs out of the zero-page window
+`$0050..$008B` that `relative.can_see_object` itself mirrors. The missing piece is not a byte
+— it is a **resume point in the model**. `can_see_object` is atomic in the cost accounting:
+`_scan_for_robot` charges one `_see_cost(see)` per slot, and the only mid-body markers are
+`index` (the next slot to query) and `paid(slot)` (its query charged, its write pending).
+There is no state part-way through a query, so crediting a partial one would put the model
+somewhere its own loop can never be. The sub-step costs are already priced individually
+(`ADD_VECTOR`, `STEP_EDGE`, `TILE_*`, `FLAT_*`, `SLOPE_*`), so what a fix needs is a step
+index threaded through `can_see_object` and the body stages — a resumable march, not a new
+measurement.
 
 **Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
 mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
@@ -342,9 +362,9 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** `$1F9F` counted rather than averaged; the `$9630` head's own 5-9 cycles
-counted through `$FFC2`/`$FFC5` and `$119F`; and, for a seed caught inside a march, a first
-frame whose budget is the raster clock's measure of what is left of it.
+**Resolves.** `$1F9F` counted rather than averaged, and a **resumable `can_see_object`** —
+a march the model can suspend mid-ray, which is the one resume point the reconstruction has
+nowhere to put the machine's position into.
 
 ## 9. The human line does not replay to a win through the live executor
 
