@@ -23,11 +23,21 @@ FRAME_PC = (
 )  # once-per-frame raster-IRQ top marker (the frame-step anchor)
 
 
+REG_SP = 4  # registers_get id of the stack pointer
+
+
 class SimClock:
     """The standalone sim as a one-frame-per-tick clock over a 64 KB image."""
 
-    def __init__(self, image):
+    def __init__(self, image, resume=None):
         self.state = State.from_mem(image)
+        if resume is not None:  # the machine was mid-pass; occupy the same position
+            (
+                self.state.pass_phase,
+                self.state.body_stage,
+                self.state.body_index,
+                self.state.body_partial,
+            ) = resume
         self.plotting = False
 
     def image(self):
@@ -61,6 +71,12 @@ class EmuClock:
 
     def poke(self, addr, val):
         self.bm.mem_set(addr, bytes([val & 0xFF]))
+
+    def sub_pass(self, image):
+        """The model resume point matching where $9630 caught the play loop."""
+        sp = self.bm.registers_get()[REG_SP]
+        page = self.bm.mem_get(0x0100, 0x01FF)
+        return enemies.resume_from_stack(image, sp, page)
 
 
 def _unfreeze(img):
@@ -109,7 +125,8 @@ def race(bm, max_frames, follow=False, log=print):
                 core_events.append((f, f - seg_start, core_divs))
                 if not follow:
                     break
-                sim = SimClock(emu.full_image())  # resync from live truth
+                live = emu.full_image()  # resync from live truth, mid-pass included
+                sim = SimClock(live, emu.sub_pass(live))
                 resyncs += 1
                 seg_start = f
                 if resyncs <= 15:
