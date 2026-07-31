@@ -140,16 +140,26 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock: what is left is the redraw and the frame budget
+## 8. The enemy clock: the frame budget, not the redraw
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**112** events, the first at frame 129) and on ls335 (**12**, the first at 478).
+ls9795 (**111** events, the first at frame 129) and on ls335 (**12**, the first at 478).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
 the `$1805` rotation that follows from it. Neither the `$1887` chain nor `$16E6`'s own line
-is the cause any more: both are cycle-exact against the ROM, and the per-frame clock is now
-counted rather than fitted (below). What is left is `ROTATE_REDRAW`'s mean and, for
-follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
+is the cause: both are cycle-exact against the ROM, the per-frame clock is counted rather
+than fitted (below), and the `$1F9F` redraw is counted rather than meaned (below) — and
+that last one moved the gate by one event and no frames at all.
+
+**Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
+own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
+-31, -91, +35 and +62 cycles at frames 20, 50, 80 and 103, i.e. **-25 cycles of accumulated
+phase** before the frame-129 event. To reach that event a pass early the model has to be
+off by a whole ls9795 pass, ~2180 cycles, or ~17 cycles a frame; the redraw correction is
+0.2 a frame. So the two branches close different things and only the frame budget is load
+bearing here: ls9795 first divergence **129 -> 129** and events **112 -> 111**, ls335
+**478 -> 478** and **12 -> 12**, ls42 **0 -> 0**. What is left is the frame budget itself
+and, for follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -271,13 +281,15 @@ for a marker that catches the loop on one it can count. ls9795's first divergenc
 **66 -> 129**, ls335's **155 -> 194**, follow-mode events on ls335 **63 -> 31** with its
 median gap **19 -> 86** frames; ls42 stays at 0 throughout.
 
-**Where it stops now.** Two things, both named by measurement rather than suspicion:
+**Where the seed work stopped.** Two things, both named by measurement rather than suspicion
+(the two paragraphs after this one move ls335 on again):
 
 * The frame-129 ls9795 event is `obj[3].h_angle` with `enemy[3].rotation_cd` — a **rotation**,
-  the one act whose cost carries `$1F9F`'s mean. Over the frames before it there is not a
-  single `$1F9F` or `$1805` (checkpoint hit counts over the first 66 frames: 0 and 0), which
-  is what rules the redraw out of everything earlier and into this.
-* ls335's first event is now frame 194, a single `enemy[2].update_cd`: still one pass of
+  and the sim takes it a frame *early*: it reads `rotation_cd` 200 already reloaded where the
+  machine still reads 0. A rotation's own cost cannot make it early, and the redraw is the
+  wrong lever by two orders of magnitude (above), so what is early is the phase that reached
+  it.
+* ls335's first event was then frame 194, a single `enemy[2].update_cd`: still one pass of
   phase, not a wrong cost. What is left of the seed is the **body** — a marker that catches
   the loop inside `$16E6` resumes at the interrupted `$1887` query's start, for the reason
   below.
@@ -439,8 +451,11 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** The `$1FFC` strip replot, the one branch of `$1F9F` still uncharged, and a
-`body_spent` resume so a follow-mode resync inside `$1887` does not restart the query.
+**Resolves.** The frame budget itself: the sim reaches a pass sooner than the machine on
+ls9795 and ls335, and neither the body, the `$1887` chain nor the now-counted `$1F9F`
+accounts for it. Plus a `body_spent` resume so a follow-mode resync inside `$1887` does not
+restart the query. The `$1FFC` replot is charged through `projector.strip_replot_frames`,
+so what is left of *its* accuracy is [5](#5-terrain-fill-cost-cannot-close-per-tile)'s.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -524,7 +539,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget) landed, so
+  [8](#8-the-enemy-clock-the-frame-budget-not-the-redraw) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.

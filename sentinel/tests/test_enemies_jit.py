@@ -31,6 +31,17 @@ def _first_diff(a, b):
     return None
 
 
+def _resume(state):
+    """The whole sub-pass resume point, which the image itself does not carry."""
+    return (
+        state.cycle_residual,
+        state.pass_phase,
+        state.body_stage,
+        state.body_index,
+        state.body_partial,
+    )
+
+
 @pytest.mark.parametrize("landscape", LANDSCAPES)
 def test_jit_matches_python_full_image(landscape):
     ref = _armed(landscape)
@@ -40,6 +51,7 @@ def test_jit_matches_python_full_image(landscape):
         enemies.advance_frames(jit, CHUNK)
         diff = _first_diff(ref.mem, jit.mem)
         assert diff is None, f"ls{landscape} frame {(chunk + 1) * CHUNK}: {diff}"
+        assert _resume(ref) == _resume(jit), f"ls{landscape} chunk {chunk}"
 
 
 @pytest.mark.parametrize("landscape", LANDSCAPES)
@@ -63,6 +75,7 @@ def test_single_frame_dispatch_matches(landscape):
         enemies.advance_frame_python(ref)
         enemies.advance_frame(jit)
         assert _first_diff(ref.mem, jit.mem) is None, f"ls{landscape} frame {frame}"
+        assert _resume(ref) == _resume(jit), f"ls{landscape} frame {frame}"
 
 
 @pytest.mark.parametrize("landscape", LANDSCAPES)
@@ -88,5 +101,4 @@ def test_jit_matches_python_across_an_on_screen_redraw(landscape):
     enemies.advance_frames_python(ref, 3000)
     enemies.advance_frames(jit, 3000)
     assert _first_diff(ref.mem, jit.mem) is None
-    assert ref.cycle_residual == jit.cycle_residual
-    assert (ref.pass_phase, ref.body_stage) == (jit.pass_phase, jit.body_stage)
+    assert _resume(ref) == _resume(jit)
