@@ -13,8 +13,8 @@ jitcache.install()  # must precede numba: the cache key carries the cost constan
 
 from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
 
-from sentinel import badline, memmap as mm, passcost  # noqa: E402
-from sentinel.badline_jit import charge, frame_clock  # noqa: E402
+from sentinel import badline, memmap as mm, passcost, writeweight  # noqa: E402
+from sentinel.badline_jit import charge, charge_run, frame_clock  # noqa: E402
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
 from sentinel.los_jit import (  # noqa: E402
     march,
@@ -117,6 +117,8 @@ _MEANIE_MAX_ATTEMPTS = 0x02
 _FOREGROUND_CYCLES = passcost.FOREGROUND_CYCLES
 _IRQ_BODY = passcost.IRQ_BODY
 _STEAL_CEILING = badline.FRAME_STEAL_CEILING
+_W_SHIFT = writeweight.SHIFT
+_W_HALF = 1 << (writeweight.SHIFT - 1)
 
 _EXPOSURE_FIXED = passcost.EXPOSURE_FIXED
 _EXPOSURE_EMPTY = passcost.EXPOSURE_EMPTY
@@ -964,18 +966,39 @@ def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30, cyc
 
 
+@njit(cache=True, inline="always")
+def _wweight(total):
+    """The write weight packed above a cost total (:mod:`sentinel.writeweight`)."""
+    return (total + np.int64(_W_HALF)) >> np.int64(_W_SHIFT)
+
+
+@njit(cache=True, inline="always")
+def _wcycles(total):
+    """The 6502 cycles of a packed cost total."""
+    return total - (_wweight(total) << np.int64(_W_SHIFT))
+
+
+@njit(cache=True, inline="always")
+def _see_charge(clk, cost, weight):
+    """Charge a $1887 query: by its own march weight when it marched, else its map."""
+    if weight != 0:
+        return charge_run(clk, cost, weight)
+    return charge(clk, 0x1887, cost)
+
+
 @njit(cache=True)
 def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     """check_if_enemy_can_see_object $1887.  A robot is probed at its upper point
     first ($18DC, $0C6E bit7 set so the looking-up rejection is waived) then at its
     base; every other object only at its base.
 
-    Returns (in_slot, in_fov, exposure, full, tree_in_los_head, cycles)."""
+    Returns (in_slot, in_fov, exposure, full, tree_in_los_head, cycles, weight),
+    ``weight`` being the write weight the marches inside it carry."""
     mem[0x0014] = 0
     if mem[_OFLAGS + target] & 0x80:  # empty slot
-        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_EMPTY)
+        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_EMPTY), np.int64(0)
     if mem[_OTYPE + target] != expected_type:
-        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_WRONG_TYPE)
+        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_WRONG_TYPE), np.int64(0)
 
     c57, angle_lo, angle_hi, z_lo, z_hi, rcyc = _relative_angles(
         mem, zp, observer, target
@@ -983,7 +1006,8 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     cyc = np.int64(_SEE_PROLOGUE) + rcyc + np.int64(_SEE_FOV)
     a = (c57 - 0x0A + (fov_width >> 1)) & 0xFF
     if a >= fov_width:  # $18B8 FOV gate
-        return 1, 0, np.int64(0), 0, 0, cyc + np.int64(_SEE_FOV_REJECT)
+        cyc += np.int64(_SEE_FOV_REJECT)
+        return 1, 0, np.int64(0), 0, 0, _wcycles(cyc), _wweight(cyc)
     cyc += np.int64(_SEE_FOV_PASS)
 
     v_angle_obs = _rd(mem, _OVANGLE + observer)
@@ -1064,7 +1088,8 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     exposure = _rd(mem, 0x0014)
     full = 1 if exposure & 0x80 else 0
     tree_head = 1 if _rd(mem, 0x0C76) & 0x40 else 0
-    return 1, 1, exposure, full, tree_head, cyc + np.int64(_SEE_TAIL)
+    cyc += np.int64(_SEE_TAIL)  # the marches inside it carry their write weight
+    return 1, 1, exposure, full, tree_head, _wcycles(cyc), _wweight(cyc)
 
 
 @njit(cache=True, inline="always")
@@ -1319,7 +1344,7 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index, clk):
             tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
             y = tb & 0x3F
             index = x - 1
-            _i, _f, _e, full, _t, _c = _can_see_object(
+            _i, _f, _e, full, _t, _c, _cw = _can_see_object(
                 mem, zp, enemy, y, _rd(mem, _OTYPE + y), _FOV_SCAN
             )
             if full:
@@ -1361,14 +1386,14 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index, clk):
         if otype != _T_TREE and otype != _T_BOULDER:
             budget -= charge(clk, 0x1ADD, np.int64(_TILE_SCAN_WRONG_TOP) - last)
             continue
-        _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
+        _in_slot, _in_fov, _exp, full, _th, scost, sweight = _can_see_object(
             mem, zp, enemy, y, otype, _FOV_SCAN
         )
         if otype == _T_TREE:
             budget -= charge(clk, 0x1ADD, np.int64(_TILE_SCAN_SEE))
         else:
             budget -= charge(clk, 0x1ADF, np.int64(_TILE_SCAN_SEE_BOULDER))
-        budget -= charge(clk, 0x1887, scost)
+        budget -= _see_charge(clk, scost, sweight)
         if not full:
             budget -= charge(clk, 0x1AE6, np.int64(_TILE_SCAN_NEXT) - last)
             continue
@@ -1397,7 +1422,7 @@ def _consider_creating_meanie(mem, zp, enemy, budget, index, clk):
         if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
             slot = _rd(mem, _M_SEARCH + enemy)
             index = 0
-            _i, _f, _e, full, _t, _c = _can_see_object(
+            _i, _f, _e, full, _t, _c, _cw = _can_see_object(
                 mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
             )
             if full:
@@ -1439,11 +1464,11 @@ def _consider_creating_meanie(mem, zp, enemy, budget, index, clk):
             dy = 0x100 - dy
         if dy >= 0x0A:
             continue
-        _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
+        _in_slot, _in_fov, _exp, full, _th, scost, sweight = _can_see_object(
             mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
         )
         budget -= charge(clk, 0x19D9, np.int64(_MEANIE_SCAN_SEE))
-        budget -= charge(clk, 0x1887, scost)
+        budget -= _see_charge(clk, scost, sweight)
         if not full:
             continue
         if budget <= 0:  # the ROM has not reached $19E1 yet
@@ -1479,11 +1504,11 @@ def _update_meanie(mem, zp, enemy, budget, index, clk):
     if mem[_OFLAGS + target] & 0x80:  # $16F7: the object the player was in is gone
         _remove_meanie_and_reset_enemy(mem, enemy)
         return budget, _BODY_DONE, 0
-    in_slot, in_fov, exposure, _full, _th, cost = _can_see_object(
+    in_slot, in_fov, exposure, _full, _th, cost, cweight = _can_see_object(
         mem, zp, meanie, target, _T_ROBOT, _FOV_SCAN
     )
     if index >= 0:  # not yet charged
-        budget -= charge(clk, 0x1887, cost)
+        budget -= _see_charge(clk, cost, cweight)
         if budget <= 0:
             return budget, _BODY_MEANIE, -2
     if in_fov == 0:  # $1706: not yet looking at the player -> rotate
@@ -1686,10 +1711,10 @@ def _scan_for_robot(mem, zp, enemy, budget, index, partial, clk):
         y = index
         index -= 1
         last = np.int64(_SCAN_LAST if y == 0 else 0)  # $17CB BPL not taken
-        in_slot, in_fov, exp_raw, _full, tree_head, scost = _can_see_object(
+        in_slot, in_fov, exp_raw, _full, tree_head, scost, sweight = _can_see_object(
             mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
         )
-        budget -= charge(clk, 0x1887, scost)
+        budget -= _see_charge(clk, scost, sweight)
         if tree_head:  # $17B7: a tree hides this robot's head
             budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_HIDDEN) - last)
             continue
@@ -1813,12 +1838,12 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial, spent, 
                 partial = -1
                 continue
             held = _rd(mem, _TARGET + enemy)  # $178C: re-check a held target
-            in_slot, in_fov, exp_raw, _full, _th, scost = _can_see_object(
+            in_slot, in_fov, exp_raw, _full, _th, scost, sweight = _can_see_object(
                 mem, zp, enemy, held, _T_ROBOT, _FOV_SCAN
             )
             if index >= 0:
                 budget -= charge(clk, 0x179A, np.int64(_HELD_CALL))
-                budget -= charge(clk, 0x1887, scost)
+                budget -= _see_charge(clk, scost, sweight)
                 if budget <= 0:
                     return budget, stage, -2, partial, spent
             exposure = _exposure_byte(in_slot, in_fov, exp_raw)

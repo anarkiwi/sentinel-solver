@@ -18,6 +18,7 @@ BADLINE_FIRST_LINE = 51  # raster $33, the first $30..$F7 line with low 3 bits =
 BADLINE_LINE_STEP = 8
 BADLINE_WINDOW_CYCLE = 11  # solved live: the one cycle that derives every sampled steal
 MIN_STEAL = BADLINE_STEAL - 2  # a write run is at most an RMW's or a JSR's two
+WEIGHT_SHIFT = 20  # fixed point the per-window refund of a weighted term accrues in
 RASTER_IRQ_LINE = 213  # $9589's $D5 entry: the once-a-frame $9630 body
 IRQ_ENTRY = 7  # the 6510 interrupt sequence, run at an instruction boundary
 IRQ_ENTRY_BRANCH = 6  # ... one less off a branch, whose IRQ poll is a cycle earlier
@@ -76,7 +77,7 @@ FRAME_ORIGIN = RASTER_IRQ_LINE * LINE_CYCLES  # the raster the $9589 $D5 entry p
 SHORT_IRQ_LINES = (53, 93, 133, 173)  # the $9589 table's other four entries
 NO_EVENT = 1 << 40  # past every event: a clock with no windows left to place
 FRAME_STEAL_CEILING = BADLINES_PER_FRAME * BADLINE_STEAL  # every window a full steal
-CLOCK_FIELDS = 4  # position, next event, event index, steal so far
+CLOCK_FIELDS = 5  # position, next event, event index, refund so far, refund residue
 
 
 def frame_events(line_cycle=BADLINE_WINDOW_CYCLE):
@@ -143,6 +144,47 @@ def charge(clk, anchor, cycles):
         clk[0] = end
         return cycles
     return _place(clk, anchor, cycles)
+
+
+def _place_run(clk, cycles, weight):
+    """The slow half of :func:`charge_run`: the events this term's cycles reach.
+
+    A term that outlives the frame reaches the NEXT frame's windows too -- every frame
+    it spans is charged its own ceiling -- so the event list wraps, and the clock comes
+    back in the coordinates of the frame the term ended in.
+    """
+    index, refund = clk[2], 0
+    base, end = 0, clk[0] + cycles
+    step = (weight << WEIGHT_SHIFT) // cycles  # the term's own refund per window
+    while base + EVENT_POS[index] < end:
+        if EVENT_SHORT_IRQ[index]:
+            end += SHORT_IRQ
+        else:
+            clk[4] += step
+            back = clk[4] >> WEIGHT_SHIFT
+            clk[4] -= back << WEIGHT_SHIFT
+            refund += back
+            end += BADLINE_STEAL - back
+        index += 1
+        if index == N_EVENTS:
+            index, base = 0, base + PAL_FRAME_CYCLES
+    clk[0], clk[1], clk[2] = end - base, EVENT_POS[index], index
+    clk[3] += refund
+    return cycles - refund
+
+
+def charge_run(clk, cycles, weight):
+    """Spend ``cycles`` of a run no static map reaches, less what its writes refund.
+
+    A term whose loop outlives its map -- the $1CDD ray-march -- carries its own write
+    weight (:mod:`sentinel.writeweight`) instead, so a window anywhere inside it gets
+    back the ``weight / cycles`` its instructions drive rather than nothing at all.
+    """
+    end = clk[0] + cycles
+    if end <= clk[1]:
+        clk[0] = end
+        return cycles
+    return _place_run(clk, cycles, weight)
 
 
 def frame_steal(instructions, windows=None):

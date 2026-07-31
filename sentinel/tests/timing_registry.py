@@ -233,6 +233,7 @@ _ENJ = "sentinel.enemies_jit"
 _PC = "sentinel.passcost"
 _BL = "sentinel.badline"
 _WM = "sentinel.writemap"
+_BLJ = "sentinel.badline_jit"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
@@ -334,6 +335,7 @@ REGISTRY = {
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
     "PAL_FRAME_CYCLES": _d(_BL, "PAL 6569: 312 raster lines x 63 cycles"),
+    "_PAL_FRAME_CYCLES": _d(_BLJ, "passcost.PAL_FRAME_CYCLES, bound njit-visible"),
     "LINE_CYCLES": entry(
         _BL,
         DERIVED,

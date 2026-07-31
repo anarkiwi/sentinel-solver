@@ -8,7 +8,7 @@ import collections
 import json
 import os
 
-from sentinel import badline, passcost, writeruns
+from sentinel import badline, passcost, writeruns, writeweight
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "live_badline.json")
 
@@ -195,6 +195,47 @@ def test_an_unarmed_clock_charges_nothing_so_the_isolated_round_is_unchanged():
 MARCH_CYCLES = (
     274578  # the one $1887 the ls9795 gate turns on: ~18 frames of foreground
 )
+
+
+def _lap(neg=0):
+    """``(cycles, write weight)`` of one $1CE8..$1D18 flat march sub-step."""
+    return (
+        sum(getattr(passcost, n) for n in writeweight.FLAT_LAP)
+        + neg * passcost.ADD_VECTOR_NEG,
+        sum(writeweight.WEIGHT.get(n, 0) for n in writeweight.FLAT_LAP)
+        + neg * writeweight.WEIGHT["ADD_VECTOR_NEG"],
+    )
+
+
+def test_a_marching_term_refunds_the_write_weight_of_its_own_laps():
+    """A term the static map cannot reach is priced by its own write profile instead:
+    each of the 25 windows a frame gets back the ``weight / cycles`` the loop's
+    instructions drive, in every one of the frames the term spans."""
+    lap, weight = _lap()
+    laps = MARCH_CYCLES // lap
+    clk = badline.frame_clock()
+    spent = badline.charge_run(clk, laps * lap, laps * weight)
+    frames = laps * lap / passcost.PAL_FRAME_CYCLES
+    assert frames > 13  # the gate's own march outlives fourteen frames
+    assert spent == laps * lap - clk[3]
+    per_window = weight / lap
+    per_frame = clk[3] / frames
+    assert abs(per_frame - passcost.BADLINES_PER_FRAME * per_window) < 0.2, per_frame
+    assert clk[2] < badline.N_EVENTS  # the event list wrapped rather than running out
+    assert clk[1] == badline.EVENT_POS[clk[2]]
+
+
+def test_the_marched_refund_is_the_per_frame_steal_the_machine_pays():
+    """Inside a march the machine's frame keeps 3.48 of the 1075-cycle ceiling back.
+    The march's own laps carry between 30/306 and 39/318 of a cycle per window --
+    2.4 to 3.1 a frame -- so the weight covers most of that and none of it is fitted.
+    """
+    totals = _complete_frames(_live()["9795_march"])
+    machine = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL - sum(
+        k * v for k, v in totals.items()
+    ) / sum(totals.values())
+    lo, hi = (passcost.BADLINES_PER_FRAME * w / c for c, w in (_lap(0), _lap(3)))
+    assert lo < hi < machine < hi * 1.5, (lo, hi, machine)
 
 
 def test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it():

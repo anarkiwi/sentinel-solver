@@ -22,7 +22,7 @@ for byte), so no game data is embedded.
 import collections
 import math
 
-from sentinel import memmap as mm, los, passcost
+from sentinel import memmap as mm, los, passcost, writeweight
 
 # ---------------------------------------------------------------------------
 # Coefficient tables, reproduced from closed form (byte-exact vs ROM).
@@ -476,6 +476,7 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
         "tree_in_los_head": False,
         "probes": [],
         "cycles": passcost.SEE_SLOT_EMPTY,
+        "weight": 0,
         "wrong_type": False,
     }
     # $188F LDA #0 ; $1891 STA $0014 -- object_exposure is cleared before any early
@@ -567,7 +568,9 @@ def can_see_object(state, observer, target, expected_type, fov_width, max_steps=
     out["full"] = bool(exposure & 0x80)
     # $0C76 bit6 == a non-target tree lay in the enemy's sightline to the (robot) head.
     out["tree_in_los_head"] = bool(state.mem[0x0C76] & 0x40)
-    out["cycles"] = cyc + passcost.SEE_TAIL
+    total = cyc + passcost.SEE_TAIL  # the marches inside it carry their write weight
+    out["cycles"] = writeweight.cycles(total)
+    out["weight"] = writeweight.weight(total)
     return out
 
 

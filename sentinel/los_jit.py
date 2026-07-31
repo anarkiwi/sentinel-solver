@@ -27,85 +27,86 @@ jitcache.install()  # must precede numba: the cache key carries the cost constan
 from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import passcost  # noqa: E402
+from sentinel.writeweight import MARCH as wcost  # noqa: E402
 
 LOS_CLEAR = 1
 BLOCKED = 0
 
 # Per-sub-step 6502 cost, bound as njit-visible globals (sentinel.passcost).
-_ADD_VECTOR = passcost.ADD_VECTOR
-_ADD_VECTOR_NEG = passcost.ADD_VECTOR_NEG
-_STEP_EDGE = passcost.STEP_EDGE
-_STEP_EDGE_EXIT = passcost.STEP_EDGE_EXIT
-_STEP_SETUP = passcost.STEP_SETUP
-_TILE_Z_CALL = passcost.TILE_Z_CALL
-_TILE_ADDR = passcost.TILE_ADDR
-_TILE_Z_READ = passcost.TILE_Z_READ
-_TILE_Z_FLAT = passcost.TILE_Z_FLAT
-_TILE_Z_OBJ = passcost.TILE_Z_OBJ
-_LEAVE_SET = passcost.LEAVE_SET
-_FLAT_BRANCH = passcost.FLAT_BRANCH
-_FLAT_DIFF = passcost.FLAT_DIFF
-_FLAT_BELOW = passcost.FLAT_BELOW
-_FLAT_ABOVE = passcost.FLAT_ABOVE
-_FLAT_TOL = passcost.FLAT_TOL
-_FLAT_TOL_HIT = passcost.FLAT_TOL_HIT
-_FLAT_BIT60 = passcost.FLAT_BIT60
-_FLAT_BIT60_HIT = passcost.FLAT_BIT60_HIT
-_FLAT_ANGLE = passcost.FLAT_ANGLE
-_FLAT_ANGLE_SKIP = passcost.FLAT_ANGLE_SKIP
-_FLAT_LOOKUP = passcost.FLAT_LOOKUP
-_FLAT_LOOKING_UP = passcost.FLAT_LOOKING_UP
-_FLAT_SAME = passcost.FLAT_SAME
-_FLAT_SAME_X_DIFF = passcost.FLAT_SAME_X_DIFF
-_FLAT_SAME_Y = passcost.FLAT_SAME_Y
-_FLAT_SAME_HIT = passcost.FLAT_SAME_HIT
-_FLAT_SAME_Y_DIFF = passcost.FLAT_SAME_Y_DIFF
-_SLOPE_BRANCH = passcost.SLOPE_BRANCH
-_SLOPE_HEAD = passcost.SLOPE_HEAD
-_SLOPE_NIB_4 = passcost.SLOPE_NIB_4
-_SLOPE_NIB_12 = passcost.SLOPE_NIB_12
-_SLOPE_NIB_QUAD = passcost.SLOPE_NIB_QUAD
-_SLOPE_EDGE_LDA = passcost.SLOPE_EDGE_LDA
-_SLOPE_EDGE_MISS = passcost.SLOPE_EDGE_MISS
-_SLOPE_EDGE_HIT = passcost.SLOPE_EDGE_HIT
-_SLOPE_EDGE_BLOCK = passcost.SLOPE_EDGE_BLOCK
-_SLOPE_Q_C2 = passcost.SLOPE_Q_C2
-_SLOPE_Q_C1 = passcost.SLOPE_Q_C1
-_SLOPE_Q_EDGE = passcost.SLOPE_Q_EDGE
-_SLOPE_Q_CORNER = passcost.SLOPE_Q_CORNER
-_SLOPE_Q_CORNER_EOR = passcost.SLOPE_Q_CORNER_EOR
-_SLOPE_Q_TAIL = passcost.SLOPE_Q_TAIL
-_SLOPE_Q_USE_Y = passcost.SLOPE_Q_USE_Y
-_SLOPE_Q_INVERT = passcost.SLOPE_Q_INVERT
-_SLOPE_Q_ABS = passcost.SLOPE_Q_ABS
-_SLOPE_Q_NEG = passcost.SLOPE_Q_NEG
-_SLOPE_Q_BLOCK = passcost.SLOPE_Q_BLOCK
-_OBJ_HEAD_GHOL = passcost.OBJ_HEAD_GHOL
-_OBJ_HEAD_LOS = passcost.OBJ_HEAD_LOS
-_OBJ_TARGET_HIT = passcost.OBJ_TARGET_HIT
-_OBJ_TARGET_MISS = passcost.OBJ_TARGET_MISS
-_OBJ_TYPE_BOULDER = passcost.OBJ_TYPE_BOULDER
-_OBJ_TYPE_TREE = passcost.OBJ_TYPE_TREE
-_OBJ_TYPE_OTHER = passcost.OBJ_TYPE_OTHER
-_OBJ_TYPE_PLATFORM = passcost.OBJ_TYPE_PLATFORM
-_MINXY = passcost.MINXY
-_MINXY_ABS = passcost.MINXY_ABS
-_MINXY_Y_WINS = passcost.MINXY_Y_WINS
-_OBJ_BT_SKIP = passcost.OBJ_BT_SKIP
-_OBJ_BT_TYPE = passcost.OBJ_BT_TYPE
-_OBJ_BT_TREE = passcost.OBJ_BT_TREE
-_OBJ_BT_BOULDER = passcost.OBJ_BT_BOULDER
-_OBJ_PLAT_SKIP = passcost.OBJ_PLAT_SKIP
-_OBJ_PLAT_RTS = passcost.OBJ_PLAT_RTS
-_OBJ_TREE_BELOW = passcost.OBJ_TREE_BELOW
-_OBJ_TREE_HIGH = passcost.OBJ_TREE_HIGH
-_OBJ_TREE_NEAR = passcost.OBJ_TREE_NEAR
-_OBJ_TREE_TARGETED = passcost.OBJ_TREE_TARGETED
-_OBJ_TREE_SEEN = passcost.OBJ_TREE_SEEN
-_OBJ_SKIP_TREE = passcost.OBJ_SKIP_TREE
-_OBJ_SKIP_OTHER = passcost.OBJ_SKIP_OTHER
-_OBJ_GHOL_LOOP = passcost.OBJ_GHOL_LOOP
-_OBJ_GHOL_RTS = passcost.OBJ_GHOL_RTS
+_ADD_VECTOR = wcost.ADD_VECTOR
+_ADD_VECTOR_NEG = wcost.ADD_VECTOR_NEG
+_STEP_EDGE = wcost.STEP_EDGE
+_STEP_EDGE_EXIT = wcost.STEP_EDGE_EXIT
+_STEP_SETUP = wcost.STEP_SETUP
+_TILE_Z_CALL = wcost.TILE_Z_CALL
+_TILE_ADDR = wcost.TILE_ADDR
+_TILE_Z_READ = wcost.TILE_Z_READ
+_TILE_Z_FLAT = wcost.TILE_Z_FLAT
+_TILE_Z_OBJ = wcost.TILE_Z_OBJ
+_LEAVE_SET = wcost.LEAVE_SET
+_FLAT_BRANCH = wcost.FLAT_BRANCH
+_FLAT_DIFF = wcost.FLAT_DIFF
+_FLAT_BELOW = wcost.FLAT_BELOW
+_FLAT_ABOVE = wcost.FLAT_ABOVE
+_FLAT_TOL = wcost.FLAT_TOL
+_FLAT_TOL_HIT = wcost.FLAT_TOL_HIT
+_FLAT_BIT60 = wcost.FLAT_BIT60
+_FLAT_BIT60_HIT = wcost.FLAT_BIT60_HIT
+_FLAT_ANGLE = wcost.FLAT_ANGLE
+_FLAT_ANGLE_SKIP = wcost.FLAT_ANGLE_SKIP
+_FLAT_LOOKUP = wcost.FLAT_LOOKUP
+_FLAT_LOOKING_UP = wcost.FLAT_LOOKING_UP
+_FLAT_SAME = wcost.FLAT_SAME
+_FLAT_SAME_X_DIFF = wcost.FLAT_SAME_X_DIFF
+_FLAT_SAME_Y = wcost.FLAT_SAME_Y
+_FLAT_SAME_HIT = wcost.FLAT_SAME_HIT
+_FLAT_SAME_Y_DIFF = wcost.FLAT_SAME_Y_DIFF
+_SLOPE_BRANCH = wcost.SLOPE_BRANCH
+_SLOPE_HEAD = wcost.SLOPE_HEAD
+_SLOPE_NIB_4 = wcost.SLOPE_NIB_4
+_SLOPE_NIB_12 = wcost.SLOPE_NIB_12
+_SLOPE_NIB_QUAD = wcost.SLOPE_NIB_QUAD
+_SLOPE_EDGE_LDA = wcost.SLOPE_EDGE_LDA
+_SLOPE_EDGE_MISS = wcost.SLOPE_EDGE_MISS
+_SLOPE_EDGE_HIT = wcost.SLOPE_EDGE_HIT
+_SLOPE_EDGE_BLOCK = wcost.SLOPE_EDGE_BLOCK
+_SLOPE_Q_C2 = wcost.SLOPE_Q_C2
+_SLOPE_Q_C1 = wcost.SLOPE_Q_C1
+_SLOPE_Q_EDGE = wcost.SLOPE_Q_EDGE
+_SLOPE_Q_CORNER = wcost.SLOPE_Q_CORNER
+_SLOPE_Q_CORNER_EOR = wcost.SLOPE_Q_CORNER_EOR
+_SLOPE_Q_TAIL = wcost.SLOPE_Q_TAIL
+_SLOPE_Q_USE_Y = wcost.SLOPE_Q_USE_Y
+_SLOPE_Q_INVERT = wcost.SLOPE_Q_INVERT
+_SLOPE_Q_ABS = wcost.SLOPE_Q_ABS
+_SLOPE_Q_NEG = wcost.SLOPE_Q_NEG
+_SLOPE_Q_BLOCK = wcost.SLOPE_Q_BLOCK
+_OBJ_HEAD_GHOL = wcost.OBJ_HEAD_GHOL
+_OBJ_HEAD_LOS = wcost.OBJ_HEAD_LOS
+_OBJ_TARGET_HIT = wcost.OBJ_TARGET_HIT
+_OBJ_TARGET_MISS = wcost.OBJ_TARGET_MISS
+_OBJ_TYPE_BOULDER = wcost.OBJ_TYPE_BOULDER
+_OBJ_TYPE_TREE = wcost.OBJ_TYPE_TREE
+_OBJ_TYPE_OTHER = wcost.OBJ_TYPE_OTHER
+_OBJ_TYPE_PLATFORM = wcost.OBJ_TYPE_PLATFORM
+_MINXY = wcost.MINXY
+_MINXY_ABS = wcost.MINXY_ABS
+_MINXY_Y_WINS = wcost.MINXY_Y_WINS
+_OBJ_BT_SKIP = wcost.OBJ_BT_SKIP
+_OBJ_BT_TYPE = wcost.OBJ_BT_TYPE
+_OBJ_BT_TREE = wcost.OBJ_BT_TREE
+_OBJ_BT_BOULDER = wcost.OBJ_BT_BOULDER
+_OBJ_PLAT_SKIP = wcost.OBJ_PLAT_SKIP
+_OBJ_PLAT_RTS = wcost.OBJ_PLAT_RTS
+_OBJ_TREE_BELOW = wcost.OBJ_TREE_BELOW
+_OBJ_TREE_HIGH = wcost.OBJ_TREE_HIGH
+_OBJ_TREE_NEAR = wcost.OBJ_TREE_NEAR
+_OBJ_TREE_TARGETED = wcost.OBJ_TREE_TARGETED
+_OBJ_TREE_SEEN = wcost.OBJ_TREE_SEEN
+_OBJ_SKIP_TREE = wcost.OBJ_SKIP_TREE
+_OBJ_SKIP_OTHER = wcost.OBJ_SKIP_OTHER
+_OBJ_GHOL_LOOP = wcost.OBJ_GHOL_LOOP
+_OBJ_GHOL_RTS = wcost.OBJ_GHOL_RTS
 _MUL8 = passcost.MUL8
 _MUL8_LOW = passcost.MUL8_LOW
 _MUL8_BIT = passcost.MUL8_BIT
@@ -485,8 +486,8 @@ def march(
          px_frac, px_sub, px_whole, pz_frac, pz_sub, pz_whole,
          py_frac, py_sub, py_whole, c56, cdd, steps_used, cycles)
 
-    ``cycles`` is the march's 6502 cost: ``MARCH_STEP`` per sub-step plus
-    ``MARCH_OBJECT``/``MARCH_SLOPE_EDGE``/``MARCH_SLOPE_QUAD`` for the branch taken.
+    ``cycles`` is the march's 6502 cost, per sub-step by the branch taken, with the
+    laps' own write weight packed above it (:mod:`sentinel.writeweight`).
 
     ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
     do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.

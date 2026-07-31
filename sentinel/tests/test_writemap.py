@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from sentinel import badline, passcost, writemap
+from sentinel import badline, passcost, writemap, writeweight
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "live_badline.json")
 IMG = os.path.join(os.path.dirname(__file__), "..", "..", "out", "sentinel_stage2.bin")
@@ -88,3 +88,43 @@ def test_the_shipped_write_map_is_what_the_image_generates(image):
     assert tuple(c for _, c, _ in rows) == writeruns.LENGTH
     assert tuple(w for _, _, w in rows) == writeruns.RUNS
     assert writeruns.RUN[writeruns.START[0x31CA] + 26] == 2  # $31D9 ROL abs
+
+
+def _flat_lap(image, neg):
+    """``(cycles, write weight)`` of the $1CE8..$1D18 sub-step, walked over the ROM.
+
+    The branch record is the march's own: per axis the $1CCA BPL (taken when that
+    component is positive) and the $1CD9 loop-back, then both edge tests, the object
+    test and the slope test falling through, and the $1D18 BMI closing the loop.
+    """
+    branches = []
+    for axis in range(3):
+        branches += [axis >= neg, axis != 2]
+    branches += [False, False, False, False, True]
+    run = writemap.walk(image, 0x1CE8, 4000, branches)
+    end = next(offset for offset, pc, _ in run[1:] if pc == 0x1CE8)
+    weight = 0
+    for offset, _pc, op in run:
+        cycles = [c for c in writemap.OP_WRITE_CYCLES[op] if offset + c < end]
+        weight += len(cycles) * (len(cycles) + 1) // 2
+    return end, weight
+
+
+@pytest.mark.oracle
+def test_the_march_laps_write_weight_is_its_own_instructions(image):
+    """A window inside a march is priced by the lap's write weight, and that weight is
+    the lap's instruction sequence: for all four component-sign patterns the terms
+    ``writeweight`` composes are the ROM walk's own cycles and write cycles."""
+    for neg in range(4):
+        cycles, weight = _flat_lap(image, neg)
+        assert (
+            cycles
+            == sum(getattr(passcost, name) for name in writeweight.FLAT_LAP)
+            + neg * passcost.ADD_VECTOR_NEG
+        ), neg
+        assert (
+            weight
+            == sum(writeweight.WEIGHT.get(name, 0) for name in writeweight.FLAT_LAP)
+            + neg * writeweight.WEIGHT["ADD_VECTOR_NEG"]
+        ), neg
+    assert _flat_lap(image, 0)[1] == 30 and _flat_lap(image, 3)[1] == 39

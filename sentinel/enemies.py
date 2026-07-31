@@ -490,7 +490,13 @@ def _reduce_object_energy(state, target, enemy, clk):
 
 
 def _see_cost(see, clk):
-    """The $1887 cycles a :func:`relative.can_see_object` query cost the ROM."""
+    """The $1887 cycles a :func:`relative.can_see_object` query cost the ROM.
+
+    A query that marched outlives every static write map, so it is charged by the
+    write weight its own $1CDD laps carry rather than against $1887's 49-cycle run.
+    """
+    if see["weight"]:
+        return badline.charge_run(clk, see["cycles"], see["weight"])
     return badline.charge(clk, 0x1887, see["cycles"])
 
 

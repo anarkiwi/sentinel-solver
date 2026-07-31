@@ -22,10 +22,12 @@ _RUN = writeruns.RUN
 _STEAL = passcost.BADLINE_STEAL
 _SHORT_IRQ = passcost.SHORT_IRQ
 _N_EVENTS = badline.N_EVENTS
+_PAL_FRAME_CYCLES = passcost.PAL_FRAME_CYCLES
 
 
 _NO_EVENT = badline.NO_EVENT
 _FIELDS = badline.CLOCK_FIELDS
+_WEIGHT_SHIFT = badline.WEIGHT_SHIFT
 
 
 @njit(cache=True)
@@ -78,3 +80,41 @@ def charge(clk, anchor, cycles):
         clk[0] = end
         return cycles
     return _place(clk, anchor, cycles)
+
+
+@njit(cache=True)
+def _place_run(clk, cycles, weight):
+    """The slow half of :func:`charge_run`: the events this term's cycles reach."""
+    index = clk[2]
+    refund = 0
+    base = 0
+    end = clk[0] + cycles
+    step = (weight << _WEIGHT_SHIFT) // cycles  # the term's own refund per window
+    while base + _EVENT_POS[index] < end:
+        if _EVENT_SHORT_IRQ[index]:
+            end += _SHORT_IRQ
+        else:
+            clk[4] += step
+            back = clk[4] >> _WEIGHT_SHIFT
+            clk[4] -= back << _WEIGHT_SHIFT
+            refund += back
+            end += _STEAL - back
+        index += 1
+        if index == _N_EVENTS:
+            index = 0
+            base += _PAL_FRAME_CYCLES
+    clk[0] = end - base
+    clk[1] = _EVENT_POS[index]
+    clk[2] = index
+    clk[3] += refund
+    return cycles - refund
+
+
+@njit(cache=True, inline="always")
+def charge_run(clk, cycles, weight):
+    """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
+    end = clk[0] + cycles
+    if end <= clk[1]:
+        clk[0] = end
+        return cycles
+    return _place_run(clk, cycles, weight)
