@@ -143,7 +143,7 @@ raise, do not retry — plus deleting the two dead constants.
 ## 8. The enemy clock: what is left is the redraw and the frame budget
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**137** events) and on ls335 (**63**). ls42 is clean: **0 over 3000 frames**. Every
+ls9795 (**131** events) and on ls335 (**39**). ls42 is clean: **0 over 3000 frames**. Every
 event is an enemy's `update_cd` reading 4 in the machine where the sim still reads 1 — one
 `$16ED` reload the sim reaches a frame late — or the `$1805` rotation that follows from it.
 Neither the `$1887` chain nor `$16E6`'s own line is the cause any more: both are now
@@ -243,14 +243,31 @@ one-interrupt edge in the probe's own window arithmetic, plus a ±2 stamp jitter
 the dispatch, the prnd, the cursor, the `$12A2` tail and the `$191F` exposure walk are
 therefore all right as charged.
 
-**Where it stops now.** Body exact against the ROM per round, pass exact against the machine
-per pass, frame exact against the raster clock — and ls9795 still reaches the same `$16ED`
-reload one frame late. The only term inside a pass that none of those three instruments can
-see is `$1F9F`, which every rotation, drain and discharge spends and which is charged a mean;
-it is worked separately. After that the next candidate is the resync itself: 65% of ls9795
-frames interrupt inside `$16E6` (the census above), and a seed or a follow-mode resync taken
-there restarts that body from its head, because RAM does not carry the sub-pass position —
-the interrupted PC, X and Y are on the `$95E9` stack frame, not in the schema.
+**The seed, not the clock.** The model's clock is not biased: over 70 live ls9795 frames the
+machine's `$16E6` hit count and the sim's own pass count agree to **±1 pass** at every
+sample (1044 passes). What the sim could not do was start where the machine was — a `$9630`
+halt catches the loop at a raster position, and 65% of ls9795's land inside `$16E6`. That
+position is recoverable: the `$95E9` frame holds Y, X and the interrupted PC from SP+1, under
+it the foreground's own return addresses, and `$1887` saves its caller's X and Y at `$191E`
+and `$0C58`. `enemies.resume_from_stack` maps it onto the model's own resume points and the
+instrument applies it at the seed and at every resync.
+
+**Measured — same seed, same machine, two sims.** One restarting the interrupted pass, one
+resuming it: on ls9795 the first CORE divergence moves **66 -> 129 frames**, and on ls335,
+where that seed happened to land on the pass head, both give 155 — the control. In follow
+mode ls335 goes 63 -> 39 events with its median gap 19 -> 56 frames; ls42 stays at 0.
+
+**Where it stops now.** Two things, both named by measurement rather than suspicion:
+
+* The frame-129 ls9795 event is `obj[3].h_angle` with `enemy[3].rotation_cd` — a **rotation**,
+  the one act whose cost carries `$1F9F`'s mean. Over the frames before it there is not a
+  single `$1F9F` or `$1805` (checkpoint hit counts over the first 66 frames: 0 and 0), which
+  is what rules the redraw out of everything earlier and into this.
+* ls335's frame-155 event is `enemy[2]` and `enemy[4]` swapping which of them the pass
+  considered: one pass of phase, not a wrong cost. The reconstruction is exact only to
+  *segment* granularity — the machine is somewhere inside the segment it was caught in (up to
+  one `$1887` query on the scan path, 433 cycles in the prnd) and the model resumes at that
+  segment's start.
 
 **Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
 mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
@@ -287,8 +304,9 @@ and byte for byte, so it does not bite at these states.
 **Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
 which staging inside the body cannot correct.
 
-**Not the resync.** Carrying the sim's clock across a follow-mode resync instead of
-resetting it moves ls9795 415 -> 397 only.
+**Not the resync's clock.** Carrying the sim's cycle residual across a follow-mode resync
+instead of resetting it moves ls9795 415 -> 397 only; it is the resync's *position* that
+mattered, and that is now read off the stack frame.
 
 **It is NOT the sound engine.** An earlier revision blamed the tune player. Live, `$0CEB`
 never leaves `$80` and `$0C73` never leaves 0, so `$34BA`/`$352C`/`$347D` are constant at
@@ -311,8 +329,9 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** `$1F9F` counted rather than averaged, and a seed that carries the sub-pass
-position off the `$95E9` stack frame instead of restarting the interrupted pass at its head.
+**Resolves.** `$1F9F` counted rather than averaged; and sub-segment seed resolution — either
+an instruction count from the interrupted PC to the end of its segment, or a first frame
+whose budget is the raster clock's own measure of what is left of that frame.
 
 ## 9. The human line does not replay to a win through the live executor
 

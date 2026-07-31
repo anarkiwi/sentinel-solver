@@ -262,7 +262,7 @@ what makes the split exact rather than one-unit-coarse: when the budget runs out
 recomputing the query for free because its cycles are already paid.
 
 The body is the open residual for a different reason now — its cycle *cost*, not its
-atomicity: [open_items.md 8](open_items.md#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget).
+atomicity: [open_items.md 8](open_items.md#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget). `enemies.resume_from_stack` reads that same position back off a `$9630` halt's `$95E9` frame, so a seed or a resync starts the sim where the machine is rather than at a pass head.
 
 Every term is an instruction count off the disassembly, reproduced by running the real code
 in the jennings oracle:
