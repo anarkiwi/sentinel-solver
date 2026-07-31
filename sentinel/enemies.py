@@ -157,9 +157,7 @@ def _reduce_object_energy(state, target, enemy):
 
 def _see_cost(see):
     """The $1887 cycles a :func:`relative.can_see_object` query cost the ROM."""
-    return passcost.see_cycles(
-        see["march_cycles"], len(see["probes"]), see["in_slot"], see["wrong_type"]
-    )
+    return see["cycles"]
 
 
 def _exposure_byte(see):

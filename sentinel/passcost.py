@@ -56,9 +56,96 @@ DISCHARGE_TRY = 966  # $1238 loop body 76..98 + two $1272 draws (445 + 440n each
 
 SEE_SLOT_EMPTY = 40  # $1887 exit at $1893
 SEE_SLOT_WRONG_TYPE = 49  # $1887 exit at $189D
-SEE_GEOMETRY = 1128  # $1887 prologue 37 + $8401 + the $18CA FOV compare/exit 85
-SEE_PROBE = 719  # $18E6 82 + $933D 627 + the $1CDD/$1ECC entry 59 -- NOT $1C54,
-# which prepare_vector_from_angle prices from its own shift-adds and branches.
+SEE_PROLOGUE = 37  # $1887..$189D both compares falling through + the $189F JSR $8401
+SEE_FOV = 54  # $18A2..$18C7; $0F3D & $0F is 0, so the $18AD BEQ is never taken
+SEE_FOV_REJECT = 18  # $18CA BCS $1917 taken 4, page crossed, + $1917..$191D 14
+SEE_FOV_PASS = 22  # $18CA BCS not taken 2 + $18CC..$18D8 20
+SEE_ROBOT = 19  # $18DA BNE not taken 2 + the $18DC head-probe setup 17
+SEE_NOT_ROBOT = 4  # $18DA BNE $1904 taken, page crossed
+SEE_PROBE_FIXED = 56  # $18E6 JSR 6 + $18E9 15 + the $1C54/$1CDD JSRs 12 + $18F9 23
+SEE_BASE = 26  # $1904..$1912: the base point and the $1E probe counter
+SEE_BASE_AGAIN = 4  # $1914 BNE $18E6 taken, page crossed
+SEE_BASE_LAST = 2  # $1914 BNE not taken
+SEE_TAIL = 16  # $1916 CLC 2 + $1917..$191D 14
+MARCH_ENTRY = 74  # $1CDD's own 15 + JSR $1ECC 6 + get_object_details 53
+
+# $8401 calculate_object_relative_angles_and_distance, and the trig beneath it.
+REL_XY = 66  # $85C4 JSR 6 + 60, both component deltas non-negative
+REL_XY_ABS = 6  # per negative delta: $85D5/$85EB BPL not taken 2 + the negate 7, -3
+REL_Z = 36  # $85F5 JSR 6 + the 30-cycle straight line
+REL_ANGLES = 119  # $8401's own line 82 + $843E BNE taken 3 + the $8460 stores 34;
+ANG_CMP = 6  # $9287 LDA $85 / CMP $83
+ANG_X_LARGER = 3  # $928B BCC $9295 taken
+ANG_Y_LARGER = 5  # ... not taken 2 + $928D BNE $92A8 taken 3
+ANG_EQ = 10  # ... BNE not taken 2 + $928F LDA $82 / CMP $80 6
+ANG_EQ_Y = 3  # $9293 BCS $92A8 taken
+ANG_EQ_X = 2  # $9293 BCS not taken
+ANG_MIN_Y = 27  # $9295..$92A5: min = y, max = x, and the JMP into the shift loop
+ANG_MIN_X = 27  # $92A8..$92B8: min = x, max = y, through the $92B8 ORA $82
+ANG_ZERO = 18  # $92BA BEQ $9280 taken 3 + the $9280 zero-angle exit 15
+ANG_NONZERO = 8  # ... not taken 2 + $92BC LDA $85 3 + JMP $9303 3
+SCALE_SHIFT = 9  # $92C5/$9303 ASL/ROL 7 + the loop's final BCC not taken 2
+SCALE_LOOP = 20  # $92C1 per loop-back: $92C8 BCC taken 3 + 10 + the next ASL/ROL 7
+SCALE_LOOP_Y = 21  # $92FF: its $9306 BCC crosses a page, so the loop-back is 4
+SCALE_TAIL = 33  # $92CA/$9308 to the JSR $0D4A: back off the shift, set the divisor
+ANG_SIGN = 6  # $92DE/$931C LDA $86 / EOR $88
+ANG_SIGN_KEEP = 3  # the $92E2/$9320 branch that skips the negate
+ANG_SIGN_NEGATE = 20  # ... not taken 2 + the $92E4/$9322 16-bit negate 18
+ANG_QUAD = 5  # $92F1/$932F LDA #imm 2 + BIT 3
+ANG_QUAD_LOW = 3  # $92F5/$9333 BPL taken: keep the first quadrant constant
+ANG_QUAD_HIGH = 4  # ... not taken 2 + the second LDA #imm 2
+ANG_QUAD_TAIL = 14  # CLC / ADC $8B / STA $8B / RTS
+
+# $0D4A divide_and_arctan: three 16-bit rounds, six 8-bit, a half, then the lookup.
+DIV_FULL_SHIFT = 7  # $0D4A/$0D68/$0D86 ASL-or-ROL $74 5 + ROL A 2
+DIV_FULL_CARRY = 3  # $0D4D BCS taken: the compare is skipped, a is over
+DIV_FULL_UNDER = 8  # BCS not taken 2 + CMP $76 3 + $0D51 BCC taken 3
+DIV_FULL_OVER = 10  # ... BCC not taken 2 + $0D53 BNE taken 3
+DIV_FULL_EQ = 15  # ... BNE not taken 2 + $0D55 LDY $74 / CPY $77 6
+DIV_FULL_EQ_UNDER = 3  # $0D59 BCC taken
+DIV_FULL_EQ_OVER = 2  # $0D59 BCC not taken
+DIV_SUB = 20  # $0D5B..$0D67: the 16-bit subtract and the SEC that carries the bit
+DIV_SKIP_TEST = 6  # $0DA4 PHP 3 + CMP $76 3
+DIV_SKIP = 28  # $0DA7 BEQ $0E10 taken 4, page crossed, + the $0E10 short exit 24
+DIV_NO_SKIP = 2  # $0DA7 BEQ not taken
+DIV_BYTE_SHIFT = 7  # $0DA9.. ASL-or-ROL $74 5 + ROL A 2
+DIV_BYTE_CARRY = 8  # BCS taken 3 + SBC $76 / SEC 5
+DIV_BYTE_UNDER = 8  # BCS not taken 2 + CMP $76 3 + BCC taken 3
+DIV_BYTE_OVER = 12  # ... BCC not taken 2 + SBC $76 / SEC 5
+DIV_LAST_SHIFT = 7  # $0DF1 ROR $78 5 + ROL A 2
+DIV_LAST_CARRY = 3  # $0DF4 BCS $0DF8 taken
+DIV_LAST_CMP = 5  # ... not taken 2 + CMP $76 3
+DIV_LAST_TAIL = 8  # $0DF8 ROR $78 5 + $0DFA LDA $74 3
+DIV_PLP = 4  # $0DFC PLP: the round-3 carry comes back
+DIV_ROUND3_UNDER = 7  # $0DFD BCC $0E01 taken 4, page crossed, + $0E01 BCC taken 3
+DIV_ROUND3_OVER = 4  # ... not taken 2 + $0DFF ADC #$1f 2
+DIV_NO_OVERFLOW = 3  # $0E01 BCC $0E1F taken
+DIV_OVERFLOW = 23  # ... not taken 2 + the $0E03 45-degree clamp and RTS 21
+DIV_ARCTAN = 22  # $0E1F TAY/STA + the two table reads + $0E2C BIT $78
+DIV_ARCTAN_DONE = 13  # $0E2E BMI nt 2 + $0E30 BVS nt 2 + JMP $0E74 3 + RTS 6
+DIV_DELTA_BR = 3  # $0E2E BMI $0E35 taken: round 10 was over
+DIV_HALF_BR = 5  # ... not taken 2 + $0E30 BVS $0E50 taken 3
+DIV_DELTA = 22  # $0E35..$0E42: arctan[Y] - arctan[Y+1], then BIT $78
+DIV_DELTA_KEEP = 3  # $0E44 BVC $0E49 taken
+DIV_DELTA_INVERT = 32  # ... not taken 2 + JSR $1009 6 + the invert 24
+DIV_DELTA_HALVE = 15  # $0E49..$0E4E: the sign-preserving >>1
+DIV_NEXT = 25  # $0E50..$0E5F: angle += arctan[Y+1], then BIT $78
+DIV_ADD_SKIP = 3  # $0E61 BPL $0E70 taken
+DIV_ADD_HALF = 22  # ... not taken 2 + $0E63..$0E6E add the half-delta 20
+DIV_AVERAGE = 16  # $0E70 LSR $8B / ROR $8A / RTS
+DIV_TABLE_CROSS = 1  # $3B01,Y crosses a page at Y $FF, $3C02,Y at Y $FE
+
+VANG_HEAD = 5  # $933D STA $86 3 + TAY 2
+VANG_POS = 3  # $9340 BPL $934D taken
+VANG_NEG = 17  # ... not taken 2 + $9342..$934B: negate the relative z 15
+VANG_SETUP = 26  # $934D..$935B: hypotenuse into y, zero the y sign, JSR $9287
+VANG_SHIFT = 52  # $935E..$9377: subtract the observer's v_angle, PHP, >>4, PLP
+VANG_SIGN_POS = 3  # $9378 BPL $937C taken
+VANG_SIGN_NEG = 4  # ... not taken 2 + $937A ORA #$f0 2
+VANG_TAIL = 9  # $937C STA $8D 3 + RTS 6
+
+HYP_HEAD = 38  # $937F..$9395: the $3D02 coefficient read and the JSR $0F4A
+HYP_TAIL = 40  # $9398..$93AC: halve, add the max component, restore Y, RTS
 
 MUL8 = 102  # $0D03 JSR 6 + STA/LDA 5 + the 8 unrolled shift-add rounds 91
 MUL8_LOW = 99  # the $0D05 entry, $0074 already stored
@@ -230,14 +317,6 @@ def exposure_cycles(mem):
             return total + slot + 1  # the walk stops here
         total += slot - last
     return total
-
-
-def see_cycles(march_cycles, probes, in_slot, wrong_type):
-    """$1887 for one visibility query: a reject path, else the bearing chain plus one
-    march per probe, each march carrying the cycles its own sub-steps cost."""
-    if not in_slot:
-        return SEE_SLOT_WRONG_TYPE if wrong_type else SEE_SLOT_EMPTY
-    return SEE_GEOMETRY + probes * SEE_PROBE + march_cycles
 
 
 def idle_pass_cycles(mem):
