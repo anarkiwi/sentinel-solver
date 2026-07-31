@@ -1090,6 +1090,14 @@ What is genuinely stateful is `$0010`: `plot_polygon $2AA9` runs the other verti
 whenever a polygon clipped an edge (`$002C`/`$002D` ≠ 1) and leaves `$0010` toggled for the
 next tile, so the model carries it across the whole pass.
 
+**`$002C`/`$002D` is not a flag pair.** `span_fill` sets both to 1 at `$22AA` and has four
+stores that end a pass: `$232B` and `$2340` put 0 in `$002D` — the row's right edge, or its
+clipped left edge, lies left of the buffer — `$2331` puts 0 in `$002C` when the left edge lies
+right of it, and `$2337`, the clip-right path, puts `$0061 ASL` in `$002C`, a row *length* and
+`$E0` for the play buffer. `$2AB9` reads `$002C,Y` with Y = `$0010` and `$2ABC` compares against
+1, so the length reads as clipped exactly like a 0 does. Modelling `$2337` as a no-op left a
+polygon clipped only on its right at `$002C` = 1 and cost it its second section.
+
 **Object term.** `plot_stack_of_objects $21AE` walks the tile's stack — the levels at or below
 the eye bottom-up, then the rest top-down — and `plot_object $8533` draws each: `$8401` for the
 observer-relative angles and distance, `$8475` to transform every model vertex, then `$856F`

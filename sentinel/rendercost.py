@@ -477,6 +477,7 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
             if ((r - b35) & 0xFF) >= b61:  # $2384: right of the buffer, so clip
                 cyc += passcost.SPAN_OFF_RIGHT_ROW + passcost.SPAN_CLIP_RIGHT
                 r_off = (b61 * 2) & 0xFF
+                flags[0] = r_off  # $2337 STA $2c: the row length, so never 1
             else:
                 cyc += passcost.SPAN_LEFT_EDGE + passcost.SPAN_RIGHT_PIXEL
                 cyc += passcost.SPAN_PLOT_RIGHT

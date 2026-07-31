@@ -98,41 +98,44 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Two views draw fewer polygons than the ROM; two route lines differently
+## 5. Five views rasterise their lines differently from the ROM
 
 **Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 10 of the 15 golden
-views. The other five split into two separate faults, and `$2F17` is **not** either of them.
+views. On the other five every polygon is now prepared, so what is left is how lines are routed
+and stepped, not which polygons are drawn. `$2F17` is **not** the mechanism.
 
 **Measured — it is not the `$0B40` test.** `$2D93 convert_angles_into_double_coordinates`,
 which computes the `screen_x` high byte that `$2E3F`/`$2F17` read, is exact: fuzzed 4000 random
 (`$0BA0`, `$A800`, `$0011`, `$0029`) against the real `$2D93`, **0 mismatches**. So the model
 and the machine agree on every value the wide/narrow test is made of.
 
-**Measured — the two faults, by counting each `process_lines` route** (`$2E4F` outer,
-`$2E5E` inner-steep, `$2E89` direct rasterise, `$2ECC` point) against the model's own:
+**Closed — the missing prepares were `$2337`'s store.** `plot_polygon $2AA9` reads `$002C,Y`
+with Y = `$0010` and takes the other vertical buffer unless it is exactly 1 (`$2ABC CMP #$01`).
+`span_fill` has four stores that clear that: `$232B` and `$2340` put 0 in `$002D` (the right
+edge, or the clipped left edge, lies left of the buffer), `$2331` puts 0 in `$002C` (the left
+edge lies right of it), and `$2337`, the clip-right path, puts `$0061 ASL` — a row *length*,
+`$E0` for the play buffer — in `$002C`. The model had the other three and the `CMP`, but stored
+nothing at `$2337`, so a polygon clipped only on its right kept `$002C` = 1 and never bought its
+second section. Tracing every `$2AA9` of the real plot_world: 335,0,0 reaches `$2337` on one
+polygon and 2024,184,244 on three, two of them with no `$2331` row — the −1 and −2 exactly.
+With the store, model prepares equal ROM prepares on every view traced: **110/110** (335,0,0),
+**95/95** (2024,184,244), and 103, 238, 103, 123 on 42,160,240 / 777,32,0 / 0,136,248 /
+2024,16,0. Polygon counts match too (73, 66, 54, 156, 79, 83).
 
-| view | outer | direct | point | lines total |
-| --- | --- | --- | --- | --- |
-| 2024,184,244 | +3 | −10 | −2 | **−9** |
-| 335,0,0 | −2 | 0 | 0 | **−4** |
-| 42,160,240 | +3 | −3 | 0 | 0 |
-| 0,136,248 | 0 | −1 | +2 | 0 |
-| 2024,16,0 | 0 | 0 | 0 | 0 |
+**Measured — what is left**, as the golden's own loop counts minus the ROM's:
 
-Two views (2024,184,244 and 335,0,0) process **fewer lines in total** — 9 and 4, i.e. two or
-three whole polygons the ROM prepares and the model does not, and counting `$2D6C` entries per
-tile localises it exactly: **2 prepares missing of 95** on 2024,184,244 and **1 of 21** on
-335,0,0, with 42,160,240 and 777,32,0 exact (73 and 117). Every tile agrees on *whether* it has
-polygons and the tile counts match (112 and 223), so no tile is skipped — the missing entries
-are second wide-buffer passes, i.e. `$2AA9`'s `$002C`/`$002D` decision on one or two polygons.
-`span_fill`'s `$2337` stores a row *length* into `$002C` rather than a flag and `$2ABC` accepts
-only exactly 1, so a clipped row must still buy the other section; both are now modelled (the
-model had a truth test and no store) and neither moves any view, so the remaining seat is one of
-the other three ways `$002C`/`$002D` can end a pass.
+| view | residual |
+| --- | --- |
+| 2024,184,244 | wide_steep +212, steep −161, span_rows +76, span_bytes +10, sections +5 |
+| 0,136,248 | steep +81, span_rows +41, shallow −9, edges +1, span_bytes −2 |
+| 42,160,240 | span_bytes −6 |
+| 335,0,0 | span_bytes −2 |
+| 2024,16,0 | shallow +2 |
 
-The other two (42,160,240 and 0,136,248) process the same number of lines but send three of
-them, and one, down a different branch, with no line count changing — a routing difference on
-`$2E3D`/`$2E45`.
+Two views are now within a handful of filled bytes. The `process_lines` route census that named
+`$2E3D`/`$2E45` as the routing suspect was taken before the `$2337` fix and a changed
+second-pass decision re-parities `$0010` for every polygon after it, so that census has to be
+re-taken before it means anything.
 
 **There is no unread-before-written `$0B40` in the ROM.** The image has exactly nine accesses:
 three writes (`$2DC0` in the wide vertex loop, `$2E58`/`$2E5B` in `$2E56`) and six reads
@@ -153,7 +156,7 @@ hiding, and it is a model-debugging job rather than a disassembly one. `$2DC9` n
 `$0B40` at all — where the model clears it — remains a real divergence and is part of that
 variant.
 
-Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
+Frame cost is 0.94-1.00× (median 0.975, mean absolute error 2.4%).
 
 **Also not derived.**
 
@@ -175,9 +178,9 @@ Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
   `_inview_object_base`'s floor and under-charges every object
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
-**Resolves.** For the polygon count, the three remaining `$002C`/`$002D` exits on the two
-polygons named above. For the routing, debugging the slot-keyed variant against the corner-keyed
-one polygon at a time — the ROM side of that question is now closed.
+**Resolves.** A fresh `process_lines` route census against the fixed model, then debugging the
+slot-keyed variant against the corner-keyed one polygon at a time — the ROM side of that
+question is now closed.
 
 ## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 
