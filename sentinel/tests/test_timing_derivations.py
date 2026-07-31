@@ -706,6 +706,281 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
         assert longest > 250_000, longest
 
 
+def _aim_at(state, observer, target):
+    """The observer facing that puts ``target`` dead ahead ($0C57 == $0A)."""
+    ra = relative.relative_angles(state, observer, target)
+    return (int(state.obj_h_angle[observer]) + ra["c57"] - 0x0A) & 0xFF
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_see_cost_model_matches_the_roms_own_1887(landscape):
+    """$1887 priced and answered from state against the real 6502, per call.
+
+    Every occupied slot as target, as the robot the $17B2 scan asks for and as its own
+    type (the $1AB0 tree/boulder call, the only $1887 whose $18DA takes the one-probe
+    branch), from every enemy aimed at the player and turned away from it -- so the
+    $1893/$189D rejects, the $18CA FOV reject, the partial and the full-sight marches
+    are all covered.  The exposure byte $0014 the answer rides on is compared too."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    player = snap[mm.PLAYER_OBJECT]
+    seen = set()
+    for e in range(8):
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+            continue
+        aim = _aim_at(base, e, player)
+        for facing in (aim, (aim + 128) & 0xFF):
+            for target in range(mm.NUM_SLOTS):
+                for etype in (mm.T_ROBOT, int(base.obj_type[target])):
+                    mem[:] = bytearray(snap)
+                    mem[mm.OBJECTS_H_ANGLE + e] = facing
+                    mem[0x6E] = e  # $16FF/$1773: the observer $8401 reads
+                    mem[mm.FOV_WIDTH] = enemies.FOV_SCAN  # $16F2
+                    st = State.from_mem(bytes(mem))
+                    see = relative.can_see_object(
+                        st, e, target, etype, enemies.FOV_SCAN
+                    )
+                    c0 = cpu.processorCycles
+                    mstate["stop"] = False
+                    oracle.call(cpu, mem, 0x1887, a=etype, y=target, state=mstate)
+                    rom = cpu.processorCycles - c0
+                    assert see["cycles"] == rom, (
+                        f"ls{landscape:04x} obs {e} tgt {target} type {etype}: "
+                        f"{see['cycles']} != {rom}"
+                    )
+                    assert st.mem[0x0014] == mem[0x0014]
+                    seen.add(
+                        "empty"
+                        if base.obj_flags[target] & 0x80
+                        else (
+                            "wrong_type"
+                            if not see["in_slot"]
+                            else (
+                                "reject"
+                                if not see["in_fov"]
+                                else ("full" if see["full"] else "partial")
+                            )
+                        )
+                    )
+    assert seen == {"empty", "wrong_type", "reject", "partial", "full"}
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_tile_scan_cost_model_matches_the_roms_own_1ab0(landscape):
+    """$1AB0 priced and decided from state against the real 6502, call for call.
+
+    A freshly generated board stacks nothing, so its $1AB0 only ever walks the empty
+    ($1AB5), rejected ($1AC0) and wrong-top ($1AE1) exits -- the drain half of the loop
+    ($1AC2 tile fetch, the $1AE3 JSR $1887 and the $1AEA hit) needs an object standing
+    on a stack, so the sweep restacks every top-of-tile tree/boulder as one.  A direct
+    call is first checked against $1AB0 as the play round itself reaches it."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+
+    def rom_call(image, enemy):
+        c, m, ms = oracle.wrap_image(image)
+        m[0x6E] = enemy
+        c0 = c.processorCycles
+        ms["stop"] = False
+        oracle.call(c, m, 0x1AB0, state=ms)
+        return c.processorCycles - c0, c.p & 1, m[mm.TARGETED_OBJECT_SLOT]
+
+    def model_call(image, enemy):
+        st = State.from_mem(bytes(image))
+        budget, _index, tb = enemies._find_drainable_boulder_or_tree(
+            st, enemy, enemies.UNBOUNDED, mm.NUM_SLOTS - 1, badline.frame_clock(False)
+        )
+        return passcost.TILE_SCAN_ENTRY + enemies.UNBOUNDED - budget, tb
+
+    # the direct call is the same call the round makes: same image, same cycles
+    inplay = 0
+    for _ in range(300):
+        if inplay >= 2:
+            break
+        mstate["stop"] = False
+        oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=mstate)
+        for hit in _trace_calls(cpu, mem, mstate, oracle, 0x1AB0):
+            assert rom_call(hit[1], hit[2])[0] == hit[0]
+            inplay += 1
+    assert inplay >= 2
+
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    tops = [
+        s
+        for s in range(mm.NUM_SLOTS)
+        if not base.obj_flags[s] & 0x80
+        and base.obj_type[s] in (mm.T_TREE, mm.T_BOULDER)
+        and enemies._tile_top(base, s) == s
+    ]
+    assert tops
+    outcomes = set()
+    for otype in (mm.T_TREE, mm.T_BOULDER):
+        for e in range(8):
+            if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+                continue
+            aim = _aim_at(base, e, tops[0])
+            for facing in (aim, (aim + 96) & 0xFF, (aim + 160) & 0xFF):
+                image = bytearray(snap)
+                for s in tops:
+                    image[mm.OBJECTS_FLAGS + s] = 0x40  # $1AB9: standing on a stack
+                    image[mm.OBJECTS_TYPE + s] = otype
+                image[mm.OBJECTS_H_ANGLE + e] = facing
+                image[0x6E] = e
+                image[mm.FOV_WIDTH] = enemies.FOV_SCAN
+                model, tb = model_call(image, e)
+                rom, carry, slot = rom_call(bytes(image), e)
+                assert model == rom, f"ls{landscape:04x} enemy {e} type {otype}"
+                assert (tb >= 0) == (carry == 0)  # $1AED CLC hit / $1AF2 SEC exhausted
+                if tb >= 0:
+                    assert tb == slot
+                outcomes.add(tb >= 0)
+    assert outcomes == {True, False}
+
+
+def _trace_calls(cpu, mem, mstate, oracle, target):
+    """[(cycles, image at entry, $6E)] for each ``target`` call one $16B5 round makes."""
+    ret, hits, inside = 0xFFF0, [], None
+    mem[ret] = 0x60
+    cpu.a = cpu.x = cpu.y = 0
+    sp = cpu.sp
+    mem[0x0100 + sp] = (ret - 1) >> 8
+    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
+    cpu.sp = (sp - 2) & 0xFF
+    cpu.pc = oracle.UPDATE_ENEMIES
+    mstate["stop"] = False
+    while cpu.pc != ret and not mstate["stop"]:
+        if inside is None and cpu.pc == target:
+            inside = (cpu.sp, cpu.processorCycles, bytes(mem), mem[0x6E])
+        elif inside is not None and cpu.sp > inside[0]:
+            hits.append((cpu.processorCycles - inside[1], inside[2], inside[3]))
+            inside = None
+        cpu.step()
+    return hits
+
+
+@pytest.mark.oracle
+@pytest.mark.xfail(
+    strict=True,
+    reason="the body applies a segment's CORE writes at the segment's start: $16ED "
+    "lands 15 cycles early, $1809/$1813 65/72, $1825/$1835 66/89 -- open_items 8",
+)
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_body_commits_its_core_writes_at_the_roms_own_cycle(landscape):
+    """The `$16ED` reload must not appear in the sim before the ROM has paid for it.
+
+    `$16E6 LDA $0C30,X` 4 + `CMP #2` 2 + `BCS` not taken 2 + `$16ED LDA #4` 2 +
+    `$16EF STA $0C30,X` 5: the machine's `update_cd` becomes 4 at cycle 15 of the body,
+    so a model spending fewer than 15 must still read the old value."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    checked = 0
+    for e in range(8):
+        if mem[mm.OBJECTS_FLAGS + e] & 0x80:
+            continue
+        if mem[mm.OBJECTS_TYPE + e] not in mm.ENEMY_TYPES:
+            continue
+        image = bytearray(mem)
+        image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+        image[mm.CURSOR] = e
+        c, m, ms = oracle.wrap_image(bytes(image))
+        c.a, c.x, c.y = 0, e, 0
+        c.pc = 0x16E6
+        c0, at = c.processorCycles, None
+        while at is None and not ms["stop"]:
+            c.step()
+            if m[mm.ENEMIES_UPDATE_COOLDOWN + e] == enemies.UPDATE_COOLDOWN_SCAN:
+                at = c.processorCycles - c0
+        assert at == 15
+        for budget in range(1, at):
+            st = State.from_mem(bytes(image))
+            enemies.update_body(st, budget, badline.frame_clock(False))
+            assert (
+                st.mem[mm.ENEMIES_UPDATE_COOLDOWN + e] == 0
+            ), f"ls{landscape:04x} enemy {e}: $16ED committed on {budget} cycles"
+        checked += 1
+    assert checked
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_body_split_is_exact_wherever_the_frame_ends(landscape, monkeypatch):
+    """Suspending $16E6 anywhere costs and does exactly what running it whole does.
+
+    The body is charged in units that are not one instruction wide, so a frame boundary
+    inside one leaves the model mid-unit; every resume point must still spend the same
+    total and leave the same CORE bytes, including the ones where the resume re-runs an
+    $1887 whose cycles are already paid ($0C56/$0CDD/$0C76 rotate on every call)."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
+    )
+    fields = (
+        (mm.OBJECTS_FLAGS, mm.NUM_SLOTS),
+        (mm.OBJECTS_TYPE, mm.NUM_SLOTS),
+        (mm.OBJECTS_H_ANGLE, mm.NUM_SLOTS),
+        (mm.ENEMIES_UPDATE_COOLDOWN, 8),
+        (mm.ENEMIES_DRAINING_COOLDOWN, 8),
+        (mm.ENEMIES_TARGETED_OBJECT, 8),
+        (mm.ENEMIES_ROTATION_COOLDOWN, 8),
+        (mm.ENEMIES_MEANIE_OBJECT, 8),
+    )
+
+    def core(st):
+        return tuple(bytes(st.mem[a : a + n]) for a, n in fields)
+
+    def run(image, enemy, first):
+        st = State.from_mem(bytes(image))
+        clk = badline.frame_clock(False)
+        budget, stage, index, partial = enemies._consider_enemy_state(
+            st, enemy, first, enemies.BODY_ENTRY, 0, -1, clk
+        )
+        spent = first - budget
+        while stage != enemies.BODY_DONE:
+            grant = budget + enemies.UNBOUNDED
+            budget, stage, index, partial = enemies._consider_enemy_state(
+                st, enemy, grant, stage, index, partial, clk
+            )
+            spent += grant - budget
+        return spent, core(st)
+
+    mem = bytearray(_oracle().generate(landscape))
+    base = State.from_mem(bytes(mem))
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for e in range(8):
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+            continue
+        aim = _aim_at(base, e, player)
+        for off in (0, 5, 96):
+            image = bytearray(mem)
+            image[mm.OBJECTS_H_ANGLE + e] = (aim + off) & 0xFF
+            image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+            image[mm.CURSOR] = e
+            whole = run(image, e, enemies.UNBOUNDED)
+            for first in range(1, whole[0] + 1, max(1, whole[0] // 40)):
+                assert (
+                    run(image, e, first) == whole
+                ), f"ls{landscape:04x} enemy {e} split at {first}"
+                checked += 1
+    assert checked > 100
+
+
 @pytest.mark.oracle
 @pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
 def test_the_object_screen_span_is_exact_against_the_roms_own_209b(landscape):

@@ -117,7 +117,7 @@ the next `$1289`. On that captured image the proxy charges 387392 cycles, 1.12x,
 `RENDER_COST_BACKEND=py65` charges **534090**, 1.54x — which the machine cannot have spent in
 22 PAL frames (24277 a frame against 19656). Calibrating the proxy against that backend
 inherits the error. Fixture `strip_replot`, measured from
-[8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is).
+[8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early).
 
 **Resolves.** Stateful emulation of the whole `plot_world` fill sequence in render order, the
 interleaved object polygons included. Short of that the only honest levers are
@@ -263,7 +263,7 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock is not the residual: the replot's frame is
+## 8. The enemy clock commits `consider_enemy_state`'s CORE writes early
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
 ls9795 (**18** events, the first at frame 151) and on ls335 (**14**, the first at 156).
@@ -892,7 +892,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is) landed, so
+  [8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
@@ -1020,12 +1020,12 @@ Each is a hypothesis and the measurement that killed it.
 - **A `body_spent` resume would cut the follow-mode event count.** Over the gate's own
   3000-frame races, **0** of ls9795's 111 and **0** of ls335's 12 CORE events catch the
   machine inside `$1CDD`; 84 of ls9795's catch it inside the `$1FFC JSR $2625` replot
-  ([8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
+  ([8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early)).
 - **The `$1887` march that decides ls9795's frame 129 is ~1% under-priced.** On the live
   image captured at that very `$16E6`, jennings and `enemies.update_body` both give
   **280640**; the real 6510 matches jennings at all 89941 instruction sites; and the
   march's own frame budget measures 15166..15591 against the model's 15174..15591. The
-  model's whole lead is **+81 to +97 cycles** ([8](#8-the-enemy-clock-is-not-the-residual-the-replots-frame-is)).
+  model's whole lead is **+81 to +97 cycles** ([8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early)).
 - **A relocation needs an energy floor above the ROM's own 3.** Floors of 5 and 8 leave every
   board that matters bit-identical — ls7414 won in 59 and ls8589 won in 46 at 3, 5 and 8;
   ls9364 lost 14 and ls6725 lost 6 at all three — and are strictly worse on two already-lost
