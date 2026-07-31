@@ -101,6 +101,112 @@ SAVED_X = 0x191E  # $1889 STX $191E: $1887 saves its caller's X here
 SAVED_Y = mm.TARGETED_OBJECT_SLOT  # $188C STY $0C58: ... and its caller's Y here
 PARTIAL_SLOT = 0x000F  # $17AE/$17C8: the head-only player the robot scan remembers
 
+_HEAD_SPENT = {  # cycles spent at each boundary of $1289..$16CC, the head and dispatch
+    0x1289: 0,
+    0x128C: 4,
+    0x128E: 6,
+    0x1291: 12,
+    0x1294: 16,
+    0x129F: 19,
+    0x16B5: 25,
+    0x16B6: 27,
+    0x16B9: 31,
+    0x16BB: 34,
+    0x16BE: 38,
+    0x16C0: 40,
+    0x16C2: 42,
+    0x16C4: 44,
+}
+_DISPATCH_SPENT = {  # $16C6..$16CC: the two enemy types take different compare chains
+    mm.T_SENTRY: {0x16C6: 43, 0x16C9: 47, 0x16CC: 51},
+    mm.T_SENTINEL: {0x16C6: 46, 0x16C9: 50, 0x16CC: 54},
+}
+_CURSOR_SPENT = {  # from $16D9; the wrap misses the $16DB BPL and costs four more
+    False: {0x16D9: 0, 0x16DB: 5, 0x16E1: 8, 0x16E3: 11, 0x16E5: 14},
+    True: {
+        0x16D9: 0,
+        0x16DB: 5,
+        0x16DD: 7,
+        0x16DF: 9,
+        0x16E1: 12,
+        0x16E3: 15,
+        0x16E5: 18,
+    },
+}
+_TAIL_SPENT = {  # from $12A2; the $191F walk and the sound bodies are added below
+    0x12A2: 0,
+    0x12A5: 4,
+    0x12B1: 7,
+    0x12B4: 13,
+    0x12B6: 15,
+    0x12B9: 19,
+    0x12BB: 21,
+    0x12BE: 27,
+    0x12C1: 33,
+    0x12C4: 39,
+    0x12C7: 45,
+}
+_TAIL_SOUND = {0x12C1: 13, 0x12C4: 42, 0x12C7: 69}  # $34BA, then $352C, then $347D
+_PRND_ROUND = {  # one $31CF lap of the 40-bit LFSR, 51 cycles
+    0x31CF: 0,
+    0x31D2: 4,
+    0x31D3: 6,
+    0x31D4: 8,
+    0x31D5: 10,
+    0x31D8: 14,
+    0x31D9: 16,
+    0x31DC: 22,
+    0x31DF: 28,
+    0x31E2: 34,
+    0x31E5: 40,
+    0x31E8: 46,
+    0x31E9: 48,
+}
+_PRND_ENTRY = {0x31CA: 0, 0x31CD: 4}  # $31CA STY $31F2 4 + $31CD LDY #$08 2
+_PRND_TAIL = {
+    0x31EB: 413,
+    0x31EE: 417,
+}  # past the loop: 6 + 7*51 + the shorter last lap
+_PRND_ROUNDS = 8  # $31CD loads the lap counter with eight
+_PRND_LAP = 51  # one lap; the last is a cycle shorter, its $31E9 BNE not taken
+
+
+def _prnd_spent(pc, y):
+    """Cycles $31CA has already spent when the interrupt caught it at ``pc``."""
+    if pc in _PRND_TAIL:
+        return _PRND_TAIL[pc]
+    if pc in _PRND_ROUND:
+        laps = _PRND_ROUNDS - (y + 1 if pc == 0x31E9 else y)
+        return 6 + laps * _PRND_LAP + _PRND_ROUND[pc]
+    return _PRND_ENTRY.get(pc)
+
+
+def _segment_offset(mem, pc, y):
+    """The signed cycles between the machine's position and the model's resume point.
+
+    Positive: the machine is past it, so the model is credited what it already paid;
+    negative: the machine still owes cycles the model's resume point will not charge.
+    None where the position is not on a straight line this can count."""
+    if pc in _HEAD_SPENT:
+        if pc >= 0x129F and mem[0x0CDC] & 0x80:  # $1296 took the longer $1223 path
+            return None
+        return _HEAD_SPENT[pc]
+    dispatch = _DISPATCH_SPENT.get(mem[mm.OBJECTS_TYPE + mem[mm.CURSOR]], {})
+    if pc in dispatch:
+        return dispatch[pc]
+    wrap = pc in (0x16DD, 0x16DF) or mem[mm.CURSOR] == 7
+    if pc in _CURSOR_SPENT[wrap]:
+        return _CURSOR_SPENT[wrap][pc]
+    if pc in _TAIL_SPENT:  # the model has paid the whole tail; the machine has not
+        exposure = passcost.exposure_cycles(mem)
+        spent = (
+            _TAIL_SPENT[pc] + _TAIL_SOUND.get(pc, 0) + (exposure if pc > 0x12BB else 0)
+        )
+        total = _TAIL_SPENT[0x12C7] + 3 + _TAIL_SOUND[0x12C7] + exposure
+        return spent - total
+    spent = _prnd_spent(pc, y)  # the prnd the model's PHASE_CURSOR does not charge
+    return None if spent is None else spent - passcost.PRND
+
 
 def _innermost_loop_address(pc, sp, page):
     """The deepest play-loop address the interrupt caught: the PC itself when it is
@@ -117,23 +223,25 @@ def _innermost_loop_address(pc, sp, page):
 
 
 def resume_from_stack(mem, sp, page):
-    """The sub-pass position a $9630 halt exposes, as (phase, stage, index, partial).
+    """The sub-pass position a $9630 halt exposes: (phase, stage, index, partial, cycles).
 
     The $95E9 frame holds Y, X, A, P, PCL, PCH from SP+1, and under it the foreground's
     own return addresses; $1887 saves its caller's X and Y at $191E and $0C58, so the
-    scan indices survive a call as well."""
+    scan indices survive a call as well.  The fifth value is the cycle offset between
+    the machine's position and that resume point, where a straight line can count it."""
     y = page[(sp + 1) & 0xFF]
     x = page[(sp + 2) & 0xFF]
     pc = page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)
     addr, live = _innermost_loop_address(pc, sp, page)
+    offset = _segment_offset(mem, pc, y) or 0
     if not LOOP_BODY[0] <= addr < LOOP_BODY[1]:
         if LOOP_DISPATCH[0] <= addr < LOOP_DISPATCH[1]:
-            return PHASE_BODY, BODY_ENTRY, 0, -1
+            return PHASE_HEAD, BODY_ENTRY, 0, -1, offset
         if LOOP_PRND[0] <= addr < LOOP_PRND[1]:
-            return PHASE_CURSOR, BODY_ENTRY, 0, -1
+            return PHASE_CURSOR, BODY_ENTRY, 0, -1, offset
         if 0x16D6 <= addr < LOOP_PRND[0]:  # the JSR $31CA: the prnd is still owed
-            return PHASE_BODY, BODY_DONE, 0, -1
-        return PHASE_HEAD, BODY_ENTRY, 0, -1  # head, tail, or off the loop entirely
+            return PHASE_BODY, BODY_DONE, 0, -1, offset
+        return PHASE_HEAD, BODY_ENTRY, 0, -1, offset  # head, tail, or off the loop
     stage = BODY_ENTRY
     for first, st in _BODY_LADDER:
         if addr >= first:
@@ -146,7 +254,7 @@ def resume_from_stack(mem, sp, page):
         index = (x if live else mem[SAVED_X]) if addr > first_call else mm.NUM_SLOTS - 1
     if stage in (BODY_SCAN, BODY_PARTIAL, BODY_TREE, BODY_ROTATE):
         partial = -1 if mem[PARTIAL_SLOT] & 0x80 else mem[PARTIAL_SLOT]
-    return PHASE_BODY, stage, index, partial
+    return PHASE_BODY, stage, index, partial, 0
 
 
 def paid(slot):
