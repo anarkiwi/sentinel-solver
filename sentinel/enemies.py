@@ -129,30 +129,40 @@ def _discharge_bank(state, enemy):
 
 
 def _reduce_object_energy(state, target, enemy):
-    """$1A08: drain `target`. The player loses one energy (returns True); a robot
-    downgrades to a boulder, a boulder to a tree, a tree is removed (returns
-    False -- no player energy change).  Every drain that is not a kill banks one
-    unit of energy on `enemy` ($1A4F/$1A4E) for later discharge as a tree -- the
-    landscape-energy conservation that scatters trees while the Sentinel drains."""
+    """$1A08: drain `target`, returning (drained the player, cycles spent).
+
+    The player loses one energy; a robot downgrades to a boulder, a boulder to a tree,
+    a tree is removed.  Every drain that is not a kill banks one unit of energy on
+    `enemy` ($1A4F/$1A4E) for later discharge as a tree."""
     mem = state.mem
     if target == mem[mm.PLAYER_OBJECT]:
         if state.energy == 0:
             # kill_player $1A00: drained with no energy left -> mark the player dead.
             mem[mm.PLAYER_DIED_BY_DRAINING] |= 0x80
-            return True  # no discharge
+            return True, passcost.REDUCE_HEAD + passcost.REDUCE_KILL
         state.energy = state.energy - 1
         _discharge_bank(state, enemy)
-        return True
+        cost = passcost.REDUCE_HEAD + passcost.REDUCE_PLAYER + passcost.REDUCE_BANK
+        # $1A1A/$1A1F: the drained bar is replotted and the drain sound started
+        cost += passcost.status_bar_cycles(state.energy) + passcost.TUNE
+        return True, cost
+    cost = passcost.REDUCE_HEAD + passcost.REDUCE_OBJECT + passcost.REDUCE_BANK
     otype = state.obj_type[target]
     if otype == mm.T_ROBOT:
         mem[mm.ENEMIES_DRAINING_COOLDOWN + enemy] = 0  # $1A31
         state.obj_type[target] = mm.T_BOULDER
+        cost += passcost.REDUCE_ROBOT
     elif otype == mm.T_TREE:
+        stacked = state.obj_flags[target] >= 0x40  # $1EFF: the tile byte it restores
         actions.remove_object(state, target)
+        cost += passcost.REDUCE_TREE + (
+            passcost.REMOVE_STACKED if stacked else passcost.REMOVE_GROUND
+        )
     else:  # boulder -> tree
         state.obj_type[target] = mm.T_TREE
+        cost += passcost.REDUCE_BOULDER
     _discharge_bank(state, enemy)
-    return False
+    return False, cost
 
 
 def _see_cost(see):
@@ -195,8 +205,7 @@ def _target_object(state, enemy, target, exposure):
     if exposure & 0x80:  # fully visible -> drain
         mem[mm.TARGETED_OBJECT_SLOT] = target
         killed = target == mem[mm.PLAYER_OBJECT] and state.energy == 0
-        _reduce_object_energy(state, target, enemy)
-        cost += passcost.TARGET_DRAIN
+        cost += passcost.TARGET_DRAIN + _reduce_object_energy(state, target, enemy)[1]
         if killed:  # kill_player $1A00 unwinds the stack -> no update-cooldown reload
             return BODY_DONE, cost
         mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
@@ -280,9 +289,9 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 mem[mm.ENEMIES_MEANIE_SEARCH_OBJECT + enemy] = 0x40  # $178B
-                _reduce_object_energy(state, tb, enemy)  # $17EA, never the player
+                drain = _reduce_object_energy(state, tb, enemy)[1]  # $17EA
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                budget -= passcost.HUNT_HIT + passcost.DRAIN_CALL
+                budget -= passcost.HUNT_HIT + passcost.DRAIN_CALL + drain
                 return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
             budget -= passcost.HUNT_MISS
             mem[mm.ENEMIES_CONSIDERING_MEANIE + enemy] = (  # $1792
@@ -343,9 +352,9 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 mem[mm.TARGETED_OBJECT_SLOT] = tb
-                _reduce_object_energy(state, tb, enemy)
+                drain = _reduce_object_energy(state, tb, enemy)[1]
                 mem[mm.ENEMIES_UPDATE_COOLDOWN + enemy] = UPDATE_COOLDOWN_DRAIN
-                budget -= passcost.TREE_HIT + passcost.DRAIN_CALL
+                budget -= passcost.TREE_HIT + passcost.DRAIN_CALL + drain
                 return budget - passcost.DRAIN_TAIL - _body_tail(), BODY_DONE, 0, -1
             budget -= passcost.TREE_NONE
             stage, index = BODY_ROTATE, 0

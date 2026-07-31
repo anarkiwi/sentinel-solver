@@ -251,6 +251,28 @@ _TARGET_DRAIN = passcost.TARGET_DRAIN
 _TARGET_DRAIN_OBJ = passcost.TARGET_DRAIN_OBJ
 _TARGET_DRAIN_PLAYER = passcost.TARGET_DRAIN_PLAYER
 
+_REDUCE_HEAD = passcost.REDUCE_HEAD
+_REDUCE_KILL = passcost.REDUCE_KILL
+_REDUCE_PLAYER = passcost.REDUCE_PLAYER
+_REDUCE_OBJECT = passcost.REDUCE_OBJECT
+_REDUCE_ROBOT = passcost.REDUCE_ROBOT
+_REDUCE_TREE = passcost.REDUCE_TREE
+_REDUCE_BOULDER = passcost.REDUCE_BOULDER
+_REDUCE_BANK = passcost.REDUCE_BANK
+_REMOVE_STACKED = passcost.REMOVE_STACKED
+_REMOVE_GROUND = passcost.REMOVE_GROUND
+_TUNE = passcost.TUNE
+_STATUS_HEAD = passcost.STATUS_HEAD
+_STATUS_BLOCK = passcost.STATUS_BLOCK
+_STATUS_BLOCK_DONE = passcost.STATUS_BLOCK_DONE
+_STATUS_UNIT_NONE = passcost.STATUS_UNIT_NONE
+_STATUS_UNIT = passcost.STATUS_UNIT
+_STATUS_PAD = passcost.STATUS_PAD
+_STATUS_MID = passcost.STATUS_MID
+_STATUS_TAIL = passcost.STATUS_TAIL
+_STATUS_PAD_END = passcost.STATUS_PAD_END
+_STATUS_PAD_LAPS = passcost.STATUS_PAD_LAPS
+
 _TILE_SCAN_ENTRY = passcost.TILE_SCAN_ENTRY
 _TILE_SCAN_EXHAUSTED = passcost.TILE_SCAN_EXHAUSTED
 _TILE_SCAN_LAST = passcost.TILE_SCAN_LAST
@@ -954,6 +976,23 @@ def _put_object_in_random_tile_below_z(mem, slot, z):
         return True, draws
 
 
+@njit(cache=True)
+def _status_bar_cycles(energy):
+    """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""
+    fifteens = energy // 15
+    rest = energy - fifteens * 15
+    threes = rest // 3
+    unit = rest - threes * 3
+    total = _STATUS_HEAD + (fifteens + threes) * _STATUS_BLOCK + 2 * _STATUS_BLOCK_DONE
+    total += _STATUS_UNIT_NONE if unit == 0 else _STATUS_UNIT
+    chars = 1 + 2 * (fifteens + threes + (1 if unit else 0))
+    laps = _STATUS_PAD_END - chars
+    total += _STATUS_PAD * (laps if laps > 1 else 1) - 1
+    return np.int64(
+        total + _STATUS_MID + _STATUS_PAD * _STATUS_PAD_LAPS - 1 + _STATUS_TAIL
+    )
+
+
 @njit(cache=True, inline="always")
 def _discharge_bank(mem, enemy):
     """increase_enemy_energy_to_discharge $1A4F."""
@@ -962,24 +1001,32 @@ def _discharge_bank(mem, enemy):
 
 @njit(cache=True)
 def _reduce_object_energy(mem, target, enemy):
-    """reduce_object_energy $1A08: drain `target`, banking a unit on `enemy`."""
+    """$1A08: drain `target`, returning (drained the player, cycles spent)."""
     if target == _rd(mem, _PLAYER):
         if _rd(mem, _ENERGY) == 0:  # kill_player $1A00
             _wr(mem, _DIED_DRAINING, _rd(mem, _DIED_DRAINING) | 0x80)
-            return True
+            return True, np.int64(_REDUCE_HEAD + _REDUCE_KILL)
         _wr(mem, _ENERGY, (_rd(mem, _ENERGY) - 1) & _ENERGY_MASK)
         _discharge_bank(mem, enemy)
-        return True
+        cost = np.int64(_REDUCE_HEAD + _REDUCE_PLAYER + _REDUCE_BANK + _TUNE)
+        return True, cost + _status_bar_cycles(_rd(mem, _ENERGY))
+    cost = np.int64(_REDUCE_HEAD + _REDUCE_OBJECT + _REDUCE_BANK)
     otype = _rd(mem, _OTYPE + target)
     if otype == _T_ROBOT:
         _wr(mem, _DRAIN_CD + enemy, 0)  # $1A31
         _wr(mem, _OTYPE + target, _T_BOULDER)
+        cost += np.int64(_REDUCE_ROBOT)
     elif otype == _T_TREE:
+        stacked = _rd(mem, _OFLAGS + target) >= 0x40  # $1EFF: the tile byte restored
         _remove_object(mem, target)
+        cost += np.int64(
+            _REDUCE_TREE + (_REMOVE_STACKED if stacked else _REMOVE_GROUND)
+        )
     else:  # boulder -> tree
         _wr(mem, _OTYPE + target, _T_TREE)
+        cost += np.int64(_REDUCE_BOULDER)
     _discharge_bank(mem, enemy)
-    return False
+    return False, cost
 
 
 @njit(cache=True)
@@ -1231,8 +1278,7 @@ def _target_object(mem, enemy, target, exposure):
     if exposure & 0x80:  # fully visible -> drain
         _wr(mem, _TARGETED_SLOT, target)
         killed = target == _rd(mem, _PLAYER) and _rd(mem, _ENERGY) == 0
-        _reduce_object_energy(mem, target, enemy)
-        cost += np.int64(_TARGET_DRAIN)
+        cost += np.int64(_TARGET_DRAIN) + _reduce_object_energy(mem, target, enemy)[1]
         if killed:  # kill_player $1A00 unwinds the stack
             return _BODY_DONE, cost
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
@@ -1358,9 +1404,9 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 _wr(mem, _M_SEARCH + enemy, 0x40)  # $178B
-                _reduce_object_energy(mem, tb, enemy)  # $17EA, never the player
+                drain = _reduce_object_energy(mem, tb, enemy)[1]  # $17EA
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-                budget -= np.int64(
+                budget -= drain + np.int64(
                     _HUNT_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
                 )
                 return budget, _BODY_DONE, 0, -1
@@ -1430,9 +1476,9 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
                 return budget, stage, index, partial
             if tb >= 0:
                 _wr(mem, _TARGETED_SLOT, tb)
-                _reduce_object_energy(mem, tb, enemy)
+                drain = _reduce_object_energy(mem, tb, enemy)[1]
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-                budget -= np.int64(
+                budget -= drain + np.int64(
                     _TREE_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
                 )
                 return budget, _BODY_DONE, 0, -1

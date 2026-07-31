@@ -63,6 +63,31 @@ HELD_LOST = 11  # $17A2 LDA $14 3 + $17A4 BEQ taken 3 + $17A9 STA $0C20,X 5
 HELD_KEPT = 8  # ... BEQ not taken 2 + $17A6 JMP $1825 3
 SCAN_INIT = 7  # $17AC LDA 2 + STA $0F 3 + $17B0 LDY #$3F 2
 
+REDUCE_HEAD = 7  # $1A08 LDX $0C58 4 + $1A0B CPX $0B 3, as its caller sees it
+REDUCE_KILL = 27  # $1A0D BNE nt 2 + LDA 4 + $1A12 BEQ $1A00 taken 3 + $1A00 9 + $1AF9 9
+REDUCE_PLAYER = 35  # ... BEQ nt 2 + $1A14 8 + JSR $9508 6 + LDA 2 + JSR $3470 6 + 5
+REDUCE_OBJECT = 46  # $1A0D BNE taken 3 + TXA 2 + JSR $1AF4 6 + $1AF4 31 + LDA type 4
+REDUCE_ROBOT = 24  # $1A2D BNE nt 2 + $1A2F..$1A38 15 + $1A4B STA 5 + $1A4E CLC 2
+REDUCE_TREE = 18  # ... BNE taken 3 + CMP 2 + BNE nt 2 + JSR $1EEF 6 + JMP 3 + CLC 2
+REDUCE_BOULDER = 23  # ... BNE $1A44 taken 3 + $1A44..$1A4B 13 + CLC 2
+REDUCE_BANK = 29  # $1A4F PHP 3 + LDY 3 + LDA 4 + CLC/ADC 4 + STA 5 + PLP 4 + RTS 6
+REMOVE_STACKED = 86  # $1EEF for an object standing on another: the flags go back
+REMOVE_GROUND = 94  # ... on bare ground: the tile byte is rebuilt from the z nibble
+TUNE = 323  # $3470 start_tune, the sound a drain makes; also inside ROTATE
+
+# plot_status_bar $9508 pads to fixed columns, so its cost is a function of the energy.
+STATUS_CHAR = 38  # $9579 JSR 6 + PHA/LDX/CLC/ADC/STA/INC/PLA/RTS 32
+STATUS_HEAD = 51  # $9508 LDA/STA 6 + one character 38 + $9510 LDA/STA 7
+STATUS_BLOCK = 95  # one $9515/$952C lap: subtract, then plot two characters
+STATUS_BLOCK_DONE = 8  # its LDA/CMP and the BCC out of the lap
+STATUS_UNIT_NONE = 5  # $9543 CMP #$01 2 + BCC $9551 taken 3: nothing left over
+STATUS_UNIT = 86  # ... not taken 2 + $9547..$954E: the odd unit's two characters
+STATUS_PAD = 49  # $9551/$9562 one padding character; the last lap's BCC is 1 shorter
+STATUS_MID = 40  # $955D the bar's own separator character
+STATUS_TAIL = 86  # $956E..$9578 the last two characters and the RTS
+STATUS_PAD_END = 0x1D  # $9559: the first pad run fills up to column 29
+STATUS_PAD_LAPS = 8  # $956A: the second run fills $1E..$25 whatever the energy
+
 DISCHARGE_NONE = 18  # $1A5D LDX 3 + SEC 2 + LDA 4 + BEQ 3 + RTS 6
 DISCHARGE_FIXED = 100  # $1A5D success 62 + create_object $211D + $1238 entry
 DISCHARGE_TRY = 966  # $1238 loop body 76..98 + two $1272 draws (445 + 440n each)
@@ -328,6 +353,17 @@ ROTATE_GATE_HELD = 14  # ... BCC not taken 2 + $1802 JMP $16D6 3: too soon to tu
 ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 straight
 ROTATE_REDRAW = 1723  # $1F9F update_object_on_screen; MEASURED 1576..1843, 16 rotations
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
+
+
+def status_bar_cycles(energy):
+    """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""
+    fifteens, rest = divmod(energy, 15)
+    threes, unit = divmod(rest, 3)
+    total = STATUS_HEAD + (fifteens + threes) * STATUS_BLOCK + 2 * STATUS_BLOCK_DONE
+    total += STATUS_UNIT_NONE if unit == 0 else STATUS_UNIT
+    chars = 1 + 2 * (fifteens + threes + (1 if unit else 0))
+    total += STATUS_PAD * max(1, STATUS_PAD_END - chars) - 1
+    return total + STATUS_MID + STATUS_PAD * STATUS_PAD_LAPS - 1 + STATUS_TAIL
 
 
 def exposure_cycles(mem):

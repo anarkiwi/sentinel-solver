@@ -350,6 +350,15 @@ REGISTRY = {
         "down, counted against the per-round $16E6 oracle",
         _BODY_ORACLE,
     ),
+    "TUNE": entry(
+        _PC,
+        MEASURED,
+        "$3470 start_tune ends in JMP $FFF1, a vector outside the 64 KB image, so it "
+        "cannot be counted; 323 is the live rotation measurement in "
+        "fixtures/live_pass_cycles.json, reused for the drain's own tune at $1A1F",
+        "test_rotate_is_the_counted_straight_line_plus_its_measured_callees",
+    ),
+    "_TUNE": _d(_ENJ, "jit alias of passcost.TUNE"),
     "_PARTIAL_ARM": _d(_ENJ, "jit alias of passcost.PARTIAL_ARM"),
     "_TARGET_WAIT": _d(_ENJ, "jit alias of passcost.TARGET_WAIT"),
     "COOLDOWN_TICK_NO_CARRY": _tick("$130C to the $1315 BCC and RTS"),
