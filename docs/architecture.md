@@ -727,6 +727,7 @@ foreground work folded into a settle constant.
 | `$27CE` | `plot_checkerboard_tile` | the observer's own tile, outside the `$0180` gate | `projector._scan_visible` | `golden_projector` |
 | `$27D3` | `offset_to_tile_table` | `[$00,$01,$21,$20]` — the drawn-tile offset by quadrant | `projector._project_scene_py` | `golden_projector` |
 | `$27D7` | `find_visible_extent_of_row_of_tiles` | the plotted span of a row | `projector._scan_visible.find_extent` | `golden_projector` |
+| `$283D` | — | `BIT $9AF6`: the examine is `$2845` with the flag clear, `$37F2` with it set | | measured live: `$9AF6` = `$80` in play |
 | `$2845` | `check_if_tile_is_on_screen_and_calculate_screen_coordinates` | the per-tile examine (trig floor) | `projector._project`, `C_EXAMINE` | `golden_projector` |
 | `$28D4` | `calculate_tile_address` | render-path tile addressing | `memmap.tidx` | `golden_landscape` |
 | `$295D` | `plot_row_of_tiles_or_block` | the plot loop over a row | `projector._project_scene_py` | `golden_projector` |
@@ -770,6 +771,7 @@ foreground work folded into a settle constant.
 | `$3682` | (in the main loop) | skips the enemy clock while `$0CE5` bit 7 is set | `playerbase._frozen`, `actions._mark_player_acted` | `test_settle_accuracy.py` |
 | `$3684` | scroll loop | ticks cooldowns while scrolling; mutually exclusive with `$9663` | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail) |
 | `$3700` | grid angle/hypotenuse pass | fixed per-settle foreground work | `projector.SETTLE_FIXED_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$37F2` | — | the same examine off a precomputed projection table, no trig | | [open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip) |
 | `$3B00`/`$3C01` | arctan coefficient tables | reproduced closed-form, byte-exact | `relative._ARCTAN_LO`/`_HI` | closed form, byte-exact against the ROM table |
 | `$3D02` | hypotenuse coefficient table | reproduced closed-form, byte-exact | `relative._HYP` | closed form, byte-exact against the ROM table |
 | `$8401` | `calculate_object_relative_angles_and_distance` | relative x/y (`$85C4`), z (`$85F5`), then the angles | `relative.relative_angles` | `golden_relative` |
@@ -1019,7 +1021,7 @@ exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-bac
 
 | term | exactness |
 | --- | --- |
-| (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`), bar one `$0078`-stale branch a pass |
+| (a) examine tree: `$2845` + `$9287` + `$937F` + `$933D` | count and cycles **exact** (`passcost.EXAM_*`) against the harness, bar one `$0078`-stale branch a pass — but the play machine takes `$283D`'s other branch entirely ([6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip)) |
 | (a2) the walk: `$2625` prologue, `$26DE`, `$27D7`, `$276F`, `$295D` | each block by the branch it takes (`passcost.WALK_*`/`ROW_*`/`SCAN_*`/`PLOT_ROW_*`) |
 | (b) terrain fill | sequence emulated (`rendercost.py`); loop counts exact on 14 of 15 golden views, cycles 0.92-0.96× the ROM's own fill subtree |
 | (c) object fill | sequence emulated (`objectcost.py`) where the game image is present, every transformed vertex byte-exact; a per-object floor without it |
@@ -1293,6 +1295,20 @@ python -m driver.instrument 42 --frames 1200     # --follow keeps racing past a 
 Boots under warp with no recording (`NO_RECORD=1`), unfreezes the enemy clock on both sides by
 clearing `$0CE5` bit7, then frame-locks and prints the per-tier first-divergence report.
 `--follow` reseeds the sim from live memory on each CORE divergence and continues.
+
+**A seed inside a replot resumes it rather than recharging it.** `$1FFC JSR $2625` runs 21
+frames on ls9795 and a resync lands inside one often (80 of ls9795's 142 CORE events before
+this). The 64 KB image cannot say so, but the `$95E9` frame can: `instrument.stack_frames`
+reads the interrupted PC at SP+5/6 and the JSR chain above it, and a `$1FFF` return means the
+foreground is in the replot. plot_world's progress is then its own zero page — `$0026` the row
+`$26EF` has walked down to, `$0025` the column `$295D` is plotting, `$0007`/`$0012` the
+`$29C7` window and `$006E` the camera slot, whose `$09C0` is the bearing `$1FC2` already
+shifted. `projector.replot_owed` walks the same `$26DE` loop `render_cost` prices, splits it
+at that row and tile, and returns the suffix; `seed_sim` charges it as a cycle debt, resumes
+at `$1884`'s `JMP $16D6` (`pass_phase` `PHASE_BODY`, `body_stage` `BODY_DONE`: the body is
+done, the prnd is not) and applies the `$2003`/`$2008` camera restore on the frame that debt
+clears. What it is worth, and what it still owes, is
+[open_items.md 8](open_items.md#8-the-enemy-clock-underprices-consider_enemy_states-own-tail).
 
 **Status:** no CORE divergence within 1200 frames on ls42;
 `driver/test_enemy_sim_divergence.py::test_enemy_sim_frame_locked_to_live_ls42` gates 600 frames

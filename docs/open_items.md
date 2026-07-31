@@ -208,10 +208,28 @@ narrow the window is, so a strip replot examines 111-148 tiles where a full scre
 ~200-300. A narrow strip is *not* a cheap plot on this ROM, and the intuition that it should be
 is what makes the backend look 1.5× dear rather than ~5 frames dear.
 
-**Resolves.** Running the py65 backend from an arbitrary observer slot; and, for the strip,
-replaying the *captured* `state.mem` rather than a freshly generated board, since after the
-above the only remaining candidates are a captured byte the span depends on differing from the
-machine's, or the 22-frame wall not containing the whole of `$1F9F`.
+**Measured — the play machine does not run `$2845` at all.** `$283D BIT $9AF6 / BPL $2845 /
+JMP $37F2` picks the examine, and in play `$9AF6` is `$80`, so every grid point goes to
+`$37F2` — a table read of the projection at (`$A8`)/(`$AA`)/(`$AC`)/(`$AE`) less the camera
+reference `$001F`/`$00B0`/`$00B1`/`$00B2`, then `$2845`'s own `$0180`, `$3E80`/`$24DA` and
+`$0007`/`$0012` tail. No trig. Checkpoint hit counts over one whole live ls9795 strip replot:
+
+| entry point | live hits | model |
+|---|---|---|
+| `$283D` examine | 127 | 106 |
+| `$2845` the trig examine `projector._project` prices | **0** | 106 |
+| `$37F2` the table examine | 127 | not modelled |
+| `$2A12` plot_tile | 50 | 44 |
+
+So the strip's cost is wrong in three separable ways: it charges a routine the play machine
+never enters (185010 of the modelled 412893 cycles, 45%), it walks 106 grid points where the
+machine walks 127, and it plots 44 tiles where the machine plots 50. The golden is not
+affected — the oracle harness runs with `$9AF6` = 0, where `$2845` really is the examine.
+
+**Resolves.** Pricing `$37F2` from its own branches for the play path, gated on `$9AF6`, and
+finding what the extra 21 examines and 6 tiles are (`$0C48` and `$0028`, which `$29C7` sets
+and the model holds at 0, are the two candidates); then running the py65 backend from an
+arbitrary observer slot.
 
 **Not a threat to the render golden.** `golden_render_cost.json` comes from `_measure_plot_world`,
 which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B` outside the counted
@@ -243,6 +261,22 @@ enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16E
 sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
 `$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and what
 is left is `consider_enemy_state`'s own line between the robot scan and `$1AB0`.
+
+**Measured — the counts, and what each event is.** ls9795 **142 -> 64**, ls0335 **57 -> 57**,
+ls0042 **0 -> 0** over 3000 frames, on the mid-replot resume
+([architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
+Classifying every event by the `$95E9` chain the halt exposes:
+
+| where the machine was | before | after |
+|---|---|---|
+| inside the `$1FFC JSR $2625` replot | 80 | 4 |
+| `$17B2..$17E8`, the robot scan and its `$1AB0` tail | | 33 |
+| `$16D6` prnd, `$12A2` pass tail, `$16E6` body head | | 20 |
+| `$1F9F` with no replot, and three unclassified | | 7 |
+
+Before, a replot's 21 frames produced 21 consecutive events; now it produces the one that
+finds it plus two at its exit, from the residual below. ls0335 is unchanged because no
+resync in 3000 frames lands inside a replot at all. The 33 are what this item names.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -379,6 +413,26 @@ and byte for byte, so it does not bite at these states.
 
 **Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
 which staging inside the body cannot correct.
+
+**Not the discarded replot either — and what its resume still owes.** A resync inside
+`$1FFC JSR $2625` used to start the sim at a pass boundary, so the model ran a whole frame
+of passes against a machine that ran none, every frame until the replot finished: 80 of
+ls9795's 142 events. `projector.replot_owed` now splits the pass at the row `$0026` and the
+tile `$0025` the machine has reached and the sim owes the suffix. Two residuals are left,
+both measured against two whole captured replots (21 frames each, sampled every frame):
+
+* **Sub-tile position is not readable.** The split is exact at a tile boundary and flat
+  inside one, so the predicted remainder tracks the machine as a sawtooth: 0 error at each
+  tile the machine enters, drifting to +3.4 f by the time it leaves a near-row tile that
+  costs 3-6 frames on its own. At the frame the instrument actually resyncs on — one frame
+  into the replot — the error is **-0.19 f** against the machine's 21. Going finer needs the
+  polygon inside `plot_tile`/`$8533`, which is control flow, not a variable.
+* **The pass total is 1.26x the machine's own.** Off the raster clock (`registers_get` 53/54
+  plus the `$9630` counter), three ls9795 replots measure 412912/413054/416845 wall cycles
+  over 21 frames, i.e. **328030..331963 foreground** cycles once the frame's 4042 IRQ and
+  badline cycles come out. `render_cost` reads 412893 for the same pass, so the debt clears
+  ~5 frames late and each replot leaves two exit events where it should leave none. The
+  mechanism is [6](#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip).
 
 **Not the resync.** Carrying the sim's clock across a follow-mode resync instead of
 resetting it moves ls9795 415 -> 397 only.

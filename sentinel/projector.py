@@ -1,8 +1,8 @@
 """plot_world ($2625) terrain render-projector, ported bit-exactly from the ROM.
 
-Walks the 32x32 tile grid furthest->nearest, projecting each grid point ($2845) to
-a horizontal angle (screen x) and vertical angle (screen y). Trig cores reused from
-:mod:`sentinel.relative`; projected corners feed :func:`render_cost`.
+Walks the 32x32 tile grid furthest->nearest, projecting each grid point ($2845) to a
+horizontal angle (screen x) and vertical angle (screen y) with :mod:`sentinel.relative`'s
+trig cores; the projected corners feed :func:`render_cost`.
 """
 
 import collections
@@ -189,15 +189,23 @@ _OFFSET_TO_TILE = (
 )  # offset_to_tile_table $27D3, indexed by quadrant
 
 
-def _scan_visible(state, setup, vis=None):
+def _scan_visible(state, setup, vis=None, schedule=None):
     """Exact port of find_visible_extent ($27D7) + plot_rows_in_front_of_observer_loop
     ($26DE), the furthest->nearest walk that probes tiles via $2845.
 
-    Returns (n_examine, exam_cycles, walk_cycles, rows, cache): the exact $2845 count,
-    the cycles those calls spent, and the cycles the walk around them spent.
+    Returns (n_examine, exam_cycles, walk_cycles, rows, cache), and fills ``schedule``
+    with one entry per $295D call carrying the scan cycles that preceded it.
     """
     cache = {}
     exam = [0, 0, 0]
+    mark = [0]
+
+    def stage(row):
+        """Close the current schedule entry: everything walked since the last one."""
+        if schedule is not None:
+            spent = exam[1] + exam[2]
+            schedule.append({"row": row, "scan": spent - mark[0]})
+            mark[0] = spent
 
     def probe(col, row):
         col &= 0xFF
@@ -312,6 +320,7 @@ def _scan_visible(state, setup, vis=None):
     )
     start, end = find_extent(row, _ROW_HINT)
     walk(passcost.WALK_HINT)
+    stage(None)  # $2625..$26DD: the setup and the furthest row's own scan
     while True:
         row -= 1
         walk(passcost.ROW_HEAD + passcost.TILE_SOUND)
@@ -326,16 +335,18 @@ def _scan_visible(state, setup, vis=None):
                 walk(passcost.OBS_ROW_START + passcost.OBS_ROW_PLOT)
                 probe(start, row)
                 probe(y, row)
-                probe(c3, row)
                 rows.append((row, start, (start + 1) & 0xFF))
+                stage(row)
+                probe(c3, row)
             elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
                 walk(
                     passcost.OBS_ROW_TEST + passcost.OBS_ROW_END + passcost.OBS_ROW_PLOT
                 )
                 probe((end - 1) & 0xFF, row)
                 probe(end, row)
-                probe(c3, row)
                 rows.append((row, (end - 1) & 0xFF, end))
+                stage(row)
+                probe(c3, row)
             else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
                 walk(passcost.OBS_ROW_TEST + passcost.OBS_ROW_SKIP)
                 probe(c3, row)
@@ -394,6 +405,8 @@ def _scan_visible(state, setup, vis=None):
             walk(passcost.ROW_END_SAME)
         walk(passcost.ROW_PLOT)
         rows.append((row, min(start, p_start), max(end, p_end)))
+        stage(row)
+    stage(None)  # $27CE the observer's own tile, and $26FC's exit
     return exam[0], exam[1], exam[2], rows, cache
 
 
@@ -552,11 +565,14 @@ def occlusion_visible(state, observer=None):
     return _occlusion_memo(state, state.player if observer is None else observer)[0]
 
 
-def _project_scene_py(state, setup, observer):
+def _project_scene_py(state, setup, observer, schedule=None):
     """The pure-Python tile-selection body of :func:`project_scene`."""
     visible = occlusion_visible(state, observer)
     n_examine, exam_cycles, walk_cycles, rows, cache = _scan_visible(
-        state, setup, visible
+        state, setup, visible, schedule
+    )
+    staged = iter(
+        [] if schedule is None else [e for e in schedule if e["row"] is not None]
     )
 
     def proj(col, row):
@@ -581,18 +597,28 @@ def _project_scene_py(state, setup, observer):
         # plot_row_of_tiles_or_block $295D: up from $0037 to $0003, then down from $0038.
         nfront = max(0, min(hi, c3) - lo)
         order = list(range(lo, lo + nfront)) + list(range(hi - 1, max(lo, c3) - 1, -1))
-        walk_cycles += passcost.PLOT_ROW_HEAD + nfront * passcost.PLOT_ROW_FRONT
-        walk_cycles += (len(order) - nfront) * passcost.PLOT_ROW_BACK
-        if nfront == hi - lo:  # $2963: the front half ran to $0038 and left
-            walk_cycles += passcost.PLOT_ROW_DONE
-        else:
-            walk_cycles += passcost.PLOT_ROW_TURN
+        per_col = [
+            passcost.PLOT_ROW_FRONT if i < nfront else passcost.PLOT_ROW_BACK
+            for i in range(len(order))
+        ]
+        row_tail = passcost.PLOT_ROW_DONE
+        if nfront != hi - lo:  # $2963: else the front half ran to $0038 and left
+            row_tail = passcost.PLOT_ROW_TURN
             if max(lo, c3) == 0:  # $2978 BMI: the descent ran off the bottom
-                walk_cycles += passcost.PLOT_ROW_BACK_EMPTY
+                row_tail += passcost.PLOT_ROW_BACK_EMPTY
             elif c3 <= lo:  # $297E BCC: it reached $0037 before $0003
-                walk_cycles += passcost.PLOT_ROW_BACK_LOW
+                row_tail += passcost.PLOT_ROW_BACK_LOW
             else:
-                walk_cycles += passcost.PLOT_ROW_BACK_END
+                row_tail += passcost.PLOT_ROW_BACK_END
+        walk_cycles += passcost.PLOT_ROW_HEAD + sum(per_col) + row_tail
+        if schedule is not None:
+            next(staged).update(
+                cols=order,
+                per_col=per_col,
+                head=passcost.PLOT_ROW_HEAD,
+                tail=row_tail,
+                n0=nfill,
+            )
         for col in order:
             ce = (col + offc) & 0xFF
             res = proj(ce, re)
@@ -783,11 +809,15 @@ _OBJECT_MODEL = {
 
 
 def _inview_object_base(state, tiles):
+    """:func:`_object_base_cycles` over a :func:`project_scene` tile list."""
+    return _object_base_cycles(state, [t["tile_byte"] for t in tiles])
+
+
+def _object_base_cycles(state, tile_bytes):
     """plot_object base cost summed over objects on the plotted object-tiles ($21AE
     stack walk down the $0100 flags chain). Unknown types contribute nothing."""
     total = 0.0
-    for tile in tiles:
-        tb = tile["tile_byte"]
+    for tb in tile_bytes:
         if tb < mm.OBJECT_TILE:
             continue
         slot = tb & 0x3F
@@ -907,6 +937,58 @@ def _exact_strip_cost(state, target):
             _EXACT_WARNED[0] = True
             print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
         return None
+
+
+PLOT_ROW = 0x26  # $26C9 seeds it $1F and $26EF walks it down to the observer row $001D
+PLOT_COLUMN = 0x25  # $295D drives it across the row it plots
+CAMERA_OBJECT = 0x6E  # $2625 LDX $6E: the slot whose $09C0/$0140 is the camera
+BUF_LEFT, BUF_RIGHT = 0x07, 0x12  # the $2993/$29C7 window plot_world is plotting into
+
+
+def replot_owed(state, row, column, in_plot):
+    """The cycles an in-flight $2625 still owes, from plot_world's own progress.
+
+    ``row`` is the next row $295D will plot, ``column`` the machine's $0025, and
+    ``in_plot`` says the halt is inside $295D rather than that row's own $27D7 scan.
+    Camera, view and window come from the image, where $1FC2/$1FE5 have set them.
+    """
+    mem = state.mem
+    obs = mem[CAMERA_OBJECT]
+    window = (mem[BUF_LEFT], mem[BUF_RIGHT])
+    h, v = state.obj_h_angle[obs], state.obj_v_angle[obs]
+    setup = _setup(state, h, v, obs, PLAY_MODE, window)
+    schedule = []
+    _tiles, _n, _exam, fill, _walk = _project_scene_py(state, setup, obs, schedule)
+    at = len(schedule) - 1  # past every plotted row: only $27CE's own tile is left
+    if row >= _LAST:  # $26EF has not run once, so neither has one $295D
+        at = 0
+    else:
+        for i, e in enumerate(schedule):
+            if e["row"] is not None and e["row"] <= row:
+                at = i
+                break
+    owed = sum(_stage_cycles(e) for e in schedule[at:])
+    here = schedule[at]
+    done = here["n0"] if "n0" in here else (0 if at == 0 else len(fill))
+    if in_plot and "cols" in here:
+        cols = here["cols"]
+        spent = cols.index(column) if column in cols else len(cols)
+        owed -= here["scan"] + here["head"] + sum(here["per_col"][:spent])
+        done += spent
+    columns = _window_columns(window)
+    total, exact = fill_frames(state, setup, fill, PLAY_MODE, obs, columns)
+    ahead, _e = fill_frames(state, setup, fill[:done], PLAY_MODE, obs, columns)
+    if not exact:  # no game image: the object floor, split at the same tile
+        total += _object_base_cycles(state, fill[:, rendercost.T_BYTE])
+        ahead += _object_base_cycles(state, fill[:done, rendercost.T_BYTE])
+    return owed + total - ahead
+
+
+def _stage_cycles(entry):
+    """One :func:`_scan_visible` schedule entry's own $27D7 scan and $295D walk."""
+    if "cols" not in entry:
+        return entry["scan"]
+    return entry["scan"] + entry["head"] + sum(entry["per_col"]) + entry["tail"]
 
 
 # Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/architecture.md).

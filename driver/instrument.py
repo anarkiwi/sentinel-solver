@@ -13,7 +13,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from sentinel import enemies, memmap as mm, statecmp as sc
+from sentinel import enemies, memmap as mm, projector, statecmp as sc
 from sentinel.state import State
 from driver import clock, core
 
@@ -21,6 +21,47 @@ RENDERS = os.path.join(core.boot.ROOT, "renders")
 FRAME_PC = (
     clock.FRAME_PC
 )  # once-per-frame raster-IRQ top marker (the frame-step anchor)
+REPLOT_RETURN = 0x1FFF  # $1FFC JSR $2625, update_object_on_screen's strip replot
+_ROW_LOOP = range(0x26D9, 0x26F0)  # $26EF DEC $26 unspent: the next row is $0026 - 1
+_PLOT_ROW_RETURNS = (0x2760, 0x2793)  # the two JSR $295D, so $0025 names a live tile
+_PLOT_SETUP = range(
+    0x2625, 0x26D6
+)  # $26C9 has not seeded $0026: the whole pass is owed
+_SP_REGISTER = 4  # VICE binary-monitor register id
+CAMERA_SAVED = 0x211A  # $1FD5 keeps the camera's own h_angle over the $1FC2 strip shift
+CAMERA_FRACTION = 0x1F  # $1FD0 the fine angle, zeroed again at $2003
+
+
+def stack_frames(page, sp):
+    """The interrupted PC and every return address under the $95E9 frame.
+
+    $95E9 pushes Y, X and A over the hardware P/PCH/PCL, so the foreground's PC is at
+    SP+5/6 and its JSR chain runs up the page from SP+7 as (lo, hi) of return-1."""
+    out = [page[(sp + 5) & 0xFF] | (page[(sp + 6) & 0xFF] << 8)]
+    for a in range((sp + 7) & 0xFF, 0xFF, 2):
+        out.append(((page[a] | (page[a + 1] << 8)) + 1) & 0xFFFF)
+    return out
+
+
+def replot_debt(state, frames):
+    """The cycles an interrupted $1FFC JSR $2625 still owes, 0 when there is none.
+
+    plot_world's progress is its own zero page: $0026 is the row it has walked down
+    to and $0025 the column $295D is plotting, which :func:`projector.replot_owed`
+    turns into the unspent tail of the very pass the model would otherwise recharge."""
+    if REPLOT_RETURN not in frames:
+        return 0
+    inside = frames[: frames.index(REPLOT_RETURN)]
+    if any(a in _PLOT_SETUP for a in inside):
+        row = 0xFF
+    else:
+        row = state.mem[projector.PLOT_ROW] - any(a in _ROW_LOOP for a in inside)
+    return projector.replot_owed(
+        state,
+        row,
+        state.mem[projector.PLOT_COLUMN],
+        any(a in _PLOT_ROW_RETURNS for a in inside),
+    )
 
 
 class SimClock:
@@ -29,12 +70,17 @@ class SimClock:
     def __init__(self, image):
         self.state = State.from_mem(image)
         self.plotting = False
+        self.replot_tail = None
 
     def image(self):
         return self.state.mem
 
     def step_frame(self):
         enemies.advance_frame(self.state, plotting=self.plotting)
+        # $2005: the frame the replot debt clears is the frame $2625 returns in.
+        if self.replot_tail and self.state.body_stage != enemies.BODY_DONE:
+            self.replot_tail()
+            self.replot_tail = None
 
     def poke(self, addr, val):
         self.state.mem[addr] = val & 0xFF
@@ -52,6 +98,11 @@ class EmuClock:
     def image(self):
         return self.bm.mem_get(0x0000, sc.MAX_ADDR)
 
+    def frames_on_stack(self):
+        """:func:`stack_frames` for the foreground this $9630 halt interrupted."""
+        sp = self.bm.registers_get()[_SP_REGISTER] & 0xFF
+        return stack_frames(self.bm.mem_get(0x0100, 0x01FF), sp)
+
     def sync_to_frame(self):
         self.bm.run_until_pc(FRAME_PC, timeout=6.0)
 
@@ -68,6 +119,29 @@ def _unfreeze(img):
     return img[mm.PLAYER_NOT_ACTED] & 0x7F
 
 
+def seed_sim(emu, image):
+    """A sim clock at the machine's position, owing what the machine still owes.
+
+    A halt inside the $1FFC replot resumes at $1884's JMP $16D6 -- the body is done,
+    the prnd is not -- carrying the unspent replot as this frame's cycle debt and the
+    $1FFF..$2008 camera restore as a write the frame that debt clears makes."""
+    sim = SimClock(image)
+    st = sim.state
+    debt = replot_debt(st, emu.frames_on_stack())
+    if debt:
+        st.cycle_residual -= int(round(debt))
+        st.pass_phase = enemies.PHASE_BODY
+        st.body_stage = enemies.BODY_DONE
+        sim.replot_tail = lambda: _restore_camera(st)
+    return sim, debt
+
+
+def _restore_camera(state):
+    """$2003/$2008: undo the $1FC2 strip shift of the camera's own bearing."""
+    state.mem[CAMERA_FRACTION] = 0
+    state.obj_h_angle[state.mem[projector.CAMERA_OBJECT]] = state.mem[CAMERA_SAVED]
+
+
 def race(bm, max_frames, follow=False, log=print):
     """Frame-lock the sim against the live game and collect divergences.
 
@@ -82,7 +156,7 @@ def race(bm, max_frames, follow=False, log=print):
     with bm.halted():
         emu.sync_to_frame()
         seed = emu.full_image()
-        sim = SimClock(seed)
+        sim, _debt = seed_sim(emu, seed)
         unfrozen = _unfreeze(seed)
         emu.poke(mm.PLAYER_NOT_ACTED, unfrozen)
         sim.poke(mm.PLAYER_NOT_ACTED, unfrozen)
@@ -109,11 +183,16 @@ def race(bm, max_frames, follow=False, log=print):
                 core_events.append((f, f - seg_start, core_divs))
                 if not follow:
                     break
-                sim = SimClock(emu.full_image())  # resync from live truth
+                sim, debt = seed_sim(emu, emu.full_image())  # resync from live truth
                 resyncs += 1
                 seg_start = f
                 if resyncs <= 15:
-                    log(f"[instrument] CORE divergence at frame {f}; resynced")
+                    owed = (
+                        f" owing {debt / projector.FRAME_CYCLES:.1f}f of replot"
+                        if debt
+                        else ""
+                    )
+                    log(f"[instrument] CORE divergence at frame {f}; resynced{owed}")
     return {
         "first": first,
         "core_events": core_events,
