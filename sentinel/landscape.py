@@ -457,6 +457,7 @@ def generate(landscape):
     mem[0x0C6F] = placed
     _initialise_player_and_trees(mem, prng, landscape, placed, z_base)
     prng.store(mem)
+    mem[mm.PLAY_DISPLAY_FLAG] = 0x80  # $3577, entering play_landscape_loop $357D
     return State(mem)
 
 

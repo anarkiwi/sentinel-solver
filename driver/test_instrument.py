@@ -35,8 +35,9 @@ def _strip_state(new_state):
     """A board with the $1FC2/$1FE5 camera and window a strip replot plots into."""
     st = new_state(9795)
     st.mem[projector.CAMERA_OBJECT] = st.player
-    left, right = projector.strip_window(STRIP_COLUMNS)
+    left, right, frac = projector.strip_window(STRIP_COLUMNS)
     st.mem[projector.BUF_LEFT], st.mem[projector.BUF_RIGHT] = left, right
+    st.mem[projector.BUF_FRAC] = frac
     return st
 
 

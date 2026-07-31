@@ -152,19 +152,19 @@ Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
 
 **Also not derived.**
 
-- **`$0078` carries a bit between calls.** One `$2845` a pass is ~90 cycles cheap because
-  `divide_and_arctan`'s `$0E30 BVS` reads bit 6 of `$0078`, which the *previous* call left
-  there; `relative._divide_and_arctan` starts it at 0 and cannot know better without
-  whole-zero-page emulation. Bisected to that single byte against the live machine.
-- **`$0028`** (the `$29C7` half-column fraction) is modelled as 0, right for every `$2993` mode
-  but not for an odd-width strip replot.
+- **`$0078` carries a bit between calls.** `divide_and_arctan`'s `$0E30 BVS` reads bit 6 of
+  `$0078`, which the *previous* call left there; `relative._divide_and_arctan` starts it at 0
+  and cannot know better without whole-zero-page emulation. Bisected to that single byte
+  against the live machine. It no longer reaches the examine — the play path's `$37F2` calls
+  no trig at all — but `objectcost`'s per-vertex transform still runs that chain.
 - **`$3030`'s two overflow guards** are modelled as a loop rather than the ROM's re-entry into
   `$3022`; equivalent in every case checked, but not the same control flow.
 - **`$27CE`, the observer's own tile.** `$2793` forces its four corners off the edges of the
-  screen and plots it through `plot_checkerboard_tile`; the model charges the branch but not
-  that polygon, because two of its corners inherit a screen_y low byte from whichever row last
-  used the other `$0005` bank. It is never reached on any of the 15 golden views, so it is
-  unmeasured rather than known-small.
+  screen and plots it through `plot_checkerboard_tile`; the model charges the branch and the
+  `$279B` examine (at `$001D + 1`, which `$2797 INC $0026` makes it) but not that polygon,
+  because two of its corners inherit a screen_y low byte from whichever row last used the other
+  `$0005` bank. It is never reached on any of the 15 golden views, so it is unmeasured rather
+  than known-small.
 - **The object term without the game image.** `objectcost` needs the model geometry, so a
   checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
   `_inview_object_base`'s floor and under-charges every object
@@ -173,69 +173,62 @@ Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
 **Resolves.** Emulating `$0078` across a whole `$8475` object transform, which is the one byte
 between the model's arctan and the machine's.
 
-## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
+## 6. A strip replot does not price `$1F9F`'s own line
 
 **Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path, and
-its `$1F9F` figure is above what a live strip replot measures.
+`strip_replot_frames` prices only the `$2625` that `$1FFC` wraps, not the rest of `$1F9F`.
 
 **Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
 `observer != state.player`, and a transfer settle is always priced from the post-transfer slot
 (`playerbase._settle_eye`), which is never the player's own at pricing time.
 
-**Measured — the strip, audited against the machine's own context.** A live ls9795 capture puts
-a real replot at 22 frames wall where `oracle.update_object_cost` reads 27.2. The two suspects
-named for it are **not** the mechanism, by direct attribution: `$2993` and `$245B` both run
-*before* the cycle counter in both oracle entry points and contribute exactly 0% of the figure
-(`$245B` buckets at 0.0%). Nor is the context wrong:
+**Closed — the play machine does not run `$2845` at all.** `$283D BIT $9AF6 / BPL $2845 /
+JMP $37F2` picks the examine and `$9AF6` is `$80` for the whole play loop (`$3577`; `$9A51` is
+its only writer, and `$117E` is the only other call, with 0, for generation and the preview).
+The play examine is `$37F2`, a read of `$3700`'s per-position projection tables less the camera
+reference — no trig, no object-stack walk, 193..251 cycles against `$2845`'s ~1750. The oracle
+harness generated its goldens with `$9AF6` = 0, so `render_cost` could be exact against the
+golden and 1.26x wrong in play. `oracle.prepare_render_context` now sets `$80` and runs
+`$3700` in the ROM's own order (`$35BA`-`$35C0`), and `passcost.TAB_*`/`EXAM_ENTRY_*` price
+`$37F2` branch by branch. Every golden view fell 0.23-0.85x; not one of the eight fill loop
+counts, nor an examine or plotted-tile count, moved by a byte — `$3700` computes exactly what
+`$2845` computes, once per position instead of once per grid point.
 
-- `$29C7` does narrow the buffer — at `$2625` the harness has `$0010` = 2 (single section),
-  `$0007` = 1-2 and `$0035`/`$0061` narrow, which is the strip, not the screen.
-- `$0C4D` (`$1FEF`: plot only the object, or the world behind it) is 0 in play. It is set only
-  on the death screen (`$87EB`) and cleared at `$1F93`, so the harness takes the machine's
-  branch.
-- Of everything the harness forces, the two that differ from a play machine — `$0C1B` = 0, so
-  no `$1223` pan-abort check per row, and `$352C` stubbed to RTS — both make it **cheaper**.
-- `$0C48`, the furthest-row hint the harness zeroes and a live machine carries, moves the cost
-  by ±3% over the whole `$00`..`$1F` range. Real, small, not the explanation.
-- `relative.object_screen_span` agrees with the ROM's own `$209B` exactly — visible flag, left
-  column and width — on all six visible objects of ls9795, so the proxy prices the window the
-  ROM plots.
+**Closed — the strip's window is three bytes.** `$29C7` puts the halving's carry in `$0028`,
+`$29EA`-`$29F2` leave `$0029`, and `$1FCC`/`$1FCF` leave `$001F`; the model held all three at 0
+because `$2993` zeroes them for every full-screen mode. With them modelled the strip examines
+111 grid points against the ROM's 111 on ls0042, 85 against 85 on ls0335 and 52 against 53 on
+ls9795, and `render_cost` is 0.98-0.99x the ROM's own `$2625` (was ~0.79x with only `$9AF6`
+fixed, and 1.5x dear before).
 
-**What the audit did find.** The ROM's strip is **1 to 5 columns wide** and its cost barely
-depends on that width: 22.6 frames for a 1-column strip against 29.7 for a 5-column one, one
-`plot_world` each. `find_visible_extent $27D7` scans a whole row to find an extent however
-narrow the window is, so a strip replot examines 111-148 tiles where a full screen examines
-~200-300. A narrow strip is *not* a cheap plot on this ROM, and the intuition that it should be
-is what makes the backend look 1.5× dear rather than ~5 frames dear.
+**Closed — `$2793` examines the observer tile one row nearer.** `$2797 INC $0026` runs before
+`$279B JSR $283D`, so the observer's own tile is probed at `$001D + 1`, not `$001D`. All three
+`$276F` branches fall into it. The model probed the observer row itself, which cost one wrong
+grid point per pass on every view.
 
-**Measured — the play machine does not run `$2845` at all.** `$283D BIT $9AF6 / BPL $2845 /
-JMP $37F2` picks the examine, and in play `$9AF6` is `$80`, so every grid point goes to
-`$37F2` — a table read of the projection at (`$A8`)/(`$AA`)/(`$AC`)/(`$AE`) less the camera
-reference `$001F`/`$00B0`/`$00B1`/`$00B2`, then `$2845`'s own `$0180`, `$3E80`/`$24DA` and
-`$0007`/`$0012` tail. No trig. Checkpoint hit counts over one whole live ls9795 strip replot:
+**Open — `$1F9F`'s own line is unpriced.** `strip_replot_frames` prices `$1FFC JSR $2625`;
+`update_object_cost` (the py65 backend) prices all of `$1F9F`, and the difference is real
+foreground the enemy clock never charges. Split on the harness, one on-screen redraw:
 
-| entry point | live hits | model |
-|---|---|---|
-| `$283D` examine | 127 | 106 |
-| `$2845` the trig examine `projector._project` prices | **0** | 106 |
-| `$37F2` the table examine | 127 | not modelled |
-| `$2A12` plot_tile | 50 | 44 |
+| landscape | `$0C69` | `$1F9F` | `$2625` | `$2211` clear | `$9730` flush | `$209B` | rest |
+|---|---|---|---|---|---|---|---|
+| ls9795 | 9 | 343374 | 275641 | 21380 | 43920 | 1776 | 657 |
+| ls0335 | 3 | 274415 | 249580 | 7988 | 14640 | 1742 | 465 |
+| ls0042 | 3 | 425472 | 400527 | 7988 | 14640 | 1852 | 465 |
 
-So the strip's cost is wrong in three separable ways: it charges a routine the play machine
-never enters (185010 of the modelled 412893 cycles, 45%), it walks 106 grid points where the
-machine walks 127, and it plots 44 tiles where the machine plots 50. The golden is not
-affected — the oracle harness runs with `$9AF6` = 0, where `$2845` really is the examine.
+That is 1.2-3.3 frames a redraw, one-signed cheap, and it is why `driver.instrument --follow`
+went from 64 CORE events to 67 on ls9795 when the examine was corrected: the clock lost a
+stall it had been getting from the over-charged examine. `passcost.REDRAW_PLOT_ENTRY`'s own
+comment already says `$1FA4` on is unpriced.
 
-**Resolves.** Pricing `$37F2` from its own branches for the play path, gated on `$9AF6`, and
-finding what the extra 21 examines and 6 tiles are (`$0C48` and `$0028`, which `$29C7` sets
-and the model holds at 0, are the two candidates); then running the py65 backend from an
-arbitrary observer slot.
+**Resolves.** Pricing `clear_strip $2211` and the `$207E JSR $9730` buffer flush from their own
+loops, both driven by `$0C69`; then running the py65 backend from an arbitrary observer slot.
 
 **Not a threat to the render golden.** `golden_render_cost.json` comes from `_measure_plot_world`,
-which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B` outside the counted
-window; it asks what plot_world costs for a board and a view, which none of the above touches.
-The one assumption it shares with the strip path is `$0C48` = 0, matched by
-`projector._ROW_HINT` and bounded at ±3% above.
+which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B`/`$3700` outside the
+counted window; it asks what plot_world costs for a board and a view. The one assumption it
+shares with the strip path is `$0C48` = 0, matched by `projector._ROW_HINT` and bounded at
+±3% above.
 
 ## 7. The driver's wall-clock timeouts are the residual load sensitivity
 
@@ -262,8 +255,11 @@ sim reaches a pass early — or the `$1805` rotation that follows from the same 
 `$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and what
 is left is `consider_enemy_state`'s own line between the robot scan and `$1AB0`.
 
-**Measured — the counts, and what each event is.** ls9795 **142 -> 64**, ls0335 **57 -> 57**,
-ls0042 **0 -> 0** over 3000 frames, on the mid-replot resume
+**Measured — the counts, and what each event is.** ls9795 **142 -> 64 -> 67**, ls0335
+**57 -> 57**, ls0042 **0 -> 0** over 3000 frames, on the mid-replot resume; the 64 -> 67 is
+pricing the play machine's own `$37F2` examine, which took a strip replot's over-charge away
+and left `$1F9F`'s still-unpriced line ([6](#6-a-strip-replot-does-not-price-1f9fs-own-line))
+as the stall the facings want back
 ([architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
 Classifying every event by the `$95E9` chain the halt exposes:
 

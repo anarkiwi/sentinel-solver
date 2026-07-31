@@ -1,7 +1,7 @@
 """pancost reproduces one pan_viewpoint notch, cycle-counted in py65.
 
 ``golden_pan_cost.json`` holds the exact $10B7 cycle count per (landscape, bearing,
-pitch, direction), split into strip-clear / examine / rest, plus the $2845 and $2A24
+pitch, direction), split into strip-clear / examine / rest, plus the $283D and $2A24
 counts (no ROM bytes). The non-oracle tests check selection exactness and cost.
 """
 
@@ -23,7 +23,14 @@ PITCHES = (0x00, 0x04, 0xF8)
 BEARINGS = tuple(range(0, 256, 32))
 
 _RET = 0xFFF0
-_EXAMINE = ((0x2845, 0x295C), (0x9287, 0x93AC), (0x0D4A, 0x0F49), (0x0F4A, 0x1000))
+# $283D's entry plus both examine bodies: $2845's trig one and the play path's $37F2.
+_EXAMINE = (
+    (0x283D, 0x295C),
+    (0x37F2, 0x38AC),
+    (0x9287, 0x93AC),
+    (0x0D4A, 0x0F49),
+    (0x0F4A, 0x1000),
+)
 
 
 def _in_examine_tree(pc):
@@ -32,7 +39,7 @@ def _in_examine_tree(pc):
 
 def _measure_notch(cpu, mem):
     """Run one pan_viewpoint ($10B7) headless and split its cycles into the strip
-    clear ($3912/$38AD), the $2845 examine call-tree and everything else."""
+    clear ($3912/$38AD), the $283D examine call-tree and everything else."""
     mem[_RET] = 0x60
     sp = cpu.sp
     mem[0x0100 + sp] = (_RET - 1) >> 8
@@ -45,7 +52,7 @@ def _measure_notch(cpu, mem):
     clear_sp = 0
     while cpu.pc != _RET and steps < 20_000_000:
         pc = cpu.pc
-        if pc == 0x2845:
+        if pc == 0x283D:
             n_examine += 1
         elif pc == 0x2A24 and mem[0x0180 + cpu.x]:
             n_filled += 1
@@ -77,13 +84,8 @@ def _build_golden():
         cpu, mem, state = oracle.generate_machine(ls)
         player = mem[0x000B]
         mem[0x006E] = player
-        for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
-            mem[addr] = 0
-        mem[0x0CCE] = 0x80  # skip the raytracer's secret-code check
-        mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
-        oracle.call(cpu, mem, 0x245B, state=state)  # occlusion table, view-independent
-        state["stop"] = False
-        oracle.call(cpu, mem, 0x2993, a=projector.PLAY_MODE, state=state)
+        # $245B and $3700 are both position-only and a notch rebuilds neither, so one prologue per landscape is what $10B7 sees for the whole sweep.
+        oracle.prepare_render_context(cpu, mem, state, projector.PLAY_MODE)
         for v in PITCHES:
             for h in BEARINGS:
                 for d in range(4):

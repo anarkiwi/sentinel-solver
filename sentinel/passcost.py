@@ -378,6 +378,10 @@ SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RT
 SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
+# $283D picks the examine off $9AF6, the play-display flag: $3577 sets it $80 for the whole play loop and $117E (reset_game_state) clears it for generation and the preview; $9A51 is its only writer.
+EXAM_ENTRY_TRIG = 7  # $283D BIT $9AF6 4 + $2840 BPL $2845 taken 3
+EXAM_ENTRY_TABLE = 9  # ... BPL not taken 2 + $2842 JMP $37F2 3
+
 # $2845 check_if_tile_is_on_screen_and_calculate_screen_coordinates, by its branches; the trig it calls ($9287, $937F, $933D) is counted by relative.py off its own data.
 EXAM_CALL = 6  # the JSR, from $26D6/$270A/$271E/$2738/$274C and the $27D7 loops
 EXAM_HEAD = 44  # $2845..$2861: the slot index, the $007F reset and the column delta
@@ -410,6 +414,31 @@ EXAM_RIGHT = 8  # $294F ROR $007F 5 + CMP $0012 3
 EXAM_OFF_RIGHT = 3  # $2953 BCC leave taken
 EXAM_ON_RIGHT = 7  # ... not taken 2 + $2955 INC $007F 5
 EXAM_TAIL = 14  # $2957 LDY $0F 3 + LDA $7F 3 + CLC 2 + RTS 6
+
+# $37F2, the play path's examine: the same plottables read off the per-position projection tables $3700 builds at ($A8)/($AA)/($AC)/($AE), less the view's $001F/$00B2/$00B0/$00B1 camera reference. No trig, and no object-stack walk.
+TAB_HEAD = 17  # $37F2..$37FB: the slot index and the $001C view-case BIT
+TAB_QUAD_NORTH = 13  # $37FD BMI nt 2 + $37FF BVS nt 2 + $3801..$3805 9
+TAB_QUAD_EAST = 20  # ... BVS taken 3 + $3808..$3810 15
+TAB_QUAD_SOUTH = (
+    25  # $37FD BMI taken 4, page crossed, + $3813 BVS nt 2 + $3815..$3820 19
+)
+TAB_QUAD_WEST = 17  # ... BVS taken 3 + $3823..$3828 10, falling into $382A
+TAB_ADDR = 123  # $382A..$3874: the tile address and the four table pointers 55, the four reads less the reference 53, the $0180 store and the CMP #$C0 15
+TAB_OBJECT = 3  # $3876 BCS taken: an object tile skips the raytrace bit
+TAB_GROUND = 24  # ... not taken 2 + $3878..$3882 the $3E80/$24DA bit 22
+TAB_VISIBLE = 3  # $3885 BNE taken: the raytrace bit is set
+TAB_HIDDEN = 7  # ... not taken 2 + $3887 STA $0180,X 5: the plot byte is zeroed
+TAB_SCREEN = 9  # $388A LDA #0 2 + LDY $A800,X 4 + CPY $0007 3
+TAB_OFF_LEFT = 3  # $3891 BCC leave taken: beyond the left edge of the buffer
+TAB_ON_LEFT = 2  # ... not taken
+TAB_NO_FRACTION = 3  # $3893 BNE taken: the high byte alone settles the left edge
+TAB_FRACTION = 9  # ... not taken 2 + $3895 LDY $0BA0,X 4 + CPY $0028 3
+TAB_FRACTION_LEFT = 3  # $389A BCC leave taken
+TAB_FRACTION_OK = 6  # ... not taken 2 + $389C LDY $A800,X 4
+TAB_RIGHT = 5  # $389F ROR A 2 + CPY $0012 3
+TAB_OFF_RIGHT = 3  # $38A2 BCC leave taken
+TAB_ON_RIGHT = 4  # ... not taken 2 + $38A4 ADC #$00 2
+TAB_TAIL = 16  # $38A6 LDY $0F 3 + STA $7F 3 + TAX 2 + CLC 2 + RTS 6
 
 
 def status_bar_cycles(energy):
@@ -729,9 +758,9 @@ SCAN_OFF = 3  # $27DC BEQ find_first_visible_tile_at_start_loop taken
 SCAN_VISIBLE = 4  # ... not taken 2 + $27DE CMP #$80 2
 SCAN_CROPPED = 3  # $27E0 BEQ tile_is_cropped_to_right taken
 SCAN_WHOLE = 2  # ... not taken
-SCAN_INC = 16  # $2836..$2840 increase_tile_column, falling into $2845
+SCAN_INC = 9  # $2836..$283B increase_tile_column, falling into $283D's own entry
 SCAN_INC_END = 24  # ... $2839 BEQ taken: the JSR 6 + the head 10 + $282C SEC/RTS 8
-SCAN_DEC = 10  # $282E LDY 3 + BEQ nt 2 + DEY 2 + JMP $2845 3
+SCAN_DEC = 10  # $282E LDY 3 + BEQ nt 2 + DEY 2 + JMP $283D 3
 SCAN_DEC_END = 20  # ... BEQ taken: the JSR 6 + LDY 3 + BEQ 3 + $282C 8
 SCAN_END_HEAD = 6  # $27E2 LDA $0024 3 + STA $0032 3
 SCAN_END_WHOLE = 7  # $27E9 BCS nt 2 + CMP #$81 2 + $27ED BEQ find_end_of_row_loop 3

@@ -20,10 +20,13 @@ except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
     projector_jit = None
     _HAVE_JIT = False
 
-# initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).
-BUF_WINDOW = {0: (0x14, 0x8A), 1: (0x14, 0x8A), 2: (0x08, 0x84)}
+# initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80, $0028), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).  $29B4 zeroes $0028 in every mode; only $29C7's odd strip sets it.
+BUF_WINDOW = {0: (0x14, 0x8A, 0x00), 1: (0x14, 0x8A, 0x00), 2: (0x08, 0x84, 0x00)}
 PLAY_MODE = 0
-_BUF_LEFT, _BUF_RIGHT = BUF_WINDOW[PLAY_MODE]
+_BUF_LEFT, _BUF_RIGHT = BUF_WINDOW[PLAY_MODE][:2]
+# $0C48 furthest-row extent hint ($26CD): plot_world's own carry between passes, 0 in a
+# fresh play state and up to $1F once the game has plotted. RENDER_ROW_HINT overrides it.
+_ROW_HINT_ENV = os.environ.get("RENDER_ROW_HINT")
 
 
 def _neg16(hi, lo):
@@ -32,10 +35,11 @@ def _neg16(hi, lo):
     return ((-hi - borrow) & 0xFF, (-lo) & 0xFF)
 
 
-def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE, window=None):
+def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE, window=None, ref_lo=0x00):
     """plot_world setup ($2625-$26D6): the view-orientation case and screen-x
     reference angle from the observer's h_angle, against ``mode``'s $2993 window,
-    or ``window`` when a caller sets its own ($29C7, as $1F9F does for a strip)."""
+    or ``window`` when a caller sets its own ($29C7, as $1F9F does for a strip).
+    ``ref_lo`` is $001F, 0 for a play redraw and $80 for a strip on an odd column."""
     view_angle = (h_angle + 0x20) & 0xFF  # $001C ($265A)
     quadrant = view_angle >> 6  # $2665: top two bits
     folded = ((view_angle & 0x3F) - 0x20) & 0xFF  # $0074 ($265E)
@@ -48,18 +52,27 @@ def _setup(state, h_angle, v_angle, observer, mode=PLAY_MODE, window=None):
         c3, c1d = (0x1E - ox) & 0xFF, (0x1E - oy) & 0xFF
     else:  # west ($26BC)
         c3, c1d = oy, (0x1E - ox) & 0xFF
-    left, right = window if window is not None else BUF_WINDOW[mode]
+    left, right, frac = window if window is not None else BUF_WINDOW[mode]
     return {
         "observer": observer,
         "quadrant": quadrant,
         "buf_left": left,  # $0007
         "buf_right": right,  # $0012
+        "buf_frac": frac,  # $0028
         "c3": c3,  # $0003
         "c1d": c1d,  # $001D
-        "ref_lo": 0x00,  # $001F (play)
+        "ref_lo": ref_lo & 0xFF,  # $001F
         "ref_hi": (folded - 0x0A) & 0xFF,  # $0020 ($267D)
         "h_angle": h_angle,  # objects_h_angle, the bearing being priced
         "v_angle": v_angle,  # objects_v_angle used by $933D
+        # $283D BIT $9AF6: bit7 set (all of play) sends every examine to $37F2.
+        "table_examine": bool(state.mem[mm.PLAY_DISPLAY_FLAG] & 0x80),
+        "row_hint": (
+            state.mem[mm.FURTHEST_ROW_HINT]
+            if _ROW_HINT_ENV is None
+            else int(_ROW_HINT_ENV)
+        )
+        & 0xFF,
     }
 
 
@@ -95,15 +108,25 @@ _EXAM_QUAD = (
     passcost.EXAM_QUAD_SOUTH,
     passcost.EXAM_QUAD_WEST,
 )
+_TAB_QUAD = (
+    passcost.TAB_QUAD_NORTH,
+    passcost.TAB_QUAD_EAST,
+    passcost.TAB_QUAD_SOUTH,
+    passcost.TAB_QUAD_WEST,
+)
 
 
 def _project(state, setup, col, row, vis=None):
-    """$2845: project grid point (col,row). Returns (sx_lo, sx_hi, sy_lo, sy_hi,
-    tile_byte, onscreen, cycles) matching the ROM plottables, visibility byte, $007F
-    and the exact cycles the call spent, the trig it drives included."""
+    """$283D: project grid point (col,row) through whichever examine $9AF6 selects.
+
+    Returns (sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, cycles). The two examines
+    produce identical plottables -- $37F2 reads back what $3700 computed with the same
+    trig -- so only the cycles differ, and ``cyc``/``tab`` price them side by side.
+    """
     observer = setup["observer"]
     zp = collections.defaultdict(int)
-    cyc = passcost.EXAM_CALL + passcost.EXAM_HEAD
+    cyc = passcost.EXAM_CALL + passcost.EXAM_ENTRY_TRIG + passcost.EXAM_HEAD
+    tab = passcost.EXAM_CALL + passcost.EXAM_ENTRY_TABLE + passcost.TAB_HEAD
     sx = (col - setup["c3"] - 1) & 0xFF  # signed column ($2858, CLC-before-SBC -1)
     zp[0x86], zp[0x80] = sx, 0x80
     if sx & 0x80:
@@ -125,41 +148,69 @@ def _project(state, setup, col, row, vis=None):
     sx_lo = (zp[0x8A] - setup["ref_lo"]) & 0xFF  # screen x ($2891), carry stays set
     sx_hi = (zp[0x8B] - setup["ref_hi"]) & 0xFF
     cyc += passcost.EXAM_STORE + relative._calc_hypotenuse(zp)  # $937F -> zp[$7C]/$7D
-    cyc += _EXAM_QUAD[setup["quadrant"]] + passcost.EXAM_ADDR
-    tx, ty = _tile_xy(setup["quadrant"], col, row)
+    quadrant = setup["quadrant"]
+    cyc += _EXAM_QUAD[quadrant] + passcost.EXAM_ADDR
+    tab += _TAB_QUAD[quadrant] + passcost.TAB_ADDR
+    tx, ty = _tile_xy(quadrant, col, row)
     height, tile_byte, levels = _tile_height(state, tx, ty)
-    if levels:  # $28F2: an object tile walks its stack and skips the raytrace bit
+    if levels:  # $28F2/$3876: an object tile skips the raytrace bit
         cyc += passcost.EXAM_OBJECT + passcost.EXAM_OBJECT_BOTTOM
-        cyc += (levels - 1) * passcost.EXAM_OBJECT_STEP
+        cyc += (levels - 1) * passcost.EXAM_OBJECT_STEP  # $37F2 walks no stack
+        tab += passcost.TAB_OBJECT
     else:
         if vis is None:
             vis = occlusion_visible(state, observer)
+        seen = vis[ty][tx]
         cyc += passcost.EXAM_GROUND
-        cyc += passcost.EXAM_VISIBLE if vis[ty][tx] else passcost.EXAM_HIDDEN
+        cyc += passcost.EXAM_VISIBLE if seen else passcost.EXAM_HIDDEN
+        tab += passcost.TAB_GROUND
+        tab += passcost.TAB_VISIBLE if seen else passcost.TAB_HIDDEN
     zf = state.obj_z_frac[observer]  # tile height relative to eye ($291E)
     zp[0x80] = (-zf) & 0xFF
     rel_z_hi = (height - state.obj_z_height[observer] - (1 if zf else 0)) & 0xFF
     sy_hi, vcyc = relative._vertical_angle(zp, rel_z_hi, setup["v_angle"])  # $933D
     sy_lo = zp[0x50]
     cyc += passcost.EXAM_VANGLE + vcyc + passcost.EXAM_TAIL
-    # $293C on-screen test against the mode's $0007/$0012; $0028=0 waives the fraction check.
+    tab += passcost.TAB_SCREEN + passcost.TAB_TAIL
+    onscreen = 0x00
+    # $293C/$388F on-screen test against the mode's $0007/$0012/$0028.
     if sx_hi < setup["buf_left"]:
-        onscreen = 0x00
         cyc += passcost.EXAM_OFF_LEFT
+        tab += passcost.TAB_OFF_LEFT
     else:
         cyc += passcost.EXAM_ON_LEFT
-        if sx_hi == setup["buf_left"]:
-            cyc += passcost.EXAM_FRACTION + passcost.EXAM_FRACTION_OK
-        else:
+        tab += passcost.TAB_ON_LEFT
+        if sx_hi != setup["buf_left"]:
             cyc += passcost.EXAM_NO_FRACTION
-        cyc += passcost.EXAM_RIGHT
-        if sx_hi < setup["buf_right"]:
-            onscreen = 0x80
-            cyc += passcost.EXAM_OFF_RIGHT
-        else:
-            onscreen = 0x81
-            cyc += passcost.EXAM_ON_RIGHT
-    return sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, cyc
+            tab += passcost.TAB_NO_FRACTION
+            fraction_left = False
+        else:  # $2945/$3895: $29C7's odd strip drops the left column's near half
+            cyc += passcost.EXAM_FRACTION
+            tab += passcost.TAB_FRACTION
+            fraction_left = sx_lo < setup["buf_frac"]
+            cyc += (
+                passcost.EXAM_FRACTION_LEFT
+                if fraction_left
+                else passcost.EXAM_FRACTION_OK
+            )
+            tab += (
+                passcost.TAB_FRACTION_LEFT
+                if fraction_left
+                else passcost.TAB_FRACTION_OK
+            )
+        if not fraction_left:
+            cyc += passcost.EXAM_RIGHT
+            tab += passcost.TAB_RIGHT
+            if sx_hi < setup["buf_right"]:
+                onscreen = 0x80
+                cyc += passcost.EXAM_OFF_RIGHT
+                tab += passcost.TAB_OFF_RIGHT
+            else:
+                onscreen = 0x81
+                cyc += passcost.EXAM_ON_RIGHT
+                tab += passcost.TAB_ON_RIGHT
+    spent = tab if setup["table_examine"] else cyc
+    return sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, spent
 
 
 _SCREEN_H = int(os.environ.get("RENDER_SCREEN_H", "240"))  # $F0 fillable scanlines
@@ -178,8 +229,6 @@ def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
-# $0C48 furthest-row extent hint ($26CD); 0 in every fresh play state, env-overridable.
-_ROW_HINT = int(os.environ.get("RENDER_ROW_HINT", "0"))
 _LAST = mm.N - 1  # 0x1F
 _OFFSET_TO_TILE = (
     0x00,
@@ -318,7 +367,7 @@ def _scan_visible(state, setup, vis=None, schedule=None):
         + passcost.WALK_ROWS
         + passcost.ROW_SCAN
     )
-    start, end = find_extent(row, _ROW_HINT)
+    start, end = find_extent(row, setup["row_hint"])
     walk(passcost.WALK_HINT)
     stage(None)  # $2625..$26DD: the setup and the furthest row's own scan
     while True:
@@ -337,7 +386,6 @@ def _scan_visible(state, setup, vis=None, schedule=None):
                 probe(y, row)
                 rows.append((row, start, (start + 1) & 0xFF))
                 stage(row)
-                probe(c3, row)
             elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
                 walk(
                     passcost.OBS_ROW_TEST + passcost.OBS_ROW_END + passcost.OBS_ROW_PLOT
@@ -346,15 +394,15 @@ def _scan_visible(state, setup, vis=None, schedule=None):
                 probe(end, row)
                 rows.append((row, (end - 1) & 0xFF, end))
                 stage(row)
-                probe(c3, row)
             else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
                 walk(passcost.OBS_ROW_TEST + passcost.OBS_ROW_SKIP)
-                probe(c3, row)
-            # $279E: the observer's own tile is plotted only when it is on screen.
+            # All three branches fall into $2793, whose $2797 INC $0026 probes the observer tile one row NEARER than the loop reached; $279E then plots it only when on screen.
+            obs_row = (row + 1) & 0xFF
+            probe(c3, obs_row)
             walk(passcost.OBS_TILE + passcost.OBS_TILE_TEST)
             walk(
                 passcost.OBS_TILE_ON + passcost.OBS_TILE_TAIL
-                if cache[(c3, row)][3] < 2
+                if cache[(c3, obs_row)][3] < 2
                 else passcost.OBS_TILE_OFF
             )
             break
@@ -524,8 +572,14 @@ def _occlusion_visible(state, observer=None):
     return _occlusion_tables(state, obs)[0]
 
 
-# Every byte plot_world reads: tiles_table ($0400) + the object flags/v_angle ($0100) and x/z/y/h_angle/z_frac/type ($0900) arrays -- 1536 bytes, ~1us to digest.
-_SCENE_SPANS = ((0x0400, 0x0800), (0x0100, 0x0180), (0x0900, 0x0A80))
+# Every byte plot_world reads: tiles_table ($0400) + the object flags/v_angle ($0100) and x/z/y/h_angle/z_frac/type ($0900) arrays + the $283D examine flag and the $26CD row hint -- 1538 bytes, ~1us to digest.
+_SCENE_SPANS = (
+    (0x0400, 0x0800),
+    (0x0100, 0x0180),
+    (0x0900, 0x0A80),
+    (mm.PLAY_DISPLAY_FLAG, mm.PLAY_DISPLAY_FLAG + 1),
+    (mm.FURTHEST_ROW_HINT, mm.FURTHEST_ROW_HINT + 1),
+)
 _CACHE_MAX = int(os.environ.get("RENDER_CACHE_MAX", "20000"))
 _OCCLUSION_CACHE = {}
 _COST_CACHE = {}
@@ -676,11 +730,13 @@ def _project_scene_jit(state, setup, observer):
     su[projector_jit.S_OBS_ZF] = state.obj_z_frac[observer]
     su[projector_jit.S_LEFT] = setup["buf_left"]
     su[projector_jit.S_RIGHT] = setup["buf_right"]
+    su[projector_jit.S_TABLE] = 1 if setup["table_examine"] else 0
+    su[projector_jit.S_FRAC] = setup["buf_frac"]
     out, spans, n, n_examine, exam_cycles, fill, walk = projector_jit.project_scene(
         np.frombuffer(state.mem, dtype=np.uint8),
         su,
         _occlusion_memo(state, observer)[1],
-        _ROW_HINT,
+        setup["row_hint"],
         _SCREEN_H,
         _W_SCALE,
     )
@@ -705,7 +761,9 @@ def _project_scene_jit(state, setup, observer):
     return tiles, int(n_examine), int(exam_cycles), fill, int(walk)
 
 
-def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None):
+def project_scene(
+    state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window=None, ref_lo=0x00
+):
     """Return (tiles, n_examine, exam_cycles, fill, walk_cycles) under ``mode``'s window.
 
     The plotted tile set and the $2845 examination count and cycles are all exact.
@@ -714,7 +772,9 @@ def project_scene(state, h_angle, v_angle, observer=None, mode=PLAY_MODE, window
     """
     if observer is None:
         observer = state.player
-    setup = _setup(state, h_angle & 0xFF, v_angle & 0xFF, observer, mode, window)
+    setup = _setup(
+        state, h_angle & 0xFF, v_angle & 0xFF, observer, mode, window, ref_lo
+    )
     if _HAVE_JIT:
         return _project_scene_jit(state, setup, observer)
     return _project_scene_py(state, setup, observer)
@@ -868,16 +928,17 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
-    if mode == PLAY_MODE and window is None:
+    ref_lo = (view.get("ref_lo") or 0) & 0xFF  # $001F, $1FD0 on an odd-column strip
+    if mode == PLAY_MODE and window is None and not ref_lo:
         exact = _exact_render_cost(state, h, v, observer)
         if exact is not None:
             return exact
     obs = state.player if observer is None else observer
 
     def make():
-        setup = _setup(state, h, v, obs, mode, window)
+        setup = _setup(state, h, v, obs, mode, window, ref_lo)
         tiles, _n, exam_cycles, fill, walk = project_scene(
-            state, h, v, obs, mode, window
+            state, h, v, obs, mode, window, ref_lo
         )
         columns = None if window is None else _window_columns(window)
         fill_cycles, exact_objects = fill_frames(
@@ -886,22 +947,24 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
         base = 0.0 if exact_objects else _inview_object_base(state, tiles)
         return (BASE_CYCLES + exam_cycles + walk + fill_cycles + base) / FRAME_CYCLES
 
-    key = (scene_key(state), obs, h, v, mode, window, rows)
+    key = (scene_key(state), obs, h, v, mode, window, rows, ref_lo)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)
 
 
 def _window_columns(window):
-    """The $0C69 column count a :func:`strip_window` pair came from ($29C9 halves it)."""
-    return window[0] * 2
+    """The $0C69 column count a :func:`strip_window` triple came from ($29C9 halves it,
+    $29CF keeping the odd bit in $0028)."""
+    return window[0] * 2 + (1 if window[2] else 0)
 
 
 def strip_window(columns):
     """$29C7 with A = $0C69: the buffer window $1F9F gives the strip plot.
 
-    $29C9 halves the column count into $0007 and $29D3 folds that into $0012, the
-    same pair $2993 sets from its own table for a full-screen mode."""
+    $29C9 halves the column count into $0007 and $29D3 folds that into $0012, the same
+    pair $2993 sets from its own table for a full-screen mode; $29CF rotates the halving's
+    carry into $0028, so an ODD strip drops the left column's near half."""
     left = columns >> 1
-    return left, (left >> 1) ^ 0x80
+    return left, (left >> 1) ^ 0x80, 0x80 if columns & 1 else 0x00
 
 
 def strip_replot_frames(state, target, left, columns):
@@ -915,9 +978,10 @@ def strip_replot_frames(state, target, left, columns):
         if exact is not None:
             return exact
     player = state.player
-    view = {
+    view = {  # $1FCC/$1FCF: the halving's carry is the camera's own $001F half column
         "h_angle": (state.obj_h_angle[player] + (left >> 1)) & 0xFF,
         "v_angle": state.obj_v_angle[player],
+        "ref_lo": 0x80 if left & 1 else 0x00,
     }
     return render_cost(state, view, player, window=strip_window(columns))
 
@@ -942,7 +1006,12 @@ def _exact_strip_cost(state, target):
 PLOT_ROW = 0x26  # $26C9 seeds it $1F and $26EF walks it down to the observer row $001D
 PLOT_COLUMN = 0x25  # $295D drives it across the row it plots
 CAMERA_OBJECT = 0x6E  # $2625 LDX $6E: the slot whose $09C0/$0140 is the camera
-BUF_LEFT, BUF_RIGHT = 0x07, 0x12  # the $2993/$29C7 window plot_world is plotting into
+BUF_LEFT, BUF_RIGHT, BUF_FRAC = (
+    0x07,
+    0x12,
+    0x28,
+)  # the $2993/$29C7 window plot_world is plotting into
+CAMERA_REF_LO = 0x1F  # $001F, the camera's fine reference ($1FD0 for a strip)
 
 
 def replot_owed(state, row, column, in_plot):
@@ -954,9 +1023,9 @@ def replot_owed(state, row, column, in_plot):
     """
     mem = state.mem
     obs = mem[CAMERA_OBJECT]
-    window = (mem[BUF_LEFT], mem[BUF_RIGHT])
+    window = (mem[BUF_LEFT], mem[BUF_RIGHT], mem[BUF_FRAC])
     h, v = state.obj_h_angle[obs], state.obj_v_angle[obs]
-    setup = _setup(state, h, v, obs, PLAY_MODE, window)
+    setup = _setup(state, h, v, obs, PLAY_MODE, window, mem[CAMERA_REF_LO])
     schedule = []
     _tiles, _n, _exam, fill, _walk = _project_scene_py(state, setup, obs, schedule)
     at = len(schedule) - 1  # past every plotted row: only $27CE's own tile is left

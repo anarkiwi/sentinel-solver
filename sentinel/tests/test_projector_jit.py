@@ -214,7 +214,8 @@ def test_project_scene_dispatcher_matches_without_jit(monkeypatch):
 
 
 def test_env_constants_stay_tunable(monkeypatch):
-    """_SCREEN_H/_W_SCALE/_W_SCREEN/_ROW_HINT reach the kernel as arguments."""
+    """_SCREEN_H/_W_SCALE/_W_SCREEN and the $0C48 row hint reach the kernel as
+    arguments -- the hint off the state byte $26CD reads, not a module constant."""
     state = landscape.generate(42)
     setup = projector._setup(state, 0x50, 0x04, state.player)
     base = projector._project_scene_jit(state, setup, state.player)
@@ -224,6 +225,9 @@ def test_env_constants_stay_tunable(monkeypatch):
     assert tuned[0] != base[0]
     assert all(t["w"] <= 1 and t["h"] <= 4 for t in tuned[0])
     assert _same(tuned, projector._project_scene_py(state, setup, state.player))
-    monkeypatch.setattr(projector, "_ROW_HINT", 0x11)
+    state.mem[mm.FURTHEST_ROW_HINT] = 0x11
+    setup = projector._setup(state, 0x50, 0x04, state.player)
+    assert setup["row_hint"] == 0x11
     hinted = projector._project_scene_jit(state, setup, state.player)
+    assert hinted[1] != base[1]  # the hint really moves the scan, in both twins
     assert _same(hinted, projector._project_scene_py(state, setup, state.player))

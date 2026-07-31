@@ -34,6 +34,7 @@ _FILL_COLS = (
 
 # $2845's own branch costs, inlined as njit globals (see passcost.EXAM_*).
 _EX_CALL = passcost.EXAM_CALL
+_EX_ENTRY_TRIG = passcost.EXAM_ENTRY_TRIG
 _EX_HEAD = passcost.EXAM_HEAD
 _EX_COL_POS = passcost.EXAM_COL_POS
 _EX_COL_NEG = passcost.EXAM_COL_NEG
@@ -63,10 +64,39 @@ _EX_OFF_LEFT = passcost.EXAM_OFF_LEFT
 _EX_ON_LEFT = passcost.EXAM_ON_LEFT
 _EX_NO_FRACTION = passcost.EXAM_NO_FRACTION
 _EX_FRACTION = passcost.EXAM_FRACTION + passcost.EXAM_FRACTION_OK
+_EX_FRACTION_LEFT = passcost.EXAM_FRACTION + passcost.EXAM_FRACTION_LEFT
 _EX_RIGHT = passcost.EXAM_RIGHT
 _EX_OFF_RIGHT = passcost.EXAM_OFF_RIGHT
 _EX_ON_RIGHT = passcost.EXAM_ON_RIGHT
 _EX_TAIL = passcost.EXAM_TAIL
+
+# $37F2's own branch costs, the play path's examine (see passcost.TAB_*).
+_TB_ENTRY = passcost.EXAM_ENTRY_TABLE
+_TB_HEAD = passcost.TAB_HEAD
+_TB_QUAD = np.array(
+    (
+        passcost.TAB_QUAD_NORTH,
+        passcost.TAB_QUAD_EAST,
+        passcost.TAB_QUAD_SOUTH,
+        passcost.TAB_QUAD_WEST,
+    ),
+    dtype=np.int64,
+)
+_TB_ADDR = passcost.TAB_ADDR
+_TB_OBJECT = passcost.TAB_OBJECT
+_TB_GROUND = passcost.TAB_GROUND
+_TB_VISIBLE = passcost.TAB_VISIBLE
+_TB_HIDDEN = passcost.TAB_HIDDEN
+_TB_SCREEN = passcost.TAB_SCREEN
+_TB_OFF_LEFT = passcost.TAB_OFF_LEFT
+_TB_ON_LEFT = passcost.TAB_ON_LEFT
+_TB_NO_FRACTION = passcost.TAB_NO_FRACTION
+_TB_FRACTION = passcost.TAB_FRACTION + passcost.TAB_FRACTION_OK
+_TB_FRACTION_LEFT = passcost.TAB_FRACTION + passcost.TAB_FRACTION_LEFT
+_TB_RIGHT = passcost.TAB_RIGHT
+_TB_OFF_RIGHT = passcost.TAB_OFF_RIGHT
+_TB_ON_RIGHT = passcost.TAB_ON_RIGHT
+_TB_TAIL = passcost.TAB_TAIL
 
 # The $2625 walk's own branch costs (see passcost); cnt[2] accumulates them.
 _W_SETUP = passcost.WALK_SETUP
@@ -290,7 +320,9 @@ _OFFSET_TO_TILE = np.array(
 # ``setup`` ($2625) packed into one int64 vector so the njit signatures stay short.
 S_QUAD, S_C3, S_C1D, S_REF_LO, S_REF_HI = 0, 1, 2, 3, 4
 S_VANGLE, S_OBS_ZH, S_OBS_ZF, S_LEFT, S_RIGHT = 5, 6, 7, 8, 9
-S_N = 10
+S_TABLE = 10  # $283D BIT $9AF6: 1 == the play path's $37F2 examine
+S_FRAC = 11  # $0028, the odd strip's half column ($29CF)
+S_N = 12
 
 
 @njit(cache=True, inline="always")
@@ -347,13 +379,14 @@ def _tile_height(mem, x, y):
 
 @njit(cache=True)
 def _project(mem, zp, su, vis, col, row, out):
-    """$2845 for grid point (col,row) -> out = sx_lo, sx_hi, sy_lo, sy_hi, tile_byte,
+    """$283D for grid point (col,row) -> out = sx_lo, sx_hi, sy_lo, sy_hi, tile_byte,
     onscreen, cycles.  ``zp`` is zeroed first because the reference allocates a fresh
     ``defaultdict(int)`` per call and _calc_angle's both-zero exit leaves $5C/$5D/$7A/$7B
     unwritten, so a stale window would leak into _calc_hypotenuse."""
     for i in range(ZP_LO, ZP_HI):  # nothing below $50 is touched
         zp[i] = 0
-    cyc = _EX_CALL + _EX_HEAD
+    cyc = _EX_CALL + _EX_ENTRY_TRIG + _EX_HEAD
+    tab = _EX_CALL + _TB_ENTRY + _TB_HEAD
     sx = (col - su[S_C3] - 1) & 0xFF  # signed column ($2858)
     zp[0x86] = sx
     zp[0x80] = 0x80
@@ -378,12 +411,16 @@ def _project(mem, zp, su, vis, col, row, out):
     out[1] = (zp[0x8B] - su[S_REF_HI]) & 0xFF
     cyc += _EX_STORE + _calc_hypotenuse(zp)  # $937F
     cyc += _EX_QUAD[su[S_QUAD]] + _EX_ADDR
+    tab += _TB_QUAD[su[S_QUAD]] + _TB_ADDR
     tx, ty = _tile_xy(su[S_QUAD], col, row)
     height, tile_byte, levels = _tile_height(mem, tx, ty)
-    if levels:  # $28F2: an object tile walks its stack and skips the raytrace bit
+    if levels:  # $28F2/$3876: an object tile skips the raytrace bit
         cyc += _EX_OBJECT + _EX_OBJECT_BOTTOM + (levels - 1) * _EX_OBJECT_STEP
+        tab += _TB_OBJECT  # $37F2 walks no stack
     else:
-        cyc += _EX_GROUND + (_EX_VISIBLE if vis[ty, tx] else _EX_HIDDEN)
+        seen = vis[ty, tx]
+        cyc += _EX_GROUND + (_EX_VISIBLE if seen else _EX_HIDDEN)
+        tab += _TB_GROUND + (_TB_VISIBLE if seen else _TB_HIDDEN)
     zf = su[S_OBS_ZF]  # tile height relative to eye ($291E)
     zp[0x80] = (-zf) & 0xFF
     rel_z_hi = (height - su[S_OBS_ZH] - (1 if zf else 0)) & 0xFF
@@ -391,20 +428,37 @@ def _project(mem, zp, su, vis, col, row, out):
     out[2] = zp[0x50]
     out[4] = tile_byte
     cyc += _EX_VANGLE + vcyc + _EX_TAIL
-    if out[1] < su[S_LEFT]:  # $293C on-screen test against $0007/$0012
-        out[5] = 0x00
+    tab += _TB_SCREEN + _TB_TAIL
+    out[5] = 0x00
+    if out[1] < su[S_LEFT]:  # $293C/$388F on-screen test against $0007/$0012/$0028
         cyc += _EX_OFF_LEFT
+        tab += _TB_OFF_LEFT
     else:
         cyc += _EX_ON_LEFT
-        cyc += _EX_FRACTION if out[1] == su[S_LEFT] else _EX_NO_FRACTION
-        cyc += _EX_RIGHT
-        if out[1] < su[S_RIGHT]:
-            out[5] = 0x80
-            cyc += _EX_OFF_RIGHT
+        tab += _TB_ON_LEFT
+        fraction_left = False
+        if out[1] != su[S_LEFT]:
+            cyc += _EX_NO_FRACTION
+            tab += _TB_NO_FRACTION
+        elif out[0] < su[S_FRAC]:  # $29C7's odd strip drops the near half column
+            fraction_left = True
+            cyc += _EX_FRACTION_LEFT
+            tab += _TB_FRACTION_LEFT
         else:
-            out[5] = 0x81
-            cyc += _EX_ON_RIGHT
-    out[6] = cyc
+            cyc += _EX_FRACTION
+            tab += _TB_FRACTION
+        if not fraction_left:
+            cyc += _EX_RIGHT
+            tab += _TB_RIGHT
+            if out[1] < su[S_RIGHT]:
+                out[5] = 0x80
+                cyc += _EX_OFF_RIGHT
+                tab += _TB_OFF_RIGHT
+            else:
+                out[5] = 0x81
+                cyc += _EX_ON_RIGHT
+                tab += _TB_ON_RIGHT
+    out[6] = tab if su[S_TABLE] else cyc
 
 
 @njit(cache=True)
@@ -570,23 +624,22 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
                 cnt[2] += _O_START + _O_PLOT
                 _probe(mem, zp, su, vis, cres, seen, cnt, start, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, y, row)
-                _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
                 rrow[nrows], rlo[nrows], rhi[nrows] = row, start, y
                 nrows += 1
             elif (end - 2) & 0xFF == c3:  # $277B: plots the single tile $0038-1
                 cnt[2] += _O_TEST + _O_END + _O_PLOT
                 _probe(mem, zp, su, vis, cres, seen, cnt, (end - 1) & 0xFF, row)
                 _probe(mem, zp, su, vis, cres, seen, cnt, end, row)
-                _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
                 rrow[nrows], rlo[nrows], rhi[nrows] = row, (end - 1) & 0xFF, end
                 nrows += 1
             else:  # skip_plotting_observer_row $2793: only the observer tile ($27CE)
                 cnt[2] += _O_TEST + _O_SKIP
-                _probe(mem, zp, su, vis, cres, seen, cnt, c3, row)
-            # $279E: the observer's own tile is plotted only when it is on screen.
+            # All three branches fall into $2793, whose $2797 INC $0026 probes the observer tile one row NEARER than the loop reached; $279E then plots it only when on screen.
+            obs_row = (row + 1) & 0xFF
+            _probe(mem, zp, su, vis, cres, seen, cnt, c3, obs_row)
             cnt[2] += _O_TILE
-            ic = _cached(mem, zp, su, vis, cres, seen, c3, row)
-            cnt[2] += _O_TILE_ON if cres[ic, row, 3] < 2 else _O_TILE_OFF
+            ic = _cached(mem, zp, su, vis, cres, seen, c3, obs_row)
+            cnt[2] += _O_TILE_ON if cres[ic, obs_row, 3] < 2 else _O_TILE_OFF
             break
         cnt[2] += _R_NEAR + _R_SCAN
         p_start, p_end = start, end

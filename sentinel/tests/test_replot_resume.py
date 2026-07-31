@@ -18,9 +18,10 @@ def _mid_replot(new_state):
     st = new_state(BOARD)
     obs = st.player
     st.mem[projector.CAMERA_OBJECT] = obs
-    left, right = projector.strip_window(STRIP_COLUMNS)
+    left, right, frac = projector.strip_window(STRIP_COLUMNS)
     st.mem[projector.BUF_LEFT] = left
     st.mem[projector.BUF_RIGHT] = right
+    st.mem[projector.BUF_FRAC] = frac
     return st
 
 
@@ -30,8 +31,13 @@ def _pass_cycles(state):
     view = {
         "h_angle": state.obj_h_angle[obs],
         "v_angle": state.obj_v_angle[obs],
+        "ref_lo": state.mem[projector.CAMERA_REF_LO],
     }
-    window = (state.mem[projector.BUF_LEFT], state.mem[projector.BUF_RIGHT])
+    window = (
+        state.mem[projector.BUF_LEFT],
+        state.mem[projector.BUF_RIGHT],
+        state.mem[projector.BUF_FRAC],
+    )
     return projector.render_cost(state, view, obs, window=window) * (
         projector.FRAME_CYCLES
     )

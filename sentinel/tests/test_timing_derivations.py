@@ -514,8 +514,10 @@ def _run(cpu, mem, mstate, addr):
 def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
     """RENDER_COST_BACKEND=py65 prices the $1FFC replot by running the real $1F9F.
 
-    The proxy prices the same camera through the same $29C7 window, so the two must
-    agree to well inside the factor the un-windowed proxy was out by (1.3..2.8x)."""
+    The proxy prices the same camera through the same $29C7 window, but only the $2625
+    it wraps: $1F9F's own line -- the $2211 strip clear and the $9730 buffer flush -- is
+    unpriced (measured 25..68k cycles), so the proxy is a strict undercount, never dear.
+    """
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
 
     mem = bytearray(_oracle().generate(landscape))
@@ -535,7 +537,7 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
             monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
             proxy = projector.strip_replot_frames(state, slot, left, cols)
             assert exact > 1.0  # the replot is always many frames, never a redraw
-            assert 0.8 < proxy / exact < 1.3
+            assert 0.75 < proxy / exact <= 1.0
             checked += 1
             break
         if checked >= 2:
@@ -544,10 +546,13 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
 
 
 def test_the_strip_buffer_window_is_the_roms_own_29c7():
-    """$29C7 halves the $0C69 column count into $0007 and folds it into $0012.
+    """$29C7 halves the $0C69 column count into $0007, folds it into $0012 and rotates
+    the halving's carry into $0028, so an odd strip drops the left column's near half.
 
-    A 40-column A is the whole play screen, which is $2993 mode 0's own pair."""
+    A 40-column A is the whole play screen, which is $2993 mode 0's own triple."""
     assert projector.strip_window(40) == projector.BUF_WINDOW[projector.PLAY_MODE]
     for columns in range(1, 21):
-        left, right = projector.strip_window(columns)
+        left, right, frac = projector.strip_window(columns)
         assert (left, right) == (columns >> 1, ((columns >> 1) >> 1) ^ 0x80)
+        assert frac == (0x80 if columns & 1 else 0x00)
+        assert projector._window_columns((left, right, frac)) == columns

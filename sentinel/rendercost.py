@@ -22,9 +22,12 @@ except ImportError:  # pragma: no cover - numba absent
 TRI_THIRD = np.array(((2, 3), (0, 1)), dtype=np.int64)
 # $2D39, the $0045 flag a one-point-different slope nibble sets.
 SLOPE_FLAG = np.array((0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1), dtype=np.int64)
-# $29BB/$29BE/$29C1 per vertical buffer: ($0011 angle offset, $0035 left, $0061 width).
-PLAY_BUFFERS = np.array(((0x0A, 0x50, 0x70), (0x02, 0x40, 0x70)), dtype=np.int64)
-PAN_BUFFER = np.array(((0x0C, 0x60, 0x40),), dtype=np.int64)  # $2993 mode 2
+# $29BB/$29BE/$29C1 per vertical buffer: ($0011 angle offset, $0035 left, $0061 width,
+# $0029 the angle offset's own low byte, which $29B8 zeroes for every $2993 mode).
+PLAY_BUFFERS = np.array(
+    ((0x0A, 0x50, 0x70, 0x00), (0x02, 0x40, 0x70, 0x00)), dtype=np.int64
+)
+PAN_BUFFER = np.array(((0x0C, 0x60, 0x40, 0x00),), dtype=np.int64)  # $2993 mode 2
 # $994B/$994D, the raster window the caller of $2993 sets: a vertical pan plots into a
 # 64-row strip, the play view and a horizontal pan into the whole 192.
 SCREEN_TOP = 0xF0
@@ -33,19 +36,19 @@ STRIP_BOTTOM = 0xB0
 
 
 def buffers(mode, window_columns=None):
-    """The ($0011, $0035, $0061) of every vertical buffer and the $0010 to start in.
+    """The ($0011, $0035, $0061, $0029) of each vertical buffer and the $0010 to start in.
 
     A play or vertical-pan plot alternates the two halves of the wide buffer; a
     horizontal pan ($2993 mode 2) and a strip replot ($29C7) each own one buffer.
     """
-    out = np.zeros((3, 3), dtype=np.int64)
+    out = np.zeros((3, 4), dtype=np.int64)
     out[0] = PLAY_BUFFERS[0]
     out[1] = PLAY_BUFFERS[1]
     if window_columns is not None:  # $29C7 initialise_buffer_variables_for_updating
         b61 = (window_columns * 4) & 0xFF
         b36 = ((b61 >> 1) & 0xFC) | 0x80
         b35 = (b36 - b61) & 0xFF
-        out[2] = (b35 >> 3, b35, b61)
+        out[2] = (b35 >> 3, b35, b61, 0x80 if b35 & 0x04 else 0x00)  # $29EA-$29F2
         return out, 2
     if mode == 2:
         out[2] = PAN_BUFFER[0]
@@ -578,24 +581,27 @@ def _plot_polygon(
     for p in range(passes):
         cyc += prep_cyc  # prepare_polygon $2D6C builds the vertex list
         o_hi = bufs[sect, 0]
+        o_lo = bufs[sect, 3]
         cyc += passcost.PREP_DATA_HEAD
         outside = False
         for j in range(nv, -1, -1):
             v = vlist[j]
-            hi8 = (vxy[v, 1] + o_hi) & 0xFF
+            lo16 = vxy[v, 0] + o_lo  # $2DD5 CLC / ADC $0029, carrying into $2DDD
+            hi8 = (vxy[v, 1] + o_hi + (lo16 >> 8)) & 0xFF
             if hi8 >= 0x20:  # $2DDF: this polygon leaves the inner area
                 cyc += passcost.PREP_VERTEX_OUT
                 outside = True
                 break
             cyc += passcost.PREP_VERTEX_LAST if j == 0 else passcost.PREP_VERTEX
-            sxb[v] = (((hi8 * 256 + vxy[v, 0]) << 3) >> 8) & 0xFF
+            sxb[v] = (((hi8 * 256 + (lo16 & 0xFF)) << 3) >> 8) & 0xFF
             sxh[v] = 0
         if outside:
             cyc += passcost.PREP_WIDE_HEAD + passcost.PREP_WIDE_JMP
             for j in range(nv, -1, -1):
                 v = vlist[j]
-                acc = (vxy[v, 1] + o_hi) & 0xFF
-                lo = vxy[v, 0]
+                lo16 = vxy[v, 0] + o_lo  # $2DA0 CLC / ADC $0029
+                acc = (vxy[v, 1] + o_hi + (lo16 >> 8)) & 0xFF
+                lo = lo16 & 0xFF
                 carry = 0
                 for r in range(3):  # $2DA9: a circular 16-bit rotate left
                     t = lo >> 7

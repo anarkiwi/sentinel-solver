@@ -1,8 +1,9 @@
 """render_cost reproduces plot_world's exact per-scene cost, cycle-counted in py65.
 
-``golden_render_cost.json`` holds, per view, the exact plot_world cycle count and $2845
-examination count from py65 (no ROM bytes); the non-oracle test asserts the projector
-reproduces the examination count byte-for-byte and the frame cost within tolerance.
+``golden_render_cost.json`` holds, per view, the exact plot_world cycle count and $283D
+examination count from py65 under play conditions (no ROM bytes); the non-oracle test
+asserts the projector reproduces the examination count byte-for-byte and the frame cost
+within tolerance.
 """
 
 import collections
@@ -39,26 +40,15 @@ VIEWS = [
 
 
 def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
-    """Run plot_world ($2625) headless in py65 with the raytraced occlusion table
-    ($245B) active; return per-view exact cycles split by SUBTREE -- the $2845
-    examinations, the $21AE object stacks and the terrain fill that is left."""
+    """Run plot_world ($2625) headless in py65 under play conditions ($9AF6 = $80, so
+    $283D takes the $37F2 table examine); return per-view exact cycles split by SUBTREE
+    -- the $283D examinations, the $21AE object stacks and the terrain fill left over.
+    """
     player = mem[0x000B]
     mem[0x006E] = player
     mem[0x09C0 + player] = h_angle  # objects_h_angle
     mem[0x0140 + player] = v_angle  # objects_v_angle
-    mem[0x001F] = 0
-    mem[0x005E] = 0
-    mem[0x0C78] = 0
-    mem[0x0C1B] = 0  # force_pan clear: no keyboard pan-abort
-    mem[0x0CDE] = 0  # not hyperspaced
-    mem[0x0CCE] = 0x80  # skip secret-code check in the raytracer
-    mem[0x352C] = 0x60  # stub update_sound (foreground-only cost)
-    mem[0x0051], mem[0x0052] = 0xF0, 0x30  # play-view raster clip window
-    oracle.call(cpu, mem, 0x245B, state=state)  # populate raytraced occlusion table
-    state["stop"] = False
-    # the raytrace leaves $0035/$0036 as $1ECC/$2597 march state; $35C0 JSR $1090
-    # re-runs $2993 before every plot_world, so the buffer variables are the table's.
-    oracle.call(cpu, mem, 0x2993, a=0, state=state)  # initialise_buffer_variables
+    oracle.prepare_render_context(cpu, mem, state)
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -74,7 +64,7 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     while cpu.pc != ret and steps < 20_000_000:
         pc = cpu.pc
         hits[pc] += 1
-        if pc == 0x2845 and not in_exam:  # $2845 subtree, the trig it calls included
+        if pc == 0x283D and not in_exam:  # the examine subtree, either branch of $2840
             in_exam, exam_sp = True, cpu.sp
             n_examine += 1
         if pc == 0x2A24 and mem[0x0180 + cpu.x]:  # plot_tile with a non-hidden byte
@@ -186,16 +176,9 @@ def test_object_base_never_overshoots_and_is_present():
 
 
 def _py65_occlusion(cpu, mem, state):
-    """Decode the real $3E80/$24DA bitmap after running $245B then $2993 in py65."""
-    player = mem[0x000B]
-    mem[0x006E] = player
-    for addr in (0x001F, 0x005E, 0x0C78, 0x0C1B, 0x0CDE):
-        mem[addr] = 0
-    mem[0x0CCE] = 0x80
-    mem[0x352C] = 0x60
-    oracle.call(cpu, mem, 0x245B, state=state)
-    state["stop"] = False
-    oracle.call(cpu, mem, 0x2993, a=0, state=state)
+    """Decode the real $3E80/$24DA bitmap after the $357D render prologue in py65."""
+    mem[0x006E] = mem[0x000B]
+    oracle.prepare_render_context(cpu, mem, state)
     vis = [[False] * 32 for _ in range(32)]
     for ty in range(32):
         for tx in range(32):

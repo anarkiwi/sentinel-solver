@@ -63,6 +63,9 @@ COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
 COOLDOWN_BRESENHAM = 0x1335  # $130C running accumulator ($1335)
 COOLDOWN_BRESENHAM_STEP = 0xCD  # $1310 ADC #$CD
 PLAYER_NOT_ACTED = 0x0CE5  # bit7 set until the player's first action ($12E1 clears it)
+# $9A51 is its only writer: $3577 stores $80 before play_landscape_loop $357D, $117E stores 0 for generation and the preview, so it is $80 for the whole of play.  $283D reads it to pick the plot_world examine ($2845's trig, or $37F2's table read), $95FA the raster split chain.
+PLAY_DISPLAY_FLAG = 0x9AF6
+FURTHEST_ROW_HINT = 0x0C48  # $26CD seeds $27D7's first column from it, $26D9 stores the furthest row's own start back: plot_world's only carry between passes
 TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
 FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
 TARGETED_OBJECT_IN_LOS = 0x0C56  # march sets bit7 when the ray reaches the target
