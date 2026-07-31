@@ -132,13 +132,26 @@ the other three ways `$002C`/`$002D` can end a pass.
 
 The other two (42,160,240 and 0,136,248) process the same number of lines but send three of
 them, and one, down a different branch, with no line count changing — a routing difference on
-`$2E3D`/`$2E45`, i.e. `$006C` or a `$0B40` a *previous* polygon left behind. Keying the model's
-`sxh` by plottable slot, as the ROM does, was **tried and reverted**: it drops the exact views
-from 10 to 1 because `_section_line`'s 16-bit x delta then reads a stale high byte and `nsec`
-saturates at its 255 cap (`edges` +12103 against `sections` +54 on 777,32,0, ~224 extra edges a
-section). So the stale values *are* reachable somewhere the corner keying masks, and slot keying
-cannot land until that read is found. `$2DC9` never writing `$0B40` at all — the model clears it
-— is confirmed and is part of the same knot.
+`$2E3D`/`$2E45`.
+
+**There is no unread-before-written `$0B40` in the ROM.** The image has exactly nine accesses:
+three writes (`$2DC0` in the wide vertex loop, `$2E58`/`$2E5B` in `$2E56`) and six reads
+(`$2E3F`, `$2E42`, `$3011`, `$3014`, `$304E`, `$30AB`). Every read indexes Y or X — the current
+line's own start and end vertex — and both entry paths to them write both: `$2E4F` only from a
+wide polygon, where `$2D93` has written every vertex, and `$2E5E` only through `$2E56`, which
+zeroes both endpoints first. So the ROM is self-consistent and a "stale `$0B40`" cannot be the
+mechanism.
+
+That relocates the problem. Keying the model's `sxh` by plottable slot, as the ROM does, was
+**tried and reverted**: it drops the exact views from 10 to 1, `edges` +12103 against `sections`
++54 on 777,32,0 — about 224 extra edges a section, `nsec` saturating at its 255 cap. Probing
+`_section_line` for the first oversized `dxh` on that view returns `sxh[vx]` = `$00`,
+`sxh[vy]` = `$02`, and `$02` is a legitimate `$2D93` output (the byte is 0..3 or `$F8`..`$FF`),
+so the offending line is genuinely wide rather than reading anything stale. The 10 -> 1 is
+therefore a defect in the slot-keyed variant itself, not a ROM behaviour the corner keying was
+hiding, and it is a model-debugging job rather than a disassembly one. `$2DC9` never writing
+`$0B40` at all — where the model clears it — remains a real divergence and is part of that
+variant.
 
 Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
 
@@ -163,8 +176,8 @@ Frame cost is 0.93-1.00× (median 0.973, mean absolute error 2.9%).
   ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
 
 **Resolves.** For the polygon count, the three remaining `$002C`/`$002D` exits on the two
-polygons named above. For the routing, finding which `_section_line` read sees a stale `$0B40`
-before slot keying can replace the corner keying.
+polygons named above. For the routing, debugging the slot-keyed variant against the corner-keyed
+one polygon at a time — the ROM side of that question is now closed.
 
 ## 6. The py65 exact backend skips transfer settles, and reads dear on a strip
 
