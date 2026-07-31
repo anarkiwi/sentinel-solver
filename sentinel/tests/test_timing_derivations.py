@@ -457,7 +457,9 @@ def test_the_sub_pass_position_is_read_back_off_the_stack_frame():
         frame = (cpu.y, cpu.x, cpu.a, cpu.p, pc & 0xFF, pc >> 8)
         for i, val in enumerate(frame):
             mem[0x0100 + ((sp + 1 + i) & 0xFF)] = val
-        phase, stage, index, _p = enemies.resume_from_stack(mem, sp, mem[0x100:0x200])
+        phase, stage, index, _p, _c = enemies.resume_from_stack(
+            mem, sp, mem[0x100:0x200]
+        )
         if 0x17B2 <= pc < 0x17CD:  # in the scan loop itself: Y is the live index
             assert (phase, stage, index) == (
                 enemies.PHASE_BODY,
@@ -475,6 +477,59 @@ def test_the_sub_pass_position_is_read_back_off_the_stack_frame():
         oracle.call(cpu, mem, 0x16B5, state=state)  # let the round finish
         mem[mm.CURSOR] = (mem[mm.CURSOR] - 1) & 7
     assert direct and called and prnd
+
+
+@pytest.mark.oracle
+def test_the_resume_offset_is_the_cycles_the_machine_already_spent():
+    """Each ladder entry is what the ROM itself spends from that segment's first byte.
+
+    The resume credits the model those cycles, so a seed taken mid-segment starts where
+    the machine is rather than at the segment's head."""
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, state = oracle.generate_machine(0x9795)
+    oracle.prime_enemy_driver(cpu, mem, state)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+    mem[0x0CDC] = mem[0x0CE4] = 0  # in the play loop, on the $1294 BPL path
+
+    def spends(start, addr):
+        state["stop"] = False
+        c0 = cpu.processorCycles
+        oracle.call(cpu, mem, start, state=state, stop_pc=addr)
+        return cpu.processorCycles - c0
+
+    slots = {}
+    for slot in range(mm.NUM_SLOTS):
+        slots.setdefault(mem[mm.OBJECTS_TYPE + slot], slot)
+    checked = 0
+    for otype, ladder in enemies._DISPATCH_SPENT.items():  # pylint: disable=W0212
+        if otype not in slots:
+            continue
+        mem[mm.CURSOR] = slots[otype]
+        head = dict(enemies._HEAD_SPENT)  # pylint: disable=protected-access
+        if otype == mm.T_SENTRY:  # the $16C0 BEQ skips the second type compare
+            head = {a: c for a, c in head.items() if a not in (0x16C2, 0x16C4)}
+        for addr, want in sorted({**head, **ladder}.items()):
+            assert spends(0x1289, addr) == want, (hex(otype), hex(addr))
+            checked += 1
+    for cursor, wrap in ((5, False), (0, True)):  # the $16DB BPL both ways
+        for addr, want in sorted(
+            enemies._CURSOR_SPENT[wrap].items()
+        ):  # pylint: disable=W0212
+            mem[mm.CURSOR] = cursor
+            assert spends(0x16D9, addr) == want, (cursor, hex(addr))
+            checked += 1
+    mem[0x0C4E] = mem[0x0C63] = mem[0x0C64] = 0  # the tail's own three gates, open
+    exposure = passcost.exposure_cycles(mem)
+    for addr, want in sorted(enemies._TAIL_SPENT.items()):  # pylint: disable=W0212
+        want += enemies._TAIL_SOUND.get(addr, 0)  # pylint: disable=protected-access
+        want += exposure if addr > 0x12BB else 0
+        assert spends(0x12A2, addr) == want, hex(addr)
+        checked += 1
+    for addr in (0x31CA, 0x31CD, 0x31CF, 0x31D9, 0x31E8):
+        assert spends(0x31CA, addr) == enemies._prnd_spent(addr, 8), hex(addr)
+        checked += 1
+    assert checked > 25
 
 
 @pytest.mark.oracle

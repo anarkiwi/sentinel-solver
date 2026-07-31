@@ -37,6 +37,7 @@ class SimClock:
                 self.state.body_stage,
                 self.state.body_index,
                 self.state.body_partial,
+                self.state.cycle_residual,
             ) = resume
         self.plotting = False
 
