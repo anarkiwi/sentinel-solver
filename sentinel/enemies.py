@@ -174,11 +174,11 @@ def _redraw_cost(state, target):
     """$187B STX $91 + $1881 JSR $1F9F: what redrawing `target` costs right now.
 
     Off screen ($209B carry set) that is the counted $1F9F alone; on screen it is
-    that plus the $1FFC JSR $2625 replot of the strip, at the camera $1FC2 shifts to."""
-    cycles, columns, left = relative.update_object_on_screen_cycles(state, target)
+    that plus $1FA4..$1F9E, the strip clear, its $2625 chunks and the buffer flush."""
+    cycles, columns, left, span = relative.update_object_on_screen_cycles(state, target)
     if columns == 0:
         return cycles
-    frames = projector.strip_replot_frames(state, target, left, columns)
+    frames = projector.strip_replot_frames(state, target, left, columns, span)
     return cycles + int(round(frames * passcost.PAL_FRAME_CYCLES))
 
 
@@ -924,6 +924,7 @@ def advance_frames(state, n_frames, plotting=False):
                 target,
                 left,
                 columns,
+                span,
             ) = enemies_jit.advance_frames(
                 state.mem,
                 remaining,
@@ -936,7 +937,7 @@ def advance_frames(state, n_frames, plotting=False):
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break
-            frames = projector.strip_replot_frames(state, target, left, columns)
+            frames = projector.strip_replot_frames(state, target, left, columns, span)
             state.cycle_residual -= int(round(frames * passcost.PAL_FRAME_CYCLES))
         return
     advance_frames_python(state, n_frames, plotting=plotting)

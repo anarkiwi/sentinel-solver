@@ -6,7 +6,6 @@ asserts the projector reproduces the examination count byte-for-byte and the fra
 within tolerance.
 """
 
-import collections
 import json
 import os
 
@@ -39,16 +38,17 @@ VIEWS = [
 ]
 
 
-def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
-    """Run plot_world ($2625) headless in py65 under play conditions ($9AF6 = $80, so
-    $283D takes the $37F2 table examine); return per-view exact cycles split by SUBTREE
-    -- the $283D examinations, the $21AE object stacks and the terrain fill left over.
-    """
+_MARKS = frozenset((0x283D, 0x2A24, 0x21AE))  # the examine, plot_tile and object stack
+
+
+def _measure_plot_world(cpu, mem, h_angle, v_angle):
+    """Run plot_world ($2625) headless in py65 on a machine :func:`_prepared` has already
+    put in the $357D render context; return per-view exact cycles split by SUBTREE --
+    the $283D examinations, the $21AE object stacks and the terrain fill left over."""
     player = mem[0x000B]
     mem[0x006E] = player
     mem[0x09C0 + player] = h_angle  # objects_h_angle
     mem[0x0140 + player] = v_angle  # objects_v_angle
-    oracle.prepare_render_context(cpu, mem, state)
     ret = 0xFFF0
     mem[ret] = 0x60
     sp = cpu.sp
@@ -58,31 +58,29 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     cpu.pc = 0x2625
     c0 = cpu.processorCycles
     n_examine = n_filled = examine_cycles = object_cycles = 0
-    in_exam = in_obj = False
-    exam_sp = obj_sp = steps = 0
-    hits = collections.Counter()
-    while cpu.pc != ret and steps < 20_000_000:
+    exam_sp = obj_sp = exam_c0 = obj_c0 = -1
+    hits = [0] * 0x10000
+    step = cpu.step
+    for _ in range(20_000_000):
         pc = cpu.pc
+        if pc == ret:
+            break
         hits[pc] += 1
-        if pc == 0x283D and not in_exam:  # the examine subtree, either branch of $2840
-            in_exam, exam_sp = True, cpu.sp
-            n_examine += 1
-        if pc == 0x2A24 and mem[0x0180 + cpu.x]:  # plot_tile with a non-hidden byte
-            n_filled += 1
-        if pc == 0x21AE and not in_obj:  # plot_stack_of_objects subtree
-            in_obj, obj_sp = True, cpu.sp
-        c1 = cpu.processorCycles
-        cpu.step()
-        d = cpu.processorCycles - c1
-        if in_exam:
-            examine_cycles += d
-            if cpu.sp > exam_sp:
-                in_exam = False
-        if in_obj:
-            object_cycles += d
-            if cpu.sp > obj_sp:
-                in_obj = False
-        steps += 1
+        if pc in _MARKS:
+            if pc == 0x283D and exam_sp < 0:  # the examine, either branch of $2840
+                exam_sp, exam_c0 = cpu.sp, cpu.processorCycles
+                n_examine += 1
+            elif pc == 0x2A24 and mem[0x0180 + cpu.x]:  # plot_tile, byte not hidden
+                n_filled += 1
+            elif pc == 0x21AE and obj_sp < 0:  # plot_stack_of_objects subtree
+                obj_sp, obj_c0 = cpu.sp, cpu.processorCycles
+        step()
+        if 0 <= exam_sp < cpu.sp:
+            examine_cycles += cpu.processorCycles - exam_c0
+            exam_sp = -1
+        if 0 <= obj_sp < cpu.sp:
+            object_cycles += cpu.processorCycles - obj_c0
+            obj_sp = -1
     total = cpu.processorCycles - c0
     examine_cycles += 6 * n_examine  # the JSR the caller pays, which the model charges
     return {
@@ -105,12 +103,29 @@ def _measure_plot_world(cpu, mem, state, h_angle, v_angle):
     }
 
 
+_PREPARED = {}
+
+
+def _prepared(landscape_number):
+    """A board generated and put in the $357D render context, on a fresh machine.
+
+    $245B, $3700 and $2993 read no view angle -- two prepares of one board at different
+    (h, v) differ only in the angle bytes -- so one prepare serves all of its views."""
+    image = _PREPARED.get(landscape_number)
+    if image is None:
+        cpu, mem, state = oracle.generate_machine(landscape_number)
+        mem[0x006E] = mem[0x000B]
+        oracle.prepare_render_context(cpu, mem, state)
+        image = _PREPARED[landscape_number] = bytes(mem)
+    return oracle.wrap_image(image)[:2]
+
+
 def _build_golden():
     """{ 'ls,h,v': {cycles, examine/object/terrain-fill cycles, counts} } over VIEWS."""
     out = {}
     for ls, h, v in VIEWS:
-        cpu, mem, state = oracle.generate_machine(ls)
-        out[f"{ls},{h},{v}"] = _measure_plot_world(cpu, mem, state, h, v)
+        cpu, mem = _prepared(ls)
+        out[f"{ls},{h},{v}"] = _measure_plot_world(cpu, mem, h, v)
     return out
 
 

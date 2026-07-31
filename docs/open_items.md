@@ -173,10 +173,9 @@ Frame cost is 0.94-1.00x (median 0.975, mean absolute error 2.5%).
 **Resolves.** Emulating `$0078` across a whole `$8475` object transform, which is the one byte
 between the model's arctan and the machine's.
 
-## 6. A strip replot does not price `$1F9F`'s own line
+## 6. The py65 exact backend cannot price another slot's view
 
-**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path, and
-`strip_replot_frames` prices only the `$2625` that `$1FFC` wraps, not the rest of `$1F9F`.
+**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path.
 
 **Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
 `observer != state.player`, and a transfer settle is always priced from the post-transfer slot
@@ -206,23 +205,28 @@ fixed, and 1.5x dear before).
 `$276F` branches fall into it. The model probed the observer row itself, which cost one wrong
 grid point per pass on every view.
 
-**Open — `$1F9F`'s own line is unpriced.** `strip_replot_frames` prices `$1FFC JSR $2625`;
-`update_object_cost` (the py65 backend) prices all of `$1F9F`, and the difference is real
-foreground the enemy clock never charges. Split on the harness, one on-screen redraw:
+**Closed — `$1F9F`'s own line is priced, and it is exact.** `strip_replot_frames` now covers
+the whole of `$1FA4..$1F9E`, every term counted from its own instruction sequence:
 
-| landscape | `$0C69` | `$1F9F` | `$2625` | `$2211` clear | `$9730` flush | `$209B` | rest |
-|---|---|---|---|---|---|---|---|
-| ls9795 | 9 | 343374 | 275641 | 21380 | 43920 | 1776 | 657 |
-| ls0335 | 3 | 274415 | 249580 | 7988 | 14640 | 1742 | 465 |
-| ls0042 | 3 | 425472 | 400527 | 7988 | 14640 | 1852 | 465 |
+| term | price | driven by |
+|---|---|---|
+| `clear_strip $2211` | `2232 * span + 1292` under 32 columns (24 rows x 8 bytes a column at 11 each, `$2247`) | `$211B`, the **uncapped** span |
+| `$29C7` | 79, a straight line | once per chunk |
+| `$1FFC JSR $2625` | `render_cost` at the `$1FC2` camera through the `$29C7` window | `$0C69`, capped at 20 |
+| `$9730` | `4340 + 135 * splits + wrap`, 4880..5016 a call | `$211B` calls, `$0095` for the price |
+| `$1FA4..$1FBF`, `$1FC2..$201C`, `$202C..$1F9E` | 33 / 120 a chunk / 106 + 32 a column + 36 | counted branch by branch |
 
-That is 1.2-3.3 frames a redraw, one-signed cheap, and it is why `driver.instrument --follow`
-went from 64 CORE events to 67 on ls9795 when the examine was corrected: the clock lost a
-stall it had been getting from the over-charged examine. `passcost.REDRAW_PLOT_ENTRY`'s own
-comment already says `$1FA4` on is unpriced.
-
-**Resolves.** Pricing `clear_strip $2211` and the `$207E JSR $9730` buffer flush from their own
-loops, both driven by `$0C69`; then running the py65 backend from an arbitrary observer slot.
+`$2105` caps `$0C69` at 20 but leaves the whole span in `$0C6A`/`$211B`, so an object wider
+than 20 columns replots in two chunks (`$201E`/`$2021` re-enter `$1FC2`) while the clear and
+the flush run **once** over the whole span — which is why the clear was `$211B` and not
+`$0C69`-driven, and `object_screen_span` now returns both. `$9730` copies 24 of the 25 `$3A00`
+screen banks, skipping bank `$0095 - 1`; a bank whose `$3A40` entry is nonzero straddles two
+buffer pages and buys a second `$9888`, so its price follows from `$0095` alone. Checked
+against the real `$1F9F` on 84 (board, facing, slot, `$0095`) combinations spanning one and
+two chunks and spans 1..25: **0 mismatches**, cycle for cycle
+(`test_the_strip_replot_line_is_the_roms_own_1fa4`). `strip_replot_frames` as a whole is now
+0.98-1.00x the ROM's own `$1F9F`, and `driver.instrument --frames 3000 --follow` reports
+ls9795 **67 -> 64**, ls0335 **57 -> 57**, ls0042 **0 -> 0**.
 
 **Not a threat to the render golden.** `golden_render_cost.json` comes from `_measure_plot_world`,
 which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B`/`$3700` outside the
@@ -252,27 +256,38 @@ raise, do not retry — plus deleting the two dead constants.
 ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
 enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
 sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
-`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and what
-is left is `consider_enemy_state`'s own line between the robot scan and `$1AB0`.
+`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and the
+classification below puts more than a quarter of what is left inside `$1AB0`
+`find_drainable_boulder_or_tree`, the tile scan `consider_enemy_state` ends on.
 
-**Measured — the counts, and what each event is.** ls9795 **142 -> 64 -> 67**, ls0335
-**57 -> 57**, ls0042 **0 -> 0** over 3000 frames, on the mid-replot resume; the 64 -> 67 is
-pricing the play machine's own `$37F2` examine, which took a strip replot's over-charge away
-and left `$1F9F`'s still-unpriced line ([6](#6-a-strip-replot-does-not-price-1f9fs-own-line))
-as the stall the facings want back
-([architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
-Classifying every event by the `$95E9` chain the halt exposes:
+**Measured — the counts, and what each event is.** ls9795 **142 -> 64 -> 67 -> 64**, ls0335
+**57 -> 57**, ls0042 **0 -> 0** over 3000 frames; the 64 -> 67 was pricing the play machine's
+own `$37F2` examine, which took a strip replot's over-charge away, and the 67 -> 64 is
+`$1F9F`'s own line replacing it with the real thing
+([6](#6-the-py65-exact-backend-cannot-price-another-slots-view),
+[architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
+Classifying every surviving event by the `$95E9` chain the halt exposes:
 
-| where the machine was | before | after |
-|---|---|---|
-| inside the `$1FFC JSR $2625` replot | 80 | 4 |
-| `$17B2..$17E8`, the robot scan and its `$1AB0` tail | | 33 |
-| `$16D6` prnd, `$12A2` pass tail, `$16E6` body head | | 20 |
-| `$1F9F` with no replot, and three unclassified | | 7 |
+| where the machine was, at each of the 64 | events |
+|---|---|
+| `$1AB0 find_drainable_boulder_or_tree`, its trig included | **18** |
+| `$1887 can_see_object`, its trig included | 14 |
+| `$31CA update_prnd` under `$16D6` | 10 |
+| `$17B2 find_drainable_robot_loop` | 5 |
+| `$16E6` body head | 5 |
+| inside the `$1FFC JSR $2625` replot | 4 |
+| inside the `$207E JSR $9730` buffer flush | 4 |
+| `$12A2` pass tail, `$3470`/`$3527`, one `$2A31` | 4 |
 
-Before, a replot's 21 frames produced 21 consecutive events; now it produces the one that
-finds it plus two at its exit, from the residual below. ls0335 is unchanged because no
-resync in 3000 frames lands inside a replot at all. The 33 are what this item names.
+At 142 the replot alone was 80 of them: a replot's 21 frames produced 21 consecutive events,
+where it now produces the one that finds it plus a couple at its exit. ls0335 is unchanged
+because no resync in 3000 frames lands inside a replot at all. **`$1AB0` is now the largest
+single group** and is what this item names: 18 of 64, ahead of `$1887`'s 14.
+
+**Not a flag the model guessed.** At all 64 halts the live machine has `$0C6D`, `$0C4D`,
+`$0C4E`, `$0C5F`, `$0008` and `$0095` **all zero** — the branch configuration `passcost`'s
+`$1FA4..$1F9E` prices and the `$9730` row window it assumes, confirmed against play rather
+than against the harness.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack

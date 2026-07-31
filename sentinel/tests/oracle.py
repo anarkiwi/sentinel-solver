@@ -85,6 +85,14 @@ def _wrap(mem):
     return cpu, mem, state
 
 
+def wrap_image(image):
+    """A play machine over ``image`` exactly as given, with no ROM overlay.
+
+    For resuming a snapshot of an already-set-up machine, where an overlay would undo
+    the setup: :func:`machine_from_image` rewrites every LOADED region."""
+    return _wrap(bytearray(image))
+
+
 def _rom_image():
     if not available():
         raise FileNotFoundError(f"{IMG} missing: place the game memory image there")
@@ -192,12 +200,17 @@ def render_frame_cost(cpu, mem, state, h_angle, v_angle, maxins=20_000_000):
 UPDATE_OBJECT_ON_SCREEN = 0x1F9F
 
 
-def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
+REPLOT_LINE = 0x1FA4  # $1FA2 BCS not taken: the strip replot proper, past $209B
+
+
+def update_object_cost(
+    cpu, mem, state, target, maxins=20_000_000, trace=None, from_pc=None
+):
     """Run the real $1F9F once headless on ``target`` and return its frame cost.
 
-    Same render context as :func:`render_frame_cost` -- $1F9F's own $1FC2 re-points
-    the camera at the object's strip and $1FFC replots it, so the view is the ROM's,
-    not the caller's. ``trace``, when given, is called with every PC executed."""
+    Same render context as :func:`render_frame_cost`; $1FC2 re-points the camera at
+    the object's strip, so the view is the ROM's. ``from_pc`` starts counting there
+    (``REPLOT_LINE`` drops $209B); ``trace`` is called with every PC executed."""
     player = mem[0x000B]
     mem[0x006E], mem[0x0091] = player, target
     prepare_render_context(cpu, mem, state)
@@ -213,6 +226,8 @@ def update_object_cost(cpu, mem, state, target, maxins=20_000_000, trace=None):
     while cpu.pc != ret and steps < maxins:
         if trace is not None:
             trace(cpu.pc)
+        if cpu.pc == from_pc:
+            c0, from_pc = cpu.processorCycles, None
         cpu.step()
         steps += 1
     return (cpu.processorCycles - c0) / FRAME_CYCLES

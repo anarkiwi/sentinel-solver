@@ -967,23 +967,120 @@ def strip_window(columns):
     return left, (left >> 1) ^ 0x80, 0x80 if columns & 1 else 0x00
 
 
-def strip_replot_frames(state, target, left, columns):
-    """$1FFC JSR $2625 out of update_object_on_screen $1F9F, in PAL frames.
+MAX_CHUNK = 0x14  # $2105: $0C69 never exceeds 20, so a wider span replots in chunks
 
-    $1FC2 re-points the camera at the strip first ($09C0 += $0C62/2) and $1FE5 narrows
-    the buffer to the strip, so both the view and the window priced are the ROM's, not
-    the player's. ``RENDER_COST_BACKEND=py65`` runs the real $1F9F and is exact."""
+
+def replot_chunks(left, span):
+    """$1FC2..$2029: the (left, columns) strips $2625 replots to cover ``span``.
+
+    $2105 caps $0C69 at 20 and $201E/$2021 re-enter $1FC2 with what is left, so a
+    span over 20 columns is two passes, each at its own $1FC2 camera shift."""
+    out = []
+    while span > 0:
+        take = min(span, MAX_CHUNK)
+        out.append((left, take))
+        left += take
+        span -= take
+    return tuple(out)
+
+
+def clear_strip_cycles(span):
+    """clear_strip $2211 over ``span`` columns of 24 rows, from its own loops.
+
+    $2247 stores 8 bytes a column and $2276 re-enters for the columns past 32."""
+    if span < 32:
+        entry, row = passcost.CLEAR_ENTRY, passcost.CLEAR_ROW
+    elif span == 32:
+        entry, row = passcost.CLEAR_ENTRY_EXACT, passcost.CLEAR_ROW
+    else:
+        entry = passcost.CLEAR_ENTRY_WIDE
+        row = passcost.CLEAR_ROW + passcost.CLEAR_ROW_SPLIT
+    body = passcost.CLEAR_COLUMN * span + row
+    return entry + passcost.CLEAR_ROWS * body + passcost.CLEAR_TAIL
+
+
+def flush_cycles(scroll):
+    """One $9730 buffer flush, from the 24 $3A00 rows it copies at ``scroll`` = $0095.
+
+    $9792 rolls X over the 25 screen banks, so the 24-row window skips bank
+    ``scroll - 1``; a bank with a nonzero $3A40 entry buys a second $9888."""
+    splits = sum(
+        1
+        for r in passcost.FLUSH_SPLIT_ROWS
+        if (r - scroll) % passcost.FLUSH_BANKS < passcost.FLUSH_ROWS
+    )
+    wrap = passcost.FLUSH_WRAP if scroll else 0
+    return passcost.FLUSH + passcost.FLUSH_SPLIT * splits + wrap
+
+
+CHUNK_CYCLES = (
+    passcost.REDRAW_CHUNK_HEAD
+    + passcost.REDRAW_CHUNK_TAIL
+    + passcost.BUF_WINDOW_CALL  # $1FE5 JSR $29C7
+)
+
+
+def strip_flush_cycles(span, scroll):
+    """$202C..$1F9E: the $207E $9730 flush loop over ``span`` columns, and the exit."""
+    tail = passcost.REDRAW_TAIL + passcost.REDRAW_FLUSH_ENTRY + passcost.REDRAW_EXIT
+    return tail + span * (passcost.REDRAW_FLUSH_LOOP + flush_cycles(scroll))
+
+
+def strip_line_cycles(span, chunks, scroll):
+    """$1FA4..$1F9E: everything the strip replot costs but the $2625 chunks themselves.
+
+    The $2211 clear and the $207E $9730 flush loop are both driven by the uncapped
+    $211B span, the $29C7 window by each chunk."""
+    cyc = passcost.REDRAW_CLEAR_CALL + clear_strip_cycles(span)
+    cyc += chunks * CHUNK_CYCLES
+    cyc += (chunks - 1) * (passcost.REDRAW_CHUNK_MORE + passcost.REDRAW_CHUNK_RESUME)
+    return cyc + strip_flush_cycles(span, scroll)
+
+
+SCREEN_SCROLL = 0x95  # $2043: the first screen bank $9730 flushes, $0097 for its loop
+CAMERA_SAVED = 0x211A  # $1FD5 keeps the camera's own bearing over the $1FC2 strip shift
+STRIP_LEFT = 0x0C62  # $20D8: the column the strip being plotted starts at
+STRIP_COLUMNS = 0x0C69  # $210B: that strip's own width, capped at 20
+STRIP_REMAINING = 0x0C6A  # $20FD: the columns left to plot, this strip included
+STRIP_SPAN = 0x211B  # $2100: the whole span, which the chunk loop never rewrites
+
+
+def strip_view(h_angle, v_angle, left):
+    """$1FC2/$1FCC: the camera the ROM plots a strip starting at column ``left`` from.
+
+    $209A holds $0C62 halved, and the halving's carry is the camera's own $001F half
+    column ($1FCF/$1FD0)."""
+    return {
+        "h_angle": (h_angle + (left >> 1)) & 0xFF,
+        "v_angle": v_angle,
+        "ref_lo": 0x80 if left & 1 else 0x00,
+    }
+
+
+def strip_replot_frames(state, target, left, columns, span=None):
+    """$1FA4..$1F9E out of update_object_on_screen $1F9F, in PAL frames.
+
+    Around the $2625 chunks sit the $2211 clear and the $9730 flush, both over the
+    uncapped ``span`` ($0C6A; ``columns`` when not given).
+    ``RENDER_COST_BACKEND=py65`` runs the real $1F9F and is exact."""
     if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() == "py65":
         exact = _exact_strip_cost(state, target)
         if exact is not None:
             return exact
+    span = columns if span is None else span
     player = state.player
-    view = {  # $1FCC/$1FCF: the halving's carry is the camera's own $001F half column
-        "h_angle": (state.obj_h_angle[player] + (left >> 1)) & 0xFF,
-        "v_angle": state.obj_v_angle[player],
-        "ref_lo": 0x80 if left & 1 else 0x00,
-    }
-    return render_cost(state, view, player, window=strip_window(columns))
+    chunks = replot_chunks(left, span)
+    frames = strip_line_cycles(span, len(chunks), state.mem[SCREEN_SCROLL])
+    frames /= FRAME_CYCLES
+    h, v = state.obj_h_angle[player], state.obj_v_angle[player]
+    for chunk_left, chunk_columns in chunks:
+        frames += render_cost(
+            state,
+            strip_view(h, v, chunk_left),
+            player,
+            window=strip_window(chunk_columns),
+        )
+    return frames
 
 
 def _exact_strip_cost(state, target):
@@ -1015,7 +1112,7 @@ CAMERA_REF_LO = 0x1F  # $001F, the camera's fine reference ($1FD0 for a strip)
 
 
 def replot_owed(state, row, column, in_plot):
-    """The cycles an in-flight $2625 still owes, from plot_world's own progress.
+    """The cycles an interrupted $1FFC JSR $2625 still owes $1F9F, from its own progress.
 
     ``row`` is the next row $295D will plot, ``column`` the machine's $0025, and
     ``in_plot`` says the halt is inside $295D rather than that row's own $27D7 scan.
@@ -1050,7 +1147,27 @@ def replot_owed(state, row, column, in_plot):
     if not exact:  # no game image: the object floor, split at the same tile
         total += _object_base_cycles(state, fill[:, rendercost.T_BYTE])
         ahead += _object_base_cycles(state, fill[:done, rendercost.T_BYTE])
-    return owed + total - ahead
+    return owed + total - ahead + _strip_line_owed(state, obs)
+
+
+def _strip_line_owed(state, obs):
+    """$1FFF..$1F9E: what $1F9F owes once the interrupted $2625 returns.
+
+    $2211 ran at $1FBA, before the chunk loop, so nothing of it is owed; the chunks
+    past this one, the $9730 flush over the whole $211B span and the exit all are."""
+    mem = state.mem
+    chunk = mem[STRIP_COLUMNS]
+    left = mem[STRIP_LEFT] + chunk
+    owed = passcost.REDRAW_CHUNK_TAIL
+    for nxt, cols in replot_chunks(left, mem[STRIP_REMAINING] - chunk):
+        owed += passcost.REDRAW_CHUNK_MORE + passcost.REDRAW_CHUNK_RESUME
+        owed += CHUNK_CYCLES + FRAME_CYCLES * render_cost(
+            state,
+            strip_view(mem[CAMERA_SAVED], state.obj_v_angle[obs], nxt),
+            obs,
+            window=strip_window(cols),
+        )
+    return owed + strip_flush_cycles(mem[STRIP_SPAN], mem[SCREEN_SCROLL])
 
 
 def _stage_cycles(entry):

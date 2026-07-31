@@ -579,11 +579,13 @@ def object_screen_span(state, target):
 
     The bearing and horizontal distance come from $8401; $933D re-arctans the
     object's $2112 half-angle over that distance, and the span is the bearing
-    +- that half-angle scaled to columns. Returns (visible, left, columns, cycles)."""
+    +- that half-angle scaled to columns. Returns (visible, left, columns, span,
+    cycles): ``columns`` is $0C69, capped at 20, ``span`` the uncapped $0C6A/$211B
+    the $2211 clear and the $9730 flush are both driven by."""
     mem = state.mem
     cyc = passcost.SPAN_HEAD
     if target == mem[mm.PLAYER_OBJECT]:  # $209F: the player is never drawn
-        return False, 0, 0, cyc + passcost.SPAN_PLAYER
+        return False, 0, 0, 0, cyc + passcost.SPAN_PLAYER
     rel = relative_angles(state, mem[mm.PLAYER_OBJECT], target)
     cyc += passcost.SPAN_ANGLES + rel["cycles"] + passcost.SPAN_SIZE
     zp = rel["_zp"]
@@ -607,37 +609,40 @@ def object_screen_span(state, target):
         cyc += passcost.SPAN_LEFT_POS
         left = ((hi << 1) | ((d & 0xFF) >> 7)) & 0xFF
         if left >= 0x28:  # $20D6: off the right of the screen
-            return False, 0, 0, cyc + passcost.SPAN_OFF_RIGHT
+            return False, 0, 0, 0, cyc + passcost.SPAN_OFF_RIGHT
         cyc += passcost.SPAN_LEFT_ONSCREEN
     cyc += passcost.SPAN_LEFT_OK + passcost.SPAN_RIGHT + passcost.SPAN_RIGHT_HI
     s = c59 + ang_lo
     hi = (c57 + ang_hi + (1 if s > 0xFF else 0)) & 0xFF
     if hi & 0x80:  # $20EB: the right edge is left of the view -> nothing on screen
-        return False, 0, 0, cyc + passcost.SPAN_BEHIND
+        return False, 0, 0, 0, cyc + passcost.SPAN_BEHIND
     cyc += passcost.SPAN_RIGHT_OK
     right = ((hi << 1) | ((s & 0xFF) >> 7)) & 0xFF
     if right >= 0x28:  # $20F2: clip to the last column
         right = 0x27
         cyc += passcost.SPAN_WIDTH_CLIP
     cyc += passcost.SPAN_WIDTH
-    width = (right + 1 - left) & 0xFF
-    if width == 0:  # $2103
-        return False, 0, 0, cyc + passcost.SPAN_ZERO_WIDTH
+    span = (right + 1 - left) & 0xFF
+    if span == 0:  # $2103
+        return False, 0, 0, 0, cyc + passcost.SPAN_ZERO_WIDTH
     cyc += passcost.SPAN_VISIBLE
+    width = span
     if width >= 0x15:  # $2105: the replot never spans more than 20 columns at once
         width = 0x14
         cyc += passcost.SPAN_WIDTH_CAP
-    return True, left, width, cyc
+    return True, left, width, span, cyc
 
 
 def update_object_on_screen_cycles(state, target):
-    """$1F9F: the redraw $187B/$1881 forces on `target`, as (cycles, columns, left).
+    """$1F9F: the redraw $187B/$1881 forces on `target`, as (cycles, columns, left,
+    span).
 
     ``columns`` is 0 when $209B found no screen span, and the whole cost is then
-    counted; otherwise it is the $0C69 strip width and the cycles cover only up to
-    $1FA4 -- the $1FFC JSR $2625 replot beyond it is projector.strip_replot_frames."""
-    visible, left, columns, cyc = object_screen_span(state, target)
+    counted; otherwise it is the $0C69 strip width, ``span`` the uncapped $211B and
+    the cycles cover only up to $1FA4 -- $1FA4..$1F9E is projector.strip_replot_frames.
+    """
+    visible, left, columns, span, cyc = object_screen_span(state, target)
     cyc += passcost.REDRAW_CALL
     if not visible:
-        return cyc + passcost.REDRAW_NONE, 0, 0
-    return cyc + passcost.REDRAW_PLOT_ENTRY, columns, left
+        return cyc + passcost.REDRAW_NONE, 0, 0, 0
+    return cyc + passcost.REDRAW_PLOT_ENTRY, columns, left, span

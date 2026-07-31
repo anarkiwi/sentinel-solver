@@ -28,7 +28,6 @@ _PLOT_SETUP = range(
     0x2625, 0x26D6
 )  # $26C9 has not seeded $0026: the whole pass is owed
 _SP_REGISTER = 4  # VICE binary-monitor register id
-CAMERA_SAVED = 0x211A  # $1FD5 keeps the camera's own h_angle over the $1FC2 strip shift
 CAMERA_FRACTION = 0x1F  # $1FD0 the fine angle, zeroed again at $2003
 
 
@@ -139,7 +138,8 @@ def seed_sim(emu, image):
 def _restore_camera(state):
     """$2003/$2008: undo the $1FC2 strip shift of the camera's own bearing."""
     state.mem[CAMERA_FRACTION] = 0
-    state.obj_h_angle[state.mem[projector.CAMERA_OBJECT]] = state.mem[CAMERA_SAVED]
+    saved = state.mem[projector.CAMERA_SAVED]
+    state.obj_h_angle[state.mem[projector.CAMERA_OBJECT]] = saved
 
 
 def race(bm, max_frames, follow=False, log=print):

@@ -290,6 +290,7 @@ in the jennings oracle:
 | `MEANIE_SCAN_*` | `$198F` walks the search counter, not a slot index | 26 / 34 / +42 |
 | `ROTATE` | `$1805..$1884`, its `$1AF4`/`$1973`/`$3470` callees at 31/32/323 | 454 |
 | `REDRAW_CALL`/`REDRAW_NONE` | `$1881 JSR $1F9F` `update_object_on_screen`, off-screen | 6 / 23 |
+| `REDRAW_*`/`CLEAR_*`/`FLUSH*` | `$1FA4..$1F9E` on screen: the clear, the chunk loop, the flush | 1..4340 |
 | `SPAN_*` | `$209B calculate_object_screen_span`, branch by branch | 1..33 |
 
 A rotation is the single most expensive thing a gated enemy does and none of it is the
@@ -304,23 +305,39 @@ ls9795, cycle-exact against the ROM's own `$209B`/`$1F9F`
 (`test_the_object_screen_span_is_exact_against_the_roms_own_209b`). All 16 live
 rotations in `fixtures/live_pass_cycles.json` (1576..1843) are that branch.
 
-An object that *does* have a span is a different animal: `$1FC2` re-points the camera at
-the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle) and `$1FFC JSR $2625` replots it,
-0.40..0.85 M cycles on ls9795 — 250..500x the branch above, and a `plot_world` cost, not
-an enemy-clock one. `projector.strip_replot_frames` prices it at that shifted camera —
-never the player's own — and through the strip's own buffer window: `$1FE5 JSR $29C7`
-takes `$0C69` and sets `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
+An object that *does* have a span is a different animal: `$1FA4..$1F9E` clears the strip,
+replots it and flushes it to the screen, 0.40..0.85 M cycles on ls9795 — 250..500x the
+branch above, and a `plot_world` cost, not an enemy-clock one.
+`projector.strip_replot_frames` prices the whole of it:
+
+| `$1F9F` calls | what it costs | driven by |
+|---|---|---|
+| `$1FBA JSR $2211` `clear_strip` | `2232 * span + 1292` (24 rows x 8 bytes a column) | `$211B`, the **uncapped** span |
+| `$1FE5 JSR $29C7` | 79, a straight line | once per chunk |
+| `$1FFC JSR $2625` | `render_cost` at the `$1FC2` camera, through the strip window | `$0C69`, capped at 20 |
+| `$207E JSR $9730` | `4340 + 135 * splits + wrap`, 4880..5016 a call | `$211B` calls, `$0095` for the price |
+
+`$209B` caps `$0C69` at 20 (`$2105`) but leaves the whole span in `$0C6A`/`$211B`, so a
+wider object replots in two chunks (`$201E`/`$2021` re-enter `$1FC2` with the remainder,
+each chunk at its own camera shift) while the clear and the flush run once over the whole
+span — `projector.replot_chunks` splits it the same way. `$1FC2` re-points the camera at
+each strip (`$09C0,X += $0C62/2`, `$001F` the fine angle), and `$1FE5 JSR $29C7` narrows
+the buffer to it: `$0007 = columns >> 1`, `$0012 = ($0007 >> 1) ^ $80`, the same pair
 `$2993` sets from its table for a full-screen mode, so `projector.strip_window` feeds it
-straight to `render_cost`. `RENDER_COST_BACKEND=py65` instead runs the real `$1F9F` and is
-exact (19..29 frames on ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized); without
-the window the proxy priced all 40 columns and was 1.3..2.8x dear, which showed up as the
-clock over-stalling. `enemies` charges the result in cycles.
+straight to `render_cost`. `$9730` copies 24 of the 25 `$3A00` screen banks, skipping bank
+`$0095 - 1`, and a bank with a nonzero `$3A40` entry straddles two buffer pages and buys a
+second `$9888` — so the flush price follows from `$0095` alone. Every term is counted
+instruction by instruction and is exact against the ROM's own `$1F9F`
+(`test_the_strip_replot_line_is_the_roms_own_1fa4`); with `RENDER_COST_BACKEND=py65` the
+`$2625` term is the real one too and the whole thing is exact (19..29 frames on
+ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized). `enemies` charges the result in
+cycles.
 
 The numba twin cannot call the renderer, so `enemies_jit._advance` **stops** on an
-on-screen `$1F9F`, hands back the object and its left column with the frames still owed,
-and `enemies.advance_frames` prices the replot and resumes — the same number, charged at
-the same point in the pass, which `test_jit_matches_python_across_an_on_screen_redraw`
-holds to byte and residual identity.
+on-screen `$1F9F`, hands back the object, its left column, its chunk width and its span
+with the frames still owed, and `enemies.advance_frames` prices the replot and resumes —
+the same number, charged at the same point in the pass, which
+`test_jit_matches_python_across_an_on_screen_redraw` holds to byte and residual identity.
 
 `$191F` is why the cadence is a property of the board: it walks all 8 enemy slots on **every**
 pass, so an 8-enemy board's pass costs 108 cycles more than a 1-enemy board's and the idle
@@ -1033,7 +1050,7 @@ the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), ove
 within 0.93-1.01× of the ROM on every golden view (median 0.966, mean absolute error 3.4%), at
 0.13-0.16 ms an uncached call against the exact backend's ~1.3 s. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
-exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-skips-transfer-settles-and-reads-dear-on-a-strip)).
+exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
 
 | term | exactness |
 | --- | --- |
@@ -1112,7 +1129,9 @@ left column's near half at `$2948`/`$3898`; it also leaves `$0029` (the low byte
 column is odd. `$2993` zeroes all three for every full-screen mode, which is why holding them
 at 0 was invisible until a strip was priced. With them modelled the strip's examine count
 matches the ROM's on ls0042 and ls0335 exactly and is one out on ls9795, and `render_cost` is
-0.98-0.99× the ROM's own `$2625`.
+0.98-0.99× the ROM's own `$2625`. The rest of `$1FA4..$1F9E` — the `$2211` clear, the `$29C7`
+window, the chunk loop and the `$9730` flush — is counted, not proxied, and is **exact**, so
+`strip_replot_frames` as a whole is 0.98-1.00× the ROM's own `$1F9F`.
 
 **The harness is audited against a live in-play machine, byte for byte.** Two goldens have
 now been generated under a configuration the game never runs in, so the harness is a suspect,
@@ -1343,7 +1362,10 @@ foreground is in the replot. plot_world's progress is then its own zero page —
 `$26EF` has walked down to, `$0025` the column `$295D` is plotting, `$0007`/`$0012` the
 `$29C7` window and `$006E` the camera slot, whose `$09C0` is the bearing `$1FC2` already
 shifted. `projector.replot_owed` walks the same `$26DE` loop `render_cost` prices, splits it
-at that row and tile, and returns the suffix; `seed_sim` charges it as a cycle debt, resumes
+at that row and tile, and returns the suffix. `$2211` ran at `$1FBA`, before the chunk loop,
+so none of the clear is owed; everything after the interrupted `$2625` is — `$1FFF..$201C`,
+any chunk `$0C6A - $0C69` still leaves (at the `$211A` camera the `$2005` restore puts back)
+and the whole `$9730` flush over `$211B`. `seed_sim` charges the sum as a cycle debt, resumes
 at `$1884`'s `JMP $16D6` (`pass_phase` `PHASE_BODY`, `body_stage` `BODY_DONE`: the body is
 done, the prnd is not) and applies the `$2003`/`$2008` camera restore on the frame that debt
 clears. What it is worth, and what it still owes, is

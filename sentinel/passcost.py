@@ -354,7 +354,50 @@ ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 st
 # $1F9F update_object_on_screen: no screen span, no replot -- see relative.py $209B.
 REDRAW_CALL = 6  # $1F9F JSR $209B
 REDRAW_NONE = 23  # $1FA2 BCS $1F93 taken 3 + the $1F93 flag reset and RTS 20
-REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is the strip replot, unpriced
+REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is projector.strip_replot_frames
+# $1FA4..$1F9E, the replot's own line, with $0C6D/$0C4D clear ($1F95/$1F98 clear both on every exit) and $0C4E/$0C5F clear ($3588 rejects bit 7 of $0C4E, $359B zeroes $0C5F a frame).
+REDRAW_CLEAR_CALL = (
+    33  # $1FA4..$1FBF: $2099, the $0C6D BPL, LDX $211B, JSR $2211, $2119
+)
+REDRAW_CHUNK_HEAD = (
+    76  # $1FC2..$1FFC: the camera shift, JSR $29C7 and JSR $2625, callees apart
+)
+REDRAW_CHUNK_TAIL = (
+    44  # $1FFF..$201C: the $2003/$2008 camera restore and the $2015 width step
+)
+REDRAW_CHUNK_MORE = (
+    16  # $201C BEQ nt 2 + $201E..$2029 re-enter $1FC2 with the remainder
+)
+REDRAW_CHUNK_RESUME = (
+    2  # $1FEB BEQ nt 2 + $1FED STA $10 3, on each chunk after the first
+)
+REDRAW_TAIL = 106  # $202C..$206A: 68 straight + $992C 22 + $9A3C 16 ($204A BVC taken)
+REDRAW_FLUSH_LOOP = 32  # one flush: $207C LDY/JSR/DEC/BNE 17 + the $206F $96 step 15
+REDRAW_FLUSH_ENTRY = (
+    -13
+)  # $206C JMP $207C 3, less the first pass's step and the last BNE
+REDRAW_EXIT = 36  # $2085..$2092 6+4+3+3 + $1F93's flag reset and RTS 20
+BUF_WINDOW_CALL = (
+    79  # $29C7..$29F8, straight line: the strip's $0007/$0012/$0028 window
+)
+# clear_strip $2211, given 24 rows from $0019 ($1FB3/$1FB5) and $211B columns ($1FB7).
+CLEAR_ENTRY = 39  # $2211..$2231 with the column count under 32 ($2218 BCC taken)
+CLEAR_ENTRY_EXACT = 44  # ... exactly 32: $221E BNE not taken, back into $2220's A = $80
+CLEAR_ENTRY_WIDE = 43  # ... over 32: $1E holds count - 32 for a second pass per row
+CLEAR_ROWS = 24  # $1FB5 LDY #$18 -> $0057
+CLEAR_COLUMN = 93  # $2247's 8 bytes at 11 each (INY/LDA/STA) + DEX 2 + BNE 3
+CLEAR_ROW = 52  # $2233..$2283 around them, one pass ($2278 BMI taken)
+CLEAR_ROW_SPLIT = (
+    16  # ... two passes: $2278 BMI nt 2, $227A INC $71 5 + JMP 3, re-entry 6
+)
+CLEAR_TAIL = 5  # RTS 6, less the last row's untaken $2283 BNE
+# $9730, the buffer flush $207E runs once per $211B column, Y = $0008 = 0 from $1FE0.
+FLUSH = 4340  # $9730 prologue 63 + RTS 6 + 24 $975D rows at 178, less the last BNE
+FLUSH_SPLIT = 135  # a row whose $3A40 entry is nonzero: a second $9888 across the split
+FLUSH_WRAP = 1  # $9792 CPX #$19 rolls X over once when the first row is not row 0
+FLUSH_ROWS = 24  # $9759 LDA #$18 -> $0098
+FLUSH_BANKS = 25  # $9792 CPX #$19: $3A00/$3A20/$3A40 hold 25 screen rows
+FLUSH_SPLIT_ROWS = (4, 9, 14, 19, 24)  # the nonzero $3A40 entries
 SPAN_HEAD = 6  # $209B LDY $91 3 + CPY $0B 3
 SPAN_PLAYER = 12  # $209F BEQ $2110 taken 4, page crossed, + $2110 SEC/RTS 8
 SPAN_ANGLES = 8  # ... BEQ not taken 2 + $20A1 JSR $8401 6

@@ -352,8 +352,9 @@ ZP_LO = 0x50  # the zero-page window the geometry touches ($0050..$008B)
 ZP_HI = 0x8C
 ZP_REPLOT = 0x8C  # out of band: the object $1F9F found a screen span for, +1
 ZP_REPLOT_LEFT = 0x8D  # ... and its $0C62 left column and $0C69 width; the
-ZP_REPLOT_COLS = 0x8E  # $1FFC plot itself is priced outside the twin
-ZP_N = 0x8F
+ZP_REPLOT_COLS = 0x8E  # $1FFC plot itself is priced outside the twin,
+ZP_REPLOT_SPAN = 0x8F  # over the uncapped $211B span the $2211/$9730 line covers
+ZP_N = 0x90
 
 
 @njit(cache=True, inline="always")
@@ -776,7 +777,7 @@ def _update_object_on_screen(mem, zp, target):
     """update_object_on_screen $1F9F via calculate_object_screen_span $209B.
 
     Returns (cycles, columns); columns is 0 when the object has no screen span and
-    the cost is then whole, else the $0C69 strip width, the $1FFC replot unpriced."""
+    the cost is then whole, else the $0C69 strip width, $1FA4..$1F9E unpriced."""
     cyc = np.int64(_REDRAW_CALL + _SPAN_HEAD)
     player = _rd(mem, _PLAYER)
     if target == player:  # $209F: the player is never drawn
@@ -817,16 +818,18 @@ def _update_object_on_screen(mem, zp, target):
         right = 0x27
         cyc += np.int64(_SPAN_WIDTH_CLIP)
     cyc += np.int64(_SPAN_WIDTH)
-    width = (right + 1 - left) & 0xFF
-    if width == 0:  # $2103
+    span = (right + 1 - left) & 0xFF
+    if span == 0:  # $2103
         return cyc + np.int64(_SPAN_ZERO_WIDTH + _REDRAW_NONE), 0
     cyc += np.int64(_SPAN_VISIBLE)
+    width = span
     if width >= 0x15:  # $2105: a replot spans at most 20 columns at once
         width = 0x14
         cyc += np.int64(_SPAN_WIDTH_CAP)
-    zp[ZP_REPLOT] = target + 1  # the $1FFC strip replot is the caller's to price
+    zp[ZP_REPLOT] = target + 1  # the $1FA4 strip replot is the caller's to price
     zp[ZP_REPLOT_LEFT] = left
     zp[ZP_REPLOT_COLS] = width
+    zp[ZP_REPLOT_SPAN] = span
     return cyc + np.int64(_REDRAW_PLOT_ENTRY), width
 
 
@@ -1713,8 +1716,8 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
     the sub-pass resume point (cycle residual, phase, $16E6 stage) in and out.
 
-    Returns the resume point plus (frames left, replot target, replot left column):
-    an on-screen $1F9F stops the run so the caller prices its $1FFC strip replot."""
+    Returns the resume point plus (frames left, replot target, left column, columns,
+    span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_N, dtype=np.int64)
     res, ph, st, ix, pa, left_frames = _advance(
@@ -1739,4 +1742,5 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
         target,
         int(zp[ZP_REPLOT_LEFT]),
         int(zp[ZP_REPLOT_COLS]),
+        int(zp[ZP_REPLOT_SPAN]),
     )
