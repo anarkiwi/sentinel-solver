@@ -1469,13 +1469,19 @@ def advance_frame_python(state, plotting=False):
     """
     clk = badline.frame_clock()  # the raster IRQ pins the frame's phase every frame
     clk[4] = state.steal_residue  # the fractional refund the last frame left over
+    if state.clock_overhang > 0:  # the instruction the raster caught finishes first,
+        clk[0] = state.entry_b  # and only then does the 6510 take the interrupt
     irq = (
         badline.charge_run(clk, passcost.IRQ_BODY, IRQ_BODY_WEIGHT) - passcost.IRQ_BODY
     )
     irq += sound_frame(state, clk) + cooldown_frame(state, clk)
     if plotting:
         state.steal_residue = clk[4]
+        state.clock_overhang, state.entry_b = badline.overhang(clk), 0
         return
+    rest = state.clock_overhang - state.entry_b  # the caught term's remaining tail,
+    if rest > 0:  # which the machine runs after the IRQ and before any fresh term
+        badline.carry(clk, rest)
     budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
     budget -= badline.FRAME_STEAL_CEILING  # the 25 windows, refunded by charge()
     if budget > 0 and state.camera_shift:  # $2003/$2008: this frame's $2625 returned
@@ -1507,6 +1513,7 @@ def advance_frame_python(state, plotting=False):
     state.cycle_residual = budget
     state.pass_phase = phase
     state.steal_residue = clk[4]
+    state.clock_overhang, state.entry_b = badline.overhang(clk), int(clk[5])
 
 
 def advance_frames_python(state, n_frames, plotting=False):
@@ -1539,6 +1546,8 @@ def advance_frames(state, n_frames, plotting=False):
                 state.camera_shift,
                 state.camera_clear,
                 state.steal_residue,
+                state.clock_overhang,
+                state.entry_b,
                 remaining,
                 target,
                 left,
@@ -1557,6 +1566,8 @@ def advance_frames(state, n_frames, plotting=False):
                 state.camera_shift,
                 state.camera_clear,
                 state.steal_residue,
+                state.clock_overhang,
+                state.entry_b,
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break

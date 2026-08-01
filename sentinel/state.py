@@ -54,6 +54,8 @@ class State:
         "camera_shift",
         "camera_clear",
         "steal_residue",
+        "clock_overhang",
+        "entry_b",
     )
 
     def __init__(
@@ -68,6 +70,8 @@ class State:
         camera_shift=0,
         camera_clear=0,
         steal_residue=0,
+        clock_overhang=0,
+        entry_b=0,
     ):
         self.mem = mem
         self.cycle_residual = cycle_residual  # cycles owed at the sub-pass resume point
@@ -81,6 +85,8 @@ class State:
             camera_clear  # the residual $1FC2 waits for: the $2211 clear
         )
         self.steal_residue = steal_residue  # badline.WEIGHT_SHIFT refund carried over
+        self.clock_overhang = clock_overhang  # clock past the raster: the caught term
+        self.entry_b = entry_b  # of which the caught INSTRUCTION owes, before the IRQ
         self._bind()
 
     def _bind(self):
@@ -113,6 +119,8 @@ class State:
             self.camera_shift,
             self.camera_clear,
             self.steal_residue,
+            self.clock_overhang,
+            self.entry_b,
         )
 
     # ---- scalars --------------------------------------------------------

@@ -13,9 +13,9 @@ from sentinel.badline import (  # noqa: F401  pylint: disable=unused-import
     BADLINES_PER_FRAME,
     PAL_FRAME_CYCLES,
     SHORT_IRQ,
+    SHORT_IRQ_WRAP,
 )
 
-SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
 SHORT_IRQ_FRAME = SHORT_IRQS_PER_FRAME * SHORT_IRQ + SHORT_IRQ_WRAP  # 477, exact live
 IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted

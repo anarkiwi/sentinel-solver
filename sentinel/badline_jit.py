@@ -28,6 +28,8 @@ _PAL_FRAME_CYCLES = passcost.PAL_FRAME_CYCLES
 _NO_EVENT = badline.NO_EVENT
 _FIELDS = badline.CLOCK_FIELDS
 _WEIGHT_SHIFT = badline.WEIGHT_SHIFT
+_NO_MAP = badline.NO_MAP
+_OWED = writeruns.OWED
 
 
 @njit(cache=True)
@@ -37,6 +39,15 @@ def frame_clock(armed):
     clk[1] = _EVENT_POS[0] if armed else _NO_EVENT
     clk[2] = 0 if armed else _N_EVENTS
     return clk
+
+
+@njit(cache=True, inline="always")
+def owed_at(anchor, offset):
+    """Cycles the instruction ``offset`` into the run at ``anchor`` has still to run."""
+    start = _START[anchor]
+    if start < 0 or offset < 0 or offset >= _LENGTH_AT[anchor]:
+        return np.int64(0)
+    return np.int64(_OWED[start + offset])
 
 
 @njit(cache=True, inline="always")
@@ -54,17 +65,21 @@ def _place(clk, anchor, cycles):
     pos = clk[0]
     index = clk[2]
     refund = 0
+    start = pos
     end = pos + cycles
     while _EVENT_POS[index] < end:
-        if _EVENT_SHORT_IRQ[index]:
-            pos += _SHORT_IRQ
-            end += _SHORT_IRQ
+        split = _EVENT_SHORT_IRQ[index]
+        if split:
+            pos += split
+            end += split
         else:
             spend = _STEAL - run_at(anchor, _EVENT_POS[index] - pos)
             refund += _STEAL - spend
             pos += spend
             end += spend
         index += 1
+    if start < _PAL_FRAME_CYCLES <= end:  # the raster crosses this term
+        clk[5] = owed_at(anchor, _PAL_FRAME_CYCLES - pos)
     clk[0] = end
     clk[1] = _EVENT_POS[index]
     clk[2] = index
@@ -77,9 +92,23 @@ def charge(clk, anchor, cycles):
     """Spend ``cycles`` of the run at ``anchor``, less what its writes refund."""
     end = clk[0] + cycles
     if end <= clk[1]:
+        if clk[0] < _PAL_FRAME_CYCLES <= end:  # the raster crosses this term
+            clk[5] = owed_at(anchor, _PAL_FRAME_CYCLES - clk[0])
         clk[0] = end
         return cycles
     return _place(clk, anchor, cycles)
+
+
+@njit(cache=True, inline="always")
+def carry(clk, cycles):
+    """Advance the clock over ``cycles`` a previous frame's budget already paid."""
+    charge(clk, _NO_MAP, cycles)
+
+
+@njit(cache=True, inline="always")
+def overhang(clk):
+    """How far past the raster this frame's clock ran: the next frame's own carry."""
+    return clk[0] - _PAL_FRAME_CYCLES
 
 
 @njit(cache=True)
@@ -91,8 +120,9 @@ def _place_run(clk, cycles, weight):
     end = clk[0] + cycles
     step = (weight << _WEIGHT_SHIFT) // cycles  # the term's own refund per window
     while base + _EVENT_POS[index] < end:
-        if _EVENT_SHORT_IRQ[index]:
-            end += _SHORT_IRQ
+        split = _EVENT_SHORT_IRQ[index]
+        if split:
+            end += split
         else:
             clk[4] += step
             back = clk[4] >> _WEIGHT_SHIFT
@@ -103,6 +133,8 @@ def _place_run(clk, cycles, weight):
         if index == _N_EVENTS:
             index = 0
             base += _PAL_FRAME_CYCLES
+    if clk[0] < _PAL_FRAME_CYCLES <= end - base:  # no map: the raster's b is unknown
+        clk[5] = 0
     clk[0] = end - base
     clk[1] = _EVENT_POS[index]
     clk[2] = index
@@ -115,6 +147,8 @@ def charge_run(clk, cycles, weight):
     """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
     end = clk[0] + cycles
     if end <= clk[1]:
+        if clk[0] < _PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
+            clk[5] = 0
         clk[0] = end
         return cycles
     return _place_run(clk, cycles, weight)

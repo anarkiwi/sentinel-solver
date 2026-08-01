@@ -82,6 +82,8 @@ class SimClock:
             self.state.body_paid,
         ) = resume
         self.state.cycle_residual = residual or 0
+        # a resume the machine has not reached owes that tail before any fresh term
+        self.state.clock_overhang = max(0, -(residual or 0))
 
     def image(self):
         return self.state.mem

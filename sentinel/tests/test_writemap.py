@@ -84,10 +84,13 @@ def test_the_shipped_write_map_is_what_the_image_generates(image):
 
     with open(os.path.join(os.path.dirname(__file__), "..", "passcost.py")) as fh:
         rows = gen.table(image, fh.read())
-    assert tuple(a for a, _, _ in rows) == writeruns.ANCHOR
-    assert tuple(c for _, c, _ in rows) == writeruns.LENGTH
-    assert tuple(w for _, _, w in rows) == writeruns.RUNS
+    assert tuple(a for a, _, _, _ in rows) == writeruns.ANCHOR
+    assert tuple(c for _, c, _, _ in rows) == writeruns.LENGTH
+    assert tuple(w for _, _, w, _ in rows) == writeruns.RUNS
+    assert tuple(b for _, _, _, b in rows) == writeruns.STARTS
     assert writeruns.RUN[writeruns.START[0x31CA] + 26] == 2  # $31D9 ROL abs
+    at = writeruns.START[0x16D6]  # $16D6 JSR $31CA: six cycles, so five are owed
+    assert list(writeruns.OWED[at : at + 7]) == [0, 5, 4, 3, 2, 1, 0]
 
 
 def _flat_lap(image, neg):

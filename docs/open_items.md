@@ -885,19 +885,13 @@ whole of the next frame's foreground sits on the clock exactly `cycle_residual` 
 frame *total* stays right because the residual telescopes frame to frame; only the placement
 moves.
 
-**Measured off the model alone, no emulator.** The model's own clock at frame end, against
-the 19656-cycle PAL frame it is pinned to, over 400 frames a board:
-
-| | ls0042 | ls0335 |
-|---|---|---|
-| `clk[0]` at frame end | 19241..19852 | 19208..20073 |
-| `(clk[0] - PAL) + residual` | -475..-1 | -473..-1 |
-| ... charging the tail first | **-1..-1** | **-1..-1** |
-
-Advancing the clock by `-cycle_residual` after the IRQ and before any fresh term makes the
-model's frame exactly one PAL frame plus the tail the raster caught, on every one of 800
-frames. The residue is the constant **-1**: `SHORT_IRQ_FRAME` is `4 x 119 + 1`, and that
-`SHORT_IRQ_WRAP` cycle is budgeted in `IRQ_CYCLES` but has no event to place it on.
+**Measured off the model alone, no emulator.** Before the fix, the model's own clock at frame
+end spans **19241..19852** on ls0042 against the 19656-cycle PAL frame it is pinned to, and
+`(clk[0] - PAL) + cycle_residual` ranges **-475..-1** rather than holding; charging the caught
+term's tail first makes it exact. (An earlier round of this measurement addressed the boards
+as `Game.typed(int(digits, 16))`, which BCD-packs twice -- `Game.typed` already packs -- so it
+read landscapes 66 and 821 instead of 42 and 335, and 9795 not at all. Pass the typed decimal.
+The live harnesses were never affected: `enter_landscape` takes the packed value.)
 
 **Live, the same correction collapses the placement.** Adding the frame's seeded residual back
 to each window's measured placement error puts `$16D6`'s median at **+2** (ls0042) and **+4**
@@ -912,16 +906,41 @@ Windows placed exactly go 3 -> **24** (23 of them priced right), and agreement 8
 (ls0042) and 79.5 -> 81.5% (ls0335). What is left is `b`, 2..7 cycles, which still decorrelates
 a 1..2-cycle write run.
 
-**Not kept: it double-places what `charge_run` already placed.** Gate 11/8/0 -> **15/8/0**.
-`_place_run` wraps a term that outlives the frame and places the windows of every frame it
-spans, so carrying that debt again pays them twice. The shape is in the sizes: the carry fires
-399/400 frames on ls0042 (median 176, max 435) and 396/400 on ls0335, but only **54/400** on
-ls9795, there with p90 **9495** and max **12554** — the frames a march ends in, and ls9795 is
-the board that regressed. Landing it wants the previous frame's clock overhang (`clk[0] - PAL`,
-which is negative exactly when a wrapping term already placed those frames) rather than
-`-cycle_residual`, which needs one state field; and then `b`, from an instruction-boundary map
-at the interrupted term's own offset — the same datum, since the tail cannot be refunded at all
-without knowing which term the raster caught.
+**Landed as the clock's own overhang, and `b` with it.** Carrying `-cycle_residual` double-pays
+a term `_place_run` already placed: that function wraps a term outliving the frame and places
+the windows of every frame it spans. The clock's own overhang does not, because `_place_run`
+returns `clk[0]` in the coordinates of the frame the term *ended* in, so `clk[0] - PAL` is
+negative exactly there. `State.clock_overhang` carries it, and `State.entry_b` carries `b` --
+the cycles the instruction the raster crossed still owed, read from an instruction-boundary
+map (`writeruns.OWED`) the generator now emits beside the write map, recorded by `charge` at
+the crossing itself rather than reconstructed at frame end (the overhang can span more than
+one term). The frame lays them where the 6510 does: `b` before the interrupt sequence, the
+term's remaining tail after it, then fresh terms.
+
+`SHORT_IRQ_WRAP` is derived and placed rather than added as a scalar. `$9602 DEX` / `$9603 BPL
++2 -> $9607` takes the branch at 3 and skips `$9605 LDX #$04`; the wrapping entry falls through
+at 2 and pays the LDX's 2, so it costs exactly one more. `$9589`'s table is `35 D5 AD 85 5D`
+with X counting 4..0, so the wrap follows `table[0] = $35` -- raster 53. `EVENT_SHORT_IRQ` now
+carries per-event cycles, 120 there and 119 elsewhere, summing to `SHORT_IRQ_FRAME` exactly.
+
+**The invariants, measured.** `(clk[0] - PAL) + cycle_residual` is **0 on all 400 frames of
+ls0042**, where no term outlives a frame. On ls0335 and ls9795 it holds on the frames with a
+positive overhang (183/400 and 97/400) and fails on the rest -- precisely the frames a wrapping
+`charge_run` outlived, which the carry skips and `_place_run` placed under its own assumption
+that no raster IRQ interrupts them. The carry is bounded on every board (max 539 / 469 / 1696
+cycles, never a frame). Live, `$16D6`'s placement error goes from p25/med/p75 of
+**-483/+5/+146** to **0/+3/+6**, windows the model places exactly go **3 -> 81** (78 of them
+priced right), and the refund carries information for the first time: its nonzero calls are
+35 of 159 real on ls0042 and 35 of 127 on ls0335, 22% and 28% against 11% base rates, with
+agreement 80.3 -> 82.0% and 79.5 -> **84.5%**. What is left of the placement error is `b`
+itself, because a harness that reseeds every frame cannot know which instruction the raster
+crossed -- `entry_b` is 0 at every seed, so increment 2 is exercised only in a free race.
+
+**The gate did not follow: 11/8/0 -> 14/8/0** (ls9795 first at 151, ls0335 at 297, ls0042
+none). ls9795 is the board whose frames are mostly the wrapping ones the carry skips, so the
+model is now exact on the frames it corrects and unchanged on the frames it does not. Closing
+that wants `_place_run` to stop at the frame end and defer the rest to the next frame's carry,
+carrying the term's own weight so the ledger is unmoved -- not attempted here.
 
 **So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
 callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can

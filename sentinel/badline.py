@@ -13,6 +13,7 @@ PAL_FRAME_CYCLES = 19656  # PAL 6569: 312 raster lines x 63 cycles
 BADLINE_STEAL = 43  # 40 VIC c-accesses + the 3-cycle AEC lag: the MAXIMUM, not a mode
 BADLINES_PER_FRAME = 25  # raster 51..243 step 8; $D015 = 0, so there is no sprite term
 SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
+SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 LINE_CYCLES = 63  # PAL 6569: 19656 = 312 x 63
 BADLINE_FIRST_LINE = 51  # raster $33, the first $30..$F7 line with low 3 bits = YSCROLL
 BADLINE_LINE_STEP = 8
@@ -88,19 +89,27 @@ def marker_position(boundary, entry=IRQ_ENTRY):
 
 FRAME_ORIGIN = RASTER_IRQ_LINE * LINE_CYCLES  # the raster the $9589 $D5 entry programs
 SHORT_IRQ_LINES = (53, 93, 133, 173)  # the $9589 table's other four entries
+SHORT_IRQ_WRAP_LINE = 53  # $9589 table[0] = $35: the entry whose $9603 BPL wraps to 4
 NO_EVENT = 1 << 40  # past every event: a clock with no windows left to place
 FRAME_STEAL_CEILING = BADLINES_PER_FRAME * BADLINE_STEAL  # every window a full steal
-CLOCK_FIELDS = 5  # position, next event, event index, refund so far, refund residue
+CLOCK_FIELDS = 6  # position, next event, event index, refund so far, refund residue,
+# then b: what the instruction the raster crossed still owed when it did
 
 
 def frame_events(line_cycle=BADLINE_WINDOW_CYCLE):
-    """``(offset from the raster IRQ, is a split IRQ)`` of everything that displaces
-    the foreground, in frame order: 25 BA windows and the four split interrupts."""
+    """``(offset from the raster IRQ, cycles it takes)`` of everything that displaces
+    the foreground, in frame order: 25 BA windows (0, priced by their own map) and the
+    four split interrupts.  The raster-53 entry is the one whose $9603 BPL wraps the
+    index: it falls through at 2 and pays $9605 LDX #$04, so it costs one more.
+    """
     windows = [
         ((w - FRAME_ORIGIN) % PAL_FRAME_CYCLES, 0) for w in window_positions(line_cycle)
     ]
     short = [
-        ((line * LINE_CYCLES - FRAME_ORIGIN) % PAL_FRAME_CYCLES, 1)
+        (
+            (line * LINE_CYCLES - FRAME_ORIGIN) % PAL_FRAME_CYCLES,
+            SHORT_IRQ + (SHORT_IRQ_WRAP if line == SHORT_IRQ_WRAP_LINE else 0),
+        )
         for line in SHORT_IRQ_LINES
     ]
     return tuple(sorted(windows + short))
@@ -119,6 +128,18 @@ def frame_clock(armed=True):
     return clk
 
 
+def owed_at(anchor, offset):
+    """Cycles the instruction ``offset`` into the run at ``anchor`` has still to run.
+
+    The 6510 finishes it before taking an interrupt, so this is ``b``: 0 where the
+    offset is an instruction boundary, and 0 where no map names the run.
+    """
+    start = writeruns.START[anchor]
+    if start < 0 or not 0 <= offset < writeruns.LENGTH_AT[anchor]:
+        return 0
+    return int(writeruns.OWED[start + offset])
+
+
 def run_at(anchor, offset):
     """Consecutive write cycles ``offset`` cycles into the run counted from ``anchor``."""
     start = writeruns.START[anchor]
@@ -130,20 +151,45 @@ def run_at(anchor, offset):
 def _place(clk, anchor, cycles):
     """The slow half of :func:`charge`: the events this term's cycles reach."""
     pos, index, refund = clk[0], clk[2], 0
-    end = pos + cycles
+    start, end = pos, pos + cycles
     while EVENT_POS[index] < end:
-        if EVENT_SHORT_IRQ[index]:
-            pos += SHORT_IRQ
-            end += SHORT_IRQ
+        split = EVENT_SHORT_IRQ[index]
+        if split:
+            pos += split
+            end += split
         else:
             spend = BADLINE_STEAL - run_at(anchor, EVENT_POS[index] - pos)
             refund += BADLINE_STEAL - spend
             pos += spend
             end += spend
         index += 1
+    if start < PAL_FRAME_CYCLES <= end:  # the raster crosses this term
+        clk[5] = owed_at(anchor, PAL_FRAME_CYCLES - pos)
     clk[0], clk[1], clk[2] = end, EVENT_POS[index], index
     clk[3] += refund
     return cycles - refund
+
+
+NO_MAP = 0  # an anchor no run is counted from: its windows refund nothing
+
+
+def carry(clk, cycles):
+    """Advance the clock over ``cycles`` a previous frame's budget already paid.
+
+    The raster catches the foreground mid-term and the model charges that term whole,
+    so the machine still owes its tail and runs it after the IRQ: real time on this
+    frame's clock, no budget, and no map to refund its windows against.
+    """
+    charge(clk, NO_MAP, cycles)
+
+
+def overhang(clk):
+    """How far past the raster this frame's clock ran: the next frame's own carry.
+
+    Negative where a wrapping ``charge_run`` already placed the frames its term
+    outlived, which owe no carry at all.
+    """
+    return int(clk[0]) - PAL_FRAME_CYCLES
 
 
 def charge(clk, anchor, cycles):
@@ -154,6 +200,8 @@ def charge(clk, anchor, cycles):
     """
     end = clk[0] + cycles
     if end <= clk[1]:
+        if clk[0] < PAL_FRAME_CYCLES <= end:  # the raster crosses this term
+            clk[5] = owed_at(anchor, PAL_FRAME_CYCLES - clk[0])
         clk[0] = end
         return cycles
     return _place(clk, anchor, cycles)
@@ -170,8 +218,9 @@ def _place_run(clk, cycles, weight):
     base, end = 0, clk[0] + cycles
     step = (weight << WEIGHT_SHIFT) // cycles  # the term's own refund per window
     while base + EVENT_POS[index] < end:
-        if EVENT_SHORT_IRQ[index]:
-            end += SHORT_IRQ
+        split = EVENT_SHORT_IRQ[index]
+        if split:
+            end += split
         else:
             clk[4] += step
             back = clk[4] >> WEIGHT_SHIFT
@@ -181,6 +230,8 @@ def _place_run(clk, cycles, weight):
         index += 1
         if index == N_EVENTS:
             index, base = 0, base + PAL_FRAME_CYCLES
+    if clk[0] < PAL_FRAME_CYCLES <= end - base:  # no map: the raster's own b is unknown
+        clk[5] = 0
     clk[0], clk[1], clk[2] = end - base, EVENT_POS[index], index
     clk[3] += refund
     return cycles - refund
@@ -198,6 +249,8 @@ def charge_run(clk, cycles, weight):
     """
     end = clk[0] + cycles
     if end <= clk[1]:
+        if clk[0] < PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
+            clk[5] = 0
         clk[0] = end
         return cycles
     return _place_run(clk, cycles, weight)

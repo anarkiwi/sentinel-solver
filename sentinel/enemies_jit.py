@@ -14,7 +14,13 @@ jitcache.install()  # must precede numba: the cache key carries the cost constan
 from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import badline, memmap as mm, passcost, writeweight  # noqa: E402
-from sentinel.badline_jit import charge, charge_run, frame_clock  # noqa: E402
+from sentinel.badline_jit import (  # noqa: E402
+    carry,
+    charge,
+    charge_run,
+    frame_clock,
+    overhang,
+)
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
 from sentinel.los_jit import (  # noqa: E402
     march,
@@ -2066,6 +2072,8 @@ def _advance(
     shift,
     at,
     residue,
+    hang,
+    entry,
 ):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
@@ -2075,12 +2083,19 @@ def _advance(
     for done in range(n_frames):
         clk = frame_clock(True)  # the raster IRQ pins the frame's phase every frame
         clk[4] = residue  # the fractional refund the last frame left over
+        if hang > 0:  # the instruction the raster caught finishes first, and only
+            clk[0] = entry  # then does the 6510 take the interrupt
         irq = charge_run(clk, np.int64(_IRQ_BODY), np.int64(_IRQ_BODY_WEIGHT))
         irq -= np.int64(_IRQ_BODY)
         irq += _sound_frame(mem, clk) + _cooldown_frame(mem, clk)
         if plotting:
             residue = clk[4]
+            hang = overhang(clk)
+            entry = np.int64(0)
             continue
+        rest = hang - entry  # the caught term's remaining tail, which the machine
+        if rest > 0:  # runs after the IRQ and before any fresh term
+            carry(clk, rest)
         budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) - irq
         if budget > 0 and shift != 0:  # $2003/$2008: this frame's $2625 returned
             _restore_camera(mem)
@@ -2112,6 +2127,8 @@ def _advance(
             _hold_camera(mem, shift)
         residual = budget
         residue = clk[4]
+        entry = clk[5]
+        hang = overhang(clk)
         if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
             return (
                 residual,
@@ -2123,9 +2140,24 @@ def _advance(
                 shift,
                 at,
                 residue,
+                hang,
+                entry,
                 n_frames - done - 1,
             )
-    return residual, phase, stage, index, partial, paid, shift, at, residue, 0
+    return (
+        residual,
+        phase,
+        stage,
+        index,
+        partial,
+        paid,
+        shift,
+        at,
+        residue,
+        hang,
+        entry,
+        0,
+    )
 
 
 def advance_frames(
@@ -2141,6 +2173,8 @@ def advance_frames(
     shift,
     at,
     residue,
+    hang,
+    entry,
 ):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
     the sub-pass resume point and the outstanding $1FC2 camera shift in and out.
@@ -2149,7 +2183,7 @@ def advance_frames(
     span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_N, dtype=np.int64)
-    res, ph, st, ix, pa, pd, sh, cl, rd, left_frames = _advance(
+    res, ph, st, ix, pa, pd, sh, cl, rd, hg, eb, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -2163,6 +2197,8 @@ def advance_frames(
         int(shift),
         int(at),
         int(residue),
+        int(hang),
+        int(entry),
     )
     target = int(zp[ZP_REPLOT]) - 1
     return (
@@ -2175,6 +2211,8 @@ def advance_frames(
         int(sh),
         int(cl),
         int(rd),
+        int(hg),
+        int(eb),
         int(left_frames),
         target,
         int(zp[ZP_REPLOT_LEFT]),
