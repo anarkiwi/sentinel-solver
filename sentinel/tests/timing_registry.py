@@ -236,6 +236,7 @@ _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
 _CORE = "driver.core"
 _TICK_EVIDENCE = "test_the_cooldown_tick_prices_every_live_130c_sample"
+_BODY_ORACLE = "test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count"
 
 
 def _tick(note):
@@ -317,12 +318,12 @@ REGISTRY = {
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,
-        "$9630 + VIC-II DMA steal. The handler IS in the fixture (KERNAL banked out, "
-        "$FFC2/$FFC5 are the game's own RAM) but the DMA steal is hardware, so the "
-        "budget is measured, not counted: the complement of the counted foreground; "
-        "the modelled idle cadence lands inside the live bracket on all 5 boards of "
-        "fixtures/live_pass_rate.json (spanning 1..8 enemies)",
-        "test_irq_cycles_matches_the_live_pass_rate",
+        "BADLINE_FRAME + the four short raster interrupts + IRQ_BODY. The handler is "
+        "COUNTED off the image (KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, "
+        "so py65 walks it); only the VIC-II DMA steal is hardware, and BADLINE_FRAME is "
+        "the frozen-clock $1289 rate on three boards to under a pass in 50000 "
+        "(fixtures/live_pass_cycles.json frozen_idle_rate)",
+        "test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count",
     ),
     "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
     "ROTATE_REDRAW": entry(
@@ -335,11 +336,45 @@ REGISTRY = {
         "test_rotate_redraw_matches_the_live_object_redraw",
     ),
     "_ROTATE_REDRAW": _d(_ENJ, "jit alias of passcost.ROTATE_REDRAW"),
+    "PARTIAL_ARM": entry(
+        _PC,
+        DERIVED,
+        "$17D5..$17DE: the JSR $1973 that re-arms a meanie hunt on a head-only "
+        "player, counted instruction by instruction against the per-round $16E6 oracle",
+        _BODY_ORACLE,
+    ),
+    "TARGET_WAIT": entry(
+        _PC,
+        DERIVED,
+        "$1833/$183D: target_object's exit while the draining cooldown still counts "
+        "down, counted against the per-round $16E6 oracle",
+        _BODY_ORACLE,
+    ),
+    "TUNE_ROTATE": entry(
+        _PC,
+        DERIVED,
+        "$3470 ends in JMP $FFF1, which the image carries as JMP $8D81 in the game's "
+        "own RAM, so the tune is counted on the image; 323 also matches the live "
+        "rotation measurement in fixtures/live_pass_cycles.json",
+        "test_the_tune_cost_is_counted_off_the_image",
+    ),
+    "TUNE_DRAIN": entry(
+        _PC,
+        DERIVED,
+        "$1A1D LDA #$05: the drain's tune walks a longer $ACxx descriptor than the "
+        "rotation's, counted on the image the same way",
+        "test_the_tune_cost_is_counted_off_the_image",
+    ),
+    "_TUNE_DRAIN": _d(_ENJ, "jit alias of passcost.TUNE_DRAIN"),
+    "_PARTIAL_ARM": _d(_ENJ, "jit alias of passcost.PARTIAL_ARM"),
+    "_TARGET_WAIT": _d(_ENJ, "jit alias of passcost.TARGET_WAIT"),
     "COOLDOWN_TICK_NO_CARRY": _tick("$130C to the $1315 BCC and RTS"),
     "COOLDOWN_TICK_GATE": _tick("+ the $1317 read and the $1331 $0C50 decrement"),
     "COOLDOWN_TICK_WALK": _tick("$131C entry + the $132B reload + RTS"),
     "COOLDOWN_TICK_BYTE_STICK": _tick("$131E LDA/CMP/BCC + $1328 DEX/BPL"),
     "COOLDOWN_TICK_BYTE_DEC": _tick("+ the $1325 DEC, less the taken BCC"),
+    "COOLDOWN_TICK_LAST": _tick("$0C20 leaves by the $1329 BPL not taken, 1 short"),
+    "_COOLDOWN_TICK_LAST": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_LAST"),
     "_COOLDOWN_TICK_NO_CARRY": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_NO_CARRY"),
     "_COOLDOWN_TICK_GATE": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_GATE"),
     "_COOLDOWN_TICK_WALK": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_WALK"),

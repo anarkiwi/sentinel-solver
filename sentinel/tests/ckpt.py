@@ -40,6 +40,10 @@ def snapshot(player, tick=0):
         "start_mem": bytes(player.st.mem),
         "mem": bytes(player.st.mem),
         "cycle_residual": player.st.cycle_residual,
+        "pass_phase": player.st.pass_phase,
+        "body_stage": player.st.body_stage,
+        "body_index": player.st.body_index,
+        "body_partial": player.st.body_partial,
         "fields": {
             name: copy.deepcopy(getattr(player, name))
             for name in FIELDS
@@ -57,6 +61,10 @@ def restore(snap, cls=PhasePlayer, **kwargs):
     player = cls(Game(State(bytearray(snap["start_mem"]))), **kwargs)
     player.st.mem[:] = snap["mem"]
     player.st.cycle_residual = snap.get("cycle_residual", 0)
+    player.st.pass_phase = snap.get("pass_phase", 0)
+    player.st.body_stage = snap.get("body_stage", 0)
+    player.st.body_index = snap.get("body_index", 0)
+    player.st.body_partial = snap.get("body_partial", -1)
     for name, value in snap["fields"].items():
         setattr(player, name, copy.deepcopy(value))
     return player

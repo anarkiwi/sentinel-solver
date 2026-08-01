@@ -440,6 +440,9 @@ def generate(landscape):
     for slot in range(mm.NUM_SLOTS):  # reset_game_state: all object slots empty
         mem[mm.OBJECTS_FLAGS + slot] = 0x80
     mem[0x0C7D] = 1  # reset_game_state INC $0C7D
+    for voice in range(3):  # the note tick's resting state, read live at entry
+        mem[mm.SOUND_NOTE_TIMER + voice] = mm.SOUND_VOICE_IDLE
+        mem[mm.SOUND_VOICE_FLAG + voice] = mm.SOUND_VOICE_IDLE
     mem[mm.PRND_STATE] = landscape & 0xFF  # seed $33ED
     mem[mm.PRND_STATE + 1] = (landscape >> 8) & 0xFF
     mem[0x0CFE] = (landscape >> 8) & 0xFF  # $33F3 STY $0CFE

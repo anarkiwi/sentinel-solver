@@ -51,6 +51,11 @@ _HAVE_JIT = True  # tests set this False to drive the pure-Python reference bodi
 # ============================================================================
 # math core (multiply / invert) -- $0D03-$1016
 # ============================================================================
+def _bits(v):
+    """Set bits of a $0D03 multiplier: each costs MUL8_BIT more than a clear one."""
+    return bin(v & 0xFF).count("1")
+
+
 def _mul8(a, b):
     """multiply_byte_by_byte ($0D03 entry, A=0): returns (high, low) of a*b using
     the ROM's shift-add. Result is exactly (a*b) >> ... well it is the standard
@@ -89,6 +94,7 @@ def multiply_double_by_byte(low74, high75, byte76):
     #   high part: $0076 * $0075  -> r2 (high=r2h, low=r2l); $0075 = r2h
     #   $0074 = $0077(r1h) + r2l ; carry -> $0075++
     # Returns A=$0074(result_low), a=$0075(result_high).
+    cyc = passcost.MUL_DBL_BYTE + passcost.MUL8_BIT * (_bits(low74) + _bits(byte76))
     r1h, _r1l = _mul8(low74, high75)
     r2h, r2l = _mul8(byte76, high75)
     res75 = r2h
@@ -96,7 +102,8 @@ def multiply_double_by_byte(low74, high75, byte76):
     res74 = total & 0xFF
     if total > 0xFF:
         res75 = (res75 + 1) & 0xFF
-    return res74, res75
+        cyc += passcost.MUL_DBL_BYTE_CARRY
+    return res74, res75, cyc
 
 
 def multiply_double_A_by_pi(A, frac74):
@@ -111,6 +118,11 @@ def multiply_double_A_by_pi(A, frac74):
         a = ((a << 1) | c) & 0xFF
     m76 = a  # STA $0076
     # LDA #$c9 ; STA $0075 ; JSR multiply_byte_by_byte (entry $0D05).
+    cyc = (
+        passcost.MUL_PI
+        + passcost.MUL_DBL_BYTE
+        + passcost.MUL8_BIT * (_bits(frac) + _bits(m76))
+    )
     r1h, _r1l = _mul8(frac, 0xC9)
     r77 = r1h  # STA $0077 (a_fraction discarded)
     # LDA $0076 ; JSR multiply_byte_by_byte ($0F51 `20 03 0d` entry $0D03):
@@ -122,7 +134,8 @@ def multiply_double_A_by_pi(A, frac74):
     r74 = total & 0xFF
     if total > 0xFF:
         r75 = (r75 + 1) & 0xFF
-    return r74, r75  # (result_low, result_high)
+        cyc += passcost.MUL_DBL_BYTE_CARRY
+    return r74, r75, cyc  # (result_low, result_high, cycles)
 
 
 def sin_cos_lookup(angle, frac74=0):
@@ -131,7 +144,8 @@ def sin_cos_lookup(angle, frac74=0):
     bytes at &0C00..&0C03; bit0 of the low byte is the sign flag (set => negate)."""
     angle &= 0xFF
     c0c = angle  # $0C0C
-    aPI_lo, aPI_hi = multiply_double_A_by_pi(angle, frac74)
+    aPI_lo, aPI_hi, cyc = multiply_double_A_by_pi(angle, frac74)
+    cyc += passcost.SIN_COS
     c53 = aPI_lo  # $0C53
     c54 = aPI_hi  # $0C54
     # X=1; $0060=1; X=0; BIT $0C0C: V(bit6) set => INX, DEC $0060
@@ -140,6 +154,9 @@ def sin_cos_lookup(angle, frac74=0):
     if c0c & 0x40:
         X = 1
         sixty = 0
+        cyc += passcost.SIN_COS_QUAD
+    else:
+        cyc += passcost.SIN_COS_NOQUAD
     # After $0E81 LDA $0075 / STA $0C54, A = c54. The loop-top CMP #$7a tests A,
     # which on pass 1 is c54 and on pass 2 is the recomputed c54.
     A_cmp = c54
@@ -151,6 +168,8 @@ def sin_cos_lookup(angle, frac74=0):
 
     while True:
         if (A_cmp & 0xFF) >= 0x7A:
+            cyc += passcost.SIN_COS_HIGH + passcost.SIN_COS_TWO
+            cyc += passcost.MUL_DBL_BYTE_CALL
             # method two $0ECB (A>=$7a): sin a =~ 1 - 2*(PI/4 - aPI)^2
             # A=#0; SEC; SBC $0C53 -> $0074
             t74 = (0 - cur_c53) & 0xFF
@@ -160,7 +179,8 @@ def sin_cos_lookup(angle, frac74=0):
             t75 = v & 0xFF
             t76 = t75
             # multiply_double_by_byte: ($0074:$0076)*$0075 -> (PI/4-aPI)^2
-            r74, r75 = multiply_double_by_byte(t74, t75, t76)
+            r74, r75, mcyc = multiply_double_by_byte(t74, t75, t76)
+            cyc += mcyc
             # ASL $0074 ; ROL $0075 (double)
             c = (r74 >> 7) & 1
             r74 = (r74 << 1) & 0xFF
@@ -180,12 +200,21 @@ def sin_cos_lookup(angle, frac74=0):
                 # carry set: clamp to &fffe (lowest bit = sign)
                 sc_low[X] = 0xFE
                 sc_high[X] = 0xFF
+                cyc += passcost.SIN_COS_TWO_CLAMP
         else:
             # method one $0EA1 (A<$7a)
             r_high1, _ = _mul8(0xAB, cur_75)
             r_high2, r_low2 = _mul8(r_high1, cur_75)
             t76 = r_high2  # STA $0076
-            r74, r75 = multiply_double_by_byte(r_low2, cur_75, t76)
+            cyc += (
+                passcost.SIN_COS_LOW
+                + passcost.SIN_COS_ONE
+                + passcost.MUL_DBL_BYTE_CALL
+                + 2 * passcost.MUL8
+                + passcost.MUL8_BIT * (_bits(0xAB) + _bits(r_high1))
+            )
+            r74, r75, mcyc = multiply_double_by_byte(r_low2, cur_75, t76)
+            cyc += mcyc
             # LDA $0C53; SEC; SBC $0074 -> $0074
             t74b = (cur_c53 - r74) & 0xFF
             borrow1 = 1 if cur_c53 < r74 else 0
@@ -199,7 +228,9 @@ def sin_cos_lookup(angle, frac74=0):
 
         # calculate_next_value $0EFD
         if X == sixty:
+            cyc += passcost.SIN_COS_DONE
             break
+        cyc += passcost.SIN_COS_NEXT
         X = sixty
         # A=#0; SEC; SBC $0C53 -> $0C53 ; LDA #$c9; SBC $0C54 -> $0C54 ; $0075=$0C54
         new_c53 = (0 - cur_c53) & 0xFF
@@ -218,13 +249,16 @@ def sin_cos_lookup(angle, frac74=0):
     # both end in their fixed slots: pass1 writes sc[X], pass2 writes sc[sixty];
     # {X,sixty}={0,1}, so slot0 and slot1 always get filled -- slot0=sine, slot1=cos.)
     # $0F19: if $0C0C bit7 set (sin negative) -> ORA #1 into sin_lo
+    cyc += passcost.SIN_COS_SIGNS
     if c0c & 0x80:
         sin_lo |= 1
+        cyc += passcost.SIN_COS_SIGN
     # cos sign: A=$0C0C; ASL A; EOR $0C0C; if result bit7 set -> cos negative
     t = ((c0c << 1) & 0xFF) ^ c0c
     if t & 0x80:
         cos_lo |= 1
-    return sin_lo & 0xFF, cos_lo & 0xFF, sin_hi & 0xFF, cos_hi & 0xFF
+        cyc += passcost.SIN_COS_SIGN
+    return sin_lo & 0xFF, cos_lo & 0xFF, sin_hi & 0xFF, cos_hi & 0xFF, cyc
 
 
 def process_sine_or_cosine(low, high):
@@ -247,10 +281,12 @@ def process_sine_or_cosine(low, high):
     A, t74, _ = lsr_a_ror74(A, t74)
     A, t74, _ = lsr_a_ror74(A, t74)
     A, t74, _ = lsr_a_ror74(A, t74)  # divided by 16
+    cyc = passcost.PROC_SC
     if saved_carry:  # PLP; BCC skip_inversion
         A, t74 = invert16(A, t74)
+        cyc += passcost.PROC_SC_INVERT
     X = t74 & 0xFF  # LDX $0074
-    return A & 0xFF, X
+    return A & 0xFF, X, cyc
 
 
 def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
@@ -263,15 +299,18 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
     s6b = y_hi & 0xFF
     s68 = x_lo & 0xFF
     s69 = x_hi & 0xFF
+    cyc = passcost.MUL_DBL_DBL + passcost.MUL8_BIT * (_bits(s68) + 2 * _bits(s69))
     # if $006B negative: negate y (16-bit), flip $0067 bit7
     if s6b & 0x80:
         neg = (-(((s6b << 8) | s6a))) & 0xFFFF
         s6a = neg & 0xFF
         s6b = (neg >> 8) & 0xFF
         s67 ^= 0x80
+        cyc += passcost.MUL_DBL_DBL_NEG_Y
     # if $0068 bit0 set: flip sign
     if s68 & 1:
         s67 ^= 0x80
+        cyc += passcost.MUL_DBL_DBL_ODD
     # $0075 = $006B ; A=$0068 ; multiply_byte_by_byte ($0D03): $0074=$0068 * $0075
     r1h, xlow_yhigh_low = _mul8(s68, s6b)  # x_low * y_high (high, low)
     r77 = r1h  # STA $0077
@@ -280,6 +319,7 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
     r76 = rounded & 0xFF
     if rounded > 0xFF:
         r77 = (r77 + 1) & 0xFF
+        cyc += passcost.MUL_DBL_DBL_CARRY
     # $0075=$006B ; LDA $0069 ; multiply_byte_by_byte: $0069 * $006B -> $0078=high
     r2h, r2l = _mul8(s69, s6b)  # x_high * y_high
     r78 = r2h
@@ -288,6 +328,7 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
     r77 = total & 0xFF
     if total > 0xFF:
         r78 = (r78 + 1) & 0xFF
+        cyc += passcost.MUL_DBL_DBL_CARRY
     # $0075=$006A ; LDA $0069 ; multiply_byte_by_byte: $0069 * $006A -> high,low
     r3h, r3l = _mul8(s69, s6a)  # x_high * y_low
     # $0075=r3h, $0074=r3l ; LDA $0074(=r3l); CLC ADC $0076 -> A ; LDA $0075(=r3h)
@@ -298,12 +339,14 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
     res74 = t2 & 0xFF
     if t2 > 0xFF:
         r78 = (r78 + 1) & 0xFF
+        cyc += passcost.MUL_DBL_DBL_CARRY
     # LDA $0078 ; BIT $0067 ; invert_if_negative
     A = r78 & 0xFF
     frac = res74 & 0xFF
     if s67 & 0x80:
         A, frac = invert16(A, frac)
-    return A & 0xFF, frac & 0xFF
+        cyc += passcost.MUL_DBL_DBL_NEG
+    return A & 0xFF, frac & 0xFF, cyc
 
 
 # ============================================================================
@@ -323,6 +366,7 @@ class Vector:
         "s30",
         "s33",
         "s32",
+        "cycles",
         "px_frac",
         "px_sub",
         "px_whole",
@@ -388,25 +432,31 @@ def prepare_vector_from_angle(h_angle, h_frac, v_angle, v_frac, s74):
     # at $1C54 entry $0074 holds v_frac stored at $1C48 STA $0074). Wait prepare_
     # vector_from_angle is also entered standalone with $0074 set by caller. For the
     # player path $1C48 STA $0074 = v_frac. So a_fraction = v_frac.
-    sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v = sin_cos_lookup(v_angle, v_frac)
+    sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v, cyc = sin_cos_lookup(v_angle, v_frac)
+    cyc += passcost.PREP_VEC
     # process cosine (Y=1) -> $0033=A, $0032=X
-    A_cos, X_cos = process_sine_or_cosine(cos_lo_v, cos_hi_v)
+    A_cos, X_cos, pcyc = process_sine_or_cosine(cos_lo_v, cos_hi_v)
+    cyc += pcyc
     s33 = A_cos
     s32 = X_cos
     # process sine (Y=0) -> $0030=A, $002D=X
-    A_sin, X_sin = process_sine_or_cosine(sin_lo_v, sin_hi_v)
+    A_sin, X_sin, pcyc = process_sine_or_cosine(sin_lo_v, sin_hi_v)
+    cyc += pcyc
     s30 = A_sin
     s2d = X_sin
     # $1C69 LDA $003D -> $0074 ; LDA $003E -> sin_cos_lookup (horizontal)
-    h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi = sin_cos_lookup(h_angle, h_frac)
+    h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi, hcyc = sin_cos_lookup(h_angle, h_frac)
+    cyc += hcyc
     # set_vector for Y=1 (cos h) X=2 -> vector_y ; Y=0 (sin h) X=0 -> vector_x
     # set_vector multiplies cos(v) [$0032/$0033] by sin/cos(h) [$0C00+Y]:
     #   multiply_double_by_double(x_lo=h_sincos_low, x_hi=h_sincos_high,
     #                             y_lo=$006A=$0032=cos(v)_low, y_hi=$006B=$0033=cos(v)_high)
     # Y=1 -> uses cosine(h); store to vector_y ($2E/$31) [X=2]
-    vy_hi, vy_lo = multiply_double_by_double(h_cos_lo, h_cos_hi, s32, s33)
+    vy_hi, vy_lo, mcyc = multiply_double_by_double(h_cos_lo, h_cos_hi, s32, s33)
+    cyc += mcyc
     # Y=0 -> uses sine(h); store to vector_x ($2C/$2F) [X=0]
-    vx_hi, vx_lo = multiply_double_by_double(h_sin_lo, h_sin_hi, s32, s33)
+    vx_hi, vx_lo, mcyc = multiply_double_by_double(h_sin_lo, h_sin_hi, s32, s33)
+    cyc += mcyc
     # set_vector stores: $2F+X = result_high(A) ; $2C+X = $0074(result_low/frac)
     # vector_z ($2D/$30) = sin(v): from process sine, $0030=high, $002D=low
     # (the ROM sets vector_z directly as the v-sine result -- $30/$2D)
@@ -419,6 +469,7 @@ def prepare_vector_from_angle(h_angle, h_frac, v_angle, v_frac, s74):
     vec.s30 = s30
     vec.s33 = s33
     vec.s32 = s32
+    vec.cycles = cyc
     return vec
 
 
@@ -491,114 +542,32 @@ def _calc_tile_z_and_slope(state, x, y):
 
 def _get_min_xy_fraction(vec):
     """get_minimum_x_or_y_fraction_from_tile_centre $1EAF, literal $1EAF..$1ECB.
-    For each of x ($0037=px_sub) and y ($0039=py_sub) compute (sub-$80) and, if the
-    8-bit result has bit7 set, EOR #$FF (so sub<$80 -> 127-sub, sub>=$80 -> sub-128;
-    note the off-by-one vs true abs at the low side -- this is the exact 6502 form).
-    $1EC3 CMP $0074 ; BCS skip_minimum keeps A=ay when ay>=t74, else LDA $0074 (t74).
-    Result is the value left in $0074 (returned)."""
+
+    (sub-$80), EOR #$FF when bit7 set, per axis, then the smaller; the exact 6502
+    form, off by one against a true abs at the low side.  Returns (value, cycles)."""
+    cyc = passcost.MINXY
     ax = (vec.px_sub - 0x80) & 0xFF  # $1EAF LDA $0037 ; SEC ; SBC #$80
     if ax & 0x80:  # $1EB4 BPL skip ; $1EB6 EOR #$ff
         ax ^= 0xFF
+        cyc += passcost.MINXY_ABS
     t74 = ax & 0xFF  # $1EB8 STA $0074
     ay = (vec.py_sub - 0x80) & 0xFF  # $1EBA LDA $0039 ; SEC ; SBC #$80
     if ay & 0x80:  # $1EBF BPL skip ; $1EC1 EOR #$ff
         ay ^= 0xFF
+        cyc += passcost.MINXY_ABS
     if ay >= (t74 & 0xFF):  # $1EC3 CMP $0074 ; $1EC5 BCS skip_min
         t74 = ay  # keep A=ay
-    # else $1EC7 LDA $0074 -> t74 unchanged
-    return t74 & 0xFF
+    else:  # $1EC7 LDA $0074 -> t74 unchanged
+        cyc += passcost.MINXY_Y_WINS
+    return t74 & 0xFF, cyc
 
 
-def _get_tile_z_from_object(vec, state, raw, s60, s79, c0c, c67, c56, cdd, c58):
-    """get_tile_z_from_object $1E3F + get_tile_z_for_line_of_sight $1E0E +
-    get_boulder_or_tree_z_for_line_of_sight $1E48 + is_tree $1E69 +
-    get_height_of_lowest_object $1EA4 -- the OBJECT-tile branch of
-    calculate_tile_address_z_and_slope $1DF9 ($1E00 BCS get_tile_z_from_object).
+def _is_tree(vec, state, Y, minxy, c56, cdd):
+    """is_tree $1E69: the enemy-can-see-a-tree marker ($0CDD).
 
-    `raw` is the tile byte (>=$C0) on first entry, or an objects_flags value (>=$40)
-    on a recursive entry (a stacked object). The zero-page state ($0060,$0079,$000C,
-    $0C67,$0C56,$0CDD) is threaded in/out so check_flat_tile sees the same surface
-    the ROM does.
-
-    Returns (z, s79, c0c, c67, c56, cdd, s60). ALL object exits leave carry CLEAR
-    (get_height_of_lowest_object falls through with carry clear from CMP #$40<; the
-    boulder/platform RTS do CLC) so the caller always takes the check_flat_tile path.
-    """
-    for _ in range(80):  # bound the stack walk
-        Y = raw & 0x3F  # $1E3F AND #$3F ; TAY
-        if not (s60 & 0x80):  # $1E42 BIT $0060 ; $1E44 BPL ghol
-            return _get_height_of_lowest_object(
-                vec, state, Y, s60, s79, c0c, c67, c56, cdd, c58
-            )
-        # $1E46 BMI get_tile_z_for_line_of_sight (always) -- $1E0E:
-        if Y == (c58 & 0xFF):  # $1E0E CPY $0C58
-            c56 = (c56 >> 1) | 0x80  # $1E13 ROR $0C56 (top bit set)
-        otype = state.obj_type[Y] & 0xFF  # $1E16 LDA objects_type,Y
-        if otype == 3 or otype == 2:  # $1E19/$1E1D boulder|tree -> $1E48
-            tag, *rest = _boulder_or_tree_z(
-                vec, state, Y, s60, s79, c0c, c67, c56, cdd, c58
-            )
-            if tag == "rts":  # near-centre boulder: RTS with z
-                return tuple(rest)
-            # tag == "cont": skip_targeting_object continuation
-            s60, s79, c0c, c67, c56, cdd, raw, done, z = rest
-            if done:
-                return (z, s79, c0c, c67, c56, cdd, s60)
-            continue  # recurse down the stack
-        if otype != 6:  # $1E23 BNE ghol (robot/sentry/enemy)
-            return _get_height_of_lowest_object(
-                vec, state, Y, s60, s79, c0c, c67, c56, cdd, c58
-            )
-        # ---- platform (type 6) $1E25 ----
-        frac = _get_min_xy_fraction(vec)  # $1E25 JSR ; A in $0074
-        if frac >= 0x64:  # $1E28 CMP #$64 ; $1E2A BCS skip
-            s60, s79, c0c, c67, c56, cdd, raw, done, z = _skip_targeting_object(
-                state, Y, s60, s79, c0c, c67, c56, cdd
-            )
-            if done:
-                return (z, s79, c0c, c67, c56, cdd, s60)
-            continue
-        c0c = 0x10  # $1E2C LDA #$10 ; STA $000C
-        zf = state.obj_z_frac[Y] & 0xFF
-        t = zf + 0x20  # $1E30 LDA z_frac ; CLC ; ADC #$20
-        s79 = t & 0xFF  # $1E36 STA $0079
-        carry = 1 if t > 0xFF else 0
-        z = (state.obj_z_height[Y] + carry) & 0xFF  # $1E38 LDA z_height ; ADC #$0
-        return (z, s79, c0c, c67, c56, cdd, s60)  # $1E3D CLC ; RTS
-    Y = raw & 0x3F  # safety: corrupt/deep stack
-    return (state.obj_z_height[Y] & 0xFF, s79, c0c, c67, c56, cdd, s60)
-
-
-def _boulder_or_tree_z(vec, state, Y, s60, s79, c0c, c67, c56, cdd, c58):
-    """get_boulder_or_tree_z_for_line_of_sight $1E48 + is_tree $1E69. Returns a tagged
-    tuple: ("rts", z, s79, c0c, c67, c56, cdd, s60) when a near-centre BOULDER RTSes
-    ($1E68); else ("cont", s60, s79, c0c, c67, c56, cdd, raw, done, z) describing the
-    skip_targeting_object / get_height_of_lowest_object continuation."""
-    frac = _get_min_xy_fraction(vec)  # $1E48 JSR ; $0074
-    if frac >= 0x40:  # $1E4B CMP #$40 ; $1E4D BCS skip
-        return ("cont",) + _skip_targeting_object(
-            state, Y, s60, s79, c0c, c67, c56, cdd
-        )
-    otype = state.obj_type[Y] & 0xFF  # $1E4F LDA objects_type,Y
-    if otype == 2:  # $1E52 CMP #$2 ; $1E54 BEQ is_tree
-        s79, c0c, c67, c56, cdd = _is_tree(vec, state, Y, s79, c0c, c67, c56, cdd)
-        return ("cont",) + _skip_targeting_object(
-            state, Y, s60, s79, c0c, c67, c56, cdd
-        )
-    # ---- boulder near-centre $1E56 ----
-    c67 = (c67 >> 1) | 0x80  # $1E56 SEC ; $1E57 ROR $0C67
-    zf = state.obj_z_frac[Y] & 0xFF
-    t = zf - 0x60  # $1E5A LDA ; SEC ; SBC #$60
-    s79 = t & 0xFF  # $1E60 STA $0079
-    borrow = 1 if t < 0 else 0
-    z = (state.obj_z_height[Y] - 0 - borrow) & 0xFF  # $1E62 LDA ; SBC #$0
-    return ("rts", z, s79, c0c, c67, c56, cdd, s60)  # $1E67 CLC ; RTS
-
-
-def _is_tree(vec, state, Y, s79, c0c, c67, c56, cdd):
-    """is_tree $1E69: the enemy-can-see-a-tree marker ($0CDD). Does NOT change the
-    surface height used by the LOS comparison (it works in $0075, not $0079), so for
-    the (tx,ty,los) verdict it only (maybe) sets $0CDD. Ported faithfully."""
+    It works in $0075, not $0079, so it cannot change the surface height the LOS
+    compare uses; the $1E8C compare reuses the $0074 the $1E48 call left.  Returns
+    (cdd, cycles)."""
     zf = state.obj_z_frac[Y] & 0xFF
     t = zf - vec.pz_sub  # $1E69 LDA ; SEC ; SBC $0038
     s75 = t & 0xFF  # $1E6F STA $0075
@@ -610,55 +579,106 @@ def _is_tree(vec, state, Y, s79, c0c, c67, c56, cdd):
     carry = 1 if t2 > 0xFF else 0
     a = (saved_hi + carry) & 0xFF  # $1E7E PLA ; $1E7F ADC #$0
     if a & 0x80:  # $1E81 BMI skip_targeting_object
-        return s79, c0c, c67, c56, cdd
+        return cdd, passcost.OBJ_TREE_BELOW
     c = a & 1  # $1E83 LSR A
     a >>= 1
     s75 = ((s75 >> 1) | (c << 7)) & 0xFF  # $1E84 ROR $0075 (C from LSR A)
     c = a & 1  # $1E86 LSR A
     a >>= 1
     if a != 0:  # $1E87 BNE skip_targeting_object
-        return s79, c0c, c67, c56, cdd
-    a = ((s75 >> 1) | (c << 7)) & 0xFF  # $1E89 LDA $0075 ; $1E8B ROR A (C from $1E86)
-    if a < _get_min_xy_fraction(vec):  # $1E8C CMP $0074 ; $1E8E BCC skip
-        return s79, c0c, c67, c56, cdd
+        return cdd, passcost.OBJ_TREE_HIGH
+    a = ((s75 >> 1) | (c << 7)) & 0xFF  # $1E89 LDA $0075 ; $1E8B ROR A
+    if a < minxy:  # $1E8C CMP $0074 ; $1E8E BCC skip
+        return cdd, passcost.OBJ_TREE_NEAR
     if c56 & 0x80:  # $1E90 BIT $0C56 ; $1E93 BMI skip
-        return s79, c0c, c67, c56, cdd
-    cdd = (cdd >> 1) | 0x80  # $1E95 SEC ; $1E96 ROR $0CDD
-    return s79, c0c, c67, c56, cdd
+        return cdd, passcost.OBJ_TREE_TARGETED
+    return (cdd >> 1) | 0x80, passcost.OBJ_TREE_SEEN  # $1E95 SEC ; $1E96 ROR $0CDD
 
 
-def _skip_targeting_object(state, Y, s60, s79, c0c, c67, c56, cdd):
-    """skip_targeting_object $1E99: tree -> straight to get_height_of_lowest_object;
-    else set $0060=$C0 (bit7 keeps doing get_tile_z_for_line_of_sight, bit6 marks an
-    object checked) then fall into get_height_of_lowest_object. Returns the loop
-    continuation tuple (s60,s79,c0c,c67,c56,cdd,raw,done,z) where on `done` the (z,...)
-    is the final return, else `raw` continues the stack walk."""
-    otype = state.obj_type[Y] & 0xFF  # $1E99 LDA objects_type,Y
-    if otype != 2:  # $1E9C CMP #$2 ; $1E9E BEQ ghol (tree)
-        s60 = 0xC0  # $1EA0 LDA #$c0 ; $1EA2 STA $0060
-    # fall into get_height_of_lowest_object $1EA4
-    flags = state.obj_flags[Y] & 0xFF  # $1EA4 LDA objects_flags,Y
-    if flags >= 0x40:  # $1EA7 CMP #$40 ; $1EA9 BCS gtzfo
-        # recurse: raw = flags (>=$40), continue the for-loop in caller
-        return (s60, s79, c0c, c67, c56, cdd, flags, False, 0)
-    z = state.obj_z_height[Y] & 0xFF  # $1EAB LDA objects_z_height,Y ; RTS
-    return (s60, s79, c0c, c67, c56, cdd, 0, True, z)
+def _get_tile_z_from_object(vec, state, raw, c56, cdd, c58):
+    """get_tile_z_from_object $1E3F and its helpers ($1E0E, $1E48, $1E69, $1E99,
+    $1EA4) as one bounded walk of the object stack -- the OBJECT-tile branch of
+    calculate_tile_address_z_and_slope ($1E00 BCS).
 
-
-def _get_height_of_lowest_object(vec, state, Y, s60, s79, c0c, c67, c56, cdd, c58):
-    """get_height_of_lowest_object $1EA4 entered directly ($1E44/$1E23/$1E9E): walk
-    down the flags chain to the bottom object's z_height. A stacked object (flags>=
-    $40) re-enters get_tile_z_from_object $1E3F (recursion), so a boulder under a
-    synthoid still gets the near-centre treatment."""
-    for _ in range(80):
-        flags = state.obj_flags[Y] & 0xFF  # $1EA4 LDA objects_flags,Y
-        if flags >= 0x40:  # $1EA7 CMP #$40 ; $1EA9 BCS gtzfo
-            return _get_tile_z_from_object(
-                vec, state, flags, s60, s79, c0c, c67, c56, cdd, c58
-            )
-        z = state.obj_z_height[Y] & 0xFF  # $1EAB ; RTS (carry clear)
-        return (z, s79, c0c, c67, c56, cdd, s60)
-    return (state.obj_z_height[Y] & 0xFF, s79, c0c, c67, c56, cdd, s60)
+    Every exit leaves carry CLEAR, so the caller always takes check_flat_tile.
+    Returns (z, s79, c0c, c67, c56, cdd, s60, cycles)."""
+    s60, s79, c0c, c67 = 0x80, 0, 0x80, 0
+    raw &= 0xFF
+    cyc = 0
+    for _ in range(80):  # bound the stack walk
+        Y = raw & 0x3F  # $1E3F AND #$3F ; TAY
+        do_ghol = False
+        if not (s60 & 0x80):  # $1E42 BIT $0060 ; $1E44 BPL ghol
+            cyc += passcost.OBJ_HEAD_GHOL
+            do_ghol = True
+        else:
+            cyc += passcost.OBJ_HEAD_LOS  # $1E46 BMI $1E0E (always)
+            if Y == (c58 & 0xFF):  # $1E0E CPY $0C58
+                c56 = (c56 >> 1) | 0x80  # $1E13 ROR $0C56
+                cyc += passcost.OBJ_TARGET_HIT
+            else:
+                cyc += passcost.OBJ_TARGET_MISS
+            otype = state.obj_type[Y] & 0xFF  # $1E16 LDA objects_type,Y
+            if otype in (2, 3):  # $1E19/$1E1D boulder|tree -> $1E48
+                cyc += (
+                    passcost.OBJ_TYPE_BOULDER if otype == 3 else passcost.OBJ_TYPE_TREE
+                )
+                frac, fcyc = _get_min_xy_fraction(vec)  # $1E48 JSR $1EAF
+                cyc += fcyc
+                if frac >= 0x40:  # $1E4B CMP #$40 ; $1E4D BCS skip
+                    cyc += passcost.OBJ_BT_SKIP
+                elif otype == 2:  # $1E52 CMP #$2 ; $1E54 BEQ is_tree
+                    cyc += passcost.OBJ_BT_TYPE + passcost.OBJ_BT_TREE
+                    cdd, tcyc = _is_tree(vec, state, Y, frac, c56, cdd)
+                    cyc += tcyc
+                else:  # boulder near-centre $1E56: targetable, RTS with z
+                    cyc += passcost.OBJ_BT_TYPE + passcost.OBJ_BT_BOULDER
+                    c67 = (c67 >> 1) | 0x80  # $1E56 SEC ; $1E57 ROR $0C67
+                    t = (state.obj_z_frac[Y] & 0xFF) - 0x60  # $1E5A ; SBC #$60
+                    s79 = t & 0xFF
+                    borrow = 1 if t < 0 else 0
+                    z = (state.obj_z_height[Y] - borrow) & 0xFF  # $1E62 ; SBC #$0
+                    return (z, s79, c0c, c67, c56, cdd, s60, cyc)
+                if state.obj_type[Y] != 2:  # skip_targeting_object $1E99
+                    s60 = 0xC0
+                    cyc += passcost.OBJ_SKIP_OTHER
+                else:
+                    cyc += passcost.OBJ_SKIP_TREE
+                do_ghol = True
+            elif otype != 6:  # $1E23 BNE ghol (robot/sentry/enemy)
+                cyc += passcost.OBJ_TYPE_OTHER
+                do_ghol = True
+            else:  # platform (type 6) $1E25
+                cyc += passcost.OBJ_TYPE_PLATFORM
+                frac, fcyc = _get_min_xy_fraction(vec)  # $1E25 JSR $1EAF
+                cyc += fcyc
+                if frac >= 0x64:  # $1E28 CMP #$64 ; $1E2A BCS skip
+                    cyc += passcost.OBJ_PLAT_SKIP
+                    if state.obj_type[Y] != 2:  # $1E99
+                        s60 = 0xC0
+                        cyc += passcost.OBJ_SKIP_OTHER
+                    else:
+                        cyc += passcost.OBJ_SKIP_TREE
+                    do_ghol = True
+                else:
+                    cyc += passcost.OBJ_PLAT_RTS
+                    c0c = 0x10  # $1E2C LDA #$10 ; STA $000C
+                    t = (state.obj_z_frac[Y] & 0xFF) + 0x20  # $1E30 ; ADC #$20
+                    s79 = t & 0xFF
+                    carry = 1 if t > 0xFF else 0
+                    z = (state.obj_z_height[Y] + carry) & 0xFF  # $1E38 ; ADC #$0
+                    return (z, s79, c0c, c67, c56, cdd, s60, cyc)
+        if do_ghol:  # get_height_of_lowest_object $1EA4
+            flags = state.obj_flags[Y] & 0xFF
+            if flags >= 0x40:  # $1EA7 CMP #$40 ; $1EA9 BCS gtzfo
+                cyc += passcost.OBJ_GHOL_LOOP
+                raw = flags
+                continue
+            cyc += passcost.OBJ_GHOL_RTS
+            z = state.obj_z_height[Y] & 0xFF  # $1EAB ; RTS
+            return (z, s79, c0c, c67, c56, cdd, s60, cyc)
+    Y = raw & 0x3F  # safety: corrupt/deep stack
+    return (state.obj_z_height[Y] & 0xFF, s79, c0c, c67, c56, cdd, s60, cyc)
 
 
 def check_for_line_of_sight_to_tile(
@@ -710,40 +730,54 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
     c6e = do_los_checks & 0xFF
     tx = ty = 0
     cycles = 0
+    # $1CBB costs 4 more per component whose high byte is negative ($1CCC DEC $0074);
+    # the signs are fixed for the whole march, so the sub-step's fixed part is too.
+    neg = sum(1 for h in (vec.vy_hi, vec.vz_hi, vec.vx_hi) if h & 0x80)
+    step_fixed = (
+        passcost.ADD_VECTOR + passcost.ADD_VECTOR_NEG * neg + 2 * passcost.STEP_EDGE
+    )
+    # $1CFB..$1DFE: only reached once both edge tests fall through.
+    tile_fixed = (
+        passcost.STEP_SETUP
+        + passcost.TILE_Z_CALL
+        + passcost.TILE_ADDR
+        + passcost.TILE_Z_READ
+    )
     # bound the march like the ROM's natural board-edge exit; an off-board ray
     # eventually trips the $1F edge test. Cap to avoid an infinite near-horizontal
     # ray (treated as no-LOS, walked off board).
     for _step in range(max_steps):
-        cycles += passcost.MARCH_STEP  # $1CE8: every sub-step pays the fixed body
+        cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
         _add_vector(vec)
         # $1CEB LDA $003A -> $0024 ; CMP #$1f ; BCS leave_with_carry_set
         tx = vec.px_whole
         if tx >= 0x1F:
+            cycles += passcost.STEP_EDGE_EXIT - passcost.STEP_EDGE + passcost.LEAVE_SET
             return tx, ty, False, cycles
         ty = vec.py_whole  # $003C -> $0026
         if ty >= 0x1F:
+            cycles += passcost.STEP_EDGE_EXIT + passcost.LEAVE_SET
             return tx, ty, False, cycles
         # $1CFB LDA #$80 ; STA $0060 ; STA $000C ; $1D01 LDA #0 ; STA $0079 ;
         # $1D05 STA $0C67 (clear boulder-consider flag).
+        cycles += tile_fixed
         s60 = 0x80
         c0c_var = 0x80  # $000C tolerance (object path may lower it)
         s79 = 0
         c67 = 0
         z, slope, carry_set, is_obj, raw = _calc_tile_z_and_slope(state, tx, ty)
-        cycles += (
-            passcost.MARCH_OBJECT
-            if is_obj
-            else passcost.MARCH_SLOPE if carry_set else 0
-        )
+        cycles += passcost.TILE_Z_OBJ if is_obj else passcost.TILE_Z_FLAT
+        cycles += passcost.SLOPE_BRANCH if carry_set else passcost.FLAT_BRANCH
         if is_obj:
             # $1E00 BCS get_tile_z_from_object: faithfully walk the object stack. This
             # sets z (surface high byte), $0079 (surface fraction), $000C (tolerance),
             # $0C67 (boulder targetable) and $0C56/$0CDD trackers; carry is always
             # clear on return -> check_flat_tile path. (calculate_tile_address_z_and_
             # slope $1DF9 -> $1E3F.)
-            z, s79, c0c_var, c67, c56, cdd, s60 = _get_tile_z_from_object(
-                vec, state, raw, s60, s79, c0c_var, c67, c56, cdd, c58
+            z, s79, c0c_var, c67, c56, cdd, s60, ocyc = _get_tile_z_from_object(
+                vec, state, raw, c56, cdd, c58
             )
+            cycles += ocyc
             # $1E13 ROR $0C56 / the $0CDD tree tracker are memory writes in the ROM;
             # persist them so the caller's post-march plumbing reads the right byte.
             if writable:
@@ -754,6 +788,7 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         if not carry_set:
             # check_flat_tile $1D0D
             # X=A(=z) ; A=$0079(=s79) ; SEC SBC $0038(pz_sub) -> $0079
+            cycles += passcost.FLAT_DIFF
             tX = z & 0xFF
             t = s79 - vec.pz_sub
             s79 = t & 0xFF
@@ -764,46 +799,60 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
             d = (tX - vec.pz_whole - borrow) & 0xFF
             if d & 0x80:
                 # BMI: 8-bit result negative -> tile below position, keep marching
+                cycles += passcost.FLAT_BELOW
                 continue
             if d != 0:
                 # BNE leave_with_carry_set: tile above position
+                cycles += passcost.FLAT_ABOVE + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_TOL
             # equal high byte: $1D1C LDA $0079 ; CMP $000C; BCS leave_set
             # ($000C defaults to $80 but the object path lowers it to $10 for a
             # near-centre platform -- a tight vertical tolerance.)
             if (s79 & 0xFF) >= c0c_var:
+                cycles += passcost.FLAT_TOL_HIT + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_BIT60
             # $1D22 BIT $0060 ; $1D24 BVS leave_set -- $0060 bit6 ($40) is set if a
             # SLOPE or an OBJECT has been checked (partial-obscure rejection). Note
             # this is the LOCAL $0060 (set $C0 by the object path / $40 by a slope),
             # NOT $0C6E.
             if s60 & 0x40:
+                cycles += passcost.FLAT_BIT60_HIT + passcost.LEAVE_SET
                 return tx, ty, False, cycles
+            cycles += passcost.FLAT_ANGLE
             # $1D26 LDA $0C6E ; $1D29 ORA $0C67 ; $1D2C BMI skip_angle_check
             # ($0C67 top bit = a boulder on this tile is TARGETABLE -> SKIP the
             # looking-up rejection, so a centre-aimed boulder above the eye is
             # visible/buildable.)
             if (c6e | c67) & 0x80:
-                pass  # skip angle check
+                cycles += passcost.FLAT_ANGLE_SKIP
             else:
+                cycles += passcost.FLAT_LOOKUP
                 # LDA $0030 (vector_z high = vec.s30) ; BPL leave_set (looking up)
                 if not (vec.s30 & 0x80):
+                    cycles += passcost.FLAT_LOOKING_UP + passcost.LEAVE_SET
                     return tx, ty, False, cycles
             # skip_angle_check $1D32: same tile as observer? keep marching, else clear
             ox = state.obj_x[slot]
             oy = state.obj_y[slot]
-            if (tx & 0xFF) == (ox & 0xFF) and (ty & 0xFF) == (oy & 0xFF):
+            cycles += passcost.FLAT_SAME
+            if (tx & 0xFF) != (ox & 0xFF):  # $1D39 BNE leave_with_carry_clear
+                cycles += passcost.FLAT_SAME_X_DIFF
+                return tx, ty, True, cycles
+            cycles += passcost.FLAT_SAME_Y
+            if (ty & 0xFF) == (oy & 0xFF):
+                cycles += passcost.FLAT_SAME_HIT
                 continue  # same tile as observer -> keep going
+            cycles += passcost.FLAT_SAME_Y_DIFF
             return tx, ty, True, cycles  # leave_with_carry_clear (LOS!)
         else:
             # check_sloping_tile $1D46
-            res = _check_sloping_tile(vec, state, tx, ty, z, slope)
+            res, scyc = _check_sloping_tile(vec, state, tx, ty, z, slope)
+            cycles += scyc
             if res == "loop":
                 continue
-            if res == "blocked":
-                return tx, ty, False, cycles
-            # res == "clear" doesn't happen from slope (it only loops or blocks)
-            return tx, ty, False, cycles
+            return tx, ty, False, cycles + passcost.LEAVE_SET  # $1D44 SEC + RTS
     return tx, ty, False, cycles
 
 
@@ -879,8 +928,8 @@ def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
 
 
 def _check_sloping_tile(vec, state, x, y, z00, slope):
-    """check_sloping_tile $1D46. Returns 'loop' (vector above the slope, keep
-    marching) or 'blocked' (vector below the slope -> tile hit, no LOS).
+    """check_sloping_tile $1D46. Returns (verdict, cycles): 'loop' (vector above the
+    slope, keep marching) or 'blocked' (vector below the slope -> tile hit, no LOS).
 
     The four corner heights:
       $0073=$0077 = z at (x,y)        [the calculate_tile_address_z_and_slope value
@@ -889,46 +938,56 @@ def _check_sloping_tile(vec, state, x, y, z00, slope):
       $0075 = z at (x+1, y+1)
       $0074 = z at (x,   y+1)
     """
+    cyc = passcost.SLOPE_HEAD
     p73 = z00 & 0xFF
     _p77 = z00 & 0xFF
     # INC $0024 -> z at (x+1,y) -> $0076
-    z76 = _slope_corner_z(state, x + 1, y)
-    p76 = z76
+    p76, c = _slope_corner_z(state, x + 1, y)
+    cyc += c
     # INC $0026 -> z at (x+1,y+1) -> $0075
-    z75 = _slope_corner_z(state, x + 1, y + 1)
-    p75 = z75
+    p75, c = _slope_corner_z(state, x + 1, y + 1)
+    cyc += c
     # DEC $0024 -> z at (x,y+1) -> $0074
-    z74 = _slope_corner_z(state, x, y + 1)
-    p74 = z74
+    p74, c = _slope_corner_z(state, x, y + 1)
+    cyc += c
     # DEC $0026 ; calculate_tile_address ; read slope nibble
     nib = tile_byte(state, x, y) & 0x0F
     # CMP #$4 BEQ ... CMP #$c BNE tile_is_corner_or_quad
-    if nib == 0x04 or nib == 0x0C:
+    if nib in (0x04, 0x0C):
+        cyc += passcost.SLOPE_NIB_4 if nib == 0x04 else passcost.SLOPE_NIB_12
         # tile_has_one_flat_and_one_sloping_edge: compare $003B against all 4 corners
+        cyc += passcost.SLOPE_EDGE_LDA
         b = vec.pz_whole & 0xFF
         for corner in (p73, p74, p75, p76):
             if b >= corner:  # BCS to_loop
-                return "loop"
-        return "blocked"  # vector below all four -> hit
+                return "loop", cyc + passcost.SLOPE_EDGE_HIT
+            cyc += passcost.SLOPE_EDGE_MISS
+        return "blocked", cyc + passcost.SLOPE_EDGE_BLOCK
     # tile_is_corner_or_quadrilateral $1D8A
-    return _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76)
+    verdict, qcyc = _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76)
+    return verdict, cyc + passcost.SLOPE_NIB_QUAD + qcyc
 
 
 def _slope_corner_z(state, x, y):
-    """The corner-height read inside check_sloping_tile: calculate_tile_address_z_
-    and_slope returns A = tile z (high nibble) for a flat read; for object tiles it
-    resolves the object base z. Here it is used purely as a corner height."""
+    """One $1D4E/$1D55/$1D5C corner read inside check_sloping_tile.
+
+    $1D4A LSR $0060 clears bit7, so an object tile takes $1E44 BPL straight to
+    get_height_of_lowest_object and leaves no trace.  Returns (z, cycles)."""
+    cyc = passcost.TILE_Z_CALL + passcost.TILE_ADDR + passcost.TILE_Z_READ
     z, _slope, _carry_set, is_obj, raw = _calc_tile_z_and_slope(
         state, x & 0xFF, y & 0xFF
     )
-    if is_obj:
-        o = raw & 0x3F
-        for _ in range(64):
-            if state.obj_flags[o] < 0x40:
-                break
-            o = state.obj_flags[o] & 0x3F
-        return state.obj_z_height[o] & 0xFF
-    return z & 0xFF
+    if not is_obj:
+        return z & 0xFF, cyc + passcost.TILE_Z_FLAT
+    cyc += passcost.TILE_Z_OBJ
+    o = raw & 0x3F
+    for _ in range(64):
+        cyc += passcost.OBJ_HEAD_GHOL
+        if state.obj_flags[o] < 0x40:
+            break
+        cyc += passcost.OBJ_GHOL_LOOP
+        o = state.obj_flags[o] & 0x3F
+    return state.obj_z_height[o] & 0xFF, cyc + passcost.OBJ_GHOL_RTS
 
 
 _EDGES = (0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03)  # the $1DF1-$1DF8 ROM table
@@ -938,16 +997,18 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     """$1D8A-$1DEE, literal instruction-faithful port (corner/quadrilateral slope).
     The 6502 control flow here is bit-intricate (the $1D8B BCC lands on $1D9C, an
     EXTRA LSR before use_corner_for_slope), so we transcribe it opcode-by-opcode with
-    explicit A and the carry flag. Returns 'loop' (ray above slope -> keep marching)
-    or 'blocked' (ray below slope -> tile hit)."""
+    explicit A and the carry flag. Returns (verdict, cycles): 'loop' (ray above the
+    slope -> keep marching) or 'blocked' (ray below it -> tile hit)."""
     # zero-page square: $73=p73, $74=p74, $75=p75, $76=p76, $77=p73 (first==last)
     corners = [p73 & 0xFF, p74 & 0xFF, p75 & 0xFF, p76 & 0xFF, p73 & 0xFF]  # $73..$77
 
+    cyc = 0
     A = nib & 0xFF
     # $1D8A LSR A
     C = A & 1
     A >>= 1
     if C == 0:
+        cyc += passcost.SLOPE_Q_C2
         # $1D8B BCC tile_is_corner_type_two -> target is $1D9C (an extra LSR)
         # $1D9C LSR A
         C = A & 1
@@ -959,10 +1020,10 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         A >>= 1
         # $1DA0 LDA $0037 (px_sub)
         A = vec.px_sub & 0xFF
-        if C == 0:
-            pass  # $1DA2 BCC skip_inversion
-        else:
+        if C:
             A ^= 0xFF  # $1DA4 EOR #$ff
+            cyc += passcost.SLOPE_Q_CORNER_EOR
+        cyc += passcost.SLOPE_Q_CORNER
         # $1DA6 CMP $0039 (py_sub): carry = A >= py_sub
         C = 1 if A >= (vec.py_sub & 0xFF) else 0
         # $1DA8 LDA $0078 ; $1DAA ROL A ; $1DAB TAY ; $1DAC LDA edges,Y
@@ -975,6 +1036,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         C = A & 1
         A >>= 1
         if C == 1:
+            cyc += passcost.SLOPE_Q_C1
             # $1D8E BCS tile_is_corner_type_two -> $1D95 (NOTE: no extra LSR here)
             # $1D95 ADC #$1 : A = A + 1 + C (C is the carry from $1D8D LSR, =1)
             A = (A + 1 + C) & 0xFF
@@ -984,16 +1046,17 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
             C = A & 1
             A >>= 1  # $1D9F LSR A
             A = vec.px_sub & 0xFF  # $1DA0 LDA $0037
-            if C == 0:
-                pass  # $1DA2 BCC skip
-            else:
+            if C:
                 A ^= 0xFF  # $1DA4 EOR #$ff
+                cyc += passcost.SLOPE_Q_CORNER_EOR
+            cyc += passcost.SLOPE_Q_CORNER
             C = 1 if A >= (vec.py_sub & 0xFF) else 0  # $1DA6 CMP $0039
             A = ((s78 << 1) | C) & 0xFF  # $1DA8 LDA $0078 ; $1DAA ROL A
             Y = A
             A = _EDGES[Y] if Y < len(_EDGES) else 0
         else:
             # $1D90 AND #$1 ; $1D92 JMP use_edge_for_slope
+            cyc += passcost.SLOPE_Q_EDGE
             A = A & 1
 
     # use_edge_for_slope $1DAF: TAX ; LSR A ; LDY $0037 ; BCS use_x ; LDY $0039
@@ -1001,17 +1064,16 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     C = A & 1
     A >>= 1  # $1DB0 LSR A
     Yreg = vec.px_sub & 0xFF  # $1DB1 LDY $0037
-    if C:
-        pass  # $1DB3 BCS use_x_for_slope
-    else:
+    cyc += passcost.SLOPE_Q_TAIL
+    if not C:
         Yreg = vec.py_sub & 0xFF  # $1DB5 use_y_for_slope
+        cyc += passcost.SLOPE_Q_USE_Y
     C = A & 1
     A >>= 1  # $1DB7 LSR A
     A = Yreg  # $1DB8 TYA
-    if C == 0:
-        pass  # $1DB9 BCC skip_inversion
-    else:
+    if C:
         A ^= 0xFF  # $1DBB EOR #$ff
+        cyc += passcost.SLOPE_Q_INVERT
     s02 = A & 0xFF  # $1DBD STA $0002
 
     # $1DBF LDA $73,X ; STA $0078
@@ -1020,17 +1082,18 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     a = (corners[(X & 3) + 1] - corners[X & 3]) & 0x1FF
     res = a & 0xFF
     neg = bool(res & 0x80)  # PHP: N flag of the subtraction
-    if not neg:
-        pass  # $1DC9 BPL skip_inversion
-    else:
+    if neg:
         res = ((res ^ 0xFF) + 1) & 0xFF  # abs
+        cyc += passcost.SLOPE_Q_ABS
     s75 = res  # $1DD0 STA $0075
     # $1DD2 LDA $0002 ; $1DD4 JSR multiply_byte_by_byte ($0D03): $0074=$0002 * $0075
     prod_h, prod_lo = _mul8(s02, s75)  # A=high, $0074=low
+    cyc += passcost.MUL8_BIT * _bits(s02)
     # $1DD7 PLP ; $1DD8 invert_A_and_a_fraction_if_negative: invert (A:$0074) if the
     # slope subtraction (N flag we saved) was negative.
     if neg:
         prod_h, prod_lo = invert16(prod_h, prod_lo)
+        cyc += passcost.SLOPE_Q_NEG
     # $1DDB CLC ; ADC $0078 -> $0075
     s75b = (prod_h + s78) & 0xFF
     # $1DE0 LDA $0038 ; SEC ; SBC $0074(=prod_lo) ; LDA $003B ; SBC $0075(=s75b) ; BPL
@@ -1038,8 +1101,8 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     borrow = 1 if lo < 0 else 0
     hi8 = (vec.pz_whole - s75b - borrow) & 0xFF
     if hi8 & 0x80:  # BPL false -> below slope -> hit
-        return "blocked"
-    return "loop"
+        return "blocked", cyc + passcost.SLOPE_Q_BLOCK
+    return "loop", cyc
 
 
 # ============================================================================
@@ -1473,6 +1536,6 @@ def aim_target(
         # px_sub/py_sub ($0037/$0039) -- the same inputs the ROM's $1EAF reads when the
         # ray reaches the object tile. This lets the NATIVE model compute a centre-
         # aimed view without any emulation.
-        centre = _get_min_xy_fraction(vec)
+        centre = _get_min_xy_fraction(vec)[0]
         return tx, ty, los, centre
     return tx, ty, los

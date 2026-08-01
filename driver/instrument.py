@@ -23,11 +23,23 @@ FRAME_PC = (
 )  # once-per-frame raster-IRQ top marker (the frame-step anchor)
 
 
+REG_SP = 4  # registers_get id of the stack pointer
+
+
 class SimClock:
     """The standalone sim as a one-frame-per-tick clock over a 64 KB image."""
 
-    def __init__(self, image):
+    def __init__(self, image, resume=None):
         self.state = State.from_mem(image)
+        if resume is not None:  # the machine was mid-pass; occupy the same position
+            (
+                self.state.pass_phase,
+                self.state.body_stage,
+                self.state.body_index,
+                self.state.body_partial,
+                residual,
+            ) = resume
+            self.state.cycle_residual = residual or 0
         self.plotting = False
 
     def image(self):
@@ -62,6 +74,30 @@ class EmuClock:
     def poke(self, addr, val):
         self.bm.mem_set(addr, bytes([val & 0xFF]))
 
+    def sub_pass(self, image):
+        """The model resume point matching where $9630 caught the play loop."""
+        sp = self.bm.registers_get()[REG_SP]
+        page = self.bm.mem_get(0x0100, 0x01FF)
+        return enemies.resume_from_stack(image, sp, page)
+
+
+def _exact_seed(emu, log, tries=40):
+    """Step frames until the marker catches the loop where the model can start exactly.
+
+    A position off the loop's straight lines is resumable but only to its segment's
+    head; one on them carries the cycles already spent as well."""
+    for waited in range(tries):
+        image = emu.full_image()
+        resume = emu.sub_pass(image)
+        if resume[4] is not None:
+            if waited:
+                log(f"[instrument] seeded {waited} frame(s) on, at an exact position")
+            return image, resume
+        emu.step_frame()
+    image = emu.full_image()
+    log(f"[instrument] no exact seed in {tries} frames; seeding mid-segment")
+    return image, emu.sub_pass(image)
+
 
 def _unfreeze(img):
     """The $0CE5-cleared byte that starts the cooldown clock (player has acted)."""
@@ -81,8 +117,8 @@ def race(bm, max_frames, follow=False, log=print):
     frames_run = 0
     with bm.halted():
         emu.sync_to_frame()
-        seed = emu.full_image()
-        sim = SimClock(seed)
+        seed, resume = _exact_seed(emu, log)
+        sim = SimClock(seed, resume)
         unfrozen = _unfreeze(seed)
         emu.poke(mm.PLAYER_NOT_ACTED, unfrozen)
         sim.poke(mm.PLAYER_NOT_ACTED, unfrozen)
@@ -109,7 +145,8 @@ def race(bm, max_frames, follow=False, log=print):
                 core_events.append((f, f - seg_start, core_divs))
                 if not follow:
                     break
-                sim = SimClock(emu.full_image())  # resync from live truth
+                live = emu.full_image()  # resync from live truth, mid-pass included
+                sim = SimClock(live, emu.sub_pass(live))
                 resyncs += 1
                 seg_start = f
                 if resyncs <= 15:

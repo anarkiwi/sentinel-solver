@@ -46,11 +46,27 @@ class State:
         "obj_flags",
         "obj_type",
         "cycle_residual",
+        "pass_phase",
+        "body_stage",
+        "body_index",
+        "body_partial",
     )
 
-    def __init__(self, mem, cycle_residual=0):
+    def __init__(
+        self,
+        mem,
+        cycle_residual=0,
+        pass_phase=0,
+        body_stage=0,
+        body_index=0,
+        body_partial=-1,
+    ):
         self.mem = mem
-        self.cycle_residual = cycle_residual  # play-loop cycles owed to the next frame
+        self.cycle_residual = cycle_residual  # cycles owed at the sub-pass resume point
+        self.pass_phase = pass_phase  # WHICH resume point: enemies.PHASE_*
+        self.body_stage = body_stage  # resume point INSIDE $16E6: enemies.BODY_*
+        self.body_index = body_index  # its scan slot; ~slot == charged, commit pending
+        self.body_partial = body_partial  # $17B2's held partially-visible player
         self._bind()
 
     def _bind(self):
@@ -72,7 +88,14 @@ class State:
     def clone(self):
         """A deep copy for branching search: duplicate ``mem`` and rebind the
         views onto it."""
-        return State(bytearray(self.mem), self.cycle_residual)
+        return State(
+            bytearray(self.mem),
+            self.cycle_residual,
+            self.pass_phase,
+            self.body_stage,
+            self.body_index,
+            self.body_partial,
+        )
 
     # ---- scalars --------------------------------------------------------
     @property
