@@ -179,6 +179,7 @@ def convert(
     src,
     dst,
     fps=0.0,
+    speed=1.0,
     hud_rows=HUD_ROWS,
     min_run=1,
     scale=1,
@@ -188,6 +189,8 @@ def convert(
     log=print,
 ):
     """Convert one recorded AVI to an APNG. Returns a summary dict."""
+    if speed <= 0:
+        raise ValueError(f"speed must be positive, got {speed}")
     frames, palette, src_fps = decode(src, max_frames=max_frames)
     total = len(frames)
     if crop:
@@ -207,7 +210,8 @@ def convert(
 
     stride = max(1, int(round(src_fps / fps))) if fps > 0 else 1
     frames = frames[::stride]
-    step = stride / src_fps
+    # sampled at stride, then played back `speed` times over
+    step = stride / src_fps / speed
 
     keep, delays = [0], [step]
     for n in range(1, len(frames)):
@@ -218,7 +222,8 @@ def convert(
             delays.append(step)
     frames = frames[keep]
     log(
-        f"held {len(frames)} distinct frames at {src_fps / stride:.1f} fps, {sum(delays):.1f}s"
+        f"held {len(frames)} distinct frames at {src_fps / stride:.1f} fps"
+        f"{f' x{speed:g}' if speed != 1 else ''}, {sum(delays):.1f}s"
     )
 
     size = write_apng(dst, frames, palette, delays, loops=loops, scale=scale)
@@ -238,6 +243,9 @@ def main(argv=None):
     parser.add_argument("avi")
     parser.add_argument("-o", "--out", help="default: the AVI's name with .png")
     parser.add_argument("--fps", type=float, default=12.0, help="0 keeps every frame")
+    parser.add_argument(
+        "--speed", type=float, default=1.0, help="playback multiple of real time"
+    )
     parser.add_argument("--scale", type=int, default=1)
     parser.add_argument(
         "--hud-rows", type=int, default=HUD_ROWS, help="status rows a blank keeps"
@@ -255,6 +263,7 @@ def main(argv=None):
         args.avi,
         dst,
         fps=args.fps,
+        speed=args.speed,
         hud_rows=args.hud_rows,
         min_run=args.min_blank_run,
         scale=args.scale,
