@@ -20,6 +20,8 @@ from sentinel.badline_jit import (  # noqa: E402
     charge_run,
     frame_clock,
     overhang,
+    spend,
+    stall,
 )
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
 from sentinel.los_jit import (  # noqa: E402
@@ -967,6 +969,19 @@ def _update_object_on_screen(mem, zp, target):
     return cyc + np.int64(_REDRAW_PLOT_ENTRY), width
 
 
+@njit(cache=True, inline="always")
+def _redraw_cost(mem, zp, clk, target):
+    """$187B STX $91 + $1881 JSR $1F9F: what redrawing ``target`` costs right now.
+
+    An on-screen span is the caller's to price, but its stall runs the clock through
+    every event the frame has left all the same."""
+    cyc, columns = _update_object_on_screen(mem, zp, target)
+    cyc = charge(clk, 0x1F9F, cyc)
+    if columns != 0:
+        stall(clk, np.int64(0))  # the stall's own cycles are priced outside the twin
+    return cyc
+
+
 @njit(cache=True)
 def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     """prepare_vector_from_angle $1C54, the standalone entry the enemy probes use.
@@ -1530,7 +1545,7 @@ def _update_meanie(mem, zp, enemy, budget, index, clk):
         _start_tune(mem, _SND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
         budget -= charge(clk, 0x1728, np.int64(_MEANIE_ROTATE))
-        redraw = charge(clk, 0x1F9F, _update_object_on_screen(mem, zp, meanie)[0])
+        redraw = _redraw_cost(mem, zp, clk, meanie)
         return budget - redraw, _BODY_DONE, 0
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(mem, enemy)
@@ -1547,11 +1562,18 @@ def _reach(budget, spent, offset, clk, anchor):
     """Charge a body stage forward to ``offset``, the ROM's own cycle for a write.
 
     ``(budget, spent, what)``: 2 where an earlier frame already paid past it, _COMMIT
-    where this frame reaches it, _WAIT where the budget stops short of it."""
+    where this frame reaches it, _WAIT where the budget stops short of it.  A _WAIT
+    still spends the budget out on the clock and into ``spent``: the ROM runs the
+    segment on to the raster, it just does not reach the write.  The windows' own
+    refunds stay on the clock, so ``spent`` cannot overrun the write."""
     if offset <= spent:
         return budget, spent, 2
     owed = np.int64(offset - spent)
     if budget < owed:
+        if budget > 0:
+            spend(clk, anchor, budget)
+            spent = np.int64(spent + budget)
+            budget = np.int64(0)
         return budget, spent, _WAIT
     return budget - charge(clk, anchor, owed), np.int64(offset), _COMMIT
 
@@ -1603,7 +1625,7 @@ def _target_object(mem, zp, enemy, target, budget, spent, clk):
             return budget - cost, _BODY_DONE, np.int64(0)
         cost += charge(clk, 0x184D, np.int64(_TARGET_DRAIN_OBJ))
         cost += charge(clk, 0x1876, np.int64(_BODY_TAIL))
-        cost += charge(clk, 0x1F9F, _update_object_on_screen(mem, zp, target)[0])
+        cost += _redraw_cost(mem, zp, clk, target)
         return budget - cost, _BODY_DONE, np.int64(0)
     # $184D: only the head -> hunt a tree to convert
     cost += charge(clk, 0x1841, np.int64(_TARGET_MEANIE))
@@ -1652,7 +1674,7 @@ def _rotate_enemy(mem, zp, enemy, budget, spent, clk):
     if what == _WAIT:
         return budget, _BODY_ROTATE, spent
     _start_tune(mem, _SND_ROTATE)  # $181D JSR $3470
-    redraw = charge(clk, 0x1F9F, _update_object_on_screen(mem, zp, enemy)[0])
+    redraw = _redraw_cost(mem, zp, clk, enemy)
     return budget - redraw, _BODY_DONE, np.int64(0)
 
 
@@ -1804,9 +1826,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial, spent, 
             if discharged:  # $177A: the tail redraws, then the update is over
                 budget -= charge(clk, 0x1778, np.int64(_DISCHARGED))
                 budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
-                budget -= charge(
-                    clk, 0x1F9F, _update_object_on_screen(mem, zp, slot)[0]
-                )
+                budget -= _redraw_cost(mem, zp, clk, slot)
                 return budget, _BODY_DONE, 0, -1, np.int64(0)
             budget -= charge(clk, 0x177D, np.int64(_NO_DISCHARGE))
             if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
@@ -1834,7 +1854,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial, spent, 
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
                 budget -= charge(clk, 0x17ED, np.int64(_DRAIN_TAIL))
                 budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
-                budget -= charge(clk, 0x1F9F, _update_object_on_screen(mem, zp, tb)[0])
+                budget -= _redraw_cost(mem, zp, clk, tb)
                 return budget, _BODY_DONE, 0, -1, np.int64(0)
             budget -= charge(clk, 0x1787, np.int64(_HUNT_MISS))
             _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
@@ -1904,7 +1924,7 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial, spent, 
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
                 budget -= charge(clk, 0x17ED, np.int64(_DRAIN_TAIL))
                 budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
-                budget -= charge(clk, 0x1F9F, _update_object_on_screen(mem, zp, tb)[0])
+                budget -= _redraw_cost(mem, zp, clk, tb)
                 return budget, _BODY_DONE, 0, -1, np.int64(0)
             budget -= charge(clk, 0x17E8, np.int64(_TREE_NONE))
             stage = _BODY_ROTATE

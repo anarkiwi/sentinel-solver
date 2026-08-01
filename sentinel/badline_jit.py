@@ -101,7 +101,52 @@ def charge(clk, anchor, cycles):
 @njit(cache=True, inline="always")
 def overhang(clk):
     """How far past the raster this frame's clock ran: the next frame's own carry."""
-    return clk[0] - _PAL_FRAME_CYCLES
+    return clk[0] - _PAL_FRAME_CYCLES + clk[7]
+
+
+@njit(cache=True)
+def spend(clk, anchor, budget):
+    """Run the clock over every cycle ``budget`` buys of the run at ``anchor``."""
+    pos = clk[0]
+    index = clk[2]
+    refund = 0
+    end = pos + budget
+    while _EVENT_POS[index] < end:
+        split = _EVENT_SHORT_IRQ[index]
+        if split:
+            pos += split
+            end += split
+        else:
+            back = run_at(anchor, _EVENT_POS[index] - pos)
+            refund += back
+            pos += _STEAL - back
+            end += _STEAL
+        index += 1
+    if clk[0] < _PAL_FRAME_CYCLES <= end:  # the budget stops the run at the raster
+        clk[5] = 0
+        clk[6] = 0
+    clk[0] = end
+    clk[1] = _EVENT_POS[index]
+    clk[2] = index
+    clk[3] += refund
+
+
+@njit(cache=True)
+def stall(clk, cycles):
+    """The whole video frames a strip replot stalls the play loop for."""
+    index = clk[2]
+    end = clk[0]
+    while index < _N_EVENTS:
+        split = _EVENT_SHORT_IRQ[index]
+        end += split if split else _STEAL
+        index += 1
+    if clk[0] < _PAL_FRAME_CYCLES:  # the stall carries no map: nothing is owed at it
+        clk[5] = 0
+        clk[6] = 0
+    clk[0] = end
+    clk[1] = _EVENT_POS[index]
+    clk[2] = index
+    clk[7] += cycles
 
 
 @njit(cache=True)

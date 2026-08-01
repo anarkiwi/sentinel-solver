@@ -11,7 +11,7 @@ from sentinel.game import Game
 
 pytestmark = pytest.mark.skipif(not enemies._HAVE_JIT, reason="numba not available")
 
-LANDSCAPES = [0, 42, 335]
+LANDSCAPES = [0, 42, 335, 9795]  # 9795 is the one that prices a $1FFC strip replot
 CHUNK = 25
 CHUNKS = 16  # 400 frames per board
 

@@ -965,24 +965,41 @@ unmoved at p25/med/p75 **0/+2/+5** and **0/+3/+6**: what is left is `b`.
 **The gate: 14/8/0 -> 13/7/0**, over more of the run (ls9795 2516 -> 2637 frames raced,
 ls0335 2917 -> 2986), every seed exact. Four of ls9795's thirteen are still the `$9730` flush.
 
-**What is left of the invariant is not `_place_run`.** Two independent frame-loop defects,
-both older than the carry:
+**Closed — the two frame-loop defects the carry left behind.** Both were older than the
+carry and both broke the same invariant. `(clk[0] - PAL) + cycle_residual` is now 0 on
+**400/400** frames of all three boards, from 400/400, **205/400** and **206/400**.
 
-* A frame whose clock stops SHORT of the raster. `_reach` returns `_WAIT` with the budget
-  unspent when it cannot reach the next write's own cycle, so the frame ends `budget + 43 x
-  (25 - windows placed)` short of PAL; the windows the raster passes in that gap are never
-  placed, and `if rest > 0` then drops the negative overhang whole. One such frame (ls0335
-  205: one window, 226 cycles) offsets the invariant by a constant +183 for the rest of the
-  run. Spending what the budget has left on the clock closes it by identity rather than fit:
-  on a frame that starts even, `clk_end + residual = PAL - 43 x missing`, so running the
-  leftover out lands the clock on PAL exactly.
-* The strip-replot debt, charged at `_redraw_cost` (`return cycles + debt`) and in the jit
-  dispatcher (`state.cycle_residual -= debt`) with no clock at all --
-  [5](#5-one-object-vertex-angle-is-ten-units-out)'s own item. It takes ls9795 from exact to
-  -343047 at frame 128 and starves the ~180 frames after it, whose clocks stop at ~2701 and
-  place 4 windows of 25. `debt` is `k` whole PAL frames of real time; putting it on `clk[0]`
-  would let those frames carry it exactly as a march's tail is carried, at the same 15575
-  cycles a frame the budget already works it off at, so the stall's length would not move.
+* A frame whose clock stopped SHORT of the raster. `_reach` returned `_WAIT` with the budget
+  unspent when it could not reach the next write's own cycle, so the frame ended `budget +
+  43 x (25 - windows placed)` short of PAL, the windows in that gap were never placed, and
+  `if rest > 0` dropped the negative overhang whole (ls0335 205: one window, 226 cycles,
+  a constant +183 for the rest of the run). `badline.spend` runs the clock over every cycle
+  the budget buys -- the ROM cycles plus each window's own steal, whose refund buys ROM
+  cycles again, so the two cancel and the clock lands on PAL by the identity `clk_end +
+  residual = PAL - 43 x missing` rather than by a fit. `spent` takes the same cycles: the
+  machine really does run the segment that far, and the refunds staying on the clock is what
+  keeps `spent` from overrunning the write it stopped short of. It fires **once in 400 frames
+  on ls0335** (183 cycles, `$181B`) and never on ls0042 or ls9795, and crediting `spent` is
+  what carries the gate -- spending the budget on the clock alone discards the segment's
+  partial progress and moves ls0335's first divergence 297 -> **111**, where crediting it
+  moves it to **1434** and removes the event.
+* The strip-replot debt, charged at `_redraw_cost` and in the jit dispatcher with no clock at
+  all. `badline.stall` retires every event the frame has left -- the frame's own ceiling has
+  already paid their steal -- and books the stall on `clk[7]`, which `overhang` adds at the
+  frame's end, so the play loop's own tail is charged on the clock the replot interrupted;
+  the jit twin retires the same events and its dispatcher adds the same debt to
+  `clock_overhang`, so neither path can see a half-applied stall. The replot is unchanged:
+  ls9795's frame-128 debt is **344791** cycles either way, it still stalls **22** frames, and
+  the board runs the same **1648** body calls and 207 idle frames over 400. Its overhang now
+  telescopes 342918 -> 0 at ~15575 a frame instead of dropping to -343047.
+
+**The gate: 13/7/0 -> 13/6/0**, every seed exact (ls9795 2637 frames raced, ls0335 2983,
+ls0042 3000). ls9795's thirteen are unmoved frame for frame and ls0042 stays clean; ls0335
+loses its frame-297 event and its first is 1434. The carry stays bounded and never negative
+-- ls0042 1..539, ls0335 1..69190, ls9795 3..342918 -- the last now bounded by the replot's
+own stall rather than by the gate's 274578-cycle `$1887`. `$16D6`'s placement error is
+unmoved at p25/med/p75 **0/+2/+5** (339 of 3325 placed exactly) and **0/+3/+6** (99 of 1750):
+what is left is still `b`, which a harness reseeding every frame cannot supply.
 
 **So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
 callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can
@@ -1014,10 +1031,10 @@ would put none of them there. At the first, the model charges **323117** cycles 
 frame-130 strip replot, pays it at ~15575 a frame and leaves frame 151 with **2004** cycles
 to spare while the machine is still at `$9786`, ~4000 cycles short of the flush's end: the
 pass is ~6000 of ~329000 cycles cheap, ~2%, which is `render_cost` and
-[5](#5-one-object-vertex-angle-is-ten-units-out). The debt itself is charged with **no clock
-at all** (`state.cycle_residual -= debt`), so every frame the replot spans pays the whole
-1075 ceiling with nothing to refund against a fill that is almost all stores — worth ~4
-cycles a frame the other way, so it cannot be closed on its own.
+[5](#5-one-object-vertex-angle-is-ten-units-out). The debt is now on the clock as well
+(`badline.stall`, above), and those four events did not move: every frame the replot spans
+still pays the whole 1075 ceiling with nothing to refund against a fill that is almost all
+stores — worth ~4 cycles a frame the other way, so it cannot be closed on its own.
 
 **The seed's own error, and its removal.** `resume_from_stack` counts the machine's position
 off the ROM's own straight lines and returns no offset for a position *inside a call*, so a

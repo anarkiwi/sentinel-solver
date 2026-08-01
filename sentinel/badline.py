@@ -92,8 +92,8 @@ SHORT_IRQ_LINES = (53, 93, 133, 173)  # the $9589 table's other four entries
 SHORT_IRQ_WRAP_LINE = 53  # $9589 table[0] = $35: the entry whose $9603 BPL wraps to 4
 NO_EVENT = 1 << 40  # past every event: a clock with no windows left to place
 FRAME_STEAL_CEILING = BADLINES_PER_FRAME * BADLINE_STEAL  # every window a full steal
-CLOCK_FIELDS = 7  # position, next event, event index, refund, refund residue, b (what
-# the instruction the raster crossed owed), and that term's own per-window refund
+CLOCK_FIELDS = 8  # position, next event, event index, refund, refund residue, b (what
+# the raster crossed owed), that term's per-window refund, and a replot's stalled frames
 
 
 def frame_events(line_cycle=BADLINE_WINDOW_CYCLE):
@@ -173,10 +173,10 @@ def _place(clk, anchor, cycles):
 def overhang(clk):
     """How far past the raster this frame's clock ran: the next frame's own carry.
 
-    Negative where the budget ran out before the raster came round, so the frame ended
-    with the foreground short of it and owes no carry at all.
+    Includes the stall a strip replot booked ahead of the frame's own tail, so the tail
+    is charged on the clock the replot interrupted and the stall carries after it.
     """
-    return int(clk[0]) - PAL_FRAME_CYCLES
+    return int(clk[0]) - PAL_FRAME_CYCLES + int(clk[7])
 
 
 def charge(clk, anchor, cycles):
@@ -192,6 +192,50 @@ def charge(clk, anchor, cycles):
         clk[0] = end
         return cycles
     return _place(clk, anchor, cycles)
+
+
+def spend(clk, anchor, budget):
+    """Run the clock over every cycle ``budget`` buys of the run at ``anchor``.
+
+    A frame that cannot reach its next write spends what is left of it all the same:
+    the ROM cycles the budget buys plus each window's own steal, whose refund buys ROM
+    cycles again.  The two cancel, so the clock lands BADLINE_STEAL per window on.
+    """
+    pos, index, refund = clk[0], clk[2], 0
+    end = pos + budget
+    while EVENT_POS[index] < end:
+        split = EVENT_SHORT_IRQ[index]
+        if split:
+            pos += split
+            end += split
+        else:
+            back = run_at(anchor, EVENT_POS[index] - pos)
+            refund += back
+            pos += BADLINE_STEAL - back
+            end += BADLINE_STEAL
+        index += 1
+    if clk[0] < PAL_FRAME_CYCLES <= end:  # the budget stops the run at the raster
+        clk[5], clk[6] = 0, 0
+    clk[0], clk[1], clk[2] = end, EVENT_POS[index], index
+    clk[3] += refund
+
+
+def stall(clk, cycles):
+    """The whole video frames a strip replot stalls the play loop for.
+
+    Every event the frame has left falls inside the stall and the frame's own ceiling
+    has already paid their steal, so the clock runs through them at the full steal; the
+    stall itself is booked on clk[7], which :func:`overhang` adds at the frame's end.
+    """
+    index, end = clk[2], clk[0]
+    while index < N_EVENTS:
+        split = EVENT_SHORT_IRQ[index]
+        end += split if split else BADLINE_STEAL
+        index += 1
+    if clk[0] < PAL_FRAME_CYCLES:  # the stall carries no map: nothing is owed at it
+        clk[5], clk[6] = 0, 0
+    clk[0], clk[1], clk[2] = end, EVENT_POS[index], index
+    clk[7] += cycles
 
 
 def _place_run(clk, cycles, step):

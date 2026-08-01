@@ -334,3 +334,50 @@ def test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it()
     mean = sum(k * v for k, v in totals.items()) / sum(totals.values())
     ceiling = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
     assert 3.0 < ceiling - mean < 4.0, mean
+
+
+def test_spending_the_leftover_budget_lands_the_clock_on_the_raster():
+    """A frame that cannot reach its next write ends `budget + 43 x missing` short of
+    PAL, so running the budget out over the windows still to place lands the clock on
+    the raster exactly -- an identity in the ceiling, whatever the refunds come to.
+    """
+    for cycles in (900, 5000, 12000, 18000):
+        clk = badline.frame_clock()
+        badline.charge(clk, 0x16D6, cycles)
+        missing = badline.N_EVENTS - int(clk[2])
+        windows = sum(
+            1
+            for i in range(int(clk[2]), badline.N_EVENTS)
+            if not badline.EVENT_SHORT_IRQ[i]
+        )
+        budget = (
+            passcost.PAL_FRAME_CYCLES - int(clk[0]) - windows * badline.BADLINE_STEAL
+        )
+        splits = sum(
+            int(badline.EVENT_SHORT_IRQ[i])
+            for i in range(int(clk[2]), badline.N_EVENTS)
+        )
+        badline.spend(clk, 0x16D6, budget - splits)
+        assert missing and int(clk[0]) == passcost.PAL_FRAME_CYCLES
+        assert int(clk[2]) == badline.N_EVENTS and int(clk[5]) == 0
+
+
+def test_a_replot_stall_retires_the_frames_windows_and_leaves_on_the_overhang():
+    """The stall runs whole video frames, so every event the frame has left falls in
+    it and the frame's own ceiling has already paid their steal.  Its own cycles land
+    on clk[7], which the overhang adds once the frame's tail is charged.
+    """
+    debt = 17 * passcost.PAL_FRAME_CYCLES
+    clk = badline.frame_clock()
+    badline.charge(clk, 0x16D6, 4000)
+    placed, at = int(clk[2]), int(clk[0])
+    badline.stall(clk, debt)
+    windows = sum(
+        1 for i in range(placed, badline.N_EVENTS) if not badline.EVENT_SHORT_IRQ[i]
+    )
+    splits = sum(
+        int(badline.EVENT_SHORT_IRQ[i]) for i in range(placed, badline.N_EVENTS)
+    )
+    assert int(clk[0]) == at + windows * badline.BADLINE_STEAL + splits
+    assert int(clk[2]) == badline.N_EVENTS and int(clk[7]) == debt
+    assert badline.overhang(clk) == int(clk[0]) - passcost.PAL_FRAME_CYCLES + debt

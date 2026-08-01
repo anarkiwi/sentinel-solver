@@ -392,11 +392,18 @@ def _reach(budget, spent, offset, clk, anchor):
     """Charge a body stage forward to ``offset``, the ROM's own cycle for a write.
 
     ``(budget, spent, what)``: _SKIP where an earlier frame already paid past it,
-    _COMMIT where this frame reaches it, _WAIT where the budget stops short of it."""
+    _COMMIT where this frame reaches it, _WAIT where the budget stops short of it.
+    A _WAIT still spends the budget out on the clock and into ``spent``: the ROM runs
+    the segment on to the raster, it just does not reach the write.  The windows' own
+    refunds stay on the clock, so ``spent`` cannot overrun the write it stopped short
+    of."""
     if offset <= spent:
         return budget, spent, _SKIP
     owed = offset - spent
     if budget < owed:
+        if budget > 0:
+            badline.spend(clk, anchor, budget)
+            spent, budget = spent + budget, 0
         return budget, spent, _WAIT
     return budget - badline.charge(clk, anchor, owed), offset, _COMMIT
 
@@ -524,7 +531,7 @@ def _redraw_cost(state, target, clk):
     debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
     state.camera_shift = left
     state.camera_clear = _clear_cycles(span) - debt
-    # whole video frames of stall: PAL_FRAME_CYCLES already carries their own badlines
+    badline.stall(clk, debt)  # the stall is real time: it runs on the clock too
     return cycles + debt
 
 
@@ -1583,6 +1590,7 @@ def advance_frames(state, n_frames, plotting=False):
             projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
             projector.restore_camera(state)
             state.cycle_residual -= debt
+            state.clock_overhang += debt  # what badline.stall books on the clock
             if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
                 projector.hold_camera(state, left)
         return

@@ -262,7 +262,10 @@ twin's call and through `tests/ckpt.py`.
 finer half of the same idea, inside a segment rather than between two: `enemies._reach`
 charges the stage forward to the ROM's own cycle for a write and commits it only there, so
 a budget that stops short suspends with the write outstanding and one that has already
-passed it skips it on resume. Every offset is the instruction sequence at its address —
+passed it skips it on resume. Stopping short still spends: `badline.spend` runs the clock
+over every cycle the budget buys, and `body_paid` takes the same cycles, so the frame ends
+on the raster and the next one resumes where the machine is. Every offset is the
+instruction sequence at its address —
 `$16ED` is `LDA $0C30,X` 4 + `CMP #2` 2 + `BCS` not taken 2 + `LDA #4` 2 + `STA` 5, so
 `update_cd` becomes 4 at cycle 15 and not before, and the sums are the whole-segment terms
 (`ENTRY_UPDATE_CD + ENTRY_FOV == CONSIDER_ENTRY`, and so on).
@@ -428,7 +431,10 @@ raster positions. One run no static map can reach is the `$1CDD` ray-march, a
 data-dependent loop of thousands of laps: it is charged by its own **write weight**
 instead (`sentinel/writeweight.py`, `badline.charge_run`) — one per one-cycle write and
 three per two, summed over the term's instructions, so a window anywhere inside gets back
-the `weight / cycles` the laps drive, in each of the frames the term outlives. The model's
+the `weight / cycles` the laps drive, in each of the frames the term outlives. Two runs end
+on the budget rather than on a map: `badline.spend` is a frame whose budget stops inside a
+segment, and `badline.stall` is a strip replot's whole video frames, which retire what the
+frame has left of its 25 windows and leave on `clk[7]` for `overhang` to add at the end. The model's
 own per-frame steal comes out 1063..1075, mean 1070.8 on
 ls0042 against the machine's 1070.2
 ([open_items.md 8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early)).
