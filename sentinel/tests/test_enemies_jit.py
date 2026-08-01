@@ -42,6 +42,9 @@ def _resume(state):
         state.camera_shift,
         state.camera_clear,
         state.steal_residue,
+        state.clock_overhang,
+        state.entry_b,
+        state.carry_step,
     )
 
 

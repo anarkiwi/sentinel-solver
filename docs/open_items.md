@@ -924,10 +924,11 @@ with X counting 4..0, so the wrap follows `table[0] = $35` -- raster 53. `EVENT_
 carries per-event cycles, 120 there and 119 elsewhere, summing to `SHORT_IRQ_FRAME` exactly.
 
 **The invariants, measured.** `(clk[0] - PAL) + cycle_residual` is **0 on all 400 frames of
-ls0042**, where no term outlives a frame. On ls0335 and ls9795 it holds on the frames with a
-positive overhang (183/400 and 97/400) and fails on the rest -- precisely the frames a wrapping
-`charge_run` outlived, which the carry skips and `_place_run` placed under its own assumption
-that no raster IRQ interrupts them. The carry is bounded on every board (max 539 / 469 / 1696
+ls0042**, where no term outlives a frame, and on **34/400** (ls0335) and **61/400** (ls9795):
+it fails on every frame a wrapping `charge_run` outlived, which the carry skips and
+`_place_run` placed under its own assumption that no raster IRQ interrupts them. (Those are
+not the positive-overhang frames, 183 and 97 -- a positive overhang is necessary, not
+sufficient.) The carry is bounded on every board (max 539 / 469 / 1696
 cycles, never a frame). Live, `$16D6`'s placement error goes from p25/med/p75 of
 **-483/+5/+146** to **0/+3/+6**, windows the model places exactly go **3 -> 81** (78 of them
 priced right), and the refund carries information for the first time: its nonzero calls are
@@ -938,9 +939,50 @@ crossed -- `entry_b` is 0 at every seed, so increment 2 is exercised only in a f
 
 **The gate did not follow: 11/8/0 -> 14/8/0** (ls9795 first at 151, ls0335 at 297, ls0042
 none). ls9795 is the board whose frames are mostly the wrapping ones the carry skips, so the
-model is now exact on the frames it corrects and unchanged on the frames it does not. Closing
-that wants `_place_run` to stop at the frame end and defer the rest to the next frame's carry,
-carrying the term's own weight so the ledger is unmoved -- not attempted here.
+model is now exact on the frames it corrects and unchanged on the frames it does not.
+
+**The frame end cuts the term, and the tail is the next frame's carry.** `_place_run` wrapped
+the event list, placing the windows of every frame its term spanned on the strength of no
+raster IRQ interrupting them, and returned its clock in the coordinates of the frame the term
+*ended* in -- so the overhang was short by `k` whole frames and every frame the term reached
+into paid its own ceiling twice. It now stops at the frame's last event, exactly as `_place`
+already did. The tail leaves on `clock_overhang` and the term's own per-window refund leaves
+with it, on `clk[6]` and `State.carry_step`, so `carry` goes on refunding at the term's rate
+and hands back what those windows give to the frame whose ceiling pre-paid them -- the ledger
+is unmoved, only its frame changes. `NO_MAP` is gone: a carry with `step` 0 is that anchor.
+
+**Measured.** The carry is now never negative and never bigger than the term that made it
+(ls0042 1..539 against the 2385-cycle `$9630` body, ls0335 1..69367 against 69759, ls9795
+3..270021 against the gate's 274578-cycle `$1887`), telescoping down one PAL frame at a time
+rather than reaching -1,025,143. `(clk[0] - PAL) + cycle_residual` is 0 on 400/400 ls0042
+frames, **34 -> 205** on ls0335 and **61 -> 206** on ls9795. Live over 200 frames, windows the
+model places exactly go **81 of 1475 -> 339 of 3325** (ls0042) and **79 of 1238 -> 99 of 1750**
+(ls0335) -- the sample itself doubles, because every frame now places its own 25 windows
+instead of having them placed by the frame before -- and the refund's nonzero calls go 35 of
+159 real to **117 of 372** and 35 of 127 to **55 of 178**. `$16D6`'s placement error is
+unmoved at p25/med/p75 **0/+2/+5** and **0/+3/+6**: what is left is `b`.
+
+**The gate: 14/8/0 -> 13/7/0**, over more of the run (ls9795 2516 -> 2637 frames raced,
+ls0335 2917 -> 2986), every seed exact. Four of ls9795's thirteen are still the `$9730` flush.
+
+**What is left of the invariant is not `_place_run`.** Two independent frame-loop defects,
+both older than the carry:
+
+* A frame whose clock stops SHORT of the raster. `_reach` returns `_WAIT` with the budget
+  unspent when it cannot reach the next write's own cycle, so the frame ends `budget + 43 x
+  (25 - windows placed)` short of PAL; the windows the raster passes in that gap are never
+  placed, and `if rest > 0` then drops the negative overhang whole. One such frame (ls0335
+  205: one window, 226 cycles) offsets the invariant by a constant +183 for the rest of the
+  run. Spending what the budget has left on the clock closes it by identity rather than fit:
+  on a frame that starts even, `clk_end + residual = PAL - 43 x missing`, so running the
+  leftover out lands the clock on PAL exactly.
+* The strip-replot debt, charged at `_redraw_cost` (`return cycles + debt`) and in the jit
+  dispatcher (`state.cycle_residual -= debt`) with no clock at all --
+  [5](#5-one-object-vertex-angle-is-ten-units-out)'s own item. It takes ls9795 from exact to
+  -343047 at frame 128 and starves the ~180 frames after it, whose clocks stop at ~2701 and
+  place 4 windows of 25. `debt` is `k` whole PAL frames of real time; putting it on `clk[0]`
+  would let those frames carry it exactly as a march's tail is carried, at the same 15575
+  cycles a frame the budget already works it off at, so the stall's length would not move.
 
 **So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
 callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can

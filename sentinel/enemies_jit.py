@@ -2074,6 +2074,7 @@ def _advance(
     residue,
     hang,
     entry,
+    step,
 ):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
@@ -2092,11 +2093,13 @@ def _advance(
             residue = clk[4]
             hang = overhang(clk)
             entry = np.int64(0)
+            step = clk[6]
             continue
         rest = hang - entry  # the caught term's remaining tail, which the machine
-        if rest > 0:  # runs after the IRQ and before any fresh term
-            carry(clk, rest)
-        budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) - irq
+        back = np.int64(0)  # runs after the IRQ and before any fresh term; the windows
+        if rest > 0:  # it covers are this frame's, so their refund is this frame's too
+            back = carry(clk, rest, step)
+        budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) + back - irq
         if budget > 0 and shift != 0:  # $2003/$2008: this frame's $2625 returned
             _restore_camera(mem)
             shift = 0
@@ -2128,6 +2131,7 @@ def _advance(
         residual = budget
         residue = clk[4]
         entry = clk[5]
+        step = clk[6]
         hang = overhang(clk)
         if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
             return (
@@ -2142,6 +2146,7 @@ def _advance(
                 residue,
                 hang,
                 entry,
+                step,
                 n_frames - done - 1,
             )
     return (
@@ -2156,6 +2161,7 @@ def _advance(
         residue,
         hang,
         entry,
+        step,
         0,
     )
 
@@ -2175,6 +2181,7 @@ def advance_frames(
     residue,
     hang,
     entry,
+    step,
 ):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
     the sub-pass resume point and the outstanding $1FC2 camera shift in and out.
@@ -2183,7 +2190,7 @@ def advance_frames(
     span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
     zp = np.zeros(ZP_N, dtype=np.int64)
-    res, ph, st, ix, pa, pd, sh, cl, rd, hg, eb, left_frames = _advance(
+    res, ph, st, ix, pa, pd, sh, cl, rd, hg, eb, sp, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -2199,6 +2206,7 @@ def advance_frames(
         int(residue),
         int(hang),
         int(entry),
+        int(step),
     )
     target = int(zp[ZP_REPLOT]) - 1
     return (
@@ -2213,6 +2221,7 @@ def advance_frames(
         int(rd),
         int(hg),
         int(eb),
+        int(sp),
         int(left_frames),
         target,
         int(zp[ZP_REPLOT_LEFT]),

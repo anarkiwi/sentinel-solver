@@ -28,7 +28,6 @@ _PAL_FRAME_CYCLES = passcost.PAL_FRAME_CYCLES
 _NO_EVENT = badline.NO_EVENT
 _FIELDS = badline.CLOCK_FIELDS
 _WEIGHT_SHIFT = badline.WEIGHT_SHIFT
-_NO_MAP = badline.NO_MAP
 _OWED = writeruns.OWED
 
 
@@ -100,26 +99,18 @@ def charge(clk, anchor, cycles):
 
 
 @njit(cache=True, inline="always")
-def carry(clk, cycles):
-    """Advance the clock over ``cycles`` a previous frame's budget already paid."""
-    charge(clk, _NO_MAP, cycles)
-
-
-@njit(cache=True, inline="always")
 def overhang(clk):
     """How far past the raster this frame's clock ran: the next frame's own carry."""
     return clk[0] - _PAL_FRAME_CYCLES
 
 
 @njit(cache=True)
-def _place_run(clk, cycles, weight):
-    """The slow half of :func:`charge_run`: the events this term's cycles reach."""
+def _place_run(clk, cycles, step):
+    """The slow half of :func:`_charge_step`: the events this term's cycles reach."""
     index = clk[2]
     refund = 0
-    base = 0
     end = clk[0] + cycles
-    step = (weight << _WEIGHT_SHIFT) // cycles  # the term's own refund per window
-    while base + _EVENT_POS[index] < end:
+    while _EVENT_POS[index] < end:
         split = _EVENT_SHORT_IRQ[index]
         if split:
             end += split
@@ -130,12 +121,10 @@ def _place_run(clk, cycles, weight):
             refund += back
             end += _STEAL - back
         index += 1
-        if index == _N_EVENTS:
-            index = 0
-            base += _PAL_FRAME_CYCLES
-    if clk[0] < _PAL_FRAME_CYCLES <= end - base:  # no map: the raster's b is unknown
+    if clk[0] < _PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
         clk[5] = 0
-    clk[0] = end - base
+        clk[6] = step
+    clk[0] = end
     clk[1] = _EVENT_POS[index]
     clk[2] = index
     clk[3] += refund
@@ -143,12 +132,25 @@ def _place_run(clk, cycles, weight):
 
 
 @njit(cache=True, inline="always")
-def charge_run(clk, cycles, weight):
-    """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
+def _charge_step(clk, cycles, step):
+    """Spend ``cycles`` whose every window refunds the fixed-point ``step``."""
     end = clk[0] + cycles
     if end <= clk[1]:
         if clk[0] < _PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
             clk[5] = 0
+            clk[6] = step
         clk[0] = end
         return cycles
-    return _place_run(clk, cycles, weight)
+    return _place_run(clk, cycles, step)
+
+
+@njit(cache=True, inline="always")
+def charge_run(clk, cycles, weight):
+    """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
+    return _charge_step(clk, cycles, (weight << _WEIGHT_SHIFT) // cycles)
+
+
+@njit(cache=True, inline="always")
+def carry(clk, cycles, step):
+    """Advance over ``cycles`` a previous frame's budget paid; return their refund."""
+    return cycles - _charge_step(clk, cycles, step)

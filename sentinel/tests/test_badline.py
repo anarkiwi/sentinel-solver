@@ -264,20 +264,41 @@ def _lap(neg=0):
 
 def test_a_marching_term_refunds_the_write_weight_of_its_own_laps():
     """A term the static map cannot reach is priced by its own write profile instead:
-    each of the 25 windows a frame gets back the ``weight / cycles`` the loop's
-    instructions drive, in every one of the frames the term spans."""
+    each of the frame's 25 windows gets back the ``weight / cycles`` the loop's
+    instructions drive."""
     lap, weight = _lap()
     laps = MARCH_CYCLES // lap
     clk = badline.frame_clock()
     spent = badline.charge_run(clk, laps * lap, laps * weight)
-    frames = laps * lap / passcost.PAL_FRAME_CYCLES
-    assert frames > 13  # the gate's own march outlives fourteen frames
+    assert laps * lap / passcost.PAL_FRAME_CYCLES > 13  # it outlives fourteen frames
     assert spent == laps * lap - clk[3]
-    per_window = weight / lap
-    per_frame = clk[3] / frames
-    assert abs(per_frame - passcost.BADLINES_PER_FRAME * per_window) < 0.2, per_frame
-    assert clk[2] < badline.N_EVENTS  # the event list wrapped rather than running out
-    assert clk[1] == badline.EVENT_POS[clk[2]]
+    assert abs(clk[3] - passcost.BADLINES_PER_FRAME * weight / lap) < 1, clk[3]
+    assert clk[2] == badline.N_EVENTS  # this frame's events, and no wrap to the next
+    assert clk[1] == badline.NO_EVENT
+    assert int(clk[0]) == (
+        laps * lap
+        + badline.FRAME_STEAL_CEILING
+        - int(clk[3])
+        + passcost.SHORT_IRQ_FRAME
+    )
+
+
+def test_the_frame_end_cuts_the_term_and_the_next_frame_carries_the_rest():
+    """A term outliving the frame is cut at the raster like any other: the tail, and
+    the term's own per-window refund with it, is the next frame's carry, which places
+    that frame's own windows against the same weight."""
+    lap, weight = _lap()
+    laps = MARCH_CYCLES // lap
+    clk = badline.frame_clock()
+    badline.charge_run(clk, laps * lap, laps * weight)
+    rest, step = badline.overhang(clk), int(clk[6])
+    assert rest > passcost.PAL_FRAME_CYCLES  # the tail alone outlives the next frame
+    assert step == (laps * weight << badline.WEIGHT_SHIFT) // (laps * lap)
+    nxt = badline.frame_clock()
+    nxt[4] = clk[4]  # the fixed-point residue the frame loop carries with it
+    back = badline.carry(nxt, rest, step)
+    assert back == nxt[3] and abs(back - int(clk[3])) <= 1
+    assert nxt[2] == badline.N_EVENTS and badline.overhang(nxt) > 0
 
 
 def test_the_marched_refund_is_the_per_frame_steal_the_machine_pays():

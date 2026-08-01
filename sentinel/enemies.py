@@ -1478,11 +1478,13 @@ def advance_frame_python(state, plotting=False):
     if plotting:
         state.steal_residue = clk[4]
         state.clock_overhang, state.entry_b = badline.overhang(clk), 0
+        state.carry_step = int(clk[6])
         return
     rest = state.clock_overhang - state.entry_b  # the caught term's remaining tail,
-    if rest > 0:  # which the machine runs after the IRQ and before any fresh term
-        badline.carry(clk, rest)
-    budget = state.cycle_residual + passcost.FOREGROUND_CYCLES - irq
+    back = 0  # which the machine runs after the IRQ and before any fresh term
+    if rest > 0:  # the windows it covers are this frame's, so their refund is too
+        back = badline.carry(clk, rest, state.carry_step)
+    budget = state.cycle_residual + passcost.FOREGROUND_CYCLES + back - irq
     budget -= badline.FRAME_STEAL_CEILING  # the 25 windows, refunded by charge()
     if budget > 0 and state.camera_shift:  # $2003/$2008: this frame's $2625 returned
         projector.restore_camera(state)
@@ -1514,6 +1516,7 @@ def advance_frame_python(state, plotting=False):
     state.pass_phase = phase
     state.steal_residue = clk[4]
     state.clock_overhang, state.entry_b = badline.overhang(clk), int(clk[5])
+    state.carry_step = int(clk[6])
 
 
 def advance_frames_python(state, n_frames, plotting=False):
@@ -1548,6 +1551,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.steal_residue,
                 state.clock_overhang,
                 state.entry_b,
+                state.carry_step,
                 remaining,
                 target,
                 left,
@@ -1568,6 +1572,7 @@ def advance_frames(state, n_frames, plotting=False):
                 state.steal_residue,
                 state.clock_overhang,
                 state.entry_b,
+                state.carry_step,
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break

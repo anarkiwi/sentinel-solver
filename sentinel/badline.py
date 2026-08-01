@@ -92,8 +92,8 @@ SHORT_IRQ_LINES = (53, 93, 133, 173)  # the $9589 table's other four entries
 SHORT_IRQ_WRAP_LINE = 53  # $9589 table[0] = $35: the entry whose $9603 BPL wraps to 4
 NO_EVENT = 1 << 40  # past every event: a clock with no windows left to place
 FRAME_STEAL_CEILING = BADLINES_PER_FRAME * BADLINE_STEAL  # every window a full steal
-CLOCK_FIELDS = 6  # position, next event, event index, refund so far, refund residue,
-# then b: what the instruction the raster crossed still owed when it did
+CLOCK_FIELDS = 7  # position, next event, event index, refund, refund residue, b (what
+# the instruction the raster crossed owed), and that term's own per-window refund
 
 
 def frame_events(line_cycle=BADLINE_WINDOW_CYCLE):
@@ -170,24 +170,11 @@ def _place(clk, anchor, cycles):
     return cycles - refund
 
 
-NO_MAP = 0  # an anchor no run is counted from: its windows refund nothing
-
-
-def carry(clk, cycles):
-    """Advance the clock over ``cycles`` a previous frame's budget already paid.
-
-    The raster catches the foreground mid-term and the model charges that term whole,
-    so the machine still owes its tail and runs it after the IRQ: real time on this
-    frame's clock, no budget, and no map to refund its windows against.
-    """
-    charge(clk, NO_MAP, cycles)
-
-
 def overhang(clk):
     """How far past the raster this frame's clock ran: the next frame's own carry.
 
-    Negative where a wrapping ``charge_run`` already placed the frames its term
-    outlived, which owe no carry at all.
+    Negative where the budget ran out before the raster came round, so the frame ended
+    with the foreground short of it and owes no carry at all.
     """
     return int(clk[0]) - PAL_FRAME_CYCLES
 
@@ -207,17 +194,16 @@ def charge(clk, anchor, cycles):
     return _place(clk, anchor, cycles)
 
 
-def _place_run(clk, cycles, weight):
-    """The slow half of :func:`charge_run`: the events this term's cycles reach.
+def _place_run(clk, cycles, step):
+    """The slow half of :func:`_charge_step`: the events this term's cycles reach.
 
-    A term that outlives the frame reaches the NEXT frame's windows too -- every frame
-    it spans is charged its own ceiling -- so the event list wraps, and the clock comes
-    back in the coordinates of the frame the term ended in.
+    The walk stops at the frame's last event: the raster IRQ interrupts a term that
+    outlives the frame like any other, so what is left of it -- and ``step`` with it --
+    is the next frame's carry, and the clock stays in the STARTING frame's coordinates.
     """
     index, refund = clk[2], 0
-    base, end = 0, clk[0] + cycles
-    step = (weight << WEIGHT_SHIFT) // cycles  # the term's own refund per window
-    while base + EVENT_POS[index] < end:
+    end = clk[0] + cycles
+    while EVENT_POS[index] < end:
         split = EVENT_SHORT_IRQ[index]
         if split:
             end += split
@@ -228,13 +214,22 @@ def _place_run(clk, cycles, weight):
             refund += back
             end += BADLINE_STEAL - back
         index += 1
-        if index == N_EVENTS:
-            index, base = 0, base + PAL_FRAME_CYCLES
-    if clk[0] < PAL_FRAME_CYCLES <= end - base:  # no map: the raster's own b is unknown
-        clk[5] = 0
-    clk[0], clk[1], clk[2] = end - base, EVENT_POS[index], index
+    if clk[0] < PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
+        clk[5], clk[6] = 0, step
+    clk[0], clk[1], clk[2] = end, EVENT_POS[index], index
     clk[3] += refund
     return cycles - refund
+
+
+def _charge_step(clk, cycles, step):
+    """Spend ``cycles`` whose every window refunds the fixed-point ``step``."""
+    end = clk[0] + cycles
+    if end <= clk[1]:
+        if clk[0] < PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
+            clk[5], clk[6] = 0, step
+        clk[0] = end
+        return cycles
+    return _place_run(clk, cycles, step)
 
 
 def charge_run(clk, cycles, weight):
@@ -242,18 +237,19 @@ def charge_run(clk, cycles, weight):
 
     A term whose loop outlives its map -- the $1CDD ray-march, the $8401 chain past
     $1887's own run, the $9630 body the $95E9 walk RTIs out of -- carries its own write
-    weight (:mod:`sentinel.writeweight`) instead, so a window anywhere inside it gets
-    back the ``weight / cycles`` its instructions drive rather than nothing at all.
-    The fixed-point residue in ``clk[4]`` is under a cycle a frame, so the frame loop
-    carries it on the state rather than dropping it with the clock.
+    weight (:mod:`sentinel.writeweight`), so each window gets ``weight / cycles`` back.
     """
-    end = clk[0] + cycles
-    if end <= clk[1]:
-        if clk[0] < PAL_FRAME_CYCLES <= end:  # no map: the raster's own b is unknown
-            clk[5] = 0
-        clk[0] = end
-        return cycles
-    return _place_run(clk, cycles, weight)
+    return _charge_step(clk, cycles, (weight << WEIGHT_SHIFT) // cycles)
+
+
+def carry(clk, cycles, step):
+    """Advance over ``cycles`` a previous frame's budget paid; return their refund.
+
+    The raster catches the foreground mid-term and the model charges that term whole,
+    so the machine still owes its tail and runs it after the IRQ: real time on this
+    frame's clock, no budget, and the crossed term's own per-window refund ``step``.
+    """
+    return cycles - _charge_step(clk, cycles, step)
 
 
 def frame_steal(instructions, windows=None):
