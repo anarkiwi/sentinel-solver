@@ -22,6 +22,7 @@ pytest -n auto
 python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
 python -m driver.instrument 42          # race the model against the ROM, frame for frame
+python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```
 
 | landscape | enemies | offline | live |
@@ -81,4 +82,6 @@ from https://github.com/anarkiwi/asid-vice).
   driver, instrument, measurement tooling.
 - [players.md](docs/players.md) — the phase player and the reactive greedy player: the rules
   that decide a move, the phases, current results.
+- [media.md](docs/media.md) — turning a recorded run into an embeddable APNG, and the
+  blank test that drops the hyperspace and transfer frames.
 - [open_items.md](docs/open_items.md) — everything unsolved, and what was disproved.
