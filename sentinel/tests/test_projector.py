@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, memmap as mm, projector
+from sentinel import landscape, memmap as mm, occlusioncost, projector, settlecost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_projector.json")
@@ -165,10 +165,23 @@ def test_project_scene_tiles_and_replot():
     # plot_tile ($2A24) draws every nonzero-$0180 tile, incl off-screen ones that clip in the rasteriser.
     assert tiles and all(t["tile_byte"] for t in tiles)
     assert all(t["h"] >= 0 and t["w"] >= 0 for t in tiles)
-    settle = projector.viewpoint_replot_frames(s, {"h_angle": h, "v_angle": v})
-    single = projector.render_cost(s, {"h_angle": h, "v_angle": v})
-    base = projector.TUNE_TRANSFER_FRAMES + projector.SETTLE_FIXED_FRAMES
-    assert settle == base + projector.REPLOT_PASSES * single
-    assert (
-        base <= settle <= 700
-    )  # tune+fixed base .. live 259-460f (docs/architecture.md)
+    view = {"h_angle": int(h), "v_angle": int(v)}
+    settle = settlecost.viewpoint_settle_frames(s, eye_view=view)
+    fg = (
+        settlecost.HEAD_BASE
+        + settlecost.REDRAW_HEAD
+        + occlusioncost.occlusion_cycles(s, p)
+        + settlecost.TAB_3700
+        + settlecost.FILL_1090
+        + projector.FRAME_CYCLES * projector.render_cost(s, view, p)
+        + settlecost.STATUS_9508
+        + settlecost.STATUS_98B2
+        + settlecost.BUF_WAIT_HEAD
+        + settlecost.EXIT_TAIL
+    )
+    floor = settlecost.BRACKET_FRAMES + settlecost.TUNE_FRAMES[0x19]
+    want = settlecost.BRACKET_FRAMES + max(
+        fg / settlecost.SETTLE_FG, settlecost.TUNE_FRAMES[0x19]
+    )
+    assert settle == pytest.approx(want)
+    assert settle >= floor  # the $35D5 tune wait overlaps the redraw, never adds

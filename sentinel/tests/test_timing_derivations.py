@@ -9,7 +9,8 @@ import pytest
 
 from driver import kbd_aim
 from sentinel import actioncost, aimcost, badline, enemies, enemies_jit, memmap as mm
-from sentinel import pancost, passcost, playerbase, projector, relative, statecmp
+from sentinel import pancost, passcost, playerbase, projector, relative, settlecost
+from sentinel import statecmp
 from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -56,27 +57,31 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
         ),
         # $E0 eye-height fraction of a tile unit.
         ("ROBOT_EYE", playerbase.ROBOT_EYE, 0xE0 / 256),
-        # $1FA4/$86A5 dither loop cycles at the PAL frame.
-        ("DITHER_FRAMES", actioncost.DITHER_FRAMES, 977904.0 / projector.FRAME_CYCLES),
         ("FRAME_CYCLES", projector.FRAME_CYCLES, 19656.0),
-        # $357D view-less fallback: tune wait + fixed foreground.
+        # $95E9 settle body: flat/carry frames mixed at the $1310 205/256 Bresenham.
         (
-            "VIEWPOINT_REPLOT_FRAMES",
-            actioncost.VIEWPOINT_REPLOT_FRAMES,
-            projector.TUNE_TRANSFER_FRAMES + projector.SETTLE_FIXED_FRAMES,
+            "SETTLE_BODY",
+            settlecost.SETTLE_BODY,
+            settlecost.SETTLE_BODY_FLAT
+            + (mm.COOLDOWN_BRESENHAM_STEP / 256.0)
+            * (settlecost.SETTLE_BODY_CARRY - settlecost.SETTLE_BODY_FLAT),
         ),
-        # dither loop + one post-action scene replot.
+        # PAL frame less the four short IRQs, the settle body and the machine steal.
         (
-            "SETTLE[create]",
-            actioncost.SETTLE["create"],
-            actioncost.FRAME_TICKS
-            * (actioncost.DITHER_FRAMES + actioncost.POST_ACTION_REPLOT_FRAMES),
+            "SETTLE_FG",
+            settlecost.SETTLE_FG,
+            19656.0
+            - passcost.SHORT_IRQ_FRAME
+            - settlecost.SETTLE_BODY
+            - settlecost.SETTLE_STEAL,
         ),
+        # tap_action's own idle+press scans, the count TAP_FRAMES pins.
+        ("BRACKET_FRAMES", settlecost.BRACKET_FRAMES, float(playerbase.TAP_FRAMES)),
+        # tap bracket + the $AB50-decoded 24-frame #$28 tune hold.
         (
-            "SETTLE[absorb]",
-            actioncost.SETTLE["absorb"],
-            actioncost.FRAME_TICKS
-            * (actioncost.DITHER_FRAMES + actioncost.POST_ACTION_REPLOT_FRAMES),
+            "UTURN_FLOOR_FRAMES",
+            playerbase.UTURN_FLOOR_FRAMES,
+            settlecost.BRACKET_FRAMES + settlecost.TUNE_FRAMES[0x28],
         ),
         # $1B2F EOR $80 flips 128 units on the +-AZIMUTH_STEP lattice.
         ("UTURN_STEP", aimcost.UTURN_STEP, 128 // aimcost.AZIMUTH_STEP),
@@ -125,12 +130,77 @@ def test_pan_max_covers_full_pan():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="HOP_FRAMES=700 != 2*SETTLE[create] + SETTLE[transfer] == 459.5",
+    reason="HOP_FRAMES=700 != 2*SETTLE[create] + SETTLE[transfer] == 554",
 )
 def test_hop_frames_matches_claimed_composition():
     assert playerbase.HOP_FRAMES == pytest.approx(
         2 * actioncost.SETTLE["create"] + actioncost.SETTLE["transfer"]
     )
+
+
+_SETTLE_ORACLE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "settle_oracle_ls42.json"
+)
+
+
+def _settle_rows():
+    with open(_SETTLE_ORACLE, encoding="utf-8") as fh:
+        return json.load(fh)["rows"]
+
+
+def test_the_settle_fallback_is_the_fixture_verb_mean():
+    """actioncost.SETTLE is the tile-less fallback: each verb's value sits on the
+    fixture's own live-measured mean (absorb 86.7, create 109.6, transfer 332)."""
+    frames = {}
+    for row in _settle_rows():
+        if row["live_ok"]:
+            frames.setdefault(row["verb"], []).append(row["measured_frames"])
+    assert set(frames) == set(actioncost.SETTLE)
+    for verb, want in actioncost.SETTLE.items():
+        assert abs(want - np.mean(frames[verb])) <= 2.5, verb
+
+
+def test_the_settle_rate_prices_every_fixture_wall():
+    """measured == BRACKET + cycles/SETTLE_FG within 1 f on every live row, so the
+    FLAT/CARRY body mix and the steal are validated inside the rate they compose."""
+    for row in _settle_rows():
+        if not row["live_ok"]:
+            continue
+        want = settlecost.BRACKET_FRAMES + row["cycles"] / settlecost.SETTLE_FG
+        assert abs(row["measured_frames"] - want) <= 1.0, row["label"]
+
+
+def test_the_counted_settle_segments_match_the_oracle_marks():
+    """Each counted $357D/$12D0 segment is the fixture's own mark-to-mark spend.
+
+    TAB_3700 swings with the scene and $9508 with the energy byte, so those two
+    are banded; the other segments are exact on every row that walks them."""
+    exact = {
+        ("0x357d", "0x35ba"): settlecost.REDRAW_HEAD,
+        ("0x35c0", "0x35c3"): settlecost.FILL_1090,
+        ("0x35c9", "0x35cc"): settlecost.STATUS_98B2,
+        ("0x35cc", "0x35d5"): settlecost.BUF_WAIT_HEAD,
+        ("0x35dd", "0x363d"): settlecost.EXIT_TAIL,
+        ("0x12ec", "0x12f9"): settlecost.SFX_HEAD,
+    }
+    seen, tabs, status, tails = set(), [], [], []
+    for row in _settle_rows():
+        marks = row["marks"]
+        for (a, b), want in exact.items():
+            if a in marks and b in marks:
+                assert marks[b] - marks[a] == want, (row["label"], a)
+                seen.add(a)
+        if "0x35bd" in marks:
+            tabs.append(marks["0x35c0"] - marks["0x35bd"])
+        if "0x35c6" in marks:
+            status.append(marks["0x35c9"] - marks["0x35c6"])
+        if "0x1f93" in marks:
+            tails.append(marks["0x1289"] - marks["0x1f93"])
+    assert seen == {a for a, _b in exact}
+    band = settlecost.TAB_3700
+    assert tabs and all(abs(t - band) / band < 0.02 for t in tabs)
+    assert status and all(abs(s - settlecost.STATUS_9508) <= 20 for s in status)
+    assert tails and all(0 <= t - settlecost.PASS_TAIL <= 30 for t in tails)
 
 
 def _units_turned(landscape):

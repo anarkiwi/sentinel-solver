@@ -26,14 +26,18 @@ python -m driver.instrument 42          # race the model against the ROM, frame 
 
 | landscape | enemies | offline | live |
 |---|---|---|---|
-| 0 | 1 | 16 | — |
-| 42 | 2 | 35 | — |
-| 60 | 7 | 41 | — |
-| 110 | 3 | 49 | — |
-| 298 | 7 | 32 | — |
-| 321 | 7 | 35 | — |
-| 335 | 7 | 55 | **66 actions** |
-| 373 | 7 | 45 | — |
+| 0 | 1 | 29 | — |
+| 42 | 2 | 32 | **36 actions** (enemies frozen) |
+| 60 | 7 | 44 | — |
+| 110 | 3 | 35 | — |
+| 298 | 7 | 36 | — |
+| 321 | 7 | 28 | — |
+| 335 | 7 | 60 | **66 actions** |
+| 373 | 7 | 32 | — |
+
+Offline counts are under the ROM-derived settle prices (`sentinel/settlecost.py`). The ls42
+live entry is a `driver.frozen_run` win (`update_enemies $16B5` RTS-stubbed): it verifies
+frame-cost fidelity, not survival under fire.
 
 A landscape is identified by one number: the one a player types on the keypad. Every tool
 here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sentinel.isoview`

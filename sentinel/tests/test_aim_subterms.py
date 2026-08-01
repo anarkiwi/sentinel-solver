@@ -15,10 +15,6 @@ _FIXTURE = os.path.join(
     os.path.dirname(__file__), "fixtures", "live_aim_subframes.json"
 )
 
-_TOGGLE_BOUND = (
-    pb.TOGGLE_FRAMES + pb.H_SCROLL
-)  # two gated scans ($9678) + the last pan notch's queued unbuffering steps ($10EE 16 h / $1135 8 v), which must drain before the next scan fires
-
 
 @functools.lru_cache(maxsize=1)
 def _by_landscape():
@@ -90,20 +86,18 @@ def test_transfer_aim_is_zero_only_under_bearing_reuse():
         )
 
 
-def test_sights_toggle_is_bounded_by_two_scans_plus_one_notch_unbuffer():
-    """The toggle pair outlasts that bound only with NO pan between sights OFF and ON,
-    when the SPACE auto-repeat lock ($1236, cleared only by a scan seeing SPACE up)
-    swallowed the ON press and ``sights_set`` retried -- the sole recorded violator, and
-    it has no pan (``kbd_aim._one_scan_press`` now re-arms the latch with an idle scan).
-    """
+def test_sights_toggle_is_the_pair_plus_the_last_notchs_trailing_scroll():
+    """A panned row's toggle bucket = the OFF+ON pair plus the LAST pan axis's queued
+    scroll ($1135 8 v after a pitch notch, $10EE 16 h otherwise), which must drain
+    before the ON scan fires -- the leak that made the retired TOGGLE_FRAMES=12."""
     for ls, row in _rows():
-        if row["toggle"] > _TOGGLE_BOUND:
-            assert not _panned(row), (
-                f"{ls}/{row['step']}: toggle {row['toggle']}f > {_TOGGLE_BOUND}f with a "
-                "pan between OFF and ON -- not the $1236 re-arm gap"
-            )
-        elif _panned(row):
-            assert row["toggle"] <= _TOGGLE_BOUND, f"{ls}/{row['step']}"
+        if not _panned(row):
+            continue
+        leak = pb.V_SCROLL if row["pan_v"] else pb.H_SCROLL
+        pair = row["toggle"] - leak
+        assert (
+            pb.TOGGLE_FRAMES - 1.5 <= pair <= pb.TOGGLE_FRAMES + 1.5
+        ), f"{ls}/{row['step']}: toggle {row['toggle']}f - leak {leak} = {pair}"
 
 
 def test_cursor_drive_costs_a_scan_per_pixel_plus_at_most_the_repeat_ramp():
@@ -128,7 +122,11 @@ def test_cursor_charge_is_exact_on_most_drives_and_never_under():
 
 def test_charged_toggle_matches_the_measured_pair():
     """``TOGGLE_FRAMES`` prices the OFF+ON pair itself (the trailing notch scroll is
-    already charged per notch), so it sits inside the measured pair's range."""
-    measured = [row["toggle"] for _, row in _rows() if _panned(row) and row["toggle"]]
-    assert measured
-    assert min(measured) <= pb.TOGGLE_FRAMES <= max(measured)
+    already charged per notch), so it sits inside the leak-corrected pair range."""
+    pairs = [
+        row["toggle"] - (pb.V_SCROLL if row["pan_v"] else pb.H_SCROLL)
+        for _, row in _rows()
+        if _panned(row) and row["toggle"]
+    ]
+    assert pairs
+    assert min(pairs) <= pb.TOGGLE_FRAMES <= max(pairs)

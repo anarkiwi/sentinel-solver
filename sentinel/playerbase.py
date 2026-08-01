@@ -9,7 +9,7 @@ import numpy as np
 
 from sentinel import actioncost, actions, aim, aimcost, enemies, landtable, los
 from sentinel import memmap as mm
-from sentinel import pancost, projector, relative, terrain, threat
+from sentinel import pancost, projector, relative, settlecost, terrain, threat
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
 V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
@@ -25,9 +25,9 @@ CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
 )  # $11F6 ASL $0CC8 / BCS: one gated scan skipped per set bit before the mask empties
 SIGHTS_CENTRE = (80, 95)  # $134C: a sights-ON toggle re-centres the cursor
-TOGGLE_FRAMES = 12  # sights OFF (~0) + ON (~10: $134C recentre + plot_sights), measured
+TOGGLE_FRAMES = 3.5  # sights OFF (~0) + ON ($134C recentre + plot_sights); the old 12 folded in the last pan notch's 8-frame trailing V scroll, isolated by the toggle-leak split (dv>0 rows measure 11-12, dv==0 rows 19-20, exactly 8 apart)
 TAP_FRAMES = 3  # tap_action: idle full scan + press scan ($9678) + latch
-UTURN_FRAMES = 77  # a u-turn is a full action tap (want-flag $23, kbd_aim._uturn), not a bare keystroke: idle+press scans plus the action's own consumption. Pooled live n=9, mean 76.6 (ls42 p1 74, eight ls335 rows 33..180): the sample spread is 2.5x the mean, so this is a central value, not a bound.
+UTURN_FLOOR_FRAMES = 27.0  # settlecost.BRACKET_FRAMES + the 24-frame #$28 tune floor: a u-turn takes the $357D redraw less $245B/$3700 ($1B2F -> $1B84 -> $0C63, $0C51 skipping $35B5), so this is an admissible lower bound; the real cost is settlecost.uturn_settle_frames per scene
 UNIT_FRAMES = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # cooldown unit in frames
 ROT_PERIOD_FRAMES = enemies.ROTATION_COOLDOWN_RELOAD * UNIT_FRAMES
 REVOLUTION_STEPS = 14  # rotations covering a full 256-bearing turn at the +-20 step
@@ -74,13 +74,14 @@ def aim_phases(st, view, aim_from, observer, cursor_from=None):
         abs(view["cursor"][1] - cur_from[1]),
     )
     cur = cur + CURSOR_RAMP if cur else 0.0
-    # Each notch scrolls then replots the strip at its own intermediate angle; the u-turn ($1B2F EOR $80) is one keystroke with no scroll and no replot.
+    # Each notch scrolls then replots the strip at its own intermediate angle; the u-turn ($1B2F) flips the bearing, starts tune #$28 and takes the full $357D redraw.
     pan = pancost.pan_frames(
         st, h0, v0, view["h_angle"], view["v_angle"], SCROLL, observer
     )
+    uturn = settlecost.uturn_settle_frames(st, observer) if nu else 0.0
     return (
         (toggles, True),
-        (nu * UTURN_FRAMES, False),
+        (nu * uturn, True),
         (pan, True),
         (cur + TAP_FRAMES, False),
     )
@@ -122,7 +123,7 @@ def _aim_bound(nu, ns, dv, cur):
     return (
         TOGGLE_FRAMES
         + TAP_FRAMES
-        + nu * UTURN_FRAMES
+        + nu * UTURN_FLOOR_FRAMES
         + ns * (pancost.CLEAR_FRAMES[0] + H_SCROLL)
         + dv * (pancost.CLEAR_FRAMES[1] + V_SCROLL)
         + drive
@@ -685,7 +686,8 @@ class BasePlayer:
         if not nu:
             return None
         reuse = self.last_bearing == (view["h_angle"], view["v_angle"])
-        return (0.0 if reuse else TOGGLE_FRAMES) + nu * UTURN_FRAMES
+        uturn = settlecost.uturn_settle_frames(self.st)
+        return (0.0 if reuse else TOGGLE_FRAMES) + nu * uturn
 
     def _step_aim_phases(self, verb, view):
         """`_aim_phases` for `verb`, empty when a transfer rides a reused bearing."""
@@ -747,11 +749,12 @@ class BasePlayer:
             if view is None or not aim.gate(st, view, tile):
                 self.fire_reason = "aim_gate"
                 return False
+        settle = self._settle(verb, view, tile=tile)  # pre-action: the clone phantom
         if verb in ("boulder", "robot"):
             cost = mm.ENERGY_IN_OBJECTS[
                 mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
             ]
-            if not self._affords(cost, self._settle(verb, view)):
+            if not self._affords(cost, settle):
                 self.fire_reason = "affords"
                 return False  # the drains this create's own settle bills take the body
         ok = False
@@ -769,7 +772,7 @@ class BasePlayer:
             if verb == "transfer":
                 self.last_bearing = None  # new body: committed bearing is stale
             # dither/replot ($1FA4/$86A5) or the viewpoint redraw ($357D): all foreground
-            self._advance(self._settle(verb, view), plotting=True)
+            self._advance(settle, plotting=True)
             if self.audit and verb in ("boulder", "robot", "transfer"):
                 self._account(verb, tile)
             self._log(verb, tile)
@@ -783,31 +786,45 @@ class BasePlayer:
         passes), else None -- the current viewpoint, unmoved."""
         return self._top(tile) if verb == "transfer" else None
 
-    def _settle(self, verb, view=None, observer=None):
+    def _settle(self, verb, view=None, observer=None, tile=None):
         """World frames the ROM advances AFTER `verb` fires; the placed object is
         on the board and exposable for this whole settle, so a danger window must
         cover the aim plus this before an enemy's cone can rotate in.
 
-        A transfer moves the eye ($0C63) BEFORE the viewpoint full-redraw path
-        ($357D) runs its two plot_world passes ($35C3/$35C6), so its settle is the
-        projector cost of the scene as the NEW body sees it: observer `observer`
-        (the transferred-into slot; default the already-moved ``st.player``) at
-        THAT body's own bearing -- a created robot faces creator ^ $80 ($1BE0), not
-        the aim `view`, which belongs to the abandoned eye.  `view` is unused for a
-        transfer and prices nothing else here."""
-        del view
+        A transfer moves the eye ($0C63) then settles through the $357D redraw as
+        the NEW body sees it (settlecost.viewpoint_settle_frames); a create/absorb
+        settles through the $12EC dither replot of the acted slot, priced on a
+        clone carrying the mid-animation posture ($1F10 flags $80 for an absorb)."""
         st = self.st
         if verb == "transfer":
-            eye = st.player if observer is None else observer
-            eye_view = {
-                "h_angle": int(st.obj_h_angle[eye]),
-                "v_angle": int(st.obj_v_angle[eye]),
-            }
-            return actioncost.FRAME_TICKS * projector.viewpoint_replot_frames(
-                st, eye_view, eye
+            eye = observer
+            if eye is None:
+                eye = self._top(tile) if tile is not None else st.player
+            return actioncost.FRAME_TICKS * settlecost.viewpoint_settle_frames(
+                st, eye, view
             )
         key = {"boulder": "create", "robot": "create"}.get(verb, verb)
-        return actioncost.SETTLE.get(key, 60)
+        if tile is None:
+            return actioncost.SETTLE.get(key, 60)
+        clone = st.clone()
+        if view is not None:  # the settle runs with the player facing the aim
+            clone.obj_h_angle[clone.player] = view["h_angle"]
+            clone.obj_v_angle[clone.player] = view["v_angle"]
+        plot_state = None
+        if key == "create":
+            otype = mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
+            slot = actions.create(clone, otype, tile)
+        else:
+            slot = terrain.top_object(clone, *tile)
+            if slot is not None:
+                plot_state = clone.clone()
+                actions.absorb(plot_state, slot)  # the strip plots the object erased
+                clone.obj_flags[slot] = 0x80
+        if slot is None:
+            return actioncost.SETTLE.get(key, 60)
+        return actioncost.FRAME_TICKS * settlecost.action_settle_frames(
+            clone, slot, view, plot_state=plot_state
+        )
 
     def _account(self, verb, tile):
         """Strict post-settle invariant on the ACTUAL placed object via the ROM's

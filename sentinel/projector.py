@@ -1211,22 +1211,5 @@ def _stage_cycles(entry):
     return entry["scan"] + entry["head"] + sum(entry["per_col"]) + entry["tail"]
 
 
-# Transfer viewpoint-replot settle ($357D): two plot_world passes (docs/architecture.md).
-REPLOT_PASSES = float(os.environ.get("RENDER_REPLOT_PASSES", "2"))
-# wait_for_end_of_tune ($35D5): #$19 tune ($1B82/$AB69) = FIXED 96 note-hold frames ($0CDF@$9630), == #$0 TUNE_FRAMES.
+# wait_for_end_of_tune ($35D5): #$19 tune ($1B82/$AB69) = FIXED 96 note-hold frames ($0CDF@$9630), == #$0 TUNE_FRAMES.  The transfer settle law lives in sentinel.settlecost.
 TUNE_TRANSFER_FRAMES = float(os.environ.get("TUNE_TRANSFER_FRAMES", "96"))
-# Fixed $357D foreground before the tune, absent from render_cost: $245B occ + $3700 + fill + status (py65 ~176f).
-SETTLE_FIXED_FRAMES = float(os.environ.get("SETTLE_FIXED_FRAMES", "176"))
-
-
-def viewpoint_replot_frames(state, view, observer=None):
-    """Transfer/viewpoint-change settle in frames (docs/architecture.md): fixed tune
-    wait + fixed $245B/$3700/fill/status foreground + ``REPLOT_PASSES`` plot_world
-    passes, all seen from ``observer`` (the POST-transfer eye $0C63; default player).
-    Live $9630 settle 259-460f; median abs error <15%
-    (``test_viewpoint_replot_lands_in_live_settle_band``)."""
-    return (
-        TUNE_TRANSFER_FRAMES
-        + SETTLE_FIXED_FRAMES
-        + REPLOT_PASSES * render_cost(state, view, observer)
-    )

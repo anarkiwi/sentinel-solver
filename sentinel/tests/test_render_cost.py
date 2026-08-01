@@ -13,7 +13,7 @@ import pytest
 
 import numpy as np
 
-from sentinel import landscape, objmodel, projector, rendercost
+from sentinel import landscape, objmodel, projector, rendercost, settlecost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
@@ -232,36 +232,31 @@ def test_occlusion_is_view_independent_and_hides_tiles():
 _LIVE_SETTLES = {42: (338, 305, 435, 460), 335: (259, 333, 371)}
 
 
-def test_viewpoint_replot_lands_in_live_settle_band():
-    """viewpoint_replot_frames = tune(96) + fixed(~176) + 2*render_cost predicts the
-    live 259-460f transfer settle: every ls42/ls335 sweep view lands in the live band
-    (vs the old ~10x under 2*render_cost), median abs error modest."""
+def test_viewpoint_settle_lands_in_live_settle_band():
+    """settlecost.viewpoint_settle_frames on the sweep views lands in the live
+    259-460f transfer band.  These sweep views are NOT the live transfers' own
+    scenes, so only the band is claimed; the per-transfer accuracy against
+    settle_oracle_ls42.json is test_settle_accuracy.py's."""
     lo, hi = min(min(v) for v in _LIVE_SETTLES.values()), max(
         max(v) for v in _LIVE_SETTLES.values()
     )
-    errs = []
-    for ls, settles in _LIVE_SETTLES.items():
+    floor = settlecost.BRACKET_FRAMES + settlecost.TUNE_FRAMES[0x19]
+    for ls in _LIVE_SETTLES:
         state = landscape.generate(ls)
-        preds = []
         for _lsk, h, v in (view for view in VIEWS if view[0] == ls):
-            f = projector.viewpoint_replot_frames(state, {"h_angle": h, "v_angle": v})
+            f = settlecost.viewpoint_settle_frames(
+                state, eye_view={"h_angle": h, "v_angle": v}
+            )
+            assert f >= floor  # the $35D5 tune wait is a hard lower bound
             assert 0.75 * lo <= f <= 1.25 * hi, f"ls{ls} {h},{v}: {f:.1f} out of band"
-            preds.append(f)
-        for p, live in zip(
-            sorted(preds), sorted(settles)
-        ):  # best-effort magnitude pair
-            errs.append(abs(p - live) / live)
-    errs.sort()
-    assert (
-        errs[len(errs) // 2] < 0.15
-    )  # median abs error (~9% with the object-base term; was ~22%, ~90% before)
 
 
 @pytest.mark.oracle
 def test_transfer_tune_is_96_frames():
     """TUNE_TRANSFER_FRAMES is ROM-derived: decode the #$19 ($AB69) and #$0 ($AB50)
     $34DE tune tables from the image -- both sum to 96 note-hold frames ($0C70=(b-$C8)*4,
-    $0CDF ticked once/frame). No ROM bytes committed; the constant is validated live."""
+    $0CDF ticked once/frame); the u-turn's #$28 tune decodes to 24, settlecost's floor.
+    """
     with open(oracle.IMG, "rb") as f:
         img = f.read()
 
@@ -279,6 +274,8 @@ def test_transfer_tune_is_96_frames():
 
     assert tune_frames(0x00) == 96  # matches projector.TUNE_TRANSFER_FRAMES
     assert tune_frames(0x19) == 96 == projector.TUNE_TRANSFER_FRAMES
+    assert settlecost.TUNE_FRAMES[0x19] == 96.0
+    assert tune_frames(0x28) == 24 == settlecost.TUNE_FRAMES[0x28]
 
 
 def _fill_cycles(state, h, v, mode=projector.PLAY_MODE):

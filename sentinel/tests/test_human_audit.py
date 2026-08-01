@@ -10,12 +10,33 @@ from sentinel.tests import human_audit
 # 94 joined the breaches when the RATE reserve stopped refusing its create: a step
 # the floor never let happen cannot leave a body in a cone.  On a WIN every placement
 # survived, so a breach here is a model false positive, same as the rejects.
-_BREACH335 = [23, 24, 28, 44, 45, 56, 95, 137]  # 52 retired by the phase-split advance
+# 52 retired by the phase-split advance; 50/52 rejoined when settlecost began pricing settles per scene, moving where each step's exposure window closes.
+_BREACH335 = [23, 24, 28, 44, 45, 50, 52, 56, 95, 137]
 # 94 became 95 when $1F9F's on-screen strip replot ($1FFC) started stalling the clock.
 # 56 joined with the derived pass cadence: the enemy clock over that span now runs at
 # the board's real rate, so the model puts the human inside a cone it had missed.
-# 18 joined when UTURN_FRAMES went 74 -> 77 and left again when the examine moved to the play machine's own $37F2: its budget is aim + HOP_FRAMES, and either way it is the drain window's edge that decides, not the step.
-_GATE335 = [17, 23, 24, 28, 42, 44, 50, 56, 74, 76, 77, 92, 94, 95, 97, 108, 137]
+# 18 joined when the u-turn price rose 74 -> 77, left when the examine moved to the play machine's own $37F2 (its budget is aim + HOP_FRAMES), and rejoined with 109 when settlecost began pricing settles per scene; either way it is the drain window's edge that decides, not the step.
+_GATE335 = [
+    17,
+    18,
+    23,
+    24,
+    28,
+    42,
+    44,
+    50,
+    56,
+    74,
+    76,
+    77,
+    92,
+    94,
+    95,
+    97,
+    108,
+    109,
+    137,
+]
 # was [30, 32, 34, 50, 51, 77, 84, 92, 94, 95] against the flat survival floor; pricing
 # exposure as the $0C20 RATE accepts seven of those human creates (docs/architecture.md)
 _FIRE335 = [32, 34, 77]
