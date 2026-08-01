@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from sentinel import actioncost, actions, enemies, memmap as mm, projector, terrain
+from sentinel import actions, enemies, memmap as mm, projector, terrain
 from sentinel.phase_player import PhasePlayer
 from sentinel.test_human_win_logs import (
     _FIX_DIR,
@@ -425,7 +425,7 @@ def test_spans_below_the_rom_floor_are_not_two_actions():
         for i, n in _exact_spans(evs)
         if _is_player_action(evs[i])
         and _is_player_action(evs[i + 1])
-        and n < floors.get(evs[i]["verb"], actioncost.DITHER_FRAMES)
+        and n < floors.get(evs[i]["verb"], 50.0)  # the retired $86A5 dither floor
     ]
     assert len(sub) == SUB_FLOOR_SPANS, f"{sub}"
 

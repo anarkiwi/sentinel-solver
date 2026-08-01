@@ -45,6 +45,14 @@ NAME_PATTERNS = (
     "_ARM",
     "_RAMP",
     "_MASK",
+    # settlecost's counted $357D/$12D0 segments carry no generic suffix.
+    "TAB_3700",
+    "FILL_1090",
+    "STATUS_9508",
+    "STATUS_98B2",
+    "EXIT_TAIL",
+    "SFX_HEAD",
+    "HEAD_BASE",
 )
 
 # Keyword arguments whose numeric default is a timing/budget knob.
@@ -216,8 +224,11 @@ def _u(module, note):
 
 
 _PRIMITIVE = "test_derived_constant_matches_primitive"
-_SETTLE_FIT = "test_create_settle_prediction_is_accurate"
 _PAN_FIT = "test_pan_notch_cost_matches_the_measured_plot"
+_SETTLE_MEAN = "test_the_settle_fallback_is_the_fixture_verb_mean"
+_SETTLE_RATE = "test_the_settle_rate_prices_every_fixture_wall"
+_SETTLE_SEG = "test_the_counted_settle_segments_match_the_oracle_marks"
+_TUNE_DECODE = "test_transfer_tune_is_96_frames"
 
 
 def _d(module, note):
@@ -227,7 +238,17 @@ def _d(module, note):
 _AC = "sentinel.actioncost"
 _PB = "sentinel.playerbase"
 _PR = "sentinel.projector"
+_SC = "sentinel.settlecost"
+_DC = "sentinel.dithercost"
+_OC = "sentinel.occlusioncost"
 _PN = "sentinel.pancost"
+
+
+def _seg(note):
+    """A counted $357D/$12D0 settle segment, checked against the oracle marks."""
+    return entry(_SC, MEASURED, note, _SETTLE_SEG)
+
+
 _EN = "sentinel.enemies"
 _ENJ = "sentinel.enemies_jit"
 _PC = "sentinel.passcost"
@@ -270,20 +291,73 @@ def _line(note):
 
 REGISTRY = {
     "FRAME_TICKS": _u(_AC, "unit scalar; no test pins it to a ROM primitive"),
-    "DITHER_FRAMES": _d(_AC, "977904 dither cycles / projector.FRAME_CYCLES"),
-    "VIEWPOINT_REPLOT_FRAMES": _d(_AC, "TUNE_TRANSFER_FRAMES + SETTLE_FIXED_FRAMES"),
-    "POST_ACTION_REPLOT_FRAMES": entry(
-        _AC,
-        MEASURED,
-        "validated only inside the create settle sum vs frozen_ls42_audit.json (<5 f)",
-        _SETTLE_FIT,
-    ),
     "SETTLE": entry(
         _AC,
         MEASURED,
-        "create settle within 5 f of frozen_ls42_audit.json; absorb bias is xfailed",
-        _SETTLE_FIT,
+        "tile-less fallback: per-verb means of settle_oracle_ls42.json (absorb 86.7, "
+        "create 109.6, transfer 332), each within 2.5 f",
+        _SETTLE_MEAN,
     ),
+    "SETTLE_BODY_FLAT": entry(
+        _SC,
+        MEASURED,
+        "counted $95E9..RTI, $0CE4 bit7 set, no-carry $130C; validated only inside "
+        "the SETTLE_FG rate vs the settle_oracle_ls42.json walls",
+        _SETTLE_RATE,
+    ),
+    "SETTLE_BODY_CARRY": entry(
+        _SC,
+        MEASURED,
+        "as SETTLE_BODY_FLAT with the $131E cooldown walk + $1635 carry frame",
+        _SETTLE_RATE,
+    ),
+    "SETTLE_BODY": _d(_SC, "FLAT + (205/256) x (CARRY - FLAT) at the $1310 Bresenham"),
+    "SETTLE_STEAL": entry(
+        _SC,
+        MEASURED,
+        "machine steal on store-heavy plot frames, fixtures/live_badline.json; "
+        "validated only inside the SETTLE_FG rate",
+        _SETTLE_RATE,
+    ),
+    "SETTLE_FG": _d(_SC, "PAL 19656 - SHORT_IRQ_FRAME - SETTLE_BODY - SETTLE_STEAL"),
+    "BRACKET_FRAMES": _d(
+        _SC, "tap_action idle+press scans + the $130B=2 re-arm, TAP_FRAMES's count"
+    ),
+    "REDRAW_HEAD": _seg("counted $357D..$35BA; exact on every fixture transfer"),
+    "TAB_3700": _seg("$35BD..$35C0 per-position tables; fixture band 1.631-1.666M"),
+    "FILL_1090": _seg("counted $35C0..$35C3; exact on every fixture transfer"),
+    "STATUS_9508": _seg("counted $35C6..$35C9; fixture band +-20 (pads by energy)"),
+    "STATUS_98B2": _seg("counted $35C9..$35CC; exact on every fixture transfer"),
+    "BUF_WAIT_HEAD": _seg("counted $35CC..$35D5; exact on every fixture transfer"),
+    "EXIT_TAIL": _seg("counted $35DD..$363D; exact on every fixture transfer"),
+    "SFX_HEAD": _seg("counted $12EC..$12F9; exact on every fixture create/absorb"),
+    "HEAD_BASE": entry(
+        _SC,
+        MEASURED,
+        "counted $12D0 dispatch + handler bookkeeping less the fire ray; validated "
+        "only inside the $357D settle sum vs the live band",
+        "test_viewpoint_settle_lands_in_live_settle_band",
+    ),
+    "TUNE_FRAMES": entry(
+        _SC,
+        DERIVED,
+        "the #$19/#$28 $AB50 tune tables decode to 96/24 note-hold frames on the image",
+        _TUNE_DECODE,
+    ),
+    "DITHER_ENTRY": _u(_DC, "ROM address, not a duration"),
+    "STEPS_PER_LAP": entry(
+        _DC,
+        DERIVED,
+        "$86BC LDA #$60: 96 chain steps per lap",
+        "test_structural_constants",
+    ),
+    "LAPS_SETTLE": entry(
+        _DC,
+        DERIVED,
+        "$2051 LDA #$28: 40 laps when $0C4E bit7 set",
+        "test_structural_constants",
+    ),
+    "_RAMP": _u(_OC, "index ramp, not a duration"),
     "_CLEAR_CYCLES_H": _d(_PN, "$3912 store-loop cycle count"),
     "_CLEAR_CYCLES_V": _d(_PN, "$38AD store-loop cycle count"),
     "CLEAR_FRAMES": entry(
@@ -304,13 +378,8 @@ REGISTRY = {
     "ROT_PERIOD_FRAMES": _d(_PB, "ROTATION_COOLDOWN_RELOAD x UNIT_FRAMES ($1813)"),
     "MEANIE_SPAWN_FRAMES": _d(_PB, "UPDATE_COOLDOWN_MEANIE_MADE x UNIT_FRAMES ($1869)"),
     "TAP_FRAMES": _u(_PB, "key tap hold; no derivation test"),
-    "UTURN_FRAMES": entry(
-        _PB,
-        MEASURED,
-        "pooled live n=9 (live_ls42_hops.json p1 + live_ls335_uturns.json), mean "
-        "76.6, samples 33..180; a central value over a wide spread, not a bound, "
-        "and not yet derived from the tap_action scan/settle structure",
-        "test_uturn_is_charged_as_an_action_tap_not_a_keystroke",
+    "UTURN_FLOOR_FRAMES": _d(
+        _PB, "settlecost.BRACKET_FRAMES + the 24-frame #$28 tune hold"
     ),
     "UNIT_FRAMES": _d(_PB, "3 x 256 / COOLDOWN_BRESENHAM_STEP gate+Bresenham divider"),
     "CURSOR_RAMP": _d(_PB, "popcount of the $11E0 CURSOR_REPEAT_MASK"),
@@ -474,8 +543,12 @@ REGISTRY = {
     "_COOLDOWN_TICK_BYTE_DEC": _d(_ENJ, "jit alias of passcost.COOLDOWN_TICK_BYTE_DEC"),
     "_FOREGROUND_CYCLES": _d(_ENJ, "jit alias of passcost.FOREGROUND_CYCLES"),
     "BASE_CYCLES": _u(_PR, "plot_world base cycles; no fixture"),
-    "SETTLE_FIXED_FRAMES": _u(_PR, "fixed settle base; no fixture"),
-    "TUNE_TRANSFER_FRAMES": _u(_PR, "transfer tune wait; unmeasured"),
+    "TUNE_TRANSFER_FRAMES": entry(
+        _PR,
+        DERIVED,
+        "the #$19/#$00 $AB50 tune tables decode to 96 note-hold frames on the image",
+        _TUNE_DECODE,
+    ),
     "UPDATE_COOLDOWN_SCAN": _u(_EN, _RELOAD),
     "UPDATE_COOLDOWN_DRAIN": _u(_EN, _RELOAD),
     "UPDATE_COOLDOWN_MEANIE_ROTATE": _u(_EN, _RELOAD),

@@ -1,0 +1,739 @@
+{
+ "_source": "driver.frozen_run 42 --player phase (2026-07-28) + jennings settle runs from each step's own sim image (scratch settle_probe2)",
+ "_why": "Enemies RTS-stubbed live and no-oped in the sim; measured settle frames are the live $9630 bracket around tap_action, cycles are the jennings count of $12D0..$1289 (create/absorb) or $12D0 + $357D..$35D5 + exit (transfer), marks are first-arrival cycle stamps.",
+ "landscape_typed": 42,
+ "rows": [
+  {
+   "label": "p1",
+   "verb": "create",
+   "tile": [
+    11,
+    26
+   ],
+   "otype": 3,
+   "live_ok": true,
+   "measured_frames": 109,
+   "cycles": 1853025,
+   "aim_ach": {
+    "h": 160,
+    "v": 237,
+    "cur": [
+     76,
+     99
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 37959,
+    "0x12f9": 38242,
+    "0x86a5": 793830,
+    "span_211b": 15,
+    "0x1f93": 1850975,
+    "0x12fc": 1850995,
+    "0x1289": 1853025
+   }
+  },
+  {
+   "label": "p2",
+   "verb": "create",
+   "tile": [
+    11,
+    26
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 118,
+   "cycles": 2023184,
+   "aim_ach": {
+    "h": 152,
+    "v": 245,
+    "cur": [
+     80,
+     69
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 45982,
+    "0x12f9": 46265,
+    "0x86a5": 977414,
+    "span_211b": 12,
+    "0x1f93": 2021131,
+    "0x12fc": 2021151,
+    "0x1289": 2023184
+   }
+  },
+  {
+   "label": "p3",
+   "verb": "transfer",
+   "tile": [
+    11,
+    26
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 262,
+   "cycles": 4537254,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 45947,
+    "0x35ba": 59196,
+    "0x35bd": 2385191,
+    "0x35c0": 4015927,
+    "0x35c3": 4124862,
+    "0x35c6": 4391641,
+    "0x35c9": 4393587,
+    "0x35cc": 4524140,
+    "0x35d5": 4524215,
+    "0x35dd": 4524240,
+    "0x363d": 4537254
+   }
+  },
+  {
+   "label": "p4",
+   "verb": "create",
+   "tile": [
+    15,
+    22
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 128,
+   "cycles": 2199421,
+   "aim_ach": {
+    "h": 104,
+    "v": 245,
+    "cur": [
+     56,
+     88
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 77629,
+    "0x12f9": 77912,
+    "0x86a5": 1175059,
+    "span_211b": 8,
+    "0x1f93": 2197365,
+    "0x12fc": 2197385,
+    "0x1289": 2199421
+   }
+  },
+  {
+   "label": "p5",
+   "verb": "transfer",
+   "tile": [
+    15,
+    22
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 309,
+   "cycles": 5356039,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 76990,
+    "0x35ba": 90239,
+    "0x35bd": 2469369,
+    "0x35c0": 4114572,
+    "0x35c3": 4223507,
+    "0x35c6": 5210423,
+    "0x35c9": 5212372,
+    "0x35cc": 5342925,
+    "0x35d5": 5343000,
+    "0x35dd": 5343025,
+    "0x363d": 5356039
+   }
+  },
+  {
+   "label": "p6",
+   "verb": "absorb",
+   "tile": [
+    11,
+    26
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 96,
+   "cycles": 1625881,
+   "aim_ach": {
+    "h": 224,
+    "v": 237,
+    "cur": [
+     79,
+     96
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 68592,
+    "0x12f9": 68875,
+    "0x86a5": 601522,
+    "span_211b": 8,
+    "0x1f93": 1623828,
+    "0x12fc": 1623848,
+    "0x1289": 1625881
+   }
+  },
+  {
+   "label": "p7",
+   "verb": "absorb",
+   "tile": [
+    9,
+    30
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 88,
+   "cycles": 1492828,
+   "aim_ach": {
+    "h": 232,
+    "v": 241,
+    "cur": [
+     65,
+     80
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 94490,
+    "0x12f9": 94773,
+    "0x86a5": 460487,
+    "span_211b": 9,
+    "0x1f93": 1490761,
+    "0x12fc": 1490781,
+    "0x1289": 1492828
+   }
+  },
+  {
+   "label": "p8",
+   "verb": "absorb",
+   "tile": [
+    14,
+    20
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 85,
+   "cycles": 1429208,
+   "aim_ach": {
+    "h": 136,
+    "v": 233,
+    "cur": [
+     83,
+     97
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 18133,
+    "0x12f9": 18416,
+    "0x86a5": 370019,
+    "span_211b": 15,
+    "0x1f93": 1427158,
+    "0x12fc": 1427178,
+    "0x1289": 1429208
+   }
+  },
+  {
+   "label": "p9",
+   "verb": "create",
+   "tile": [
+    8,
+    20
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 95,
+   "cycles": 1602808,
+   "aim_ach": {
+    "h": 184,
+    "v": 245,
+    "cur": [
+     70,
+     95
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 80955,
+    "0x12f9": 81238,
+    "0x86a5": 582431,
+    "span_211b": 7,
+    "0x1f93": 1600755,
+    "0x12fc": 1600775,
+    "0x1289": 1602808
+   }
+  },
+  {
+   "label": "p10",
+   "verb": "transfer",
+   "tile": [
+    8,
+    20
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 367,
+   "cycles": 6375918,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 80408,
+    "0x35ba": 93657,
+    "0x35bd": 2652193,
+    "0x35c0": 4302836,
+    "0x35c3": 4411771,
+    "0x35c6": 6230305,
+    "0x35c9": 6232251,
+    "0x35cc": 6362804,
+    "0x35d5": 6362879,
+    "0x35dd": 6362904,
+    "0x363d": 6375918
+   }
+  },
+  {
+   "label": "p11",
+   "verb": "create",
+   "tile": [
+    11,
+    19
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 107,
+   "cycles": 1831414,
+   "aim_ach": {
+    "h": 72,
+    "v": 245,
+    "cur": [
+     63,
+     127
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 46323,
+    "0x12f9": 46606,
+    "0x86a5": 781146,
+    "span_211b": 13,
+    "0x1f93": 1829358,
+    "0x12fc": 1829378,
+    "0x1289": 1831414
+   }
+  },
+  {
+   "label": "p12",
+   "verb": "transfer",
+   "tile": [
+    11,
+    19
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 336,
+   "cycles": 5814754,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 45677,
+    "0x35ba": 58926,
+    "0x35bd": 3091092,
+    "0x35c0": 4756931,
+    "0x35c3": 4865866,
+    "0x35c6": 5669138,
+    "0x35c9": 5671087,
+    "0x35cc": 5801640,
+    "0x35d5": 5801715,
+    "0x35dd": 5801740,
+    "0x363d": 5814754
+   }
+  },
+  {
+   "label": "p13",
+   "verb": "absorb",
+   "tile": [
+    15,
+    22
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 86,
+   "cycles": 1454958,
+   "aim_ach": {
+    "h": 40,
+    "v": 229,
+    "cur": [
+     64,
+     79
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 71577,
+    "0x12f9": 71860,
+    "0x86a5": 422559,
+    "span_211b": 9,
+    "0x1f93": 1452905,
+    "0x12fc": 1452925,
+    "0x1289": 1454958
+   }
+  },
+  {
+   "label": "p14",
+   "verb": "absorb",
+   "tile": [
+    8,
+    20
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 84,
+   "cycles": 1422400,
+   "aim_ach": {
+    "h": 200,
+    "v": 229,
+    "cur": [
+     94,
+     75
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 36415,
+    "0x12f9": 36698,
+    "0x86a5": 372183,
+    "span_211b": 13,
+    "0x1f93": 1420350,
+    "0x12fc": 1420370,
+    "0x1289": 1422400
+   }
+  },
+  {
+   "label": "p15",
+   "verb": "absorb",
+   "tile": [
+    11,
+    26
+   ],
+   "otype": 3,
+   "live_ok": true,
+   "measured_frames": 82,
+   "cycles": 1378911,
+   "aim_ach": {
+    "h": 0,
+    "v": 229,
+    "cur": [
+     80,
+     95
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 86776,
+    "0x12f9": 87059,
+    "0x86a5": 333193,
+    "span_211b": 12,
+    "0x1f93": 1376847,
+    "0x12fc": 1376867,
+    "0x1289": 1378911
+   }
+  },
+  {
+   "label": "p16",
+   "verb": "absorb",
+   "tile": [
+    5,
+    30
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 78,
+   "cycles": 1302003,
+   "aim_ach": {
+    "h": 232,
+    "v": 245,
+    "cur": [
+     105,
+     39
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 161720,
+    "0x12f9": 162003,
+    "0x86a5": 281617,
+    "span_211b": 7,
+    "0x1f93": 1299956,
+    "0x12fc": 1299976,
+    "0x1289": 1302003
+   }
+  },
+  {
+   "label": "p17",
+   "verb": "absorb",
+   "tile": [
+    18,
+    15
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 91,
+   "cycles": 1549891,
+   "aim_ach": {
+    "h": 80,
+    "v": 229,
+    "cur": [
+     95,
+     100
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 90272,
+    "0x12f9": 90555,
+    "0x86a5": 513186,
+    "span_211b": 10,
+    "0x1f93": 1547844,
+    "0x12fc": 1547864,
+    "0x1289": 1549891
+   }
+  },
+  {
+   "label": "p18",
+   "verb": "absorb",
+   "tile": [
+    10,
+    12
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 89,
+   "cycles": 1499672,
+   "aim_ach": {
+    "h": 136,
+    "v": 233,
+    "cur": [
+     72,
+     87
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 84626,
+    "0x12f9": 84909,
+    "0x86a5": 458224,
+    "span_211b": 11,
+    "0x1f93": 1497611,
+    "0x12fc": 1497631,
+    "0x1289": 1499672
+   }
+  },
+  {
+   "label": "p19",
+   "verb": "absorb",
+   "tile": [
+    5,
+    12
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 92,
+   "cycles": 1559824,
+   "aim_ach": {
+    "h": 160,
+    "v": 229,
+    "cur": [
+     66,
+     81
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 132762,
+    "0x12f9": 133045,
+    "0x86a5": 527407,
+    "span_211b": 9,
+    "0x1f93": 1557780,
+    "0x12fc": 1557800,
+    "0x1289": 1559824
+   }
+  },
+  {
+   "label": "p20",
+   "verb": "absorb",
+   "tile": [
+    4,
+    27
+   ],
+   "otype": 2,
+   "live_ok": true,
+   "measured_frames": 83,
+   "cycles": 1405832,
+   "aim_ach": {
+    "h": 224,
+    "v": 241,
+    "cur": [
+     95,
+     85
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 115643,
+    "0x12f9": 115926,
+    "0x86a5": 385491,
+    "span_211b": 7,
+    "0x1f93": 1403788,
+    "0x12fc": 1403808,
+    "0x1289": 1405832
+   }
+  },
+  {
+   "label": "p21",
+   "verb": "create",
+   "tile": [
+    4,
+    20
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 81,
+   "cycles": 1378161,
+   "aim_ach": {
+    "h": 192,
+    "v": 245,
+    "cur": [
+     105,
+     95
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 70935,
+    "0x12f9": 71218,
+    "0x86a5": 357775,
+    "span_211b": 7,
+    "0x1f93": 1376114,
+    "0x12fc": 1376134,
+    "0x1289": 1378161
+   }
+  },
+  {
+   "label": "p22",
+   "verb": "transfer",
+   "tile": [
+    4,
+    20
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 386,
+   "cycles": 6705636,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 70410,
+    "0x35ba": 83659,
+    "0x35bd": 3261855,
+    "0x35c0": 4913310,
+    "0x35c3": 5022245,
+    "0x35c6": 6560029,
+    "0x35c9": 6561969,
+    "0x35cc": 6692522,
+    "0x35d5": 6692597,
+    "0x35dd": 6692622,
+    "0x363d": 6705636
+   }
+  },
+  {
+   "label": "p23",
+   "verb": "create",
+   "tile": [
+    15,
+    10
+   ],
+   "otype": 3,
+   "live_ok": true,
+   "measured_frames": 117,
+   "cycles": 1995792,
+   "aim_ach": {
+    "h": 96,
+    "v": 245,
+    "cur": [
+     77,
+     92
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 151398,
+    "0x12f9": 151681,
+    "0x86a5": 979359,
+    "span_211b": 6,
+    "0x1f93": 1993728,
+    "0x12fc": 1993748,
+    "0x1289": 1995792
+   }
+  },
+  {
+   "label": "p24",
+   "verb": "create",
+   "tile": [
+    15,
+    10
+   ],
+   "otype": 0,
+   "live_ok": true,
+   "measured_frames": 122,
+   "cycles": 2085690,
+   "aim_ach": {
+    "h": 96,
+    "v": 245,
+    "cur": [
+     72,
+     101
+    ]
+   },
+   "marks": {
+    "0x1b18": 91,
+    "0x12ec": 155454,
+    "0x12f9": 155737,
+    "0x86a5": 1080958,
+    "span_211b": 4,
+    "0x1f93": 2083623,
+    "0x12fc": 2083643,
+    "0x1289": 2085690
+   }
+  },
+  {
+   "label": "p25",
+   "verb": "transfer",
+   "tile": [
+    15,
+    10
+   ],
+   "otype": 0,
+   "live_ok": false,
+   "measured_frames": 3,
+   "cycles": 6548463,
+   "aim_ach": null,
+   "marks": {
+    "0x1b18": 91,
+    "0x357d": 155352,
+    "0x35ba": 168601,
+    "0x35bd": 3215620,
+    "0x35c0": 4883577,
+    "0x35c3": 4992512,
+    "0x35c6": 6402836,
+    "0x35c9": 6404796,
+    "0x35cc": 6535349,
+    "0x35d5": 6535424,
+    "0x35dd": 6535449,
+    "0x363d": 6548463
+   }
+  }
+ ]
+}

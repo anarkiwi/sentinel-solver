@@ -47,11 +47,13 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
 
 
 def drive_transfer_aim(kbd, tile, view, log):
-    """Aim the sights onto `tile` for a transfer (perform_step drives the aim only for
-    create/absorb).  Reuses a matching committed bearing, else drives the full view;
-    the live ray probe confirms the landing."""
+    """Aim the sights onto `tile` for a transfer; the live ray probe is the arbiter.
+
+    A reused aim whose probe misses re-drives, and a still-missing probe refuses the
+    fire (frozen ls42 p25: a blind reuse transferred 61->61, the sim reaches 58)."""
     want = (view["h_angle"], view["v_angle"])
-    if kbd.sights_live_on() and kbd.committed_bearing() == want:
+    reused = kbd.sights_live_on() and kbd.committed_bearing() == want
+    if reused:
         kbd.fine_cursor(*view["cursor"])
     else:
         ach = kbd.drive_to(view)
@@ -60,9 +62,19 @@ def drive_transfer_aim(kbd, tile, view, log):
             return False
         kbd.set_bearing(*want)
     rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
-    if (rx, ry) != tuple(tile) or not los_hit:
-        log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
-    return True
+    if (rx, ry) == tuple(tile) and los_hit:
+        return True
+    log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
+    if reused:  # the parked sights drifted: full re-drive, then re-probe
+        ach = kbd.drive_to(view)
+        if ach["ok"]:
+            kbd.set_bearing(*want)
+            rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+            if (rx, ry) == tuple(tile) and los_hit:
+                return True
+        log(f"    transfer re-aim probe ({rx},{ry}) los={los_hit}; not firing")
+    kbd.clear_bearing()
+    return False
 
 
 class LiveMixin:

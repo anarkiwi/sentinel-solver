@@ -75,7 +75,7 @@ class PhasePlayer(BasePlayer):
         the gap the action needs -- no invented duration.
         """
         return self._step_aim_frames(verb, view) + self._settle(
-            verb, view, self._settle_eye(verb, tile)
+            verb, view, self._settle_eye(verb, tile), tile=tile
         )
 
     def _hop_span(self, tile, k):
