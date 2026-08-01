@@ -303,9 +303,14 @@ def test_offband_tiles_still_cost_their_prepare_polygon_calls():
     assert zero_area, "no all-off-band view in the sweep to guard"
 
 
+@pytest.mark.skipif(
+    not objmodel.available(), reason="the object stacks need the game image"
+)
 def test_fill_model_tracks_the_measured_terrain_fill():
     """rendercost emulates $2A24 -> $22AA and $21AE in render order, so its cycles
-    track the golden's own fill subtrees rather than an area proxy."""
+    track the golden's own fill subtrees rather than an area proxy.  The golden's
+    object_fill_cycles are part of the claim, so the $21AE emulation -- and with it the
+    model geometry out of the game image -- has to be there to make it."""
     ratios = []
     for key, rec in sorted(json.load(open(GOLDEN)).items()):
         ls, h, v = (int(x) for x in key.split(","))

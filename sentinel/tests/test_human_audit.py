@@ -4,6 +4,8 @@ them flips this test.  One comprehensive test per fixture keeps it xdist-safe.""
 
 import pytest
 
+from sentinel import objmodel
+from sentinel.test_human_win_logs import _load
 from sentinel.tests import human_audit
 
 # Pinned CURRENT ls335 disagreements: recording play_20260725_105258, a live WIN whose enemy clock is recorded into the fixture, so the audit runs on TRUE facings (no live _truth.json). Regenerable via ``python -m sentinel.tests.human_audit``; a model fix that clears any -> update here.
@@ -114,6 +116,11 @@ EXPECTED_ENERGY = {
 
 @pytest.mark.parametrize("name", human_audit.FIXTURES)
 def test_fixture_audit(name):
+    # A recorded enemy clock is advanced through the frame's plotting cost, whose $21AE object term needs the game image; without it the facings, and so the pins below, are a different model's.
+    if not objmodel.available() and any(
+        ev.get("enemy_clock") for ev in _load(name)["events"]
+    ):
+        pytest.skip("game image absent: object render terms fall back to floors")
     audit = human_audit.audit_fixture(name)
     steps = audit["steps"]
     summ = audit["summary"]
