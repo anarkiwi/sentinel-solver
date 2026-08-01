@@ -82,21 +82,102 @@ shortens every window, so the gates are the test. Price at the same time that an
 object **pins** a gaze, since a sentry with something to drain stops rotating. Binds the
 reactive player only; the phase player simulates the span (`_drained_over`).
 
-## 4. Per-step frame drift, and the unattributed create/absorb settle split
+## 4. The settle law is exact; the live residual is aim-side attribution
 
-**Wrong.** Charged frames drift against measured frames per step, and the settle side is two
-constants merged into one.
+**Wrong.** The per-verb settle is now priced from the ROM's own paths (`settlecost.py`) and
+lands within 2.4 f of every frozen-live measurement, but the live per-action total still
+carries sd 71 f (was 118 under the old constants), and all four surviving terms are on the
+aim side, not the settle:
 
-**Measured.** A winning live ls42 run under-charges over its 36 steps, reproducibly run to run.
-Over 15 runs a create's settle measures 96.00 f against an absorb's 85.87 f while
-`actioncost.SETTLE` charges both 93.75 f — the separation pinned by
-`test_absorb_and_create_measured_settles_are_separated`, the merge a strict xfail in
-`test_settle_accuracy.py`. The only split `$2099` is known to have is the meanie flag, so the
-create/absorb difference has no ROM path yet. The aim side is a separate over-charge, dominated
-by large pans.
+- **Pitch notches over-charge ~3.4 f each, live.** A pitch notch plots a 64-row band
+  (`$994B` → `$0051`/`$0052`) but the examine/walk is charged full-scene; and
+  `pancost.PAN_MODE`'s vertical mode is 0 == `projector.PLAY_MODE`, so
+  `projector._exact_render_cost` prices a pitch strip as a full redraw too.
+- **`TAB_3700`'s scene band is not walked per tile.** `$35BD..$35C0` spans 1.631–1.666 M
+  cycles over ls42 scenes (±1 f at the settle rate); `settlecost.TAB_3700` charges the
+  1.648 M centre.
+- **`render_cost` carries an internal compensating pair.** The pan law itself is verified
+  serial from the ROM (the `$363D..$3694` loop: the `$0CC1` queue, the `$0CD8` once-per-frame
+  drain, the `$130B` accept gate) and empirically unbiased (24 rows, mean resid −0.5 f,
+  RMS 13.5 f) — but only because a notch divides raw proxy cycles by 19656 while the proxy's
+  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the py65 backend
+  **alone** breaks it ~25%, in opposite directions. Move both sides or neither.
+- **Live bracket attribution.** The sd-71 residual sits in how the live `$9630` bracket
+  splits an action between aim and settle, not in either law's own bias — the settle's
+  per-verb bias is ≤ 1.3 f offline.
 
-**Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
-on it rather than on the fitted difference.
+**Measured — the old model against frozen-live ground truth** (`out/frozen_phase_0042.json`,
+2026-07-28): per-action total error sd 118 f, worst −411/+391 f; the transfer settle biased
++40 f; create and absorb shared one 93.75 f constant against measured 109–128 f and 78–96 f.
+**The new law, offline** (`test_settle_law_predicts_the_frozen_measurement`,
+`tests/fixtures/settle_oracle_ls42.json`): all 24 measured actions within 2.4 f, rms 0.9 f,
+per-verb bias ≤ 1.3 f. **Live rerun** (this cycle): the frozen ls42 run now WINS in 36
+actions where the old run lost at p25, and per-action sd falls 118 → 71 f. **Offline suite**:
+all eight boards win under the new prices — ls0 29 (was 16), ls42 32 (35), ls60 44 (41),
+ls110 35 (49), ls298 36 (32), ls321 28 (35), ls335 60 (55), ls373 32 (45); the counts are a
+world model changing, not a policy.
+
+**Closed — the redraw runs ONE `plot_world`.** `$357D`'s calls are `$35C3` = `plot_world` and
+`$35C6`/`$35C9` = `plot_status_bar` `$9508`/`$98B2` — there is no second pass. The old
+`REPLOT_PASSES = 2` charged one. The fixture's marks say what the "second pass" was:
+`$35C9−$35C6` = 1946 and `$35CC−$35C9` = 130553 cycles, status plots, not a render.
+
+**Closed — the transfer tune overlaps the redraw.** Tune `#$19` (96 note-hold frames) starts
+at `$1B82`, BEFORE the redraw; `$35D5` waits only for its remainder. The law is
+`max(redraw, tune)`; the old model added the 96 on top.
+
+**Closed — a u-turn is a redraw, not a bare keystroke.** `$1B2F` EORs the bearing, starts
+tune `#$28` (24 f, the `$AB50` table, `test_uturn_tune_is_24_frames`) via `$1B3C LDA #$28 /
+BNE $1B84`, sets `$0C63` and takes the `$357D` redraw — with `$245B`/`$3700` SKIPPED,
+because `$1B2F`'s ASL leaves `$0C51` bit7 set and `$35B5 BMI` branches to `$35C0`.
+`UTURN_FRAMES = 77` (a pooled mean over clipped samples spanning 33–180 f) is retired;
+`playerbase.UTURN_FLOOR_FRAMES = 27` is the admissible bound (3-frame tap bracket + the
+24-frame tune floor) and the real price is `settlecost.uturn_settle_frames`, per scene.
+
+**Closed — the create/absorb split is the strip's own scene.** The path is `$12D0` → `$1B18`
+(the fire ray's `$1C10`/`$1CDD` march, priced by `los`) → `$12EC`: the `#$02` sfx, `$0C6D =
+$C0`, then `$1F9F` replots the object's strip WITH the `$86A5` dither inserted at the flush
+(`$2056`, gated by `$2047 BIT $0C6D`), then `$9508` and the pass tail; a transfer skips
+`$12EC` entirely (`$1B8C SEC` → `$12EA BCS $1302`). The difference this item could not find
+a ROM path for IS the strip's scene: a create plots the strip WITH the new object, an absorb
+plots it with the object ERASED (`$1F10`, flags `$80`) — measured on ls42, creates 109–128 f
+against absorbs 78–96 f.
+
+**Closed — the dither is walked cycle-exactly.** `$2099 = #$19` = 25 outer laps (`$1FA4`;
+`$2051` overrides to `#$28` = 40 only when `$0C4E` bit7 is set) × 96 inner steps (`$86BC`,
+`$0CD2`), a pointer chain (`$87B0`/`$A3`/`$A4`, ×5 per step) with span-masked plotting.
+`sentinel/dithercost.py` walks it: 69/69 oracle cases cycle-exact, the chain threaded across
+calls (`test_dithercost.py`).
+
+**Closed — `$245B` is per (board, position) and is the largest transfer term.** 2.33–3.26 M
+cycles on ls42 scenes — 119–166 f at the settle rate. `sentinel/occlusioncost.py` prices it
+cycle-exact: 15/15 oracle pairs on ls42/ls335/ls9795, spanning 0.8–3.6 M cycles
+(`test_occlusioncost.py`).
+
+**Closed — the settle's wall rate is not 19656 cycles/frame.** During a settle `$0CE4` bit7
+makes the IRQ body skip the `$119F` keyboard walk (`$9669 BMI`), so the frame's foreground
+is 19656 − 477 (short IRQs) − 634.7 (settle body: `$95E9`..RTI, 356 flat / 704 on the
+205/256 Bresenham-carry frames) − 1069 (store-heavy steal, `fixtures/live_badline.json`)
+= 17475.6 = `settlecost.SETTLE_FG`.
+
+**Closed — the segments are counted, not fitted** (jennings, the fixture's first-arrival
+marks): `REDRAW_HEAD` 13249 (`$357D..$35BA`), `TAB_3700` 1.648 M (`$35BD..$35C0`),
+`FILL_1090` 108935 constant, `STATUS_9508` 1946 (± f(E)), `STATUS_98B2` 130553 constant,
+`BUF_WAIT_HEAD` 75, `EXIT_TAIL` 13014, `SFX_HEAD` 283, `PASS_TAIL` 2040, `HEAD_BASE` 4600,
+`BRACKET_FRAMES` 3 (`tap_action`: idle scan + press scan + the `$130B = 2` re-arm).
+
+**Closed — `TOGGLE_FRAMES` 12 → 3.5.** The old 12 folded the last pan notch's 8-frame
+trailing V scroll into the sights-toggle bucket: dv>0 rows measure 11–12 and dv==0 rows
+19–20 — exactly 8 apart, 29/29 rows.
+
+**Closed — the probe arbitrates a reused transfer aim.** `driver/live_player.drive_transfer_aim`
+re-drives a reused aim that misses and refuses the fire while the probe still misses. Frozen
+ls42 p25 had fired blind at the player's own body (61 → 61) and lost the run; the same
+posture in jennings transfers 61 → 58.
+
+**Resolves.** The 64-row pitch charge (both the proxy walk and `_exact_render_cost`'s mode
+alias), a per-tile walk of `$3700`'s band, and a live bracket attribution that closes the
+sd-71 residual — with the `render_cost` compensating pair moved together or not at all.
 
 ## 5. One object vertex angle is ten units out
 

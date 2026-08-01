@@ -545,11 +545,11 @@ ROM's does, and search and executor share the one sequence (`_aim_head_tail`).
 
 | segment | ROM | frames | runs `$16B5`? |
 |---|---|---|---|
-| sights toggle | `initialise_sights $134C` re-centre + `plot_sights` | 0 on a same-bearing reuse, else `TOGGLE_FRAMES` | no |
-| u-turn taps | action code `$23`, no scroll, no replot | `n · UTURN_FRAMES` | **yes** |
+| sights toggle | `initialise_sights $134C` re-centre + `plot_sights` | 0 on a same-bearing reuse, else `TOGGLE_FRAMES` = 3.5 | no |
+| u-turn taps | action code `$23`: bearing `⊕ $80`, tune `#$28`, the `$357D` redraw less `$245B`/`$3700` (`$35B5 BMI`) | `n · settlecost.uturn_settle_frames` | **yes** |
 | pan notches | `$10EE`/`$1135` scroll + one `plot_world` per notch | `pancost.pan_frames` | no |
 | cursor drive + firing tap | gated `move_sights`/`tap_action` scans | `max(abs Δcx, abs Δcy) + CURSOR_RAMP + TAP_FRAMES` | **yes** |
-| settle | `$1FA4`/`$86A5` dither + replot, or the `$357D` redraw | `actioncost.SETTLE[verb]` | no |
+| settle | `$12EC` strip replot + `$86A5` dither, or the `$357D` redraw | `settlecost.action_settle_frames` / `viewpoint_settle_frames` | no |
 
 Two freezes decide which segments the enemies see.
 
@@ -661,7 +661,7 @@ foreground work folded into a settle constant.
 | `$0F3E` | `multiply_double_A_by_pi` | scale a 16-bit value by π | `los.multiply_double_A_by_pi` | `golden_los` |
 | `$0F4A` | `multiply_double_by_byte` | 16×8 fixed-point multiply | `los.multiply_double_by_byte` | `golden_los` |
 | `$0F9E` | `multiply_double_by_double` | signed 16×16 fixed-point multiply | `los.multiply_double_by_double` | `golden_los` |
-| `$1090` | `fill_screen_with_background` | clears the play buffer before a replot |  | folded into `projector.SETTLE_FIXED_FRAMES`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$1090` | `fill_screen_with_background` | clears the play buffer before a replot | `settlecost.FILL_1090` (108935 cycles, constant) | `test_transfer_segment_constants_match_the_fixture_marks` |
 | `$10B7` | `pan_viewpoint` | one keyboard pan notch: strip clear, one `plot_world` at the intermediate angle, queue the scroll | `pancost.notch_frames` | `golden_pan_cost` |
 | `$10EE` | (in `pan_viewpoint`) | horizontal scroll — 16 steps per ±8 bearing notch | `playerbase.H_SCROLL` | `golden_pan_cost` |
 | `$1135` | (in `pan_viewpoint`) | vertical scroll — 8 steps per ±4 pitch notch | `playerbase.V_SCROLL` | `golden_pan_cost` |
@@ -676,9 +676,10 @@ foreground work folded into a settle constant.
 | `$127C` | `update_game` | the per-pass game update |  |  |
 | `$1281` | (in `update_game`) | zeroes the action latch `$0C51` | `kbd_aim.tap_action` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$1289` | `update_game_loop` | calls `update_enemies` once per main-loop pass | `enemies.CURSOR_SLOTS` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
-| `$12D0` | `consider_player_action` | requires the sights active before create/absorb/transfer | `kbd_aim.tap_action` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$12D0` | `consider_player_action` | requires the sights active before create/absorb/transfer; dispatch + handler bookkeeping is `settlecost.HEAD_BASE` = 4600 cycles | `kbd_aim.tap_action`, `settlecost.HEAD_BASE` | `driver/test_live_determinism.py`; `test_settle_accuracy.py` |
 | `$12D5` | (in `consider_player_action`) | `CMP #$22 / BCS $12DE` — codes `>= $22` skip the sights check | `playerbase._aim_unfreeze_split` | `test_settle_accuracy.py` |
 | `$12E1` | (in `consider_player_action`) | `LSR $0CE5` — the first action unfreezes the enemy clock | `actions._mark_player_acted` | `test_settle_accuracy.py` |
+| `$12EC` | (in `consider_player_action`) | the create/absorb settle: `#$02` sfx, `$0C6D = $C0`, the `$1F9F` strip replot with the `$86A5` dither at the flush, `$9508`, the pass tail; a transfer skips it (`$1B8C SEC` → `$12EA BCS $1302`) | `settlecost.action_settle_frames` | `test_settle_law_predicts_the_frozen_measurement`, fixture `settle_oracle_ls42.json` |
 | `$130C` | `update_enemy_cooldowns` | per-frame Bresenham: `$1335 += $CD`, call `$1317` on carry | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$1317` | `update_enemy_cooldowns` | decrement stage, every third carry (gated by `$0C50`) | `enemies.tick_cooldowns` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$134C` | `initialise_sights` | a sights-ON toggle re-centres the cursor to `$0CC6`=80 / `$0CC7`=95 | `playerbase.SIGHTS_CENTRE`, `kbd_aim.sights_set` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
@@ -741,11 +742,11 @@ foreground work folded into a settle constant.
 | `$1B00` | (in `consider_enemy_state`) | `SEC / BIT $0C1F / BPL $1B17` — returns carry set without doing anything unless the plot flag `$0C1F` bit 7 is set |  | deliberately unmodelled: a no-op on the common path |
 | `$1B18` | `handle_player_actions` | dispatch; builds the aim vector for every code `< $22` | `aim.resolve` | `golden_actions` |
 | `$1B1F` | `handle_hyperspace` | the hyperspace action | `actions.hyperspace` | `golden_actions` |
-| `$1B2F` | `handle_uturn` | `objects_h_angle ⊕ $80` — free instant 180° flip | `aimcost.h_press_count`, `kbd_aim._uturn` | `test_aimcost.py`, `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$1B2F` | `handle_uturn` | `objects_h_angle ⊕ $80`, starts tune `#$28` (`$1B3C LDA #$28 / BNE $1B84`), sets `$0C63`; its ASL leaves `$0C51` bit7 set so `$35B5 BMI` skips `$245B`/`$3700` in the redraw that follows | `settlecost.uturn_settle_frames`, `aimcost.h_press_count`, `kbd_aim._uturn` | `test_uturn_tune_is_24_frames`, `test_aimcost.py`, `driver/test_live_determinism.py` |
 | `$1B40`-`$1B46` | (in `handle_player_actions`) | the LOS gate; carry set → bad-action sound, no effect | `aim.resolve`/`gate` | `golden_actions` |
 | `$1B64` | `try_to_transfer_into_object` | move `player_object` into a visible type-0 robot | `actions.transfer` | `golden_actions` |
 | `$1B6E` | `find_platform_below_player_loop` | sets `$0CE6` when the new body stands on the platform | `actions.on_platform` | `golden_actions` |
-| `$1B82` | (in `try_to_transfer_into_object`) | starts the transfer tune (`start_tune $888F`, tune `#$19`) | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
+| `$1B82` | (in `try_to_transfer_into_object`) | starts the transfer tune (`start_tune $888F`, tune `#$19`) BEFORE the redraw — `$35D5` waits only for its remainder, so the tune overlaps, never adds | `settlecost.TUNE_FRAMES` | `test_transfer_tune_is_96_frames` |
 | `$1B8E` | `try_to_absorb_object` | absorb the topmost object in the target tile | `actions.absorb`/`can_absorb` | `golden_actions` |
 | `$1B91` | (in `try_to_absorb_object`) | `LDA $0100` — absolute read of `objects_flags[0]`; the Sentinel lock | `actions.can_absorb` (`SENTINEL_SLOT`) | `golden_actions` |
 | `$1B9A` | (in `try_to_absorb_object`) | the platform (type 6) can never be absorbed | `actions.can_absorb` | `golden_actions` |
@@ -780,9 +781,9 @@ foreground work folded into a settle constant.
 | `$1EFF`/`$1F16` | `put_object_in_tile` | ground, or stacked on a boulder (+½) or platform (+1) | `enemies._put_object_in_tile`, `landscape._put_object` | `golden_actions`, `golden_landscape` |
 | `$1F38` | (in `put_object_in_tile`) | refuses a create on a tile that already carries anything else | `actions.can_create` | `golden_actions` |
 | `$1F83` | (in `put_object_in_tile`) | random initial facing `(prnd & $F8) + $60` | `actions.create`, `landscape._put_object` | `golden_landscape` |
-| `$1FA4` | dither loop | the create/absorb post-action dither, loads `#$19` into `$2099` | `actioncost.DITHER_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
-| `$2051` | (in the settle path) | loads `#$28` instead when `$0C4E` (meanie-made) is set |  | the meanie split, not the create/absorb one ([4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split)) |
-| `$2099` | settle counter | the post-action dither countdown | `actioncost.SETTLE` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$1FA4` | dither loop | loads `#$19` = 25 outer laps into `$2099`; the dither runs at the `$2056` flush, gated by `$2047 BIT $0C6D` | `dithercost.LAPS_PLAY` | `test_dithercost.py`, 69/69 oracle cases cycle-exact |
+| `$2051` | (in the settle path) | loads `#$28` = 40 laps instead when `$0C4E` (meanie-made) bit7 is set | `dithercost.LAPS_SETTLE` | `test_dithercost.py` |
+| `$2099` | dither lap counter | the per-call outer-lap countdown, 96 chain steps a lap (`$86BC`) | `dithercost.dither_cycles` | `test_dithercost.py` |
 | `$210E` | `create_object` | the highest empty slot, typed | `enemies._create_object`, `landscape._create_object` | `golden_actions` |
 | `$2120`/`$2122` | `create_object_from_action` / `find_empty_slot_loop` | slots 63→0 | `actions._find_empty_slot` | `golden_actions` |
 | `$2136` | `gain_or_lose_energy_from_object` | absorb adds, create subtracts | `energy.gain`/`lose` | `golden_actions` |
@@ -797,7 +798,7 @@ foreground work folded into a settle constant.
 | `$21AE` | `plot_stack_of_objects` | the per-tile object stack draw | `projector._inview_object_base` | `golden_projector` |
 | `$22AA` | `span_fill` | middle-of-polygon fill, 8 cycles per byte, 4 px/byte | `rendercost._span_fill` | `golden_render_cost` |
 | `$23D0` | `plot_middle_of_row` | per-row span emit; the `$23DB` branch offset selects the entry into a 31-store unrolled loop | `rendercost._span_fill` | `golden_render_cost` |
-| `$245B` | `populate_tile_visibility_bit_table` | raytraced occlusion into the `$3E80`/`$24DA` bitmap | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
+| `$245B` | `populate_tile_visibility_bit_table` | raytraced occlusion into the `$3E80`/`$24DA` bitmap; per (board, position), 2.33–3.26 M cycles on ls42 scenes — the largest transfer-settle term | `projector.occlusion_visible` (result), `occlusioncost.occlusion_cycles` (price) | tile-for-tile against the ROM `$3E80` bitmap; `test_occlusioncost.py`, cycle-exact 15/15 on ls42/ls335/ls9795 |
 | `$24E2` | `trace_rays_from_observer_to_row_of_tiles` | the fixed-point DDA occlusion raytrace | `projector._occlusion_visible_py.trace` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$2565`/`$2570` | code-entry validation | the driver patches these to accept any code | `core.CODE_PATCHES` | `driver/test_core.py` |
 | `$2625` | `plot_world` | the equirectangular rasteriser, 32×32 grid furthest-to-nearest | `projector.project_scene`, `projector_jit` | `golden_projector` |
@@ -840,19 +841,19 @@ foreground work folded into a settle constant.
 | `$33ED` | `seed_prnd_from_landscape_number` | seeds `state[0..1]` from the typed number as packed BCD | `landscape.seed_for`, `core.landscape_from_digits` | `golden_prng`, `test_landscape_numbering.py` |
 | `$3426` | `get_maximum_number_of_enemies` | geometric draw centred on the thousands digit + 2 | `landscape._max_enemies_second_cap` | `golden_landscape` |
 | `$3451` | `get_random_number_between_0_and_22` | one draw, range-limited | `landscape._rnd_0_22` | `golden_landscape` |
-| `$34DE` | `play_tune` | walks `$AB50 + tune_number`; note holds count down in `$0CDF` | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
-| `$357D` | `play_landscape_loop` | the full viewpoint settle | `projector.viewpoint_replot_frames`, `playerbase._settle` | `test_settle_accuracy.py` |
+| `$34DE` | `play_tune` | walks `$AB50 + tune_number`; note holds count down in `$0CDF` | `settlecost.TUNE_FRAMES` (`#$19` = 96 f, `#$28` = 24 f) | `test_transfer_tune_is_96_frames`, `test_uturn_tune_is_24_frames` |
+| `$357D` | `play_landscape_loop` | the full viewpoint settle | `settlecost.viewpoint_settle_frames`, `playerbase._settle` | `test_settle_law_predicts_the_frozen_measurement`: 24 actions within 2.4 f, rms 0.9 f |
 | `$35A4` | load signature | `A5 0B 85` — the driver's proof the game is resident | `boot.SIG_ADDR` | `driver.dump_stage2.verify` |
-| `$35BA` | (in `play_landscape_loop`) | calls the occlusion raytrace | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
-| `$35C3`/`$35C6` | (in `play_landscape_loop`) | the two `plot_world` passes | `projector.REPLOT_PASSES`, `playerbase._settle_eye` | `test_settle_accuracy.py` |
-| `$35D5` | `wait_for_end_of_tune` | spins until the tune's bit 7 sets | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
+| `$35BA` | (in `play_landscape_loop`) | calls the occlusion raytrace | `projector.occlusion_visible`, `occlusioncost.occlusion_cycles` | tile-for-tile against the ROM `$3E80` bitmap; `test_occlusioncost.py` |
+| `$35C3`/`$35C6`/`$35C9` | (in `play_landscape_loop`) | `$35C3` is the ONE `plot_world` pass; `$35C6`/`$35C9` are `plot_status_bar` `$9508`/`$98B2`, not a second pass (fixture marks: 1946 and 130553 cycles) | `projector.render_cost`, `settlecost.STATUS_9508`/`STATUS_98B2`, `playerbase._settle_eye` | `test_transfer_segment_constants_match_the_fixture_marks` |
+| `$35D5` | `wait_for_end_of_tune` | spins until the tune's bit 7 sets — only the tune's remainder past the redraw, so the settle is `max(redraw, tune)` | `settlecost.viewpoint_settle_frames` | `test_transfer_tune_is_96_frames`, `test_settle_accuracy.py` |
 | `$3603` | `landscape_completed` | sets `$0CDE` bit 6 — the win | `memmap.LANDSCAPE_COMPLETE`, `actions.won` | read back out of live memory by the driver |
 | `$363D` | `update_game_and_continue` | the main loop; no vsync wait | `enemies.advance_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$3642` | viewpoint redraw entry | into `play_landscape_loop` | `kbd_aim._run_to_scan` | `test_settle_accuracy.py` |
 | `$365A`/`$365D` | (in the main loop) | the `JSR pan_viewpoint` call site and the pan-done PC | `kbd_aim.PC_PAN_DONE` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
 | `$3682` | (in the main loop) | skips the enemy clock while `$0CE5` bit 7 is set | `playerbase._frozen`, `actions._mark_player_acted` | `test_settle_accuracy.py` |
 | `$3684` | scroll loop | ticks cooldowns while scrolling; mutually exclusive with `$9663` | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
-| `$3700` | grid projection-table build | per **position**, all 1024 tiles, into `$BC00`/`$C000`/`$C400`/`$C800`; `$35BD` runs it once per play redraw and no pan or strip rebuilds it | `projector.SETTLE_FIXED_FRAMES` | `test_settle_accuracy.py`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$3700` | grid projection-table build | per **position**, all 1024 tiles, into `$BC00`/`$C000`/`$C400`/`$C800`; `$35BD` runs it once per play redraw and no pan or strip rebuilds it | `settlecost.TAB_3700` (1.648 M cycles; scene band 1.631–1.666 M) | `test_transfer_segment_constants_match_the_fixture_marks`; the ±1 f band is [4](open_items.md#4-the-settle-law-is-exact-the-live-residual-is-aim-side-attribution) |
 | `$37F2` | — | the play path's examine: the same plottables off `$3700`'s table less the camera reference `$001F`/`$00B0`/`$00B1`/`$00B2`, no trig and no object-stack walk | `projector._project`, `passcost.TAB_*` | `golden_render_cost`, cycle-exact on all 15 views |
 | `$3B00`/`$3C01` | arctan coefficient tables | reproduced closed-form, byte-exact | `relative._ARCTAN_LO`/`_HI` | closed form, byte-exact against the ROM table |
 | `$3D02` | hypotenuse coefficient table | reproduced closed-form, byte-exact | `relative._HYP` | closed form, byte-exact against the ROM table |
@@ -860,16 +861,18 @@ foreground work folded into a settle constant.
 | `$8475` | object transform loop | per-vertex `transform_vertex` | `projector.C_VERTEX` | `golden_render_cost` |
 | `$8533` | `plot_object` | the object model draw | `objectcost.object_cycles` | `golden_object_cost`, every vertex byte-exact; `projector._inview_object_base`'s floor without the game image |
 | `$0F70` | `calculate_sine_and_cosine` | \|sin\| and \|cos\| from the `$AC80` quarter-turn table | `objectcost._sin_cos` | `golden_object_cost` |
+| `$86A5` | dither (dissolve) loop | 25 laps × 96 steps of the ×5 pointer chain (`$87B0`/`$A3`/`$A4`), span-masked plotting; the chain and `$9D` persist across calls | `dithercost.dither_cycles` (chain threaded), `dither_cycles_mean` (no image) | `test_dithercost.py`, 69/69 oracle cases cycle-exact |
 | `$9939`/`$994F` | the pan raster window | `$0051`/`$0052` from `$994B`/`$994D`: a pitch notch plots 64 rows, a bearing notch 192 | `pancost.PAN_ROWS` | `golden_pan_cost` |
-| `$888F` | `start_tune` | begins a tune, number in `$0CE7` | `projector.TUNE_TRANSFER_FRAMES` | `test_transfer_tune_is_96_frames` |
+| `$888F` | `start_tune` | begins a tune, number in `$0CE7` | `settlecost.TUNE_FRAMES` | `test_transfer_tune_is_96_frames`, `test_uturn_tune_is_24_frames` |
 | `$9287` | `calculate_angle` | bearing from a relative x/y pair | `relative._calc_angle` | `golden_relative` |
 | `$933D` | `calculate_object_relative_vertical_angle` | pitch from z and distance | `relative._vertical_angle` | `golden_relative` |
 | `$937F` | `calculate_hypotenuse` | horizontal distance | `relative._calc_hypotenuse` | `golden_relative` |
+| `$9508` | `plot_status_bar` (first section) | the `$35C6` status plot; pads to fixed columns so its length breathes with the energy | `settlecost.STATUS_9508` (1946 ± f(E)), `passcost.status_bar_cycles` | `test_transfer_segment_constants_match_the_fixture_marks` |
 | `$9630` | raster frame marker | `DEC $0CDF`; one `$9630`→`$9630` span is exactly one frame | `driver.clock.frames`/`run_frames` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$9659` | (in the raster IRQ) | skips the enemy clock while frozen | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$9663` | (in the raster IRQ) | the once-per-frame cooldown tick | `enemies.cooldown_frame` | instrument gate `test_enemy_sim_frame_locked_to_live_ls42`; [8](open_items.md#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) |
 | `$9678`/`$967B` | gated full input scan | the driver's press window | `kbd_aim._run_to_scan`, `playerbase.TAP_FRAMES` | `driver/test_live_determinism.py`; [7](open_items.md#7-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
-| `$98B2` | `plot_status_bar` | fixed per-settle foreground work |  | folded into `projector.SETTLE_FIXED_FRAMES`; [4](open_items.md#4-per-step-frame-drift-and-the-unattributed-createabsorb-settle-split) |
+| `$98B2` | `plot_status_bar` (second section) | the `$35C9` status plot | `settlecost.STATUS_98B2` (130553 cycles, constant) | `test_transfer_segment_constants_match_the_fixture_marks` |
 | `$9925` | `PAN_DELTA` table | `$14/$F8/$04/$F4` added before the pan's `plot_world` | `pancost.PAN_DELTA` | `golden_pan_cost` |
 | `$9939`/`$994F` | pan buffer-mode entries | vertical `A=#$00` (play window), horizontal `A=#$02` | `pancost.PAN_MODE`, `projector.BUF_WINDOW` | `golden_pan_cost` |
 | `$9958` | `move_sights` | steps cx and cy in ONE call — the cursor moves diagonally | `los.landable_views`, `kbd_aim.fine_cursor` | `test_landable.py`, `test_landtable.py`; [10](open_items.md#10-landability-filter-unproven-corners) |
@@ -894,9 +897,12 @@ foreground work folded into a settle constant.
 | `aim.py` | the one action aim/LOS layer (`resolve`/`gate`/`propose`) — the `$1B40`-`$1B46` gate |
 | `aimcost.py` | keyboard-aim geometry: keystrokes to pan a heading, u-turn-aware |
 | `pancost.py` | per-notch pan redraw cost, ported from `pan_viewpoint $10B7` |
+| `settlecost.py` | per-verb settle frames from the ROM's own paths: `$12D0`→`$12EC` create/absorb, the `$357D` transfer redraw, the `$1B2F` u-turn; counted segment constants and the `SETTLE_FG` wall rate |
+| `dithercost.py` | exact cycles of the `$86A5` dissolve: the ×5 pointer chain, span mask and lap structure, chain threaded across calls |
+| `occlusioncost.py` | exact cycles of the `$245B` occlusion raytrace per (board, position), no emulator |
 | `projector.py`, `projector_jit.py` | `plot_world $2625` terrain projector, ported bit-exactly; feeds the render-cost proxy |
 | `rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in py65, memoized; ROM-gated |
-| `actioncost.py` | per-action world advance: the ROM dither/replot frame counts and the `$1335`/`$0C50` frame→tick cadence |
+| `actioncost.py` | frame→tick glue (`FRAME_TICKS`, the `$1335`/`$0C50` cadence); its `SETTLE` dict is only the tile-less per-verb fallback — per-scene pricing is `settlecost.py` |
 | `actions.py` | absorb / create / transfer / hyperspace / win (the LOS gate is the caller's) |
 | `energy.py` | the energy economy (`$2136`, table `$214F`, 6-bit mask, underflow) |
 | `landscape.py` | `generate(landscape) -> State`, the board generator |
@@ -946,8 +952,8 @@ The frame clock is the one mechanic with no golden: it is gated by
   limits exactly two things, both through `put_object_in_random_tile_below_z $1224`: the
   discharge tree's tile and the hyperspace tile. Meanie creation is **not** one — `$197D` is
   a deterministic slot scan, as are the hunt and the hyperspace trigger.
-- **The u-turn as a player action.** The free 180° flip (`$1B2F`) is priced in
-  `aimcost`/`playerbase` but is not in `actions.py`.
+- **The u-turn as a player action.** The 180° flip (`$1B2F`) is priced in
+  `settlecost.uturn_settle_frames`/`aimcost`/`playerbase` but is not in `actions.py`.
 - **Exposure-bar aggregation** (`$191F`/`set_bar_state $194D`/`$0C4F`); the underlying
   two-probe `$0014` is modelled.
 - **Meanie death-credit `$0C1C = 4`** — affects only death-screen attribution.
@@ -962,16 +968,21 @@ Priced mechanism for mechanism against the executor's key sequence, over the aim
   `plot_world`: horizontal `$10EE` = 16 scroll steps per ±8 bearing notch, vertical `$1135` =
   8 steps per ±4 pitch notch. Notch counts from `aimcost.h_press_count` (u-turn-aware,
   returns `(n_uturn, n_step)`) and `aimcost.v_steps`.
-- **U-turn** = one action tap (`UTURN_FRAMES`), no scroll and no redraw; taken only when it
-  strictly lowers the keystroke count (crossover at `d >= 9` lattice steps). Pooled live
-  n=9 (ls42 p1 plus the ls335 win's eight), mean 76.6 over samples spanning 33–180 f — a
-  central value, not a bound.
+- **U-turn** = one action tap plus its own redraw: `$1B2F` flips the bearing, starts tune
+  `#$28` (24 f) and takes the `$357D` redraw with `$245B`/`$3700` skipped (`$0C51` bit7,
+  `$35B5 BMI`). Priced per scene by `settlecost.uturn_settle_frames`;
+  `playerbase.UTURN_FLOOR_FRAMES = 27` (3-frame tap bracket + the 24-frame tune floor) is the
+  admissible bound the aim planner uses. Taken only when it strictly lowers the keystroke
+  count (crossover at `d >= 9` lattice steps). The retired `UTURN_FRAMES = 77` was a pooled
+  mean over clipped live samples spanning 33–180 f — a fit, not a mechanism.
 - **Cursor is derived, not fitted.** `move_sights $9958` steps both axes in one call at 1 px
   per gated scan, so a drive costs `max(|Δcx|, |Δcy|)` scans plus `CURSOR_RAMP =
   popcount($6B) = 5` scans the `$0CC8` auto-repeat mask skips. Zero if the cursor is parked.
 - **Sights toggle is a state transition.** A same-bearing reuse keeps sights on and drives
-  from the live cursor at zero toggle cost; otherwise `TOGGLE_FRAMES` is charged and `$134C`
-  re-centres to `SIGHTS_CENTRE = (80, 95)`.
+  from the live cursor at zero toggle cost; otherwise `TOGGLE_FRAMES = 3.5` is charged and
+  `$134C` re-centres to `SIGHTS_CENTRE = (80, 95)`. The old 12 folded the last pan notch's
+  8-frame trailing V scroll into the toggle bucket (dv>0 rows measure 11–12, dv==0 rows
+  19–20, exactly 8 apart, 29/29 rows).
 - **A transfer charges 0 aim only on a bearing reuse** — the executor sends no aim keys then,
   `$21` firing on the object the preceding same-tile create/absorb parked the cursor over.
   Live, the predicate is the driver's, adopted by `LiveMixin._sync_aim_state`.
@@ -1290,34 +1301,47 @@ per-object floor instead (`C_VERTEX` per vertex plus a `prepare_polygon` call pe
 section), which is a strict under-charge; that is the only fidelity difference between the two
 modes and it is the one term still fitted rather than emulated.
 
-**Transfer settle `$357D`.**
+**Transfer settle `$357D`** (`settlecost.viewpoint_settle_frames`).
 
-    viewpoint_replot_frames = TUNE_TRANSFER_FRAMES + SETTLE_FIXED_FRAMES
-                              + REPLOT_PASSES * render_cost(state, view, observer)
+    frames = BRACKET_FRAMES + max(fg / SETTLE_FG, TUNE_FRAMES[tune])
+    fg = HEAD_BASE + fire_ray + REDRAW_HEAD + occlusioncost.occlusion_cycles
+         + TAB_3700 + FILL_1090 + render_cost · FRAME_CYCLES
+         + STATUS_9508 + STATUS_98B2 + BUF_WAIT_HEAD + EXIT_TAIL
 
 `$0C63` moves into the target in `try_to_transfer_into_object $1B64` **before**
-`play_landscape_loop $357D` runs its two `plot_world` passes (`$35C3`/`$35C6`), so both
-`render_cost` and the `$245B` raytrace run from the post-transfer eye at that body's own
-bearing (a created robot faces `creator_angle ^ $80`, `$1BE0`) — not the aim view, which
-belongs to the abandoned eye. `playerbase._settle_eye(verb, tile)` returns that slot.
+`play_landscape_loop $357D` runs, so both `render_cost` and the `$245B` raytrace run from the
+post-transfer eye at that body's own bearing (a created robot faces `creator_angle ^ $80`,
+`$1BE0`) — not the aim view, which belongs to the abandoned eye.
+`playerbase._settle_eye(verb, tile)` returns that slot.
 
-`TUNE_TRANSFER_FRAMES = 96` is ROM-derived: `play_landscape_loop` ends at
-`wait_for_end_of_tune $35D5`, spinning until the tune started at `$1B82` (`start_tune $888F`,
-tune `#$19`) sets bit7; `play_tune $34DE` walks `$AB50 + tune_number`, a byte `>= $C8` setting
-note length `$0C70 = (byte-$C8)*4` and a byte `< $C8` holding it in the `$0CDF` countdown
-decremented once per frame by `$9630 DEC $0CDF` — note holds sum to 96 frames, the same as the
-`#$0` hyperspace tune (`test_transfer_tune_is_96_frames`). `SETTLE_FIXED_FRAMES = 176` is a
-stand-in for four foreground routines absent from `render_cost` — `$245B`, `$3700`,
-`fill_screen_with_background $1090` and `plot_status_bar $98B2` — py65 cycle-counted on ls42
-and ls335 and averaged, since the occlusion term is scene-dependent; raster-IRQ steal is folded
-into it and the tune base.
+The redraw runs ONE `plot_world` (`$35C3`); `$35C6`/`$35C9` are the `$9508`/`$98B2` status
+plots — the retired `REPLOT_PASSES = 2` charged a pass that does not exist. Tune `#$19`
+(96 note-hold frames: `play_tune $34DE` walks `$AB50 + tune_number`, notes held in the
+`$0CDF` countdown `$9630` decrements, `test_transfer_tune_is_96_frames`) starts at `$1B82`
+BEFORE the redraw, and `$35D5` spins only for its remainder — hence the `max`; the retired
+model added the 96 on top. The segment constants are counted, not fitted (jennings against
+the fixture's first-arrival marks, `test_transfer_segment_constants_match_the_fixture_marks`):
+`REDRAW_HEAD` 13249, `TAB_3700` 1.648 M (scene band 1.631–1.666 M), `FILL_1090` 108935,
+`STATUS_9508` 1946 ± f(E), `STATUS_98B2` 130553, `BUF_WAIT_HEAD` 75, `EXIT_TAIL` 13014.
+`SETTLE_FG = 17475.6` cycles/frame, not 19656: `$0CE4` bit7 makes the IRQ body skip the
+`$119F` keyboard walk (`$9669 BMI`), so a settle frame is 19656 − 477 (short IRQs) − 634.7
+(settle body: 356 flat / 704 on the 205/256 Bresenham-carry frames) − 1069 (store-heavy
+steal, `fixtures/live_badline.json`). The retired `SETTLE_FIXED_FRAMES = 176` averaged
+`$245B` over two boards; `$245B` is per (board, position), 2.33–3.26 M cycles on ls42 scenes
+(119–166 f), and `occlusioncost.occlusion_cycles` prices it cycle-exact (15/15 oracle pairs).
 
-`test_viewpoint_replot_lands_in_live_settle_band` asserts each prediction lands in
-`[0.75*lo, 1.25*hi]` of the recorded live band with median abs error < 15%. That band was read
-through a 6 s wall-clock `run_until_pc` in `tap_action` that caps a reading at ~300 frames, so
-any value at or under that ceiling is indistinguishable from it. A u-turn scrolls 0 frames and
-is not a viewpoint replot; `_exact_render_cost` returns `None` for any `observer !=
-state.player`.
+**Create/absorb settle** (`settlecost.action_settle_frames`) goes through `$12D0` → `$1B18` →
+`$12EC` instead: the `#$02` sfx, `$0C6D = $C0`, the `$1F9F` strip replot with the `$86A5`
+dither inserted at the flush (`dithercost`, cycle-exact 69/69), `$9508` and the pass tail; a
+transfer skips `$12EC` entirely (`$1B8C SEC` → `$12EA BCS $1302`). The strip's scene is the
+create/absorb split: a create plots the strip WITH the new object, an absorb with it erased
+(`$1F10` flags `$80`) — ls42 creates measure 109–128 f, absorbs 78–96 f. A **u-turn**
+(`settlecost.uturn_settle_frames`) is the transfer redraw less `$245B`/`$3700` and less the
+fire ray, floored by the 24-frame `#$28` tune.
+
+`test_settle_law_predicts_the_frozen_measurement` gates all the laws against
+`settle_oracle_ls42.json` — 24 frozen-live actions, every one within 2.4 f, rms 0.9 f,
+per-verb bias ≤ 1.3 f.
 
 **Per-notch pan.** One keyboard notch is one `pan_viewpoint $10B7` call and `notch_frames` is a
 direct port: the strip clear (`$3912` h / `$38AD` v), the ONE `plot_world` at the
@@ -1544,8 +1568,8 @@ stops*, so scoring on it measures the recorder
 (`test_update_cooldown_is_sampling_dependent_and_not_a_score`). Facings are the sound score — a
 facing only moves when a rotation actually fires.
 
-**Fixture hygiene.** The dither loop (`$1FA4`, `DITHER_FRAMES`) and the transfer tune wait
-(`$35D5`, `TUNE_TRANSFER_FRAMES`) are hard floors on how close two real actions can be; 8 exact
+**Fixture hygiene.** The dither loop (`$1FA4`, `dithercost`) and the transfer tune wait
+(`$35D5`, `settlecost.TUNE_FRAMES`) are hard floors on how close two real actions can be; 8 exact
 ls335 spans fall below the floor for the action preceding them, so those bracket pairs are one
 action recorded twice. ls335 also carries 33 events of the two known recorder classes (enemy
 discharge trees, drain ticks minted as self-transfers); `human_replay` skips them.

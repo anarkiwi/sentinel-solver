@@ -11,7 +11,7 @@ import os
 FRAME_TICKS = float(os.environ.get("FRAME_TICKS", "1.0"))
 
 SETTLE = {
-    "absorb": 86.0,
-    "create": 112.0,
-    "transfer": 330.0,
+    "absorb": 86.7,
+    "create": 109.6,
+    "transfer": 332.0,
 }

@@ -1,7 +1,5 @@
 """The reactive greedy player (sentinel.player) beats landscape 0."""
 
-import pytest
-
 from sentinel import actions
 from sentinel.game import Game
 from sentinel.player import Player
@@ -23,17 +21,11 @@ def test_player_wins_landscape_0():
     assert game.state.is_empty(actions.SENTINEL_SLOT)
 
 
-@pytest.mark.xfail(
-    reason="accurate view-aware transfer settle (~420-480f vs the old flat 47) "
-    "reveals ls42's climb-out transfers are UNSAFE: the greedy planner correctly "
-    "refuses them (0 placement breaches, see test_player_placement_invariant) but has "
-    "no safe winning line in its reactive heuristics and dies escaping. Winning under "
-    "the accurate cost needs a broader search re-tune (out of scope of the cost port).",
-    strict=False,
-)
 def test_player_wins_landscape_0042():
     """Landscape 42 (two enemies, down-look-only start hollow): the band climb
-    fallback and frozen-world model get the player out and to the win."""
+    fallback and frozen-world model get the player out and to the win.  Was an
+    xfail while the transfer settle over-charged (2 render passes + an added
+    tune, ~420-480f); the derived settlecost law (~260-390f) restores the win."""
     game = Game.typed(42)
     player = Player(game)
     assert player.run(max_actions=250)
