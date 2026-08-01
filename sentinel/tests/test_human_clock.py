@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from sentinel import actions, enemies, memmap as mm, projector, terrain
+from sentinel import actions, enemies, memmap as mm, objmodel, projector, terrain
 from sentinel.phase_player import PhasePlayer
 from sentinel.test_human_win_logs import (
     _FIX_DIR,
@@ -46,6 +46,10 @@ LIVE_CLOCKS = {"ls0": (16, 16), "ls42": (10, 10), "ls335": (18, 12)}
 LS42_CLOCK = "ls42_clock.json"
 ENERGY_EXACT = 83  # exact-span actions whose next energy we reproduce
 ENERGY_MISSES = 8  # the rest, all off by one in both directions (drain timing)
+# A plotting advance's fill carries its $21AE object cycles only where objmodel finds the game image, so the counts pinned above are that model's, not the fallback's.
+needs_game_image = pytest.mark.skipif(
+    not objmodel.available(), reason="the plotting advance needs the game image"
+)
 
 
 def _events(name=FIXTURE):
@@ -120,6 +124,7 @@ def test_enemy_facings_after_a_measured_span():
     assert exact >= FACING_EXACT, f"regressed: {exact} < {FACING_EXACT}"
 
 
+@needs_game_image
 @pytest.mark.parametrize("plotting", (False, True))
 def test_enemy_update_cadence_brackets_the_truth(plotting):
     """Neither extreme is the ROM's cadence, which is what indicts advancing a span as
@@ -312,6 +317,7 @@ def test_update_cooldown_is_sampling_dependent_and_not_a_score():
     assert halted_1 / len(halted) < 0.2  # checkpoint-halted: almost never
 
 
+@needs_game_image
 def test_every_facing_error_is_exactly_one_extra_rotation():
     """The ls335 facing gap is all but one-sided: we rotate once too many.
 

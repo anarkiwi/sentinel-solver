@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from sentinel import landscape, pancost, projector
+from sentinel import landscape, objmodel, pancost, projector
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_pan_cost.json")
@@ -157,6 +157,9 @@ def test_horizontal_pan_window_is_not_the_play_window():
     assert differ > 0.5 * len(rows)
 
 
+@pytest.mark.skipif(
+    not objmodel.available(), reason="the notch's object fill needs the game image"
+)
 def test_pan_notch_cost_matches_the_measured_plot():
     """Whole-notch accuracy. The residual is the fill proxy's (docs/architecture.md
     gap 3), not the notch model's -- tile selection is exact -- so this bracket is the
@@ -179,6 +182,9 @@ def test_pan_notch_cost_matches_the_measured_plot():
     assert abs(bias) < 1.0, f"per-notch bias {bias:+.1f} f"
 
 
+@pytest.mark.skipif(
+    not objmodel.available(), reason="the notch's object fill needs the game image"
+)
 def test_derived_notch_beats_the_flat_base_it_replaced():
     """The reason this model exists: a flat per-notch base cannot span a redraw that
     swings by an order of magnitude across a board, whatever value it takes. The
