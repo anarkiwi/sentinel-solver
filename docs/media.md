@@ -6,12 +6,18 @@
 frames, so `driver.avi2apng` turns one into an APNG small enough to embed.
 
 ```bash
-python -m driver.avi2apng renders/player_ls340_win.avi -o docs/media/ls340.png --fps 12
+python -m driver.avi2apng renders/player_ls1442_win.avi \
+    -o docs/media/ls1442_phase_win.png --fps 12 --speed 2
 ```
+
+`--fps` decides which source frames survive; `--speed` only shortens the delays on the
+ones that did, so raising it costs no detail. The two compose: the run above samples at
+12.5 fps and plays it back at 25.
 
 | flag | default | effect |
 |---|---|---|
 | `--fps` | 12 | decimate to this rate; `0` keeps every frame |
+| `--speed` | 1 | playback multiple of real time; `2` runs it twice over |
 | `--scale` | 1 | integer nearest-neighbour upscale |
 | `--hud-rows` | 6 | rows of status strip a blanked viewport keeps drawing |
 | `--min-blank-run` | 1 | blank runs shorter than this are kept |

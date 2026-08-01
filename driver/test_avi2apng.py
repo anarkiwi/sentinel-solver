@@ -165,6 +165,37 @@ def test_convert_decimates_to_the_asked_frame_rate(tmp_path, monkeypatch):
     assert info["seconds"] == pytest.approx(0.4)
 
 
+def test_speed_shortens_the_run_without_dropping_a_frame(tmp_path, monkeypatch):
+    frames = np.stack([_board(i) for i in range(10)])
+    palette = _fake_decode(monkeypatch, frames, fps=10.0)
+    out = str(tmp_path / "fast.png")
+    info = avi2apng.convert("x.avi", out, speed=2.0, crop=False, log=lambda _m: None)
+
+    assert info["frames"] == 10
+    assert info["seconds"] == pytest.approx(0.5)  # 1.0s of source, played twice over
+    assert np.array_equal(_decode_rgb(out), palette[frames])
+
+
+def test_speed_scales_a_held_repeat_too(tmp_path, monkeypatch):
+    frames = np.stack([_board(0), _board(0), _board(0), _board(1)])
+    _fake_decode(monkeypatch, frames, fps=10.0)
+    info = avi2apng.convert(
+        "x.avi", str(tmp_path / "held.png"), speed=4.0, crop=False, log=lambda _m: None
+    )
+
+    assert info["frames"] == 2
+    assert info["seconds"] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("speed", [0.0, -1.0])
+def test_a_speed_that_is_not_positive_is_refused(tmp_path, monkeypatch, speed):
+    _fake_decode(monkeypatch, np.stack([_board(0), _board(1)]))
+    with pytest.raises(ValueError, match="speed must be positive"):
+        avi2apng.convert(
+            "x.avi", str(tmp_path / "x.png"), speed=speed, log=lambda _m: None
+        )
+
+
 @pytest.mark.parametrize("name", ["player_ls340_win.avi", "ls335_phase_win.avi"])
 def test_converts_a_recorded_run_when_one_is_present(tmp_path, name):
     src = os.path.join(ROOT, "renders", name)
