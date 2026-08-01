@@ -96,7 +96,7 @@ def _replay(state, setup, rec, key):
     n = 0
     for tk, want in rec["tiles"].items():
         col, row = (int(x) for x in tk.split(","))
-        got = list(projector._project(state, setup, col, row))
+        got = list(projector._project(state, setup, col, row))[:6]
         assert got == want, f"{key} tile {tk}: {got} != {want}"
         n += 1
     return n

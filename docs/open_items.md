@@ -98,31 +98,178 @@ by large pans.
 **Resolves.** The ROM path that lengthens a create's settle, and splitting `actioncost.SETTLE`
 on it rather than on the fitted difference.
 
-## 5. Terrain fill cost cannot close per tile
+## 5. One object vertex angle is ten units out
 
-**Wrong.** `projector`'s fill term is an area proxy (`PER_SCANLINE*H + PER_PIXEL*H*W`) whose
-residual is systematic in scene busy-ness.
+**Wrong.** `rendercost` reproduces the ROM's own loop counts exactly on 14 of the 15 golden
+views. The fifteenth, 2024,16,0, runs `$2FA1` twice more than the ROM, and the cause is not
+the fill: one object vertex's 16-bit horizontal angle is 10 units low, which moves its
+`screen_x` byte across a multiple of 32.
 
-**Measured.** Mean error changes sign and grows across measured-cost quartiles, tracking how
-busy the scene is. It cannot close per tile: the `$AD00`/`$AE00` edge tables carry state across
-polygons ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)),
-the filled-rows/y-extent ratio spans both sides of 1, `H` is 0 on views where the ROM still
-fills heavily (every corner `screen_y` below the inner band), and per-tile fill spans nearly two
-orders of magnitude.
+**Measured.** Tracing every `$2EE4` of that view, four edges (polygons 3, 12 and 13, one
+object) disagree on their input `$0039` alone: 76 on the machine, 75 in the model. `$2D93`
+builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vertex's pair is
+`$FF80` on the machine against `$FF76` in the model — every other vertex of those polygons is
+byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
-**Resolves.** Stateful emulation of the whole `plot_world` fill sequence in render order, the
-interleaved object polygons included. Short of that the only honest levers are
-`projector.PER_SCANLINE`/`PER_PIXEL`.
+**Closed — the terrain fill, and the oracle's own `DEC abs`.** Two errors, one of each sign.
+py65 declares `$CE DEC abs` at 3 cycles where the 6502 takes 6 (`deity_informant`'s
+`CYCLETIME` inherits it; `writemap.DEC_ABS_CYCLES` already corrected the static table but
+nothing corrected execution), and `$CE` is the self-modified loop counter of every plot_world
+DDA — 8328 executions and 24984 cycles on 2024,184,244, ~3% of a fill, missing from every
+golden and from `RENDER_COST_BACKEND=py65`. Against a corrected profile the fill's own blocks
+were 85189 cycles light on that view: `span_fill`'s row body 25 cycles a row (`$238C..$239C`
+priced 26 for 31, `$23B5..$23CF` 29 for 45, `$23D0..$23DA` 13 for 20, `$22E0..$2306` 24 for
+39), its two off-buffer branches missing the `$2380`/`$2384` compare that decides them,
+`plot_polygon` charging `$2AB7` on a pass that never reaches it and dropping the second
+section's `$2AC3 JSR`, `$3019`/`$3040` counted as one `$1007` call instead of two, and four
+page-crossed taken branches at 3 instead of 4. Every block is now its own straight-line run:
+per routine the model is within 0.2% of the ROM's own subtree (`prepare_polygon` and
+`plot_polygon` exact to the cycle), and what is left is the ~0.2% of page-crossed reads whose
+address the model does not carry. `prepare_render_context` also stopped stubbing `$352C`,
+zeroing `$0CDF`/`$0C73` instead — what a live `$1FFC` image carries — so the golden pays
+`update_sound`'s real 29-cycle play path. `render_cost` is **0.995-1.000x** the ROM on all 15
+golden views (was 0.916-1.008). Live: eleven `$1FFC JSR $2625` passes captured at the `$1FFC`
+halt on ls9795, ls0042 and ls2024, each re-run as the real `$2625` from its own 64 KB image,
+put the model at **0.986-1.002x** of the ROM's own cycles for that pass; on the two boards
+whose per-frame foreground is measured the machine's wall clock agrees with that ROM count to
+**1.000-1.003x**, so the wall, the ROM and the model are one number. (ls2024's wall is not:
+its passes carry ~6200 cycles a frame of non-foreground against ls9795's and ls0042's 4180,
+which is that board's own frame budget, unmeasured, not the fill.) Not one of the eight loop
+counts moved.
 
-## 6. The py65 exact backend skips transfer settles
+**Still open — the object term.** `$21AE` is 65% of a strip's own `$2625` and the terrain
+around it is now exact, so what the strip-replot proxy has left is the object's: on ls0335
+h=112 slot=5 the model charges 186052 against the ROM's 175017 (+6.3%), where the same pass's
+terrain-plus-walk is 76464 against 77041 (-0.7%). `test_the_strip_replot_backend_is_the_roms_own_1f9f`'s
+band is two-sided now (0.98-1.02) for that reason.
+
+**`$0078` is stale in bit 0, not in the bits `$0E2C` reads.** Traced over the whole of
+2024,16,0's plot_world: 70 `$0E2C` reads and 70 writes each at `$0DF1` and `$0DF8`, nothing
+else touching the byte. The two RORs put the divide's own round-9 and round-10 quotient bits
+in bits 6 and 7, so what `$0E2C BIT` reads is never stale — but `$0DF1 ROR $78` rotates the
+*incoming* bit 0 out into the carry `$0DF3 ROL A` consumes, and that can tip round 10's own
+`$0DF6 CMP $76`. Counted: the incoming bit 0 is set on **25 of 70** calls on 2024,16,0, on 75
+of 140 on 335,0,0 and 26 of 68 on 42,192,0, and it changes the round-10 bit — hence `$0E30
+BVS`, hence the interpolation, hence the angle — on **exactly one call of the 70, on 2024,16,0
+alone**, and on none of the other two views. That is one flipped angle on the one view whose
+loop counts are wrong.
+
+**The model can know it.** Within a `plot_world` pass `$0078` has no writer but `$0D4A`
+itself, so its incoming bit 0 is the previous call's own output shifted twice: threading the
+byte from call to call through `relative._divide_and_arctan` (which today seeds it 0) is a
+single byte of state, not whole-zero-page emulation. `$0F9E`/`$1D9D`/`$1DC1` write it outside
+plot_world, so the thread has to start from the image rather than from 0.
+
+**Closed — the storing loops' second entry.** `$2EE4`'s narrow steep and shallow DDAs each have
+an entry for a line starting above the inner area (`$2FB6`, `$2FDC`) that walks those rows
+without storing. Neither rejoins at the store: `$2FD9` lands on `$2F67`, so `DEY` then `$2F58`
+accumulate before the first `$2F5F`, and `$2FFF` lands on `$2FB0`, so `DEY` then `$2FA1` step
+before the first `$2FAD`. The model stored first, which put every column one row late and wrote
+one row below the polygon's bottom. That was the whole residual on 335,0,0 (-2 filled bytes)
+and 42,160,240 (-6), and the shallow entry was not modelled at all.
+
+**Closed — the harness ran `$2993` before `$245B`.** `populate_tile_visibility_bit_table
+$245B` calls `get_object_details $1ECC` per ray, which zeroes `$0034`-`$0036`, and `$2597`
+accumulates the march fraction into `$0035`; nothing rewrites `$0036`. So the raytrace leaves
+the buffer variables as march state (`$0035` = the last ray's fraction, `$0036` = 0), and the
+ROM re-runs `$2993` before every `plot_world` — `$35C0 JSR $1090` on the play redraw, `$994F`
+on a pan notch, `$1FE5 JSR $29C7` on a strip. The oracle harness called `$2993` first and
+`$245B` second, so its `plot_world` ran with `$0036` = 0, where every row's left edge reads as
+right of the buffer: the polygons before the first `$0010` toggle plotted no bytes and clipped,
+re-paritying `$0010` for the rest of the pass. Swapping the two calls is the whole residual on
+0,136,248 and 2024,184,244; it moves three golden views' cycles (0,136,248 +5350,
+2024,184,244 +13739, 42,192,0 -161) and neither `golden_object_cost.json` nor
+`golden_pan_cost.json` by a byte.
+
+**There is no unread-before-written `$0B40` in the ROM.** The image has exactly nine accesses:
+three writes (`$2DC0` in the wide vertex loop, `$2E58`/`$2E5B` in `$2E56`) and six reads
+(`$2E3F`, `$2E42`, `$3011`, `$3014`, `$304E`, `$30AB`). Every read indexes Y or X — the current
+line's own start and end vertex — and both entry paths to them write both: `$2E4F` only from a
+wide polygon, where `$2D93` has written every vertex, and `$2E5E` only through `$2E56`, which
+zeroes both endpoints first. So the ROM is self-consistent and a "stale `$0B40`" cannot be the
+mechanism. `$2D93` itself is exact: fuzzed 4000 random (`$0BA0`, `$A800`, `$0011`, `$0029`)
+against the real routine, **0 mismatches**. `$2F17` is not the mechanism either.
+
+Frame cost is 0.995-1.000x (median 0.997).
+
+**Also not derived.**
+
+- **`$3030`'s two overflow guards** are modelled as a loop rather than the ROM's re-entry into
+  `$3022`; equivalent in every case checked, but not the same control flow.
+- **`$27CE`, the observer's own tile.** `$2793` forces its four corners off the edges of the
+  screen and plots it through `plot_checkerboard_tile`; the model charges the branch and the
+  `$279B` examine (at `$001D + 1`, which `$2797 INC $0026` makes it) but not that polygon,
+  because two of its corners inherit a screen_y low byte from whichever row last used the other
+  `$0005` bank. It is never reached on any of the 15 golden views, so it is unmeasured rather
+  than known-small.
+- **The object term without the game image.** `objectcost` needs the model geometry, so a
+  checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
+  `_inview_object_base`'s floor and under-charges every object
+  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
+
+**Resolves.** Threading `$0078` through `_divide_and_arctan` from the image, so the one call
+in seventy whose round-10 bit the residue tips takes the machine's interpolation branch.
+
+## 6. The py65 exact backend cannot price another slot's view
 
 **Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path.
 
-**Measured.** `projector._exact_render_cost` returns `None` for any `observer != state.player`,
-and a transfer settle is always priced from the post-transfer slot (`playerbase._settle_eye`),
-which is never the player's own at pricing time.
+**Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
+`observer != state.player`, and a transfer settle is always priced from the post-transfer slot
+(`playerbase._settle_eye`), which is never the player's own at pricing time.
 
-**Resolves.** Running the py65 backend from an arbitrary observer slot.
+**Closed — the play machine does not run `$2845` at all.** `$283D BIT $9AF6 / BPL $2845 /
+JMP $37F2` picks the examine and `$9AF6` is `$80` for the whole play loop (`$3577`; `$9A51` is
+its only writer, and `$117E` is the only other call, with 0, for generation and the preview).
+The play examine is `$37F2`, a read of `$3700`'s per-position projection tables less the camera
+reference — no trig, no object-stack walk, 193..251 cycles against `$2845`'s ~1750. The oracle
+harness generated its goldens with `$9AF6` = 0, so `render_cost` could be exact against the
+golden and 1.26x wrong in play. `oracle.prepare_render_context` now sets `$80` and runs
+`$3700` in the ROM's own order (`$35BA`-`$35C0`), and `passcost.TAB_*`/`EXAM_ENTRY_*` price
+`$37F2` branch by branch. Every golden view fell 0.23-0.85x; not one of the eight fill loop
+counts, nor an examine or plotted-tile count, moved by a byte — `$3700` computes exactly what
+`$2845` computes, once per position instead of once per grid point.
+
+**Closed — the strip's window is three bytes.** `$29C7` puts the halving's carry in `$0028`,
+`$29EA`-`$29F2` leave `$0029`, and `$1FCC`/`$1FCF` leave `$001F`; the model held all three at 0
+because `$2993` zeroes them for every full-screen mode. With them modelled the strip examines
+111 grid points against the ROM's 111 on ls0042, 85 against 85 on ls0335 and 52 against 53 on
+ls9795, and `render_cost` is 0.98-0.99x the ROM's own `$2625` (was ~0.79x with only `$9AF6`
+fixed, and 1.5x dear before).
+
+**Closed — `$2793` examines the observer tile one row nearer.** `$2797 INC $0026` runs before
+`$279B JSR $283D`, so the observer's own tile is probed at `$001D + 1`, not `$001D`. All three
+`$276F` branches fall into it. The model probed the observer row itself, which cost one wrong
+grid point per pass on every view.
+
+**Closed — `$1F9F`'s own line is priced, and it is exact.** `strip_replot_frames` now covers
+the whole of `$1FA4..$1F9E`, every term counted from its own instruction sequence:
+
+| term | price | driven by |
+|---|---|---|
+| `clear_strip $2211` | `2232 * span + 1292` under 32 columns (24 rows x 8 bytes a column at 11 each, `$2247`) | `$211B`, the **uncapped** span |
+| `$29C7` | 79, a straight line | once per chunk |
+| `$1FFC JSR $2625` | `render_cost` at the `$1FC2` camera through the `$29C7` window | `$0C69`, capped at 20 |
+| `$9730` | `4340 + 135 * splits + wrap`, 4880..5016 a call | `$211B` calls, `$0095` for the price |
+| `$1FA4..$1FBF`, `$1FC2..$201C`, `$202C..$1F9E` | 33 / 120 a chunk / 106 + 32 a column + 36 | counted branch by branch |
+
+`$2105` caps `$0C69` at 20 but leaves the whole span in `$0C6A`/`$211B`, so an object wider
+than 20 columns replots in two chunks (`$201E`/`$2021` re-enter `$1FC2`) while the clear and
+the flush run **once** over the whole span — which is why the clear was `$211B` and not
+`$0C69`-driven, and `object_screen_span` now returns both. `$9730` copies 24 of the 25 `$3A00`
+screen banks, skipping bank `$0095 - 1`; a bank whose `$3A40` entry is nonzero straddles two
+buffer pages and buys a second `$9888`, so its price follows from `$0095` alone. Checked
+against the real `$1F9F` on 84 (board, facing, slot, `$0095`) combinations spanning one and
+two chunks and spans 1..25: **0 mismatches**, cycle for cycle
+(`test_the_strip_replot_line_is_the_roms_own_1fa4`). `strip_replot_frames` as a whole is now
+0.98-1.00x the ROM's own `$1F9F`, and `driver.instrument --frames 3000 --follow` reports
+ls9795 **67 -> 64**, ls0335 **57 -> 57**, ls0042 **0 -> 0**.
+
+**Not a threat to the render golden.** `golden_render_cost.json` comes from `_measure_plot_world`,
+which runs `$2625` directly at an explicit (h, v) with `$2993`/`$245B`/`$3700` outside the
+counted window; it asks what plot_world costs for a board and a view. The one assumption it
+shares with the strip path is `$0C48` = 0, matched by `projector._ROW_HINT` and bounded at
+±3% above.
 
 ## 7. The driver's wall-clock timeouts are the residual load sensitivity
 
@@ -140,16 +287,848 @@ constants; what remains is the 4 s `_RU_COMMIT` socket backstop and the swallowe
 **Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play loop —
 raise, do not retry — plus deleting the two dead constants.
 
-## 8. The enemy clock: what is left is the redraw and the frame budget
+## 8. The enemy clock commits `consider_enemy_state`'s CORE writes early
 
 **Wrong.** `driver.instrument --frames 3000 --follow` still reports CORE divergences on
-ls9795 (**112** events, the first at frame 129) and on ls335 (**12**, the first at 478).
+ls9795 (**14** events, the first at frame 151) and on ls335 (**4**, the first at 613) — was
+19 and 14 before the march carried its own write weight, 15 and 9 before the `$8401` chain
+and the `$9630` body carried theirs (*Done* below).
 ls42 is clean: **0 over 3000 frames**. Every event is an enemy's `update_cd` reading 4 in the
 machine where the sim still reads 1 — one `$16ED` reload the sim reaches a frame late — or
-the `$1805` rotation that follows from it. Neither the `$1887` chain nor `$16E6`'s own line
-is the cause any more: both are cycle-exact against the ROM, and the per-frame clock is now
-counted rather than fitted (below). What is left is `ROTATE_REDRAW`'s mean and, for
-follow-mode resyncs only, a marker that catches the machine mid-`$1887`.
+the `$1805` rotation that follows from it. Everything this item has blamed in turn is now
+measured, and none of it is the cause.  Those counts are from a seed that carries no error of
+its own; the 116/24 this item used to quote were **partly the instrument's own seeding**, see
+*The seed's own error* below.
+
+Ten of ls9795's 14 and all 4 of ls335's are `update_cd`. The other four of ls9795's catch the
+machine inside a replot, at `$9786`, `$978D`, `$988E` and `$9899` — the `$9730` buffer flush,
+i.e. the replot's *exit* — three of them diverging on `obj[62].h_angle`, not on `update_cd` at
+all (*The camera the replot borrows* below), where the model's debt has run out and the
+machine's has not.
+
+**Measured — the fill was not the residual either.** Closing the `$2625` fill
+([5](#5-one-object-vertex-angle-is-ten-units-out)) moved the model from ~0.956x to
+**0.986-0.988x** of the machine's own foreground on four captured live `$1FFC JSR $2625`
+passes, and the gate did not move at all: ls9795 **14 -> 14**, ls335 **4 -> 4**, ls42
+**0 -> 0** over 3000 `--follow` frames, with the same four replot-exit PCs. So the ~3% of a
+replot the model used to owe is not what the enemy clock is late by.
+
+**Measured — the counted redraw is not the residual.** Charging `$1F9F` from the object's
+own screen span instead of the retired 1723 mean changes what an ls9795 rotation costs by
+-31, -91, +35 and +62 cycles at frames 20, 50, 80 and 103, i.e. **-25 cycles of accumulated
+phase** before the frame-129 event, where reaching it a pass early needs ~2180. The gate
+does not move: ls9795 first divergence **129 -> 129** and events **112 -> 111**, ls335
+**478 -> 478** and **12 -> 12**, ls42 **0 -> 0**.
+
+**Measured — the frame is fully accounted, to under 4 cycles.** `cpuhistory` stamps every
+instruction with an absolute cycle, so the whole 19656-cycle frame splits four ways with
+no inference: the VIC steal (a delta 20 or more above the opcode's own minimum), the four
+short raster interrupts, the `$9630` body (`$95E9` to its RTI) and what is left for the
+play loop. Means over 140 frames a board, `fixtures/live_pass_cycles.json`:
+
+| term | model | ls0042 | ls0335 | ls9795 | ls9795 frozen |
+|---|---|---|---|---|---|
+| four short IRQs | 477 | 477.00 | 477.00 | 477.00 | 477.00 |
+| `$9630` body | `IRQ_BODY` + gate + `$130C` + `$8ED1` | 2633.49 (2633.67) | 2645.73 (2646.07) | 2648.15 (2648.50) | 2454.34 (2455) |
+| badline steal | 25 windows, priced apart | 1072.91 | 1073.96 | 1073.93 | 1075.20 |
+| foreground | the rest | 15472.54 | 15459.24 | 15456.96 | 15649.27 |
+
+The short interrupts are **exactly** 477 in every one of 500 frames. The body is within
+**one cycle** of the model on all four captures: `$FFC5` a flat 56, `$1635` taking its
+25-cycle fast exit every time (so `IRQ_SPRITES` never fires), `$FFC2` exactly
+`SOUND_TICK_IDLE` 63 in all 80 frozen frames, and no `$130C` and no `$1635` at all when
+frozen — the `$9659` gate, as `IRQ_GATE_SHUT` says.
+
+So the whole frame-budget error was the badline steal. This split's own steal column is an
+**upper bound** — it charges any delta over the opcode's *table* minimum to the VIC, so a
+taken branch on a badline reads 44 and ls9795-frozen reads 1075.20, above the physical
+25 x 43. The exact steal, per instruction rather than per table, is 1070.2 / 1072.1 /
+1072.5 / 1072.0 on the same four captures: **-0.8 to +1.5 cycles a frame**, and its sign
+changes with the board. The derivation is under *Boundary* below.
+
+**Measured — the clock does not drift.** Frame-locked against the machine with the sim's
+memory replaced from live truth every frame and only its cycle residual carried, so
+nothing but the clock can move, over 1200 frames: ls42 **21354** machine passes against
+**21363**, ls335 **9410** against **9408**. Nine passes and two — under 0.01 a frame,
+either sign.
+
+**A quiet frame is usually not a replot.** ls9795 reaches no `$1289` on **445 of 700**
+live frames, in runs of 3, 4 and 7 — and a checkpoint on `$1805`/`$1F9F`/`$1FFC`/`$2625`
+fires in none of them. Those are simply passes longer than a frame: one `$1887` march is
+64080 cycles and the pass before the frame-129 rotation is a single **274578**-cycle
+query, four and eighteen frames of foreground. Only **one** run in 700 frames is a replot.
+
+**Measured — the replot is billed in the right pass.** That one run is frames 112..151, 40
+frames, with `$1805`, `$1F9F`, `$1FFC` and `$2625` all inside frame **130**. The model
+enters the same 274578-cycle march during the same frame 111, drains it, and charges its
+own single replot — 389179 cycles, slot 3, span (37, 3) — in frame **129**. One frame, and
+it is not a mis-billing: over 400 frames the model charges **exactly one** replot against
+the machine's exactly one `$2625`, so nothing is double-billed, and the span it computes is
+the ROM's own `$0C62`/`$0C69` byte for byte. What puts it a frame early is below.
+
+**NOT the march price: it is exact, three ways.** The frame-129 event turns on one
+`$16E6` — slot 3's, entered in frame 111 — whose `$17B2` scan spends a single 274578-cycle
+`$1887` on the player. Halting the machine at that very `$16E6` and capturing the live
+image:
+
+* **The body is cycle-exact.** jennings on the captured image runs `$16E6` in **280640**
+  cycles and `enemies.update_body` charges **280640**, with `$1F9F` stubbed on both sides.
+  The same round is in the headless comparison too — ls9795 round 90, slot 3, 280640
+  against 280640 — so `test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count`
+  now asserts its longest checked round exceeds 250000 and a long march cannot leave it.
+* **The real 6510 agrees with jennings instruction by instruction.** cpuhistory over the
+  live march, aligned against jennings' own stream of the same query, matches at **every**
+  site: 89941 instructions, no cost differs. (`$1DB9 BCC` reads 3 live against jennings'
+  2 only because the live sample never sees it not taken.)
+* **The frame budget the march really gets is the model's.** Taking each frame's
+  foreground as jennings' count for the instructions the live stream executed in it — no
+  threshold, no classification — eleven whole frames inside the march measure 15166..15591
+  where the model's own per-frame budget is 15174..15591; model minus machine sums to
+  **+12 cycles over 11 frames**.
+
+**Measured — what is left is ~1 cycle a frame.** The same alignment gives the machine's
+position *inside* the march at every frame boundary, against the model's
+`274578 + cycle_residual`: the model leads by **+81** cycles at the march's first frame
+boundary and **+97** at its fifteenth, i.e. ~1.1 a frame on top of ~80 already accumulated
+over frames 1..111. That lead is the whole event. Live, `$16E6` to `$17CD` is 354664 wall
+cycles (17.926 frames) and `$17F9` a further 4098 (18.138), so the machine crosses the
+frame boundary **between the scan's end and the rotate gate** and turns in frame 130; the
+model, ~100 cycles ahead, reaches `$17F9` with ~119 of budget still in frame 129 and turns
+there. Rotating with 119 cycles left is not a modelling error — the ROM's own `$1810`
+h_angle write is ~80 cycles past `$17F9` — so nothing about *where* the model suspends
+moves it. Only the ~100 cycles do.
+
+**Boundary — the badline steal, now derived exactly, and why no constant can carry it.**
+Per frame, 19656 = foreground + 477 + the `$9630` body + steal, and the first three are
+counted off the image, so the residual is the steal. `driver/badline.py` measures it
+exactly: `cpuhistory` stamps every instruction, and an instruction's *unstolen* cost is
+the minimum delta over its own (opcode, branch taken, index page crossed) class — a steal
+is never negative, so that minimum is its true cost. Every instruction off a badline then
+reads a steal of **exactly zero** (256827 of 258267 in one ls9795 capture; the rest are
+the 7-cycle interrupt entries), which is what makes the badline numbers exact.
+
+The law, and it is a derivation, not a fit. A badline pulls BA low three cycles before
+the VIC takes the bus and the 6510 runs on to its first **read** cycle, so
+
+    one badline = 43 - (consecutive CPU write cycles at the window's first cycle)
+
+43 being the 40 c-accesses plus the AEC lag. A write run is at most **two** — an NMOS
+read-modify-write's dummy-plus-real pair, or a JSR's two pushes — because every
+instruction opens with an opcode fetch, so **40 is unreachable and 44 impossible**.
+Over **6424 live badlines** on ls0042/ls0335/ls9795, ls9795 frozen and ls9795 mid-march,
+the steal is 41, 42 or 43 and `sentinel/badline.py` reproduces **every one** of them from
+the opcode alone, with the window solved to one cycle-in-line (11) that is the same on
+all five captures
+(`fixtures/live_badline.json`, `test_every_live_badline_steal_is_the_derived_one`).
+The 44s this item used to quote were an artefact: a static opcode table charged a taken
+branch's or a crossed page's own extra cycle to the VIC. So was ls9795-frozen's 1075.20,
+which is above the physical maximum of 25 x 43.
+
+**The frame total is state-dependent, so no constant can be right.** Exactly:
+
+| board | per badline | per frame | complete-frame range |
+|---|---|---|---|
+| ls0042 | 42.81 | **1070.2** | 1066..1075 |
+| ls0335 | 42.88 | **1072.1** | 1069..1075 |
+| ls9795 | 42.90 | **1072.5** | 1071..1075 |
+| ls9795 frozen | 42.88 | **1072.0** | 1069..1075 |
+
+Those three play means are the run's **head** — 10 captures a frame apart, ~15 distinct
+frames, standard error ~0.6. Sampled across the run they are 1070.6 / 1071.1 / 1071.8
+(*The ls335 gap was the measurement, not the model* below); the spread survives, the
+individual figures do not.
+The fitted 1071 was *above* ls0042's true steal and *below* the other two. The
+writers the window catches are named in the fixture and are dominated by `$31CA`'s LFSR
+(`ROL abs` at `$31D9`-`$31E5`, a dummy-plus-real pair, hence the 41s), then `$16D9 DEC
+$0090`, the `$1289`/`$12A2` loop's `LSR`/`ASL`/`JSR`, and `$194D`/`$195F STY`. ls0042
+runs ~19 passes a frame against ls9795's ~7, so it spends far more of the frame inside
+`$31CA` and its windows catch far more writes — which is exactly why one constant cannot
+serve three boards.
+
+**Probe — the steal IS the lever, and one number cannot pull it.** Setting the term to
+each board's own exact steal (the fitted `BADLINE_FRAME` **and** `IRQ_CYCLES`, which was a
+stale literal — editing the fit alone had been inert):
+
+| board | steal | first CORE | follow events |
+|---|---|---|---|
+| ls0042 | 1071 → 1070 | none → none | 0 → 0 |
+| ls0335 | 1071 → 1072 | 478 → **155** | 12 → **20** |
+| ls9795 | 1071 → 1073 | 129 → **130** | 111 → **122** |
+| ls9795 | 1071 → 1075 | 129 → **66** | 111 → **164** |
+
+ls9795's frame-129 rotation does move to the machine's own frame 130 — the phase lead
+this item measured is real and it is the steal — but every other board pays for it.
+
+**What closing it needs, precisely.** The model would have to know *which instruction*
+the raster caught at each of the 25 windows. Two things were said to stand in the way.
+Both were measured, and neither is a blocker; what is left is plumbing, not physics.
+
+**1. The frame origin IS instruction-aligned — the 4-6 cycle spread is an output, not
+blur.** The raster IRQ is taken at an instruction boundary, and the `$9630` marker's
+frame position is that boundary plus a constant. Over **204 live frames** on five
+captures the gap is **88** — `IRQ_ENTRY` 7 plus the 81 cycles `$95E9..$9630`, exactly
+`IRQ_BODY`'s own split — with **8** frames reading 87, and every one of those 8 is a
+**branch**, whose IRQ poll the NMOS core takes a cycle earlier (1292 short-IRQ entries
+say the same: 7, or 6 off a branch, 55 of 55; a wider sample adds 5 off a branch that
+crosses a page, *The IRQ entry is 7, or a taken branch's own cycles less* below). The
+boundaries land at frame position
+**13421..13426** — raster 213 cycles 2..7 — and 13421+88 = 13509, 13426+88 = 13514, which
+is precisely the observed marker spread. So the spread is the tail of the interrupted
+instruction, and a model that knows the instruction stream *predicts* it
+(`badline.marker_position`, `test_the_9630_anchor_is_instruction_aligned_and_its_spread_is_that_instruction`).
+The four short interrupts land on rasters 53/93/133/173 by the same law, so the frame's
+whole IRQ layout is placeable.
+
+**2. The write-cycle map per term exists, and the march resolves.** `sentinel/writemap.py`
+walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables, with
+`$CE DEC abs` corrected from its table's 3 to the machine's 6 — and reads the write cycles
+straight off the addressing mode, so no hand table is needed. Measured against **6424**
+live BA windows over five captures, one of them taken 112 frames into ls9795 so the loop
+is inside a single 274578-cycle `$1887` march:
+
+| | |
+|---|---|
+| windows falling after a `$XXXX` the cost model itself counts from | **6424 of 6424** |
+| distinct (anchor, offset) keys | 1081 |
+| keys carrying more than one steal | **3** |
+| windows the static walk resolves with *no* branch record at all | 6147 (**95.7%**) |
+| complete frames `badline.frame_steal` reproduces from the stream | 192 of 192 |
+
+The march is not the hard case it was called: 842 of the 1600 march-capture windows land
+in `$1CBB`, 240 in `$2BA8` and 237 in `$0D03`, and every one of them is anchored. All
+three ambiguous keys are a branch the charging term *already* decides — `$0D05+57` is
+`$0D03`'s per-bit shift-add (`MUL8_BIT`), `$1CCC+33` its per-component negate
+(`ADD_VECTOR_NEG`), `$193A+10` the `$191F` targeting walk (`EXPOSURE_TARGETS_PLAYER`).
+
+**Done — the fit is retired and the steal is charged per window.** Every cost term now
+reports the ROM address it is counted from: `badline.charge(clk, $XXXX, cycles)` through
+`enemies.py`, `relative.py`'s `$1887` and both numba twins, against
+`sentinel/writeruns.py` — the per-anchor write-cycle map, regenerated from the image by
+`driver/writeruns.py` (307 anchors, 1312 write cycles, `$31CA`'s eight LFSR rounds and
+the pass head carrying the branch record the charging term itself decides).
+`badline.frame_clock` pins the frame at raster 213, places the 25 BA windows and the four
+split interrupts at their own raster positions, and hands `charge` the offset into the
+running term. `passcost.BADLINE_FRAME` is **gone**; the frame is charged
+`BADLINES_PER_FRAME * BADLINE_STEAL` (1075, the derived ceiling) up front and each window
+refunds the write run it lands on.
+
+| board | model steal, mean | machine |
+|---|---|---|
+| ls0042 | **1070.8** (1063..1075) | 1070.2 |
+| ls9795 | **1071.5** (1064..1075) | 1072.5 |
+
+**Measured against the machine, frame-locked, 3000 frames, `--follow`:**
+
+| board | CORE events | first CORE |
+|---|---|---|
+| ls0042 | 0 → **0** | none → none |
+| ls9795 | 111 → **116** | 129 → **130** |
+| ls0335 | 12 → **24** | 478 → **155** |
+
+ls9795's frame-129 rotation is gone: the model no longer turns enemy 3 a frame early, and
+the machine's own frame 130 is the first CORE. ls0335 moves to 155/24 — which is what the
+probe above predicted for its own true steal (1072 → 155/20), so the model is now right
+about the steal and ls0335's residue is elsewhere. ls0042 is untouched.
+
+**Placement matters and is not free — and the reason is not calibration.** Charging each
+window's steal at its own raster position (rather than the whole frame's ceiling up front)
+is physically right, and it still makes the model measurably *worse*. Re-run on the tree
+that has since lost the `$9AF6`/`$37F2`, `$1F9F`, `$0C48`, camera-shift and CORE-write-offset
+errors that were said to be compensating for it, under exact seeding over 3000 frames:
+
+| board | CORE, ceiling up front | CORE, steal at its own raster |
+|---|---|---|
+| ls9795 | 19 (first at frame 151) | **96** (first at 77) |
+| ls0335 | 14 (first at 156) | **140** (first at 111) |
+| ls0042 | 0 | **0** |
+
+`test_human_clock`'s pinned counts move both ways and net roughly nil (facing cadence
+89 → 91, split cadence 87 → 86, ls335 exact spans 12 → 11, facing errors 42 → 39), so the
+gate is the whole verdict. **The mechanism is measured, and it is not the rest of the clock
+being calibrated against the lump.** The event list `frame_clock` arms covers exactly one
+frame, but a term is charged atomically and may outlive several: over 300 ls9795 frames
+**253 run no foreground at all**, the clock stops at **2701** of 19656 cycles, and only the
+four windows the `$9630` body contains are ever reached. Placement therefore charges those
+four (~172 cycles) where the frame really pays 25 (~1072), handing the model ~900 free
+foreground cycles in every frame a march spans. ls0042 is untouched for the same reason it
+was untouched before: its clock reaches 19655 and all 25 windows in every frame.
+
+**What the ceiling costs instead, and where the residual accrues.** Model per-frame steal
+against the machine's own (`fixtures/live_badline.json`, complete frames only):
+
+| board | machine | model |
+|---|---|---|
+| ls0042 | 1070.22 | 1070.37 |
+| ls0335 | 1072.08 | 1070.71 |
+| ls9795 loop | 1072.56 | — |
+| ls9795 inside the march | **1071.46** | **1074.76** (1075.00 in the 253 quiet frames) |
+
+(The two whole-run rows are head-of-run machine means against a model measured on another
+landscape; only the march row survives. See *The ls335 gap was the measurement, not the
+model* below.)
+
+So across a march the model runs **~3.5 cycles a frame short of foreground** — the sign that
+makes the sim late, which is what every one of the 19 and 14 `update_cd` events surviving then was.
+And it is not a placement question at all: `charge(clk, 0x1887, 274578)` walks a 49-cycle
+write map, so every window inside the march is charged the full 43 whatever its position.
+Of the machine's own 3.48 cycles a frame of refund there, **3.09** lands on the march's own
+writes (`$1CBF`, `$1CFF`, `$1CD6`, `$1D4C`, `$1DF9`, `$0D07`, `$2BB9` …) and 0.42 inside the
+`$9630` body, on the `$8CFC`/`$8D01`/`$8D0D` CIA1 strobes the `$119F` keyboard walk drives
+(called the sound engine here until the walk was read; `driver.badline`'s routine table now
+names `$0F62`/`$119F`/`$1363`/`$8CF9`/`$8F78` the keyboard walk and leaves `$8ED1` the note
+tick) — and the `$95E9` walk RTIs out of the short-IRQ chain, so the model
+refunded none of it either.
+`test_a_term_outliving_the_frame_pays_the_ceiling_with_nothing_to_refund_it` pins all of it.
+
+**Done — the march is charged by its own laps' write weight, and it closes.** No static map
+can reach a data-dependent loop of thousands of laps, but the loop's *write profile* is fixed
+arithmetic: a window `d` cycles into a term refunds the consecutive write cycles at `d`, so
+summed over the term that is one per one-cycle write (STA/STX/STY/PHA/PHP) and three per two
+(an RMW's dummy-plus-real pair or a JSR's pushes) — and 40 being unreachable, no run merges
+across an opcode fetch. `sentinel/writeweight.py` carries that weight for every `$1CDD` term,
+packed above the term's cycles so the march's existing accumulator sums both and no second
+one is needed; `badline.charge_run` prices each window at the term's own `weight / cycles`
+and **wraps the event list**, since every frame a term outlives is charged its own ceiling.
+
+The weight is checked against the ROM, not fitted. The flat sub-step `$1CE8 JSR $1CBB` through
+the `$1D18 BMI` that closes the loop, walked over the image for all four component-sign
+patterns, is **306/310/314/318** cycles carrying **30/33/36/39** — exactly what the terms
+`writeweight` composes claim
+(`test_the_march_laps_write_weight_is_its_own_instructions`). The gate's own `$1887` is
+274578 cycles carrying **35667**, 0.1299 a window against the machine's 0.139.
+
+| ls9795, the gate's 274578-cycle march (frames 110..124) | steal a frame |
+|---|---|
+| machine | **1071.46** |
+| model, the ceiling with nothing to refund it | 1075.00 |
+| model, charged by the march's own write weight | **1071.73** |
+
+**Measured against the machine, frame-locked, 3000 frames, `--follow`, exact seeding:**
+
+| board | CORE events | first CORE |
+|---|---|---|
+| ls0042 | 0 → **0** | none → none |
+| ls0335 | 14 → **9** | 156 → **297** |
+| ls9795 | 19 → **15** | 151 → 151 |
+
+`test_human_clock`'s pinned counts are untouched (facing cadence 89, split cadence 87, facing
+errors 42, exact spans 117, facings 89, energies 86), and the rollout costs 6.2 → 6.6 ms
+(ls42), 6.6 → 8.0 (ls335) and 7.7 → 8.7 (ls9795) per 3000 `advance_frame`s.
+
+**Done — the `$8401` chain and the `$9630` body carry their own weight, and ls335 halves.**
+The 0.21 of the machine's 3.48 a frame that the march's weight did not reach was in two
+places, and neither is the march. **The `$95E9` body is the bigger one.** Its write map is
+walked from `$95E9`, and with every branch falling through that walk takes the split chain's
+`$962D JMP $969A` and RTIs after 380 cycles — before the *first* of the four windows the
+body contains (offsets 389/893/1397/1901 from the raster IRQ), so `charge` refunded
+**nothing at all** for the whole body. It is not a sound engine: the 2156 cycles of `$119F`
+are `$1363`'s keyboard walk, seventeen `$8CF9` CIA1 matrix scans reached through `$0F62`,
+and the walk cannot be placed statically because the body's length moves 450 cycles frame to
+frame (the `$130C` tick, the `$8ED1` branches). So it is charged like a march: `charge_run`
+with the weight of its own sequence, **203** (`writeweight.IRQ_BODY_WRITES`, `$0F62` and
+`$8CF9` repeating `$11D9 LDY #$0E` + 2 times, pinned to the image by
+`test_the_irq_bodys_write_weight_is_its_own_instructions`) — 0.340 a frame. Live over 40
+`$9630` bodies the machine's own walk carries **211.4**, of which the `$8ED1` tick and the
+`$9659` gate own 16.1: 195.3, plus the entry's 8. The fixed-point refund residue is smaller
+than one cycle a frame, so it is now carried on `State.steal_residue` rather than reset with
+the clock; a per-frame stand-in would have been inert.
+
+The `$8401`/`$9287`/`$0D4A` chain now carries its own weight too (`writeweight.TRIG`), each
+term walked over the image to exactly the cycles and write cycles it claims
+(`test_the_trig_chains_write_weight_is_its_own_instructions`). It is worth only **+0.025** a
+frame inside a march — the coincidence was real — but it also stops a query that rejects at
+the `$18CA` FOV gate being charged against `$1887`'s 49-cycle map, which its ~460 cycles
+outran; those now price by their own density, and ls42's whole-run steal lands on the
+machine's.
+
+| model per-frame steal | machine | ceiling only | + march weight | + trig and `$9630` |
+|---|---|---|---|---|
+| ls9795, inside the gate's march | **1071.46** | 1075.00 | 1071.78 | **1071.41** |
+| ls0042, whole run | 1070.22 | — | 1070.43 | 1070.23 |
+| ls0335, whole run | 1072.08 | — | 1070.72 | 1070.44 |
+
+The two whole-run rows are **retracted**: neither column is that board. See *The ls335
+gap was the measurement, not the model* below.
+
+**Measured against the machine, frame-locked, 3000 frames, `--follow`, exact seeding:**
+
+| board | CORE events | first CORE |
+|---|---|---|
+| ls0042 | 0 → **0** | none → none |
+| ls0335 | 9 → **4** | 297 → **613** |
+| ls9795 | 15 → **14** | 151 → 151 |
+
+`test_human_clock`'s pinned counts are untouched (facing cadence 89, split cadence 87, facing
+errors 42, exact spans 117, facings 89, energies 86) and the rollout costs 11.4 → 11.5 ms
+(ls42), 12.2 → 12.3 (ls335) and 9.9 → 10.0 (ls9795) per 3000 `advance_frame`s, i.e. +1%.
+
+**The ls335 gap was the measurement, not the model.** The 1.64-cycle deficit the table
+above records for ls0335 does not exist, and neither column was that board's own steal:
+
+* The **model** column was measured on **another landscape**. The probe read its argument
+  as hex and handed it to `Game.typed`, which takes the number a player TYPES -- so
+  `Game.typed(int("335", 16))` generates the board typed 0821, seed `$0821`, not ls0335
+  (seed `$0335`), while printing "$0335". Those stand-in boards read 1070.25 and 1070.49
+  over 3000 frames, which is the table's 1070.23 and 1070.44; the boards themselves read
+  **1070.52** and **1071.32**.
+* The **machine** column came from 10 captures **one frame apart** at the head of the run.
+  A cpuhistory window spans 4-5 frames, so that mean rests on ~15 distinct frames whose own
+  per-frame total has sd 2.2 -- a standard error of ~0.6, and 1072.08 is a head-of-run
+  fluctuation.
+
+`driver/badline.py --stride` runs frames between captures, so the mean covers the run
+rather than its head. Machine (40 captures, +/- one standard error) against the model's
+own frame clock on the same board over its own first frames:
+
+| board | machine, stride 20 | machine, stride 50 | model, 800 frames | model, 3000 |
+|---|---|---|---|---|
+| ls0042 | 1070.68 +/- 0.19 | 1070.55 +/- 0.22 | 1070.51 | 1070.52 |
+| ls0335 | 1071.16 +/- 0.22 | 1071.11 +/- 0.21 | 1071.36 | 1071.32 |
+| ls9795 | 1071.87 +/- 0.18 | 1071.82 +/- 0.19 | 1072.02 | 1071.68 |
+
+**The model's per-frame steal is the machine's on all three boards, to within 0.25 cycles.**
+`test_the_models_own_frame_steal_is_the_one_the_machine_pays_on_each_board` pins each board
+against the fixture, which is now sampled 40 frames apart (20 captures a board, ~800 frames)
+and names the board by its typed number.
+
+Where each side's refund lands, per frame (machine from the fixture's own writers, model
+from the anchor its clock refunds at, both over the same three boards):
+
+| refund a frame | ls0042 | ls0335 | ls9795 |
+|---|---|---|---|
+| `$31CA` prnd | 2.69 / **3.39** | 1.74 / **1.42** | 0.38 / **0.37** |
+| the `$1887` chain | 0.09 / **0.13** | 1.24 / **1.28** | 1.99 / **1.90** |
+| the `$9630` body | 0.76 / **0.34** | 0.66 / **0.34** | 0.49 / **0.34** |
+| `$1289` pass head/tail | 0.41 / **0.44** | 0.20 / **0.29** | 0.07 / **0.14** |
+| `$16E6` body and the rest | 0.39 / **0.14** | 0.23 / **0.21** | 0.16 / **0.18** |
+| total | 4.35 / **4.45** | 4.08 / **3.63** | 3.09 / **2.96** |
+
+The one term whose sign is the same on every board is the `$9630` body: it refunds **0.34** a
+frame where the machine pays 0.49..0.76. That is what is left of the steal, and it is worth
+~0.3 a frame on every board rather than 1.64 on one.
+
+**Measured — the body's weight is its real path's, and the gap is the interrupt's own cycle.**
+The suspect was the fall-through walk. It is not that. `cpuhistory` over **188** raster bodies
+on ls0042, ls0335 and ls9795 (20 captures a board, 40 frames apart, each verified on the board
+it claims by regenerating `$0400-$07FF`) reads **one path**, the same on every board and every
+frame, branch for branch:
+
+| run | cycles | write weight | |
+|---|---|---|---|
+| the 6510 interrupt sequence | 7 | — | three pushes, before the `$95E9` fetch |
+| `$95E9`..the `$963D` JSR | 153 | 18 | `$9621 BEQ $9630` taken, `$9633 BPL` not, and `$FFC5`'s three idle voices |
+| the `$8ED1` note tick | 63..130 | charged apart | `sound_frame` |
+| `$9640`..`$9652 BEQ` | 25 | 0 | four reads; the `$9652 BEQ $9659` taken |
+| the `$9659` gate | 7, 64, 76 or ~470..550 | charged apart | `cooldown_frame`, `$130C`, `$1635` |
+| `$9669`..the `$969F` RTI | 2200 | 185 | `$130B` is 0, so `$9671 BEQ` runs `$119F` every frame |
+
+7 + 153 + 25 + 2200 = **2385** = `passcost.IRQ_BODY`, and 18 + 185 = **203**, the weight
+`writeweight` already carried. So the composed weight was never the fall-through walk's; it is
+the real path's, and `writemap.walk` from `$9669` with that path's branch record reproduces all
+**739** instructions of the tail. `test_the_irq_bodys_write_weight_is_its_own_instructions` now
+walks all three runs end to end instead of checking the pieces by repetition count. Nothing is
+double-counted or missed at the `$8ED1`/`$9659` boundaries either: the tick is exactly
+`$963D`..`$9640` and the gate exactly `$9659`..`$9669`, on 188 of 188 bodies.
+
+**The four windows land 375..380 cycles past the `$95E9` fetch.** Measured, the body's four BA
+windows sit at **375..380 / 879..884 / 1383..1388 / 1887..1892** from the `$95E9` opcode fetch
+— the recorded 389/893/1397/1901 are from raster 213 cycle 0, and the difference is `b`, the
+cycles from the raster assert to the instruction boundary the IRQ is taken at (2..7, mean 3.4;
+the model's clock assumes 0). All four fall inside `$119F`'s seventeen `$8CF9` matrix scans,
+and the machine's refund is two single-cycle stores in them: `$8CFC STA $DC02` and
+`$8D0D STA $DC00`. Placing the four in the body's own write map, in ROM order, with the
+machine's own `b`, reproduces the machine **body for body**:
+
+| board | bodies | machine | placed at the machine's `b` | bodies agreeing exactly |
+|---|---|---|---|---|
+| ls0042 | 68 | 0.735 | **0.721** | 67 of 68 |
+| ls0335 | 60 | 0.617 | **0.617** | 60 of 60 |
+| ls9795 | 60 | 0.467 | **0.433** | 59 of 60 |
+
+**So the residual is one datum, `b`, and it is not usable.** The refund is a knife edge on it —
+placed at a fixed `b`, per frame:
+
+| `b` | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| ls0042 | 0.04 | 0.28 | 0.63 | **1.28** | 0.02 | 0.22 |
+| ls0335 | 0.00 | 0.23 | 0.48 | **1.15** | 0.38 | 0.00 |
+| ls9795 | 0.05 | 0.25 | 0.45 | **0.92** | 0.28 | 0.07 |
+
+— and `b` is the interrupted instruction's own remaining cycles, which the model has no way to
+count: it charges the body first and hands the frame's foreground what is left, so it holds no
+instruction boundary at the raster. Averaging the placement over `b` uniform on 2..7 gives
+0.48 / 0.40 / 0.32, still short of 0.735 / 0.617 / 0.467 because the machine's `b` concentrates
+at 2..3, and that distribution is assumed rather than derived. The uniform-density `charge_run`
+the body has now **is** that expectation, taken over a phase spread wide against the 121-cycle
+scan lap; its only correctable bias is that 18 of the 203 sits in the 185 cycles ahead of the
+tick that no window can reach, worth 0.004 a frame.
+
+**And closing the body alone would break the totals.** The model's whole-frame steal is already
+inside 0.25 of the machine on all three boards (1070.52 against 1070.55..1070.68, 1071.32
+against 1071.11..1071.16, 1071.68 against 1071.82..1071.87), because `$31CA`'s own refund runs
++0.70 high on ls0042 and −0.32 low on ls0335. Adding the body's +0.40 / +0.28 / +0.13 would put
+ls0042 and ls9795 outside it. Whatever eventually carries the body's phase has to carry
+`$31CA`'s at the same time.
+
+**The IRQ entry is 7, or a taken branch's own cycles less.** The wider sample also carries
+entries of **5** cycles, which the 6/7 law had no case for. Keyed by the interrupted
+instruction's own unstolen cost, all 1940 live entries are one law and it is not a fit: 7
+past anything else, but a TAKEN branch polls the IRQ two cycles in, so a raster already
+asserted starts the sequence there -- **6** off its 3 cycles (108 of them), **5** off the 4
+of a page crossing (4) -- and one asserting after that poll lets the branch finish and pays
+7 (133 taken branches do). `badline.entry_cycles` is that law;
+`test_the_interrupt_sequence_is_short_only_by_a_taken_branchs_own_cycles` checks every entry
+against it. The static walk resolving windows with no branch record at all reads 93% across
+a run rather than the head-of-run sample's 95%.
+
+None of this is a model change: `entry_cycles` and `marker_position` are the frame-origin
+law and nothing charges through them, no term's cycles or weight move, and the gate is
+unchanged end to end — CORE **14 / 4 / 0** with the same first divergences (151, 613, none)
+over 3000 frames under exact seeding, `test_human_clock`'s pins held, and 6.5 / 7.7 / 8.9 ms
+per 3000 `advance_frame`s.
+
+**What is left.** All eighteen survivors are `update_cd` — ls335's four and every one of
+ls9795's fourteen, the four `$9730` buffer-flush positions (`$9786`, `$978D`, `$988E`,
+`$9899`) included: `obj[62].h_angle` is closed and those four now diverge on `update_cd`
+like the rest. The `$0F4A`/`$0D03` multiply beneath `$937F` still carries no weight of its
+own; it is shared with `$1C54`'s sin/cos and with the march's `$1DAF`, so naming it means
+unpacking at the projector and object-cost boundaries as well.
+
+**Measured — every event is one `$16E6` gate decision, and the lead at it is under 140
+cycles.** `resume_from_stack` prices the machine's own position off the ROM's straight
+lines, so wherever both sides sit in the same segment the difference of the two residuals is
+the model's lead **in cycles**. Raced frame for frame with no resync (each board verified by
+regenerating `$0400-$07FF` against `landscape.generate`: **0** mismatched bytes on all
+three), the lead does not run away — ls9795 +3 -> +88 over frames 1..102, ls0042 -13..+87
+over 300 frames, ls0335 +65 down to -55 over 600. Under `--follow`, at the last comparable
+frame before each event:
+
+| board | the model's lead, cycles, at each event |
+|---|---|
+| ls9795 (14) | +88, -87, -7, -6, +74, +93, +114, +132, +132, +96, +110, +54, +71, +22 |
+| ls0335 (4) | -55, +112, +68, +92 |
+
+Every event is the same shape. One enemy reads `emu=1 sim=4` — the model reached `$16ED`
+first — and in **9 of the 18** a second enemy reads `emu=4 sim=1`, the model arriving at
+*that* enemy's body one tick early, finding `update_cd` still 2 and shutting the gate the
+machine opened. Both signs are the same lead. Ninety cycles of 19656 is 0.5% of a frame and
+ls9795 races 2638 frames at ~1.1 passes a frame, so ~11 gate decisions are expected inside
+the band against the 14 seen. **No event carries a lead of a term's size**: there is no
+mis-priced routine hiding in them.
+
+**Measured — the per-window refund's per-frame value carries no information about the
+machine's.** Reseeding the sim at the machine's exact cycle **every** frame reduces the lead
+to one frame's budget error: mean **-0.5**, range -10..+8, sd **3.7**, the same on ls0042
+(n=107) and ls9795 (n=35) and in every phase pair. Switching `badline.charge`/`charge_run`
+to return their cycles unrefunded and charging a flat frame steal instead, on the *same*
+frames, leaves the mean where it was and drops the spread to sd **3.2** (ls0042) and **3.1**
+(ls9795) — Pitman-Morgan t = 3.49 and 2.25, the same sign on both boards. A refund that
+tracked the machine would *shrink* the spread; this one adds its own variance to it, so its
+covariance with the machine's own per-frame steal is ~0. Its **mean** is right, which is why
+the whole-run steals match to 0.25 cycles, and its per-frame value is noise — which is what
+random-walks the phase out to +/-100 cycles over the 60..290 frames between events. The gate
+run confirms the term: flat steal (1072 / 1071) reads ls9795 14 -> **10** and ls0335 4 ->
+**10** (first at 479, was 613), so the events are the steal's and no constant serves both
+boards. Diagnostic only; nothing is kept.
+
+**Measured — window by window: the write maps are right, the placement is not.** The
+per-frame figure above is an aggregate; the same seeding prices each window directly. Seed the
+sim at the machine's exact cycle, run ONE frame on both, and read the sim's own refund for
+event *i* against the steal `cpuhistory` measures at that window. Over 120 exactly-seeded
+frames a board — 1974 windows on ls0042, 1466 on ls0335:
+
+| | ls0042 | ls0335 |
+|---|---|---|
+| model refund a window | 0.150 | 0.171 |
+| machine refund a window | 0.162 | 0.158 |
+| windows the model prices right | 80.3% | 79.5% |
+| answering 0 to every window would price right | **88.2%** | **89.4%** |
+| nonzero calls, of them real | 205, **31** | 179, **23** |
+
+The mean is right to 0.01 and the per-window answer is *worse than a constant zero*: precision
+15% and 13% against base rates of 12% and 11%, so the calls are chance. A uniform shift of
+every offset over -8..+8 moves the agreement by under 4 points and has no peak, so it is not
+one origin offset.
+
+**Where the sim places a window exactly, it prices it exactly: 13 windows of 13** (10 of 10
+within a cycle on ls0042 alone). Recording the sim's own `(anchor, offset)` per window and
+finding that anchor in the machine's own instruction stream gives the placement error in
+cycles, ls0042, n=1249:
+
+| the sim's anchor | n | p25 | median | p75 |
+|---|---|---|---|---|
+| `$95E9` raster-IRQ body | 66 | +10 | **+10** | +12 |
+| `$16D6` prnd | 671 | -483 | +5 | +146 |
+| `$1925` exposure | 264 | -625 | -138 | -8 |
+| `$12A2` pass tail | 162 | -622 | -518 | -38 |
+| `$1289` pass head | 31 | -696 | -593 | -509 |
+
+Inside the body the sim is a tight **+10** cycles ahead — `b` plus the 7-cycle entry, which
+`badline.entry_cycles` already names and `advance_frame` does not apply. Past the body the
+error is pass-scale, not cycle-scale: `$16D6`'s own term is 433 cycles and its quartiles span
+-483..+146, so at a quarter of those windows the machine is in a *different pass's* prnd, and
+`$1289`'s whole run is 25 cycles against machine offsets of 389..787. Median |error| by window
+index runs 10 inside the body, ~150 over the next four windows and ~480 by mid-frame,
+oscillating against ls0042's ~630-cycle idle pass. **The sim's offset into its own term is
+not where the machine is**, so no per-window refund of any kind can track the machine until
+the within-frame phase does. (Comparing the *anchor's* routine against the machine's PC
+overstates this — a term legitimately spans into its callee, `$16D6` into `$31CA` and `$95E9`
+into `$119F` — so it is the offset, not the routine, that carries the measurement.)
+
+**The phase is the frame's own `cycle_residual`, and it is read off the frame loop.**
+`advance_frame` re-pins `badline.frame_clock()` to the raster every frame, but the model's
+*work* boundary is not the raster boundary: the frame ends when the budget runs out part way
+through a term, and that whole term is charged to the frame that started it. The mismatch is
+carried as `state.cycle_residual` — a **budget** carry with no **clock** counterpart. The
+machine still owes that term's tail and runs it after the IRQ; the model does not, so the
+whole of the next frame's foreground sits on the clock exactly `cycle_residual` early. The
+frame *total* stays right because the residual telescopes frame to frame; only the placement
+moves.
+
+**Measured off the model alone, no emulator.** Before the fix, the model's own clock at frame
+end spans **19241..19852** on ls0042 against the 19656-cycle PAL frame it is pinned to, and
+`(clk[0] - PAL) + cycle_residual` ranges **-475..-1** rather than holding; charging the caught
+term's tail first makes it exact. (An earlier round of this measurement addressed the boards
+as `Game.typed(int(digits, 16))`, which BCD-packs twice -- `Game.typed` already packs -- so it
+read landscapes 66 and 821 instead of 42 and 335, and 9795 not at all. Pass the typed decimal.
+The live harnesses were never affected: `enter_landscape` takes the packed value.)
+
+**Live, the same correction collapses the placement.** Adding the frame's seeded residual back
+to each window's measured placement error puts `$16D6`'s median at **+2** (ls0042) and **+4**
+(ls0335) with p90 +7 and +9 — `b` alone. Charging the tail for real and re-measuring:
+
+| `$16D6` placement error | min | p25 | med | p75 | max |
+|---|---|---|---|---|---|
+| as shipped | -760 | -483 | +5 | +146 | +409 |
+| charging the tail first | -213 | **+1** | **+4** | **+6** | +15 |
+
+Windows placed exactly go 3 -> **24** (23 of them priced right), and agreement 80.3 -> 81.6%
+(ls0042) and 79.5 -> 81.5% (ls0335). What is left is `b`, 2..7 cycles, which still decorrelates
+a 1..2-cycle write run.
+
+**Landed as the clock's own overhang, and `b` with it.** Carrying `-cycle_residual` double-pays
+a term `_place_run` already placed: that function wraps a term outliving the frame and places
+the windows of every frame it spans. The clock's own overhang does not, because `_place_run`
+returns `clk[0]` in the coordinates of the frame the term *ended* in, so `clk[0] - PAL` is
+negative exactly there. `State.clock_overhang` carries it, and `State.entry_b` carries `b` --
+the cycles the instruction the raster crossed still owed, read from an instruction-boundary
+map (`writeruns.OWED`) the generator now emits beside the write map, recorded by `charge` at
+the crossing itself rather than reconstructed at frame end (the overhang can span more than
+one term). The frame lays them where the 6510 does: `b` before the interrupt sequence, the
+term's remaining tail after it, then fresh terms.
+
+`SHORT_IRQ_WRAP` is derived and placed rather than added as a scalar. `$9602 DEX` / `$9603 BPL
++2 -> $9607` takes the branch at 3 and skips `$9605 LDX #$04`; the wrapping entry falls through
+at 2 and pays the LDX's 2, so it costs exactly one more. `$9589`'s table is `35 D5 AD 85 5D`
+with X counting 4..0, so the wrap follows `table[0] = $35` -- raster 53. `EVENT_SHORT_IRQ` now
+carries per-event cycles, 120 there and 119 elsewhere, summing to `SHORT_IRQ_FRAME` exactly.
+
+**The invariants, measured.** `(clk[0] - PAL) + cycle_residual` is **0 on all 400 frames of
+ls0042**, where no term outlives a frame, and on **34/400** (ls0335) and **61/400** (ls9795):
+it fails on every frame a wrapping `charge_run` outlived, which the carry skips and
+`_place_run` placed under its own assumption that no raster IRQ interrupts them. (Those are
+not the positive-overhang frames, 183 and 97 -- a positive overhang is necessary, not
+sufficient.) The carry is bounded on every board (max 539 / 469 / 1696
+cycles, never a frame). Live, `$16D6`'s placement error goes from p25/med/p75 of
+**-483/+5/+146** to **0/+3/+6**, windows the model places exactly go **3 -> 81** (78 of them
+priced right), and the refund carries information for the first time: its nonzero calls are
+35 of 159 real on ls0042 and 35 of 127 on ls0335, 22% and 28% against 11% base rates, with
+agreement 80.3 -> 82.0% and 79.5 -> **84.5%**. What is left of the placement error is `b`
+itself, because a harness that reseeds every frame cannot know which instruction the raster
+crossed -- `entry_b` is 0 at every seed, so increment 2 is exercised only in a free race.
+
+**The gate did not follow: 11/8/0 -> 14/8/0** (ls9795 first at 151, ls0335 at 297, ls0042
+none). ls9795 is the board whose frames are mostly the wrapping ones the carry skips, so the
+model is now exact on the frames it corrects and unchanged on the frames it does not.
+
+**The frame end cuts the term, and the tail is the next frame's carry.** `_place_run` wrapped
+the event list, placing the windows of every frame its term spanned on the strength of no
+raster IRQ interrupting them, and returned its clock in the coordinates of the frame the term
+*ended* in -- so the overhang was short by `k` whole frames and every frame the term reached
+into paid its own ceiling twice. It now stops at the frame's last event, exactly as `_place`
+already did. The tail leaves on `clock_overhang` and the term's own per-window refund leaves
+with it, on `clk[6]` and `State.carry_step`, so `carry` goes on refunding at the term's rate
+and hands back what those windows give to the frame whose ceiling pre-paid them -- the ledger
+is unmoved, only its frame changes. `NO_MAP` is gone: a carry with `step` 0 is that anchor.
+
+**Measured.** The carry is now never negative and never bigger than the term that made it
+(ls0042 1..539 against the 2385-cycle `$9630` body, ls0335 1..69367 against 69759, ls9795
+3..270021 against the gate's 274578-cycle `$1887`), telescoping down one PAL frame at a time
+rather than reaching -1,025,143. `(clk[0] - PAL) + cycle_residual` is 0 on 400/400 ls0042
+frames, **34 -> 205** on ls0335 and **61 -> 206** on ls9795. Live over 200 frames, windows the
+model places exactly go **81 of 1475 -> 339 of 3325** (ls0042) and **79 of 1238 -> 99 of 1750**
+(ls0335) -- the sample itself doubles, because every frame now places its own 25 windows
+instead of having them placed by the frame before -- and the refund's nonzero calls go 35 of
+159 real to **117 of 372** and 35 of 127 to **55 of 178**. `$16D6`'s placement error is
+unmoved at p25/med/p75 **0/+2/+5** and **0/+3/+6**: what is left is `b`.
+
+**The gate: 14/8/0 -> 13/7/0**, over more of the run (ls9795 2516 -> 2637 frames raced,
+ls0335 2917 -> 2986), every seed exact. Four of ls9795's thirteen are still the `$9730` flush.
+
+**Closed — the two frame-loop defects the carry left behind.** Both were older than the
+carry and both broke the same invariant. `(clk[0] - PAL) + cycle_residual` is now 0 on
+**400/400** frames of all three boards, from 400/400, **205/400** and **206/400**.
+
+* A frame whose clock stopped SHORT of the raster. `_reach` returned `_WAIT` with the budget
+  unspent when it could not reach the next write's own cycle, so the frame ended `budget +
+  43 x (25 - windows placed)` short of PAL, the windows in that gap were never placed, and
+  `if rest > 0` dropped the negative overhang whole (ls0335 205: one window, 226 cycles,
+  a constant +183 for the rest of the run). `badline.spend` runs the clock over every cycle
+  the budget buys -- the ROM cycles plus each window's own steal, whose refund buys ROM
+  cycles again, so the two cancel and the clock lands on PAL by the identity `clk_end +
+  residual = PAL - 43 x missing` rather than by a fit. `spent` takes the same cycles: the
+  machine really does run the segment that far, and the refunds staying on the clock is what
+  keeps `spent` from overrunning the write it stopped short of. It fires **once in 400 frames
+  on ls0335** (183 cycles, `$181B`) and never on ls0042 or ls9795, and crediting `spent` is
+  what carries the gate -- spending the budget on the clock alone discards the segment's
+  partial progress and moves ls0335's first divergence 297 -> **111**, where crediting it
+  moves it to **1434** and removes the event.
+* The strip-replot debt, charged at `_redraw_cost` and in the jit dispatcher with no clock at
+  all. `badline.stall` retires every event the frame has left -- the frame's own ceiling has
+  already paid their steal -- and books the stall on `clk[7]`, which `overhang` adds at the
+  frame's end, so the play loop's own tail is charged on the clock the replot interrupted;
+  the jit twin retires the same events and its dispatcher adds the same debt to
+  `clock_overhang`, so neither path can see a half-applied stall. The replot is unchanged:
+  ls9795's frame-128 debt is **344791** cycles either way, it still stalls **22** frames, and
+  the board runs the same **1648** body calls and 207 idle frames over 400. Its overhang now
+  telescopes 342918 -> 0 at ~15575 a frame instead of dropping to -343047.
+
+**The gate: 13/7/0 -> 13/6/0**, every seed exact (ls9795 2637 frames raced, ls0335 2983,
+ls0042 3000). ls9795's thirteen are unmoved frame for frame and ls0042 stays clean; ls0335
+loses its frame-297 event and its first is 1434. The carry stays bounded and never negative
+-- ls0042 1..539, ls0335 1..69190, ls9795 3..342918 -- the last now bounded by the replot's
+own stall rather than by the gate's 274578-cycle `$1887`. `$16D6`'s placement error is
+unmoved at p25/med/p75 **0/+2/+5** (339 of 3325 placed exactly) and **0/+3/+6** (99 of 1750):
+what is left is still `b`, which a harness reseeding every frame cannot supply.
+
+**So `charge_run`'s uniform smear is a defect, but not the binding one.** It has two live
+callers — the `$9630` body and the `$1887` see cost — and in the frames this seeding can
+measure at all it prices **4.1 of 25 windows** (ls0042 4.1, ls0335 4.1, ls9795 4.2), all of
+them the body's: a march frame has no countable position, so it is skipped. The other ~20 go
+through `run_at` against a real map, `$16D6`'s exactly-measured prnd map the largest share
+(918 of 1974 on ls0042), and price right 73.2% against the 88.2% a constant zero scores. Both
+paths are uninformative, so charging the see path's terms individually would replace one
+uninformative refund with another while the placement stands.
+
+**Charged in the ROM's own order: `$17B2`.** The scan loop charged its whole slot *after* the
+`$1887` query the ROM runs in the middle of it, and its 22..36-cycle map walked through the
+`JSR` into `$1887`'s own prologue — writes at offsets 10/14/18 belong to the callee the model
+charges separately. It is now the ROM's three pieces: `SCAN_SLOT_CALL` 8 at `$17B2` (map
+`(5,6)`, the JSR's pushes), the query, the branch's own test at `$17B7` (map `(22,)`, the
+`$17C8 STY`) and the `$17CA` loop step (no writes). Cycle totals per slot are unchanged.
+**The gate reshuffles rather than improves: ls9795 14 -> 11, ls0335 4 -> 8, ls0042 0 -> 0**
+(18 events to 19), which is what a refund carrying no per-window information does under any
+perturbation. Kept for the map and the order, not for the count.
+
+**Not the frame origin.** `b`, the 2..7 cycles from the raster assert to the instruction
+boundary the IRQ is taken at, is not the missing datum. Shifting the whole event list by a
+constant b = 0 / 3 / 6 leaves the single-frame error at mean -0.44 / -0.52 / -0.44 and sd
+3.91 / 3.99 / 3.42 on ls0042 (n=63). Whatever the refund is missing, it is not the origin.
+
+**Four of ls9795's fourteen are the replot's price, not this item.** Frames 151, 906, 1657
+and 2404 catch the machine in the `$9730` flush, ~5000 cycles of a ~180-frame gap, so chance
+would put none of them there. At the first, the model charges **323117** cycles for the
+frame-130 strip replot, pays it at ~15575 a frame and leaves frame 151 with **2004** cycles
+to spare while the machine is still at `$9786`, ~4000 cycles short of the flush's end: the
+pass is ~6000 of ~329000 cycles cheap, ~2%, which is `render_cost` and
+[5](#5-one-object-vertex-angle-is-ten-units-out). The debt is now on the clock as well
+(`badline.stall`, above), and those four events did not move: every frame the replot spans
+still pays the whole 1075 ceiling with nothing to refund against a fill that is almost all
+stores — worth ~4 cycles a frame the other way, so it cannot be closed on its own.
+
+**The seed's own error, and its removal.** `resume_from_stack` counts the machine's position
+off the ROM's own straight lines and returns no offset for a position *inside a call*, so a
+resync there started the model at the call's head and injected everything the machine had
+already spent in it. Measured over the gate's own 3000-frame races (`--seed-any`, the shipped
+behaviour): **4 of 117** ls9795 seeds and **3 of 25** ls0335 seeds were at the machine's exact
+cycle. `instrument._seed` now steps frames until the `$9630` marker catches the loop on a line
+it can count, and reports any seed it cannot make exact per event instead of absorbing it:
+
+| board | CORE, seeding anywhere | CORE, seeding exactly | exact seeds | frames raced |
+|---|---|---|---|---|
+| ls0042 | 0 | **0** | 1 of 1 | 3000 of 3000 |
+| ls0335 | 24 | **14** | 15 of 15 | 2917 of 3000 |
+| ls9795 | 116 | **18** | 19 of 19 | 2516 of 3000 |
+
+Per raced frame that is 0.0387 -> 0.0072 on ls9795 and 0.0080 -> 0.0048 on ls0335, so it is
+not the shorter race. ls42 stays clean. The waiting is the cost: a stretch in which no marker
+lands on a countable line is skipped, up to **296 frames** on ls9795 — one `$17B2` scan whose
+`$1887` marches run ~4.6 M cycles, during which every frame boundary falls inside a call.
+Those are the segments that genuinely cannot be resolved to a cycle: an `$1887` march (the
+missing datum is cycles already spent in the query) and a `$1FFC JSR $2625` replot (the
+missing datum is `plot_world`'s own progress, [5](#5-one-object-vertex-angle-is-ten-units-out)).
+
+**What the surviving events are, classified by the PC the raster IRQ interrupted** and by
+`resume_from_stack`'s own chain, every one of them from an exact seed:
+
+| the model's resume point | ls9795 (18) | ls0335 (14) |
+|---|---|---|
+| `$17B7` — `$17B2`'s scan slot, machine under `$1887` | **8** (`$1893`, `$189D`, `$1916`x2, `$191D`, `$1D16`, `$17B7`, `$85DE`) | **9** (`$1887`'s line, `$1D8A`, `$85FE`, `$92DB`, `$9306`) |
+| `$17E8` — `$1AB0`'s tree/boulder walk | 2 (`$1AB5`, `$1ABE`) | 2 (`$1AB5`x2) |
+| `$1884` — the `$1876` redraw tail, inside a strip replot | 4 (`$9786`, `$978D`, `$988E`, `$9899`, all the `$9730` flush) | 0 |
+| the body's and the loop's own lines | 4 (`$16F4`, `$17B0`, `$17B2`, `$31D8`) | 3 (`$1773`, `$17B2`, `$17BC`) |
+
+* **Both boards are now the same defect: the `$1887` see cost.** Ten of ls9795's fourteen
+  `update_cd` events and eleven of ls0335's fourteen catch the machine inside `$17B2`'s or
+  `$1AB0`'s scan, in the `$1887`/`$18E6`/`$1CDD`/`$8401`/`$9287` chain the clock charges as
+  one opaque term. ls9795's renderer share is gone — 68 of 116 became 4 of 18.
+* **The camera the replot borrows.** `$1FC2` adds `$0C62/2` to the *player's* own `$09C0,X`
+  and `$2003`/`$2008` put it back, so for the whole stall the object table carries a bearing
+  the model priced but never wrote: on ls9795's strip, `$0C62` is 37 and the machine read
+  **18 above the model**. That was 5 of 22 events, every one of them `obj[62].h_angle` alone.
+  The model now writes the shift and takes it off — `$187D`/`$187F` name the camera object
+  (the player, not the drawn one), `$211A` holds its own bearing and `$001F` the odd half
+  column, and the shift lands only once the replot's own `$1FBA JSR $2211` clear is spent,
+  8021 cycles in. All five are gone and nothing else moved (ls0335 14 -> 14, ls42 0 -> 0).
+
+**Measured — the length, and a backend that is dearer than the machine.** Caught at
+`$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
+`$1289`. `strip_replot_frames`' proxy charges 387392 cycles = 24.6 frames of stall,
+**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=py65` backend, on the
+same captured image, returns **534090** cycles = 34.0 frames, **1.54x**. The machine cannot
+have spent 534090 cycles in 22 PAL frames — that is 24277 a frame against the frame's
+19656 — so the *exact* backend's render context is dear, and the proxy calibrated against
+it inherits that. Both belong to [5](#5-one-object-vertex-angle-is-ten-units-out), not here.
+
+`~17 cycles a frame` was therefore never there. The budget is right to under 4 and the
+clock to under 0.01 of a pass a frame; what is left is a render cost and its timing, and the
+`$1887` see cost the surviving events name.
+
+ls9795 and on ls335. ls42 is clean: **0 over 3000 frames**. Every event is an
+enemy's `update_cd` reading 4 in the sim where the machine reads 1 — one `$16ED` reload the
+sim reaches a pass early — or the `$1805` rotation that follows from the same lead. The
+`$1887` chain is no longer the cause: it is now cycle-exact against the oracle, and the
+classification below puts more than a quarter of what is left inside `$1AB0`
+`find_drainable_boulder_or_tree`, the tile scan `consider_enemy_state` ends on.
+
+**Measured — the counts, and what each event is.** ls9795 **142 -> 64 -> 67 -> 64**, ls0335
+**57 -> 57**, ls0042 **0 -> 0** over 3000 frames; the 64 -> 67 was pricing the play machine's
+own `$37F2` examine, which took a strip replot's over-charge away, and the 67 -> 64 is
+`$1F9F`'s own line replacing it with the real thing
+([6](#6-the-py65-exact-backend-cannot-price-another-slots-view),
+[architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
+Classifying every surviving event by the `$95E9` chain the halt exposes:
+
+| where the machine was, at each of the 64 | events |
+|---|---|
+| `$1AB0 find_drainable_boulder_or_tree`, its trig included | **18** |
+| `$1887 can_see_object`, its trig included | 14 |
+| `$31CA update_prnd` under `$16D6` | 10 |
+| `$17B2 find_drainable_robot_loop` | 5 |
+| `$16E6` body head | 5 |
+| inside the `$1FFC JSR $2625` replot | 4 |
+| inside the `$207E JSR $9730` buffer flush | 4 |
+| `$12A2` pass tail, `$3470`/`$3527`, one `$2A31` | 4 |
+
+At 142 the replot alone was 80 of them: a replot's 21 frames produced 21 consecutive events,
+where it now produces the one that finds it plus a couple at its exit. ls0335 is unchanged
+because no resync in 3000 frames lands inside a replot at all. **`$1AB0` is now the largest
+single group** and is what this item names: 18 of 64, ahead of `$1887`'s 14.
+
+**Not a flag the model guessed.** At all 64 halts the live machine has `$0C6D`, `$0C4D`,
+`$0C4E`, `$0C5F`, `$0008` and `$0095` **all zero** — the branch configuration `passcost`'s
+`$1FA4..$1F9E` prices and the `$9730` row window it assumes, confirmed against play rather
+than against the harness.
 
 **Measured — where the frame boundary lands.** The raster IRQ interrupts the play loop at a
 raster position, not at a pass boundary, and the interrupted PC is on the `$95E9` stack
@@ -212,6 +1191,47 @@ the two-probe robot path, and over a whole 8x64 scan run as one sequence on one 
 `$1CDD` is exact over random rays on five boards; `$1C54` over all 55296 angle/fraction
 pairs; `$9287` and `$933D` over thousands of random inputs.
 
+**Measured — `$1AB0` and `$1887` are not the residual: their price is exact.** Both are
+now checked against the ROM directly rather than only through the rounds a generated board
+happens to run (`test_the_see_cost_model_matches_the_roms_own_1887`,
+`test_the_tile_scan_cost_model_matches_the_roms_own_1ab0`). `$1887` is cycle-exact, and
+leaves the same `$0014`, over every occupied slot as target on ls42/ls335/ls9795, asked for
+as the robot `$17B2` wants and as its own type, from every enemy aimed at the player and
+turned away. `$1AB0` is cycle-exact over its whole loop, with the board's top-of-tile trees
+restacked so its drain half runs at all: on a freshly generated board nothing stands on a
+stack, so `TILE_SCAN_TILE`, `_SEE`, `_SEE_BOULDER`, `_NEXT`, `_HIT`, `SCAN_SLOT_FULL`,
+`TARGET_*` and `DRAIN_*` were never once reached by the `$16E6` oracle rounds.
+
+**Fixed, and it was a write's placement, not its price: the body committed every CORE
+write EARLY.** Stepping the ROM's `$16E6` instruction by instruction, recording the cycle
+each CORE byte changes at, and binary-searching the smallest budget at which
+`enemies.update_body` makes the same write, every one of the 153 writes the aimed bodies
+make on the three boards landed before the ROM's own offset, because the model applied a
+segment's writes at the segment's *start*:
+
+| write | ROM offset in its segment | early by |
+|---|---|---|
+| `update_cd` (`$16ED`) | 15 | 15 |
+| `h_angle` (`$1810`) | rotate + 66 | 65 |
+| `rotation_cd` (`$1815`) | rotate + 73 | 72 |
+| `targeted_object` (`$1826`) | `$1825` + 7 | 66 |
+| `targeted_exposure` (`$182B`) | `$1825` + 15 | 74 |
+| `draining_cd` (`$1837`) | `$1825` + 30 | 89 |
+
+`State.body_paid` and `enemies._reach` now charge each stage forward to a write's own
+cycle and commit it only there: `$1825` is a stage (`BODY_TARGET`) rather than a call, the
+rotate line is seven rungs, `$16E6`'s gate and reload are two, and `$17CD..$17E5` is one
+laddered stage covering `$1973`'s four writes and the `$17E2` drop. Every offset is the
+instruction sequence at its address and every ladder sums to the whole-segment term the
+`$16E6` oracle already pins (`test_every_write_cycle_offset_sums_to_its_own_segment_term`).
+`test_the_body_commits_its_core_writes_at_the_roms_own_cycle` now steps the ROM and
+demands the model make **every** CORE write on the ROM's own cycle and not one cycle
+earlier, on ls42/ls335/ls9795 with the meanie bytes seeded dirty so `$1973`'s four writes
+are changes; `test_a_resumed_segment_picks_up_at_the_roms_own_cycle_inside_it` checks the
+per-PC resume tables against the same stepped ROM, and
+`test_a_body_split_at_every_single_cycle_repeats_and_skips_nothing` suspends a rotating
+body at every one of its cycles.
+
 **Measured — the body is now exact.** Stepping `$16E6 consider_enemy_state` one round at a
 time against the same oracle, comparing **every** round the play loop dispatches, is
 cycle-exact on ls42, ls335, ls9795, ls0, ls60, ls110, ls298 and ls373 — gated, marching,
@@ -219,117 +1239,62 @@ rotating, held-target, draining and discharging rounds alike
 (`test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count`). Getting there priced
 five regions that were means or were not charged at all:
 
-* **`$16E6`'s own line.** `CONSIDER_ENTRY` folded the `$16FA` meanie branch,
-  `CONSIDER_PREAMBLE` folded the `$1782`/`$1798` gates *and* the scan init, and `SCAN_FIXED`
-  charged that init a second time. `SCAN_SLOT` was one shape of five (22 hidden, 27 unseen,
-  25 full, 34 another robot's head, 36 the player's). `$17CD..$17E8`, the held-target line
-  `$1795..$17A9`, `target_object $1825` and the `$1876` redraw tail were charged **nothing**.
-* **`$1AB0`.** Its entry and its exhausted exit were one constant, the last slot's untaken
-  `$1AF0 BPL` was overcharged, a boulder top's `$1ADF` compare was priced as a tree's, and
-  the hit exit omitted `$1AE6 LDA $14` and its own `RTS`.
-* **`reduce_object_energy $1A08`.** Every drain was free. It is now charged per target kind,
-  with `$1AF4`'s update gate, `remove_object $1EEF` (86 on a stack, 94 on the ground) and
-  the `$1A4F` energy bank.
-* **`plot_status_bar $9508`.** A player drain replots the bar. It pads to fixed columns, so
-  its whole cost is a function of the energy byte the drain just wrote — exact over 0..39.
-* **The discharge.** `DISCHARGE_FIXED` 100 and `DISCHARGE_TRY` 966-a-draw were means over
-  `$211D create_object`, `$1238`'s tile hunt and `$1F16 put_object_in_tile`; each is now
-  charged per slot walked, per lap by the test that lap failed, and per `$1272` draw (445,
-  plus 440 for each draw masking to `$1F`).
+**No longer a mean: the rotation's redraw.** `$1F9F update_object_on_screen` **does** run
+headless — it needs no render context on the branch the enemy clock takes. It calls
+`$209B calculate_object_screen_span` first, which takes the object's bearing and distance
+from `$8401`, re-arctans its `$2112` half-angle over that distance through `$933D`, and
+turns bearing +- half-angle into the left column `$0C62` and the width `$0C69`. With no
+span on the 40-column screen it returns carry set and `$1FA2` exits at `$1F93` without
+touching the render buffer: 1568..1858 cycles, now counted from state by
+`relative.update_object_on_screen_cycles` and cycle-exact against the ROM's own
+`$209B`/`$1F9F` on ls0042/ls0335/ls9795, every occupied slot at every 8th player facing.
+All 16 live rotations (1576..1843) are that branch, as is every rotation the headless
+enemy driver takes over 2000 rounds on ls9795 and ls0335. Every `$1876` exit spends it —
+a turn's redraw, a drain's and a discharge's — and all three are now counted, not meaned.
 
-**NOT the pass line either.** The same raster clock times one whole play-loop pass live:
-consecutive `$1289` hits, less the interrupts the window contains and the badlines outside
-them, against `passcost`'s own model of that pass. On ls42, ls335 and ls9795 the model is
-**exact** (ls9795: 222 of 299 consecutive passes exact, the rest a one-badline or
-one-interrupt edge in the probe's own window arithmetic, plus a ±2 stamp jitter). The head,
-the dispatch, the prnd, the cursor, the `$12A2` tail and the `$191F` exposure walk are
-therefore all right as charged.
+**What is left is a `plot_world`, not a redraw.** When the object *does* have a span,
+`$1FC2` re-points the camera at the strip (`$09C0,X += $0C62/2`, `$001F` the fine angle)
+and `$1FFC JSR $2625` replots it: 0.40..0.85 M cycles on ls9795 against 0.76..2.67 M for
+the same board's whole screen, i.e. 20..40 frames of foreground for one rotation. It is
+a function of the strip's own scene, not of the player's facing — four facings that put
+the same object at four different columns cost the identical 841221 cycles, because the
+camera shift cancels the column shift. That branch is real (the ROM only suppresses it
+mid-replot, at `$1AF4`/`$1B00`, where an on-screen object aborts the whole enemy update)
+and it is reachable at 8% of facings on ls9795 — about four replots per 3000 frames on
+each of ls0042/ls0335/ls9795 at a facing that puts one enemy on screen, i.e. some 4% of
+the clock spent where the flat 1723 spent none.
 
-**The seed, not the clock.** The model's clock is not biased: over 70 live ls9795 frames the
-machine's `$16E6` hit count and the sim's own pass count agree to **±1 pass** at every
-sample (1044 passes). What the sim could not do was start where the machine was — a `$9630`
-halt catches the loop at a raster position, and 65% of ls9795's land inside `$16E6`. That
-position is recoverable: the `$95E9` frame holds Y, X and the interrupted PC from SP+1, under
-it the foreground's own return addresses, and `$1887` saves its caller's X and Y at `$191E`
-and `$0C58`. `enemies.resume_from_stack` maps it onto the model's own resume points and the
-instrument applies it at the seed and at every resync.
+It is now charged, by `projector.strip_replot_frames`, at the camera `$1FC2` shifts to
+(`$09C0 += $0C62/2`) rather than the player's own, and through the strip's own buffer
+window: `$1FE5 JSR $29C7` halves `$0C69` into `$0007` and folds that into `$0012`, exactly
+as `$2993` does from its table, so `render_cost` takes the window as an argument.
+`RENDER_COST_BACKEND=py65` runs the real `$1F9F` instead and is exact — 19..29 frames on
+the three boards — but costs ~1.3 s per uncached call, so the default is the windowed
+proxy. The window matters: without it the proxy priced all 40 columns, ran 1.3..2.8x dear
+and the clock over-stalled (ls335 grew a second facing error of the wrong sign, which the
+exact backend did not). With it, proxy and exact agree on the error structure.
 
-**Measured — same seed, same machine, two sims.** One restarting the interrupted pass, one
-resuming it: on ls9795 the first CORE divergence moves **66 -> 129 frames**, and on ls335,
-where that seed happened to land on the pass head, both give 155 — the control.
+**What it bought, and the one it cost.** Over the ls335 human replay the modelled facing
+errors fall 40 -> 37 and 35 strip replots fire. Thirty-six of the 37 are still the old
+one-sided "+1 rotation"; the thirty-seventh is new and the other way — span 13 slot 3
+loses a rotation the ROM kept.
 
-**And mid-segment, not just mid-pass.** Resuming at the interrupted segment's *head* still
-lost what the machine had spent inside it — up to 433 cycles in the prnd, a whole `$191F`
-walk in the tail. `resume_from_stack` now also returns the signed cycle offset between the
-machine's position and the model's resume point, counted off the ROM's own straight lines
-(`$1289` through the `$16B5` dispatch for both enemy types, `$16D9`'s cursor step both ways
-round its wrap, `$12A2`'s tail with its exposure walk and three sound bodies, and `$31CA`
-per LFSR lap off the interrupted Y), and the instrument hands it over as the opening
-`cycle_residual`; every entry is checked against the ROM running that stretch. A position
-off those lines resumes at its segment head as before, so the seed waits up to 40 frames
-for a marker that catches the loop on one it can count. ls9795's first divergence
-**66 -> 129**, ls335's **155 -> 194**, follow-mode events on ls335 **63 -> 31** with its
-median gap **19 -> 86** frames; ls42 stays at 0 throughout.
+**That one is decided, and it is not `$1F9F`.** Both cheap alternatives are excluded on
+the recorded state by running it: `$0C4D` bit 7 is clear, so `$1FEF` does not divert to
+`$8533`, and `$0C1F` bit 7 is clear, so `$1B00` hands `$1AF4` a set carry and the update
+runs. Stepped round by round with `$1F9F` live, the ROM reaches `$1FFC JSR $2625` on
+**slot 4** — the very enemy the model picks — and pays 728868 cycles, 37.1 frames. `$209B`
+agrees with the model on all seven occupied slots of that state, cycle for cycle
+(`test_the_rom_really_replots_the_enemy_the_overshoot_blames`).
 
-**Where it stops now.** Two things, both named by measurement rather than suspicion:
-
-* The frame-129 ls9795 event is `obj[3].h_angle` with `enemy[3].rotation_cd` — a **rotation**,
-  the one act whose cost carries `$1F9F`'s mean. Over the frames before it there is not a
-  single `$1F9F` or `$1805` (checkpoint hit counts over the first 66 frames: 0 and 0), which
-  is what rules the redraw out of everything earlier and into this.
-* ls335's first event is now frame 194, a single `enemy[2].update_cd`: still one pass of
-  phase, not a wrong cost. What is left of the seed is the **body** — a marker that catches
-  the loop inside `$16E6` resumes at the interrupted `$1887` query's start, for the reason
-  below.
-
-**It WAS the `$9630` head: the note tick, and the badline mean.** `$963D JSR $FFC2` vectors
-into the sound engine's note tick `$8ED1`, and 63 is only its all-idle cost: a voice whose
-`$8E86,X` note timer is counting costs **+9**, one that has run out **+5**, and the frame the
-gate expires **+67**. Live on ls335 those four land 20/26/73/1 in 120 frames. The tick is now
-charged per frame from its own branches (`sound_frame`, exact against the ROM over 300 random
-voice states), the three `$3470` sites reload the voice off the `$AC00` descriptor
-(`start_tune`), and `IRQ_BODY` is **counted** off the image rather than fitted: 7 entry +
-`$95E9` 81 + the `$9630` body 2275 + the `$969A` RTI tail 22 = 2385, with the `$9659`-gated
-block (`JSR $130C`, `$1635`, and the branch itself) charged only when the clock runs — the
-model was paying all 43 of it on frozen frames, and never paying the `JSR $130C` at all.
-What that exposed: `BADLINE_STEAL` 43 is the **mode**, not the mean. With the clock frozen
-(so every pass is the idle one) the live `$1289` rate fixes the frame's whole steal at
-**1071**, 42.8 a badline; the model reproduces the measured pass count on ls42/ls335/ls9795
-to under **4 passes in 50000**. Together: ls335's first CORE divergence **194 -> 478** and its
-follow events **31 -> 12**, ls9795's **128 -> 112**, ls42 still 0 over 3000 frames.
-
-`$963A JSR $FFC5` ($8F0C, the effect tick) stays inside `IRQ_BODY` at a measured constant 72:
-it is gated on `$8E96,X` bit7 and no tune a play frame starts clears it. `$9633 BPL` is not a
-branch in play either — `$0CDF` reads 0 at every marker, so `$9635 INC` runs every frame.
-
-**The march resume is a FOLLOW-MODE fix only, and its unit is cycles, not steps.** Two
-corrections to what this item used to claim. First, the seed is never inside `$1887`:
-`instrument._exact_seed` waits for a marker whose position `_segment_offset` can count, and
-every `PHASE_BODY` position returns `None`, so the *first* divergence on all three boards is
-measured from an exact non-body seed and the march resume cannot move it. It moves the
-**resyncs**, which is where ls9795's 1-frame median gap comes from.
-
-Second, the resume unit is not a step index. The raster IRQ preempts the ROM at an
-*instruction* boundary, not at an `$1CE8` sub-step boundary, so the position to reconstruct
-is "cycles spent inside this `$1887`" and the model can occupy any of them: give `State` a
-`body_spent`, have the query charge `min(cost, budget)` and suspend at the same
-`(stage, index)`, and re-run it on resume charging `cost - body_spent`. The query is a pure
-function of state that nothing between frames disturbs, so the re-run is exact; its only
-memory effects are `$0014`/`$0C56`/`$0CDD`/`$0C76`, which must move from per-probe writes to
-locals written once the query completes, or the re-run's `$1CDF LSR $0C56` shifts twice. That
-needs no change to `sentinel/los.py` at all.
-
-What it does need is `c`, the cycles the machine has already spent, and that IS recoverable:
-`$001E` is the probe counter, `$0C58` the target, and the ray's own accumulators sit at
-`$0034..$003C`. `check_for_line_of_sight_to_tile` already takes `max_steps` and leaves the
-marched position in its `Vector`, so a **binary search on `max_steps`** against the machine's
-`$0034..$003C` finds the interrupted sub-step and reads its cycles off the same call — no
-instrumented march, no step index threaded anywhere. **Not implemented.**
-
-**Still a mean: `ROTATE_REDRAW`.** `$1F9F update_object_on_screen` is charged at 1723, the
-mean of 16 live rotations spanning 1576..1843. It cannot be measured headless — the oracle
-stubs it because it writes the render buffer — and it is spent by **every** `$1876` exit: a
-turn's redraw, a drain's and a discharge's. Three paths now carry a ±150-cycle mean.
+What differs is *order*. Slots 3 and 4 enter the span with the same `$0C28` of 24, so they
+come due together, and the descending `$0090` cursor decides which is considered first.
+The ROM rotates slot 3 at round 68 and only then slot 4, with its stall, at round 75. The
+model reaches slot 4 first, at frame 90 of 111, and the stall runs the span out: slot 3 is
+never considered again and ends holding `$0C28` = 1, due and unserved. That is the
+frame-to-round cadence this item already carries, one round wide, now with a 30-frame
+lever on it. `test_every_facing_error_is_exactly_one_extra_rotation` caps the overshoot at
+one so a later fix cannot quietly widen it.
 
 **NOT the frame budget.** `registers_get` returns the VIC raster line (id 53) and the cycle
 within it (id 54), so `line * 63 + cyc` is an exact intra-frame stamp and the handler can be
@@ -339,7 +1304,7 @@ and 213, and only the line-213 entry passes the `$961E` compare into the `$9630`
 short entry is `SHORT_IRQ` exactly, and the body is `IRQ_BODY` **plus the four badlines its
 own window (lines 213..~255) encloses plus the `$130C` the model bills to the foreground** —
 which is what the 2683..2705 / 3079..3153 spread in `full_9630_wall` is. The **+9 within each
-of those clusters was real**, and it is the note tick above; `$119F` is a flat 2162 counted on
+of those clusters was real**, and it is the note tick above; `$119F` is a flat 2156 counted on
 the image and its live 2291/2334 wall is that plus the four or five badlines its own window
 happens to enclose. Two counted cycles were genuinely missing and are now charged: the one
 split entry a frame whose `$9603 BPL` wraps the index costs 1 more (the fixture's own
@@ -357,7 +1322,9 @@ the previous call's residue out into the carry that `$0DF3 ROL A` consumes, so b
 incoming `$0078` can change the quotient bit, the interpolation and the angle. Both twins
 start it at 0. It is live in principle — `$0F9E` and `$1D9D`/`$1DC1` write `$0078` too — but
 over the natural 8x64 scan on ls42/ls335/ls9795 the sim matches the machine cycle for cycle
-and byte for byte, so it does not bite at these states.
+and byte for byte, so it does not bite at these states. Now counted inside plot_world as well
+([5](#5-one-object-vertex-angle-is-ten-units-out)): the residue reaches `$0DF3` on a third of
+the calls and tips round 10 on one of 278 across three views.
 
 **Not the atomic body.** It was, and it is fixed; the model still reaches the wrong pass,
 which staging inside the body cannot correct.
@@ -365,6 +1332,31 @@ which staging inside the body cannot correct.
 **Not the resync's clock.** Carrying the sim's cycle residual across a follow-mode resync
 instead of resetting it moves ls9795 415 -> 397 only; it is the resync's *position* that
 mattered, and that is now read off the stack frame.
+
+**Not the discarded replot either — and what its resume still owes.** A resync inside
+`$1FFC JSR $2625` used to start the sim at a pass boundary, so the model ran a whole frame
+of passes against a machine that ran none, every frame until the replot finished: 80 of
+ls9795's 142 events. `projector.replot_owed` now splits the pass at the row `$0026` and the
+tile `$0025` the machine has reached and the sim owes the suffix. Two residuals are left,
+both measured against two whole captured replots (21 frames each, sampled every frame):
+
+* **Sub-tile position is not readable.** The split is exact at a tile boundary and flat
+  inside one, so the predicted remainder tracks the machine as a sawtooth: 0 error at each
+  tile the machine enters, drifting to +3.4 f by the time it leaves a near-row tile that
+  costs 3-6 frames on its own. At the frame the instrument actually resyncs on — one frame
+  into the replot — the error is **-0.19 f** against the machine's 21. Going finer needs the
+  polygon inside `plot_tile`/`$8533`, which is control flow, not a variable.
+* **The pass total is now within 1% of the machine's own, and slightly short.** Off the
+  raster clock (`registers_get` 53/54 plus the `$9630` counter), three ls9795 replots measure
+  412912/413054/416845 wall cycles over 21 frames, i.e. **328030..331963 foreground** cycles
+  once the frame's 4042 IRQ and badline cycles come out. `render_cost` read 412893 for the
+  same pass — 1.26x, two exit events a replot — and with `$37F2`, the `$2993`/`$245B` context
+  and the `$1FA4..$1F9E` line all counted it reads **332100**, so the debt now clears just
+  *early* and each replot leaves exactly one. What is left is the `$2625` area fill,
+  [5](#5-one-object-vertex-angle-is-ten-units-out).
+
+**Not the resync.** Carrying the sim's clock across a follow-mode resync instead of
+resetting it moves ls9795 415 -> 397 only.
 
 **It is NOT the sound engine.** An earlier revision blamed the tune player. Live, `$0CEB`
 never leaves `$80` and `$0C73` never leaves 0, so `$34BA`/`$352C`/`$347D` are constant at
@@ -387,9 +1379,30 @@ inside that same call chain (`$18BE` the FOV gate, `$170E`/`$172A` the meanie ro
 compute an object's screen x into `$0C62`/`$211C`. Nothing reads it before `$8425` has
 rewritten it, and the plotting readers touch no field the schema carries.
 
-**Resolves.** `$1F9F` counted rather than averaged (which is what the ls42 and ls335 residual
-now is: 4 rotations in 1000 ls42 frames at a ±150-cycle mean), and a `body_spent` resume so
-a follow-mode resync inside `$1887` does not restart the query.
+**Measured — the write placement was a real defect, and it was not the gate's.** With every
+CORE write committed on the ROM's own cycle, `--frames 3000 --follow` reads ls9795 **19**
+(was 18), ls0335 **14** (was 14) and ls42 **0** (was 0). Every survivor is still an enemy's
+`update_cd` reading 1 on the machine against 4 in the sim, and the interrupted PC says why:
+the model has already run that enemy's body when the frame ends and the machine has not.
+Classified by the `$95E9` chain, ls9795's 19 are 8 with the machine inside an `$1887` march
+(`$1893`, `$189D`, `$1916` x2, `$191D`, `$1D16`, `$85C4`, `$17B7`), 3 inside `$1AB0`
+(`$1AB5` x2, `$1ABE`), 4 inside the `$1F9F` replot's `$9730` flush (`$9786`, `$978D`,
+`$988E`, `$9899`), 3 on the body's own straight line (`$16F4`, `$17B0`, `$17B2`) and 1 in
+the prnd (`$31D8`); ls0335's 14 are 9 under `$1887`, 2 under `$1AB0` and 3 on the straight
+line. That distribution is unchanged by the fix, which is the point: where a write lands
+*inside* a segment is now exact, so what is left is when the model **arrives** at the
+segment at all.
+
+**Resolves.** Not the frame budget, not the clock, not the replot's placement, not the march
+price, not the write's placement inside its segment and not the frame origin `b` — all now
+measured directly against the machine. Not the seed either: it starts at the machine's own
+cycle on every board. What is left is a per-window refund that names the instruction the
+**machine** is running when the window falls, rather than an offset into the model's own
+composite term: its mean is the machine's to 0.25 cycles and its per-frame value is
+uncorrelated with the machine's, which is the whole +/-100-cycle band the surviving gate
+decisions sit in. The replot's *price* — both backends 0.90..0.92 of a machine wall measured
+at 22 frames, and ~2% cheap on the ls9795 pass measured above — is
+[5](#5-one-object-vertex-angle-is-ten-units-out)'s.
 
 ## 9. The human line does not replay to a win through the live executor
 
@@ -473,7 +1486,7 @@ Three distinct failures sit underneath that, and they need different fixes:
   ls9795 lost 8, ls5301 lost 7, ls6725 lost 6, ls5916 lost 5 -- a win where there were 0
   actions. Only the two wins are re-measured under the current clock; ls7414/ls8589 read
   59/46, then 63/86, then 81/47 as the enemy-clock terms and splits of
-  [8](#8-the-enemy-clock-what-is-left-is-the-redraw-and-the-frame-budget) landed, so
+  [8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early) landed, so
   every action count on this page is a world model, not a policy. The other 10 *can* land somewhere but generate no climb candidate from it and
   are **not** re-measured here; that group shows the trigger is "no move I will commit to",
   not "nowhere to stand", so `_barren` is the predicate to widen next.
@@ -598,6 +1611,15 @@ Each is a hypothesis and the measurement that killed it.
   probe that decides the board accepts a landing that is genuinely survivable, six probe
   models leave it lost, and the verdict moves with `ARBITRATE_ACTIONS` alone
   ([13](#13-arbitration-charges-an-option-with-its-continuations-mistakes)).
+- **A `body_spent` resume would cut the follow-mode event count.** Over the gate's own
+  3000-frame races, **0** of ls9795's 111 and **0** of ls335's 12 CORE events catch the
+  machine inside `$1CDD`; 84 of ls9795's catch it inside the `$1FFC JSR $2625` replot
+  ([8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early)).
+- **The `$1887` march that decides ls9795's frame 129 is ~1% under-priced.** On the live
+  image captured at that very `$16E6`, jennings and `enemies.update_body` both give
+  **280640**; the real 6510 matches jennings at all 89941 instruction sites; and the
+  march's own frame budget measures 15166..15591 against the model's 15174..15591. The
+  model's whole lead is **+81 to +97 cycles** ([8](#8-the-enemy-clock-commits-consider_enemy_states-core-writes-early)).
 - **A relocation needs an energy floor above the ROM's own 3.** Floors of 5 and 8 leave every
   board that matters bit-identical — ls7414 won in 59 and ls8589 won in 46 at 3, 5 and 8;
   ls9364 lost 14 and ls6725 lost 6 at all three — and are strictly worse on two already-lost

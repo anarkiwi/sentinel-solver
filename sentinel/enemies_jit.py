@@ -13,7 +13,16 @@ jitcache.install()  # must precede numba: the cache key carries the cost constan
 
 from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
 
-from sentinel import memmap as mm, passcost  # noqa: E402
+from sentinel import badline, memmap as mm, passcost, writeweight  # noqa: E402
+from sentinel.badline_jit import (  # noqa: E402
+    carry,
+    charge,
+    charge_run,
+    frame_clock,
+    overhang,
+    spend,
+    stall,
+)
 from sentinel.relative import _ARCTAN_LO, _ARCTAN_HI, _HYP
 from sentinel.los_jit import (  # noqa: E402
     march,
@@ -29,6 +38,9 @@ from sentinel.los_jit import (  # noqa: E402
 ARCTAN_LO = np.array(_ARCTAN_LO, dtype=np.int64)
 ARCTAN_HI = np.array(_ARCTAN_HI, dtype=np.int64)
 HYP = np.array(_HYP, dtype=np.int64)
+HALF_ANGLE = np.array(
+    [mm.OBJECT_SCREEN_HALF_ANGLE.get(t, 0) for t in range(8)], dtype=np.int64
+)
 
 # Addresses and tuning constants, inlined as njit-visible globals.
 _OFLAGS = mm.OBJECTS_FLAGS
@@ -40,7 +52,12 @@ _OHANG = mm.OBJECTS_H_ANGLE
 _OZF = mm.OBJECTS_Z_FRACTION
 _OTYPE = mm.OBJECTS_TYPE
 
+_CAMERA_OBJECT = mm.CAMERA_OBJECT
+_CAMERA_SAVED = mm.CAMERA_SAVED
+_CAMERA_REF_LO = mm.CAMERA_REF_LO
+
 _PLAYER = mm.PLAYER_OBJECT
+_SIZE_FLOOR = mm.OBJECT_SIZE_FLOOR
 _ENERGY = mm.PLAYER_ENERGY
 _CURSOR = mm.CURSOR
 _FOV_WIDTH = mm.FOV_WIDTH
@@ -106,6 +123,11 @@ _MEANIE_MAX_ATTEMPTS = 0x02
 
 # Cycle costs, shared with the reference so the two clocks cannot drift.
 _FOREGROUND_CYCLES = passcost.FOREGROUND_CYCLES
+_IRQ_BODY = passcost.IRQ_BODY
+_IRQ_BODY_WEIGHT = writeweight.WEIGHT["IRQ_BODY"]
+_STEAL_CEILING = badline.FRAME_STEAL_CEILING
+_W_SHIFT = writeweight.SHIFT
+_W_HALF = 1 << (writeweight.SHIFT - 1)
 
 _EXPOSURE_FIXED = passcost.EXPOSURE_FIXED
 _EXPOSURE_EMPTY = passcost.EXPOSURE_EMPTY
@@ -166,80 +188,80 @@ _SEE_TAIL = passcost.SEE_TAIL
 _MARCH_ENTRY = passcost.MARCH_ENTRY
 _PREP_VEC = passcost.PREP_VEC
 
-_REL_XY = passcost.REL_XY
-_REL_XY_ABS = passcost.REL_XY_ABS
-_REL_Z = passcost.REL_Z
-_REL_ANGLES = passcost.REL_ANGLES
-_ANG_CMP = passcost.ANG_CMP
-_ANG_X_LARGER = passcost.ANG_X_LARGER
-_ANG_Y_LARGER = passcost.ANG_Y_LARGER
-_ANG_EQ = passcost.ANG_EQ
-_ANG_EQ_Y = passcost.ANG_EQ_Y
-_ANG_EQ_X = passcost.ANG_EQ_X
-_ANG_MIN_Y = passcost.ANG_MIN_Y
-_ANG_MIN_X = passcost.ANG_MIN_X
-_ANG_ZERO = passcost.ANG_ZERO
-_ANG_NONZERO = passcost.ANG_NONZERO
-_SCALE_SHIFT = passcost.SCALE_SHIFT
-_SCALE_LOOP = passcost.SCALE_LOOP
-_SCALE_LOOP_Y = passcost.SCALE_LOOP_Y
-_SCALE_TAIL = passcost.SCALE_TAIL
-_ANG_SIGN = passcost.ANG_SIGN
-_ANG_SIGN_KEEP = passcost.ANG_SIGN_KEEP
-_ANG_SIGN_NEGATE = passcost.ANG_SIGN_NEGATE
-_ANG_QUAD = passcost.ANG_QUAD
-_ANG_QUAD_LOW = passcost.ANG_QUAD_LOW
-_ANG_QUAD_HIGH = passcost.ANG_QUAD_HIGH
-_ANG_QUAD_TAIL = passcost.ANG_QUAD_TAIL
+_REL_XY = writeweight.pack("REL_XY")
+_REL_XY_ABS = writeweight.pack("REL_XY_ABS")
+_REL_Z = writeweight.pack("REL_Z")
+_REL_ANGLES = writeweight.pack("REL_ANGLES")
+_ANG_CMP = writeweight.pack("ANG_CMP")
+_ANG_X_LARGER = writeweight.pack("ANG_X_LARGER")
+_ANG_Y_LARGER = writeweight.pack("ANG_Y_LARGER")
+_ANG_EQ = writeweight.pack("ANG_EQ")
+_ANG_EQ_Y = writeweight.pack("ANG_EQ_Y")
+_ANG_EQ_X = writeweight.pack("ANG_EQ_X")
+_ANG_MIN_Y = writeweight.pack("ANG_MIN_Y")
+_ANG_MIN_X = writeweight.pack("ANG_MIN_X")
+_ANG_ZERO = writeweight.pack("ANG_ZERO")
+_ANG_NONZERO = writeweight.pack("ANG_NONZERO")
+_SCALE_SHIFT = writeweight.pack("SCALE_SHIFT")
+_SCALE_LOOP = writeweight.pack("SCALE_LOOP")
+_SCALE_LOOP_Y = writeweight.pack("SCALE_LOOP_Y")
+_SCALE_TAIL = writeweight.pack("SCALE_TAIL")
+_ANG_SIGN = writeweight.pack("ANG_SIGN")
+_ANG_SIGN_KEEP = writeweight.pack("ANG_SIGN_KEEP")
+_ANG_SIGN_NEGATE = writeweight.pack("ANG_SIGN_NEGATE")
+_ANG_QUAD = writeweight.pack("ANG_QUAD")
+_ANG_QUAD_LOW = writeweight.pack("ANG_QUAD_LOW")
+_ANG_QUAD_HIGH = writeweight.pack("ANG_QUAD_HIGH")
+_ANG_QUAD_TAIL = writeweight.pack("ANG_QUAD_TAIL")
 
-_DIV_FULL_SHIFT = passcost.DIV_FULL_SHIFT
-_DIV_FULL_CARRY = passcost.DIV_FULL_CARRY
-_DIV_FULL_UNDER = passcost.DIV_FULL_UNDER
-_DIV_FULL_OVER = passcost.DIV_FULL_OVER
-_DIV_FULL_EQ = passcost.DIV_FULL_EQ
-_DIV_FULL_EQ_UNDER = passcost.DIV_FULL_EQ_UNDER
-_DIV_FULL_EQ_OVER = passcost.DIV_FULL_EQ_OVER
-_DIV_SUB = passcost.DIV_SUB
-_DIV_SKIP_TEST = passcost.DIV_SKIP_TEST
-_DIV_SKIP = passcost.DIV_SKIP
-_DIV_NO_SKIP = passcost.DIV_NO_SKIP
-_DIV_BYTE_SHIFT = passcost.DIV_BYTE_SHIFT
-_DIV_BYTE_CARRY = passcost.DIV_BYTE_CARRY
-_DIV_BYTE_UNDER = passcost.DIV_BYTE_UNDER
-_DIV_BYTE_OVER = passcost.DIV_BYTE_OVER
-_DIV_LAST_SHIFT = passcost.DIV_LAST_SHIFT
-_DIV_LAST_CARRY = passcost.DIV_LAST_CARRY
-_DIV_LAST_CMP = passcost.DIV_LAST_CMP
-_DIV_LAST_TAIL = passcost.DIV_LAST_TAIL
-_DIV_PLP = passcost.DIV_PLP
-_DIV_ROUND3_UNDER = passcost.DIV_ROUND3_UNDER
-_DIV_ROUND3_OVER = passcost.DIV_ROUND3_OVER
-_DIV_NO_OVERFLOW = passcost.DIV_NO_OVERFLOW
-_DIV_OVERFLOW = passcost.DIV_OVERFLOW
-_DIV_ARCTAN = passcost.DIV_ARCTAN
-_DIV_ARCTAN_DONE = passcost.DIV_ARCTAN_DONE
-_DIV_DELTA_BR = passcost.DIV_DELTA_BR
-_DIV_HALF_BR = passcost.DIV_HALF_BR
-_DIV_DELTA = passcost.DIV_DELTA
-_DIV_DELTA_KEEP = passcost.DIV_DELTA_KEEP
-_DIV_DELTA_INVERT = passcost.DIV_DELTA_INVERT
-_DIV_DELTA_HALVE = passcost.DIV_DELTA_HALVE
-_DIV_NEXT = passcost.DIV_NEXT
-_DIV_ADD_SKIP = passcost.DIV_ADD_SKIP
-_DIV_ADD_HALF = passcost.DIV_ADD_HALF
-_DIV_AVERAGE = passcost.DIV_AVERAGE
-_DIV_TABLE_CROSS = passcost.DIV_TABLE_CROSS
+_DIV_FULL_SHIFT = writeweight.pack("DIV_FULL_SHIFT")
+_DIV_FULL_CARRY = writeweight.pack("DIV_FULL_CARRY")
+_DIV_FULL_UNDER = writeweight.pack("DIV_FULL_UNDER")
+_DIV_FULL_OVER = writeweight.pack("DIV_FULL_OVER")
+_DIV_FULL_EQ = writeweight.pack("DIV_FULL_EQ")
+_DIV_FULL_EQ_UNDER = writeweight.pack("DIV_FULL_EQ_UNDER")
+_DIV_FULL_EQ_OVER = writeweight.pack("DIV_FULL_EQ_OVER")
+_DIV_SUB = writeweight.pack("DIV_SUB")
+_DIV_SKIP_TEST = writeweight.pack("DIV_SKIP_TEST")
+_DIV_SKIP = writeweight.pack("DIV_SKIP")
+_DIV_NO_SKIP = writeweight.pack("DIV_NO_SKIP")
+_DIV_BYTE_SHIFT = writeweight.pack("DIV_BYTE_SHIFT")
+_DIV_BYTE_CARRY = writeweight.pack("DIV_BYTE_CARRY")
+_DIV_BYTE_UNDER = writeweight.pack("DIV_BYTE_UNDER")
+_DIV_BYTE_OVER = writeweight.pack("DIV_BYTE_OVER")
+_DIV_LAST_SHIFT = writeweight.pack("DIV_LAST_SHIFT")
+_DIV_LAST_CARRY = writeweight.pack("DIV_LAST_CARRY")
+_DIV_LAST_CMP = writeweight.pack("DIV_LAST_CMP")
+_DIV_LAST_TAIL = writeweight.pack("DIV_LAST_TAIL")
+_DIV_PLP = writeweight.pack("DIV_PLP")
+_DIV_ROUND3_UNDER = writeweight.pack("DIV_ROUND3_UNDER")
+_DIV_ROUND3_OVER = writeweight.pack("DIV_ROUND3_OVER")
+_DIV_NO_OVERFLOW = writeweight.pack("DIV_NO_OVERFLOW")
+_DIV_OVERFLOW = writeweight.pack("DIV_OVERFLOW")
+_DIV_ARCTAN = writeweight.pack("DIV_ARCTAN")
+_DIV_ARCTAN_DONE = writeweight.pack("DIV_ARCTAN_DONE")
+_DIV_DELTA_BR = writeweight.pack("DIV_DELTA_BR")
+_DIV_HALF_BR = writeweight.pack("DIV_HALF_BR")
+_DIV_DELTA = writeweight.pack("DIV_DELTA")
+_DIV_DELTA_KEEP = writeweight.pack("DIV_DELTA_KEEP")
+_DIV_DELTA_INVERT = writeweight.pack("DIV_DELTA_INVERT")
+_DIV_DELTA_HALVE = writeweight.pack("DIV_DELTA_HALVE")
+_DIV_NEXT = writeweight.pack("DIV_NEXT")
+_DIV_ADD_SKIP = writeweight.pack("DIV_ADD_SKIP")
+_DIV_ADD_HALF = writeweight.pack("DIV_ADD_HALF")
+_DIV_AVERAGE = writeweight.pack("DIV_AVERAGE")
+_DIV_TABLE_CROSS = writeweight.pack("DIV_TABLE_CROSS")
 
-_VANG_HEAD = passcost.VANG_HEAD
-_VANG_POS = passcost.VANG_POS
-_VANG_NEG = passcost.VANG_NEG
-_VANG_SETUP = passcost.VANG_SETUP
-_VANG_SHIFT = passcost.VANG_SHIFT
-_VANG_SIGN_POS = passcost.VANG_SIGN_POS
-_VANG_SIGN_NEG = passcost.VANG_SIGN_NEG
-_VANG_TAIL = passcost.VANG_TAIL
-_HYP_HEAD = passcost.HYP_HEAD
-_HYP_TAIL = passcost.HYP_TAIL
+_VANG_HEAD = writeweight.pack("VANG_HEAD")
+_VANG_POS = writeweight.pack("VANG_POS")
+_VANG_NEG = writeweight.pack("VANG_NEG")
+_VANG_SETUP = writeweight.pack("VANG_SETUP")
+_VANG_SHIFT = writeweight.pack("VANG_SHIFT")
+_VANG_SIGN_POS = writeweight.pack("VANG_SIGN_POS")
+_VANG_SIGN_NEG = writeweight.pack("VANG_SIGN_NEG")
+_VANG_TAIL = writeweight.pack("VANG_TAIL")
+_HYP_HEAD = writeweight.pack("HYP_HEAD")
+_HYP_TAIL = writeweight.pack("HYP_TAIL")
 
 _CONSIDER_MEANIE = passcost.CONSIDER_MEANIE
 _CONSIDER_NO_MEANIE = passcost.CONSIDER_NO_MEANIE
@@ -255,11 +277,13 @@ _HELD_CALL = passcost.HELD_CALL
 _HELD_LOST = passcost.HELD_LOST
 _HELD_KEPT = passcost.HELD_KEPT
 _SCAN_INIT = passcost.SCAN_INIT
-_SCAN_SLOT_HIDDEN = passcost.SCAN_SLOT_HIDDEN
-_SCAN_SLOT_UNSEEN = passcost.SCAN_SLOT_UNSEEN
-_SCAN_SLOT_FULL = passcost.SCAN_SLOT_FULL
-_SCAN_SLOT_OTHER = passcost.SCAN_SLOT_OTHER
-_SCAN_SLOT_PARTIAL = passcost.SCAN_SLOT_PARTIAL
+_SCAN_SLOT_CALL = passcost.SCAN_SLOT_CALL
+_SCAN_TEST_HIDDEN = passcost.SCAN_TEST_HIDDEN
+_SCAN_TEST_UNSEEN = passcost.SCAN_TEST_UNSEEN
+_SCAN_TEST_FULL = passcost.SCAN_TEST_FULL
+_SCAN_TEST_OTHER = passcost.SCAN_TEST_OTHER
+_SCAN_TEST_PARTIAL = passcost.SCAN_TEST_PARTIAL
+_SCAN_STEP = passcost.SCAN_STEP
 _SCAN_LAST = passcost.SCAN_LAST
 _SCAN_END = passcost.SCAN_END
 _SCAN_END_PARTIAL = passcost.SCAN_END_PARTIAL
@@ -274,6 +298,7 @@ _BODY_TAIL = passcost.BODY_TAIL
 _TARGET_HEAD = passcost.TARGET_HEAD
 _TARGET_FIRST = passcost.TARGET_FIRST
 _TARGET_WAIT = passcost.TARGET_WAIT
+_OBJ_EXPOSURE = mm.OBJECT_EXPOSURE
 _TARGET_DUE = passcost.TARGET_DUE
 _TARGET_MEANIE = passcost.TARGET_MEANIE
 _TARGET_DRAIN = passcost.TARGET_DRAIN
@@ -328,7 +353,30 @@ _MEANIE_SCAN_DONE = passcost.MEANIE_SCAN_DONE
 _ROTATE_GATE = passcost.ROTATE_GATE
 _ROTATE_GATE_HELD = passcost.ROTATE_GATE_HELD
 _ROTATE = passcost.ROTATE
-_ROTATE_REDRAW = passcost.ROTATE_REDRAW
+_REDRAW_CALL = passcost.REDRAW_CALL
+_REDRAW_NONE = passcost.REDRAW_NONE
+_REDRAW_PLOT_ENTRY = passcost.REDRAW_PLOT_ENTRY
+_SPAN_HEAD = passcost.SPAN_HEAD
+_SPAN_PLAYER = passcost.SPAN_PLAYER
+_SPAN_ANGLES = passcost.SPAN_ANGLES
+_SPAN_SIZE = passcost.SPAN_SIZE
+_SPAN_SIZE_FLOOR = passcost.SPAN_SIZE_FLOOR
+_SPAN_LEFT = passcost.SPAN_LEFT
+_SPAN_LEFT_HI = passcost.SPAN_LEFT_HI
+_SPAN_LEFT_NEG = passcost.SPAN_LEFT_NEG
+_SPAN_LEFT_POS = passcost.SPAN_LEFT_POS
+_SPAN_OFF_RIGHT = passcost.SPAN_OFF_RIGHT
+_SPAN_LEFT_ONSCREEN = passcost.SPAN_LEFT_ONSCREEN
+_SPAN_LEFT_OK = passcost.SPAN_LEFT_OK
+_SPAN_RIGHT = passcost.SPAN_RIGHT
+_SPAN_RIGHT_HI = passcost.SPAN_RIGHT_HI
+_SPAN_BEHIND = passcost.SPAN_BEHIND
+_SPAN_RIGHT_OK = passcost.SPAN_RIGHT_OK
+_SPAN_WIDTH_CLIP = passcost.SPAN_WIDTH_CLIP
+_SPAN_WIDTH = passcost.SPAN_WIDTH
+_SPAN_ZERO_WIDTH = passcost.SPAN_ZERO_WIDTH
+_SPAN_VISIBLE = passcost.SPAN_VISIBLE
+_SPAN_WIDTH_CAP = passcost.SPAN_WIDTH_CAP
 _MEANIE_ROTATE = passcost.MEANIE_ROTATE
 
 _COOLDOWN_TICK_NO_CARRY = passcost.COOLDOWN_TICK_NO_CARRY
@@ -365,11 +413,56 @@ _BODY_PARTIAL = 6
 _BODY_TREE = 7
 _BODY_ROTATE = 8
 _BODY_MAKE_MEANIE = 9
+_BODY_TARGET = 10
 _BODY_DONE = -1
+
+_ENTRY_CD = passcost.ENTRY_UPDATE_CD  # the ROM's own cycle for each CORE write
+_ENTRY_END = _ENTRY_CD + passcost.ENTRY_FOV
+_ROTATE_ANGLE = passcost.ROTATE_GATE + passcost.ROTATE_TURN
+_ROTATE_CD = _ROTATE_ANGLE + passcost.ROTATE_RELOAD
+_ROTATE_MEANIE = _ROTATE_CD + passcost.ROTATE_ARM
+_ROTATE_MEMORY = _ROTATE_MEANIE + passcost.MEANIE_INIT_MEMORY
+_ROTATE_SCANS = _ROTATE_MEMORY + passcost.MEANIE_INIT_SCANS
+_ROTATE_SEARCH = _ROTATE_SCANS + passcost.MEANIE_INIT_SEARCH
+_ROTATE_RTS = _ROTATE_SEARCH + passcost.MEANIE_INIT_RTS
+_ROTATE_END = _ROTATE_RTS + passcost.ROTATE_TAIL
+_TGT_SLOT = passcost.TARGET_SLOT
+_TGT_EXPOSURE = _TGT_SLOT + passcost.TARGET_EXPOSURE
+_TGT_TIMER = _TGT_EXPOSURE + passcost.TARGET_TIMER
+_TGT_ARM = _TGT_TIMER + passcost.TARGET_ARM
+_TGT_ARM_END = _TGT_ARM + passcost.TARGET_ARM_TAIL
+_PT_HEAD = passcost.SCAN_END_PARTIAL
+_PT_MEANIE = _PT_HEAD + passcost.PARTIAL_ARM_MEANIE
+_PT_MEMORY = _PT_MEANIE + passcost.MEANIE_INIT_MEMORY
+_PT_SCANS = _PT_MEMORY + passcost.MEANIE_INIT_SCANS
+_PT_SEARCH = _PT_SCANS + passcost.MEANIE_INIT_SEARCH
+_PT_RTS = _PT_SEARCH + passcost.MEANIE_INIT_RTS
+_PT_END = _PT_RTS + passcost.PARTIAL_ARM_TAIL
+_TREE_GONE = passcost.SCAN_END
+_TREE_KNOWN = _PT_HEAD + passcost.PARTIAL_KNOWN
+_TREE_CLEAR = passcost.TREE_CLEAR
+_WAIT, _COMMIT = 0, 1
 
 _MAX_STEPS = 20000  # can_see_object's march bound (the ROM's board-edge exit)
 ZP_LO = 0x50  # the zero-page window the geometry touches ($0050..$008B)
 ZP_HI = 0x8C
+ZP_REPLOT = 0x8C  # out of band: the object $1F9F found a screen span for, +1
+ZP_REPLOT_LEFT = 0x8D  # ... and its $0C62 left column and $0C69 width; the
+ZP_REPLOT_COLS = 0x8E  # $1FFC plot itself is priced outside the twin,
+ZP_REPLOT_SPAN = 0x8F  # over the uncapped $211B span the $2211/$9730 line covers
+ZP_N = 0x90
+
+
+@njit(cache=True, inline="always")
+def _wweight(total):
+    """The write weight packed above a cost total (:mod:`sentinel.writeweight`)."""
+    return (total + np.int64(_W_HALF)) >> np.int64(_W_SHIFT)
+
+
+@njit(cache=True, inline="always")
+def _wcycles(total):
+    """The 6502 cycles of a packed cost total."""
+    return total - (_wweight(total) << np.int64(_W_SHIFT))
 
 
 @njit(cache=True, inline="always")
@@ -380,6 +473,20 @@ def _rd(mem, addr):
 @njit(cache=True, inline="always")
 def _wr(mem, addr, val):
     mem[addr] = np.uint8(val & 0xFF)
+
+
+@njit(cache=True, inline="always")
+def _restore_camera(mem):
+    """$2003/$2008: put the camera's own bearing and half column back."""
+    _wr(mem, _CAMERA_REF_LO, 0)
+    _wr(mem, _OHANG + _rd(mem, _CAMERA_OBJECT), _rd(mem, _CAMERA_SAVED))
+
+
+@njit(cache=True, inline="always")
+def _hold_camera(mem, left):
+    """$1FCF..$1FDB with $211A already saved: $09C0,X and $001F for a strip at ``left``."""
+    _wr(mem, _CAMERA_REF_LO, 0x80 if left & 1 else 0x00)
+    _wr(mem, _OHANG + _rd(mem, _CAMERA_OBJECT), _rd(mem, _CAMERA_SAVED) + (left >> 1))
 
 
 @njit(cache=True)
@@ -801,6 +908,81 @@ def _relative_angles(mem, zp, observer, target):
 
 
 @njit(cache=True)
+def _update_object_on_screen(mem, zp, target):
+    """update_object_on_screen $1F9F via calculate_object_screen_span $209B.
+
+    Returns (cycles, columns); columns is 0 when the object has no screen span and
+    the cost is then whole, else the $0C69 strip width, $1FA4..$1F9E unpriced."""
+    cyc = np.int64(_REDRAW_CALL + _SPAN_HEAD)
+    player = _rd(mem, _PLAYER)
+    _wr(mem, _CAMERA_OBJECT, player)  # $187D/$187F: $1FC2's camera is the player
+    if target == player:  # $209F: the player is never drawn
+        return cyc + np.int64(_SPAN_PLAYER + _REDRAW_NONE), 0
+    c57, _alo, _ahi, _zlo, _zhi, rcyc = _relative_angles(mem, zp, player, target)
+    c59 = zp[0x8A]
+    cyc += np.int64(_SPAN_ANGLES + _SPAN_SIZE) + _wcycles(rcyc)
+    otype = _rd(mem, _OTYPE + target)
+    half = HALF_ANGLE[otype]
+    if half < _rd(mem, _SIZE_FLOOR):  # $20AC: a pending size wins
+        half = _rd(mem, _SIZE_FLOOR)
+        cyc += np.int64(_SPAN_SIZE_FLOOR)
+    _wr(mem, _SIZE_FLOOR, 0)  # $20B8
+    zp[0x80] = half
+    cyc += _wcycles(_vertical_angle(zp, 0, _rd(mem, _OVANGLE + otype))[1])
+    ang_lo = zp[0x8A]
+    ang_hi = zp[0x8B]
+    cyc += np.int64(_SPAN_LEFT + _SPAN_LEFT_HI)
+    d = c59 - ang_lo
+    hi = (c57 - ang_hi - (1 if d < 0 else 0)) & 0xFF
+    if hi & 0x80:  # $20CB: the left edge is behind the view origin -> column 0
+        left = 0
+        cyc += np.int64(_SPAN_LEFT_NEG)
+    else:
+        cyc += np.int64(_SPAN_LEFT_POS)
+        left = ((hi << 1) | ((d & 0xFF) >> 7)) & 0xFF
+        if left >= 0x28:  # $20D6: off the right of the screen
+            return cyc + np.int64(_SPAN_OFF_RIGHT + _REDRAW_NONE), 0
+        cyc += np.int64(_SPAN_LEFT_ONSCREEN)
+    cyc += np.int64(_SPAN_LEFT_OK + _SPAN_RIGHT + _SPAN_RIGHT_HI)
+    s = c59 + ang_lo
+    hi = (c57 + ang_hi + (1 if s > 0xFF else 0)) & 0xFF
+    if hi & 0x80:  # $20EB: the right edge is left of the view
+        return cyc + np.int64(_SPAN_BEHIND + _REDRAW_NONE), 0
+    cyc += np.int64(_SPAN_RIGHT_OK)
+    right = ((hi << 1) | ((s & 0xFF) >> 7)) & 0xFF
+    if right >= 0x28:  # $20F2: clip to the last column
+        right = 0x27
+        cyc += np.int64(_SPAN_WIDTH_CLIP)
+    cyc += np.int64(_SPAN_WIDTH)
+    span = (right + 1 - left) & 0xFF
+    if span == 0:  # $2103
+        return cyc + np.int64(_SPAN_ZERO_WIDTH + _REDRAW_NONE), 0
+    cyc += np.int64(_SPAN_VISIBLE)
+    width = span
+    if width >= 0x15:  # $2105: a replot spans at most 20 columns at once
+        width = 0x14
+        cyc += np.int64(_SPAN_WIDTH_CAP)
+    zp[ZP_REPLOT] = target + 1  # the $1FA4 strip replot is the caller's to price
+    zp[ZP_REPLOT_LEFT] = left
+    zp[ZP_REPLOT_COLS] = width
+    zp[ZP_REPLOT_SPAN] = span
+    return cyc + np.int64(_REDRAW_PLOT_ENTRY), width
+
+
+@njit(cache=True, inline="always")
+def _redraw_cost(mem, zp, clk, target):
+    """$187B STX $91 + $1881 JSR $1F9F: what redrawing ``target`` costs right now.
+
+    An on-screen span is the caller's to price, but its stall runs the clock through
+    every event the frame has left all the same."""
+    cyc, columns = _update_object_on_screen(mem, zp, target)
+    cyc = charge(clk, 0x1F9F, cyc)
+    if columns != 0:
+        stall(clk, np.int64(0))  # the stall's own cycles are priced outside the twin
+    return cyc
+
+
+@njit(cache=True)
 def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     """prepare_vector_from_angle $1C54, the standalone entry the enemy probes use.
 
@@ -820,18 +1002,27 @@ def _prep_vec_angle(h_angle, h_frac, v_angle, v_frac):
     return vx_lo, vx_hi, s2d, s30, vy_lo, vy_hi, s30, cyc
 
 
+@njit(cache=True, inline="always")
+def _see_charge(clk, cost, weight):
+    """Charge a $1887 query: by its own march weight when it marched, else its map."""
+    if weight != 0:
+        return charge_run(clk, cost, weight)
+    return charge(clk, 0x1887, cost)
+
+
 @njit(cache=True)
 def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     """check_if_enemy_can_see_object $1887.  A robot is probed at its upper point
     first ($18DC, $0C6E bit7 set so the looking-up rejection is waived) then at its
     base; every other object only at its base.
 
-    Returns (in_slot, in_fov, exposure, full, tree_in_los_head, cycles)."""
+    Returns (in_slot, in_fov, exposure, full, tree_in_los_head, cycles, weight),
+    ``weight`` being the write weight the marches inside it carry."""
     mem[0x0014] = 0
     if mem[_OFLAGS + target] & 0x80:  # empty slot
-        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_EMPTY)
+        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_EMPTY), np.int64(0)
     if mem[_OTYPE + target] != expected_type:
-        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_WRONG_TYPE)
+        return 0, 0, np.int64(0), 0, 0, np.int64(_SEE_SLOT_WRONG_TYPE), np.int64(0)
 
     c57, angle_lo, angle_hi, z_lo, z_hi, rcyc = _relative_angles(
         mem, zp, observer, target
@@ -839,7 +1030,8 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     cyc = np.int64(_SEE_PROLOGUE) + rcyc + np.int64(_SEE_FOV)
     a = (c57 - 0x0A + (fov_width >> 1)) & 0xFF
     if a >= fov_width:  # $18B8 FOV gate
-        return 1, 0, np.int64(0), 0, 0, cyc + np.int64(_SEE_FOV_REJECT)
+        cyc += np.int64(_SEE_FOV_REJECT)
+        return 1, 0, np.int64(0), 0, 0, _wcycles(cyc), _wweight(cyc)
     cyc += np.int64(_SEE_FOV_PASS)
 
     v_angle_obs = _rd(mem, _OVANGLE + observer)
@@ -920,7 +1112,8 @@ def _can_see_object(mem, zp, observer, target, expected_type, fov_width):
     exposure = _rd(mem, 0x0014)
     full = 1 if exposure & 0x80 else 0
     tree_head = 1 if _rd(mem, 0x0C76) & 0x40 else 0
-    return 1, 1, exposure, full, tree_head, cyc + np.int64(_SEE_TAIL)
+    cyc += np.int64(_SEE_TAIL)  # the marches inside it carry their write weight
+    return 1, 1, exposure, full, tree_head, _wcycles(cyc), _wweight(cyc)
 
 
 @njit(cache=True, inline="always")
@@ -932,14 +1125,14 @@ def _exposure_byte(in_slot, in_fov, exposure):
 
 
 @njit(cache=True)
-def _exposure_cycles(mem):
+def _exposure_cycles(mem, clk):
     """$191F for the current board: the 8-slot walk plus prologue/epilogue."""
     player = _rd(mem, _PLAYER)
-    total = np.int64(_EXPOSURE_FIXED)
+    total = charge(clk, 0x191F, np.int64(_EXPOSURE_FIXED))
     for x in range(7, -1, -1):
         last = np.int64(_EXPOSURE_LAST) if x == 0 else np.int64(0)
         if mem[_OFLAGS + x] & 0x80:
-            total += np.int64(_EXPOSURE_EMPTY) - last
+            total += charge(clk, 0x1925, np.int64(_EXPOSURE_EMPTY) - last)
             continue
         otype = _rd(mem, _OTYPE + x)
         if otype == _T_SENTRY:
@@ -947,19 +1140,19 @@ def _exposure_cycles(mem):
         elif otype == _T_SENTINEL:
             slot = np.int64(_EXPOSURE_SENTINEL)
         else:
-            total += np.int64(_EXPOSURE_OTHER) - last
+            total += charge(clk, 0x1925, np.int64(_EXPOSURE_OTHER) - last)
             continue
         if _rd(mem, _TARGET + x) != player:
-            total += slot - last
+            total += charge(clk, 0x1925, slot - last)
             continue
-        slot += np.int64(_EXPOSURE_TARGETS_PLAYER)
+        total += charge(clk, 0x1925, slot)
         if mem[_DRAIN_CD + x] == 0:
-            total += slot - last
+            total += charge(clk, 0x193A, np.int64(_EXPOSURE_TARGETS_PLAYER) - last)
             continue
-        slot += np.int64(_EXPOSURE_DRAINING)
+        total += charge(clk, 0x193A, np.int64(_EXPOSURE_TARGETS_PLAYER))
         if mem[_TARGET_EXP + x] & 0x80:
-            return total + slot + 1  # the walk stops here
-        total += slot - last
+            return total + charge(clk, 0x193F, np.int64(_EXPOSURE_DRAINING + 1))
+        total += charge(clk, 0x193F, np.int64(_EXPOSURE_DRAINING) - last)
     return total
 
 
@@ -977,26 +1170,28 @@ def _remove_object(mem, slot):
 
 
 @njit(cache=True)
-def _create_object(mem, otype):
+def _create_object(mem, otype, clk):
     """create_object $211D: (the highest empty slot typed `otype`, or -1; cycles)."""
-    cost = np.int64(_CREATE_HEAD)
+    cost = charge(clk, 0x211D, np.int64(_CREATE_HEAD))
     for slot in range(_NUM_SLOTS - 1, -1, -1):
         if mem[_OFLAGS + slot] & 0x80:
             _wr(mem, _OTYPE + slot, otype)
-            return slot, cost + np.int64(_CREATE_HIT)
-        cost += np.int64(_CREATE_SLOT - (_CREATE_LAST if slot == 0 else 0))
-    return -1, cost + np.int64(_CREATE_NONE)
+            return slot, cost + charge(clk, 0x212C, np.int64(_CREATE_HIT))
+        cost += charge(
+            clk, 0x2122, np.int64(_CREATE_SLOT - (_CREATE_LAST if slot == 0 else 0))
+        )
+    return -1, cost + charge(clk, 0x212A, np.int64(_CREATE_NONE))
 
 
 @njit(cache=True)
-def _random_tile_coord(mem):
+def _random_tile_coord(mem, clk):
     """$1272: (a prnd draw masked to 0..31, rejecting 31; cycles)."""
-    cost = np.int64(_DRAW)
+    cost = charge(clk, 0x1272, np.int64(_DRAW))
     while True:
         v = _prng_next(mem) & 0x1F
         if v != 0x1F:
             return v, cost
-        cost += np.int64(_DRAW_REJECT)
+        cost += charge(clk, 0x1279, np.int64(_DRAW_REJECT))
 
 
 @njit(cache=True)
@@ -1014,51 +1209,60 @@ def _put_object_in_tile(mem, slot, tx, ty):
 
 
 @njit(cache=True)
-def _put_object_in_random_tile_below_z(mem, slot, z):
+def _put_object_in_random_tile_below_z(mem, slot, z, clk):
     """$1238: a random flat, empty tile no higher than `z`; after 256 misses the
     ceiling rises, and it fails once it reaches 12.  Returns (placed, cycles)."""
     attempts = 0
-    cost = np.int64(_PLACE_HEAD)
+    cost = charge(clk, 0x1238, np.int64(_PLACE_HEAD))
     while True:
         attempts = (attempts - 1) & 0xFF
         if attempts == 0:  # $1242: 256 misses -> relax the height ceiling
             z = (z + 1) & 0xFF
             if z >= 0x0C:
-                return False, cost + np.int64(_PLACE_GIVE_UP)
-            cost += np.int64(_PLACE_WRAP)
-        cost += np.int64(_PLACE_LAP)
-        tx, dx = _random_tile_coord(mem)
-        ty, dy = _random_tile_coord(mem)
+                return False, cost + charge(clk, 0x1270, np.int64(_PLACE_GIVE_UP))
+            cost += charge(clk, 0x1240, np.int64(_PLACE_WRAP))
+        cost += charge(clk, 0x123E, np.int64(_PLACE_LAP))
+        tx, dx = _random_tile_coord(mem, clk)
+        ty, dy = _random_tile_coord(mem, clk)
         cost += dx + dy
         b = _tile_byte(mem, tx, ty)
         if b >= _OBJECT_TILE:  # tile already holds an object
-            cost += np.int64(_PLACE_OCCUPIED)
+            cost += charge(clk, 0x125B, np.int64(_PLACE_OCCUPIED))
             continue
         if b & 0x0F:  # not flat
-            cost += np.int64(_PLACE_NOT_FLAT)
+            cost += charge(clk, 0x125F, np.int64(_PLACE_NOT_FLAT))
             continue
         if (b >> 4) >= z:  # too high
-            cost += np.int64(_PLACE_TOO_HIGH)
+            cost += charge(clk, 0x1269, np.int64(_PLACE_TOO_HIGH))
             continue
         _put_object_in_tile(mem, slot, tx, ty)
-        return True, cost + np.int64(_PLACE_HIT + _PUT_IN_TILE)
+        cost += charge(clk, 0x126B, np.int64(_PLACE_HIT))
+        return True, cost + charge(clk, 0x1F16, np.int64(_PUT_IN_TILE))
 
 
 @njit(cache=True)
-def _status_bar_cycles(energy):
+def _status_bar_cycles(energy, clk):
     """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""
     fifteens = energy // 15
     rest = energy - fifteens * 15
     threes = rest // 3
     unit = rest - threes * 3
-    total = _STATUS_HEAD + (fifteens + threes) * _STATUS_BLOCK + 2 * _STATUS_BLOCK_DONE
-    total += _STATUS_UNIT_NONE if unit == 0 else _STATUS_UNIT
+    total = charge(clk, 0x9508, np.int64(_STATUS_HEAD))
+    total += charge(
+        clk,
+        0x9515,
+        np.int64((fifteens + threes) * _STATUS_BLOCK + 2 * _STATUS_BLOCK_DONE),
+    )
+    if unit == 0:
+        total += charge(clk, 0x9543, np.int64(_STATUS_UNIT_NONE))
+    else:
+        total += charge(clk, 0x9547, np.int64(_STATUS_UNIT))
     chars = 1 + 2 * (fifteens + threes + (1 if unit else 0))
     laps = _STATUS_PAD_END - chars
-    total += _STATUS_PAD * (laps if laps > 1 else 1) - 1
-    return np.int64(
-        total + _STATUS_MID + _STATUS_PAD * _STATUS_PAD_LAPS - 1 + _STATUS_TAIL
-    )
+    total += charge(clk, 0x9551, np.int64(_STATUS_PAD * (laps if laps > 1 else 1) - 1))
+    total += charge(clk, 0x955D, np.int64(_STATUS_MID))
+    total += charge(clk, 0x9551, np.int64(_STATUS_PAD * _STATUS_PAD_LAPS - 1))
+    return total + charge(clk, 0x956E, np.int64(_STATUS_TAIL))
 
 
 @njit(cache=True, inline="always")
@@ -1068,64 +1272,75 @@ def _discharge_bank(mem, enemy):
 
 
 @njit(cache=True)
-def _reduce_object_energy(mem, target, enemy):
+def _reduce_object_energy(mem, target, enemy, clk):
     """$1A08: drain `target`, returning (drained the player, cycles spent)."""
+    head = charge(clk, 0x1A08, np.int64(_REDUCE_HEAD))
     if target == _rd(mem, _PLAYER):
         if _rd(mem, _ENERGY) == 0:  # kill_player $1A00
             _wr(mem, _DIED_DRAINING, _rd(mem, _DIED_DRAINING) | 0x80)
-            return True, np.int64(_REDUCE_HEAD + _REDUCE_KILL)
+            return True, head + charge(clk, 0x1A0D, np.int64(_REDUCE_KILL))
         _wr(mem, _ENERGY, (_rd(mem, _ENERGY) - 1) & _ENERGY_MASK)
         _discharge_bank(mem, enemy)
-        cost = np.int64(_REDUCE_HEAD + _REDUCE_PLAYER + _REDUCE_BANK + _TUNE_DRAIN)
+        cost = head + charge(clk, 0x1A14, np.int64(_REDUCE_PLAYER))
+        cost += charge(clk, 0x1A4F, np.int64(_REDUCE_BANK))
+        cost += _status_bar_cycles(_rd(mem, _ENERGY), clk)
+        cost += charge(clk, 0x1A1D, np.int64(_TUNE_DRAIN))
         _start_tune(mem, _SND_DRAIN)
-        return True, cost + _status_bar_cycles(_rd(mem, _ENERGY))
-    cost = np.int64(_REDUCE_HEAD + _REDUCE_OBJECT + _REDUCE_BANK)
+        return True, cost
+    cost = head + charge(clk, 0x1A0D, np.int64(_REDUCE_OBJECT))
+    cost += charge(clk, 0x1A4F, np.int64(_REDUCE_BANK))
     otype = _rd(mem, _OTYPE + target)
     if otype == _T_ROBOT:
         _wr(mem, _DRAIN_CD + enemy, 0)  # $1A31
         _wr(mem, _OTYPE + target, _T_BOULDER)
-        cost += np.int64(_REDUCE_ROBOT)
+        cost += charge(clk, 0x1A2D, np.int64(_REDUCE_ROBOT))
     elif otype == _T_TREE:
         stacked = _rd(mem, _OFLAGS + target) >= 0x40  # $1EFF: the tile byte restored
         _remove_object(mem, target)
-        cost += np.int64(
-            _REDUCE_TREE + (_REMOVE_STACKED if stacked else _REMOVE_GROUND)
+        cost += charge(clk, 0x1EEF, np.int64(_REDUCE_TREE))
+        cost += charge(
+            clk, 0x1EEF, np.int64(_REMOVE_STACKED if stacked else _REMOVE_GROUND)
         )
     else:  # boulder -> tree
         _wr(mem, _OTYPE + target, _T_TREE)
-        cost += np.int64(_REDUCE_BOULDER)
+        cost += charge(clk, 0x1A44, np.int64(_REDUCE_BOULDER))
     _discharge_bank(mem, enemy)
     return False, cost
 
 
 @njit(cache=True)
-def _consider_discharging_enemy_energy(mem, enemy):
+def _consider_discharging_enemy_energy(mem, enemy, clk):
     """consider_discharging_enemy_energy $1A5D: return one banked unit to the
-    landscape as a tree on a random flat tile.  Returns (discharged, cycles)."""
+    landscape as a tree on a random flat tile.  Returns (discharged, cycles, slot)."""
     if mem[_DISCHARGE + enemy] == 0:  # $1A63: nothing to discharge
-        return False, np.int64(_DISCHARGE_NONE)
-    slot, ccost = _create_object(mem, _T_TREE)  # $1A67
-    cost = np.int64(_DISCHARGE_CREATE) + ccost
+        return False, charge(clk, 0x1A5D, np.int64(_DISCHARGE_NONE)), -1
+    cost = charge(clk, 0x1A65, np.int64(_DISCHARGE_CREATE))
+    slot, ccost = _create_object(mem, _T_TREE, clk)  # $1A67
+    cost += ccost
     if slot < 0:
-        return False, cost
-    placed, pcost = _put_object_in_random_tile_below_z(mem, slot, _rd(mem, _BELOW_Z))
-    cost += np.int64(_DISCHARGE_PLACE) + pcost
+        return False, cost, -1
+    cost += charge(clk, 0x1A6A, np.int64(_DISCHARGE_PLACE))
+    placed, pcost = _put_object_in_random_tile_below_z(
+        mem, slot, _rd(mem, _BELOW_Z), clk
+    )
+    cost += pcost
     if not placed:  # $1A70: no tile found -> abandon
-        return False, cost + np.int64(_DISCHARGE_ABANDON)
+        return False, cost + charge(clk, 0x1A70, np.int64(_DISCHARGE_ABANDON)), -1
     _wr(mem, _DISCHARGE + enemy, _rd(mem, _DISCHARGE + enemy) - 1)  # $1A7A
-    return True, cost + np.int64(_DISCHARGE_DONE)
+    return True, cost + charge(clk, 0x1A72, np.int64(_DISCHARGE_DONE)), slot
 
 
 @njit(cache=True)
 def _do_hyperspace(mem):
     """do_hyperspace $2147: a synthoid on a random low tile, energy spent, player
     transferred; too little energy kills, and doing it from the platform wins."""
-    slot, _ccost = _create_object(mem, _T_ROBOT)
+    idle = frame_clock(False)  # the hyperspace's cycles are not budgeted
+    slot, _ccost = _create_object(mem, _T_ROBOT, idle)
     if slot < 0:
         return
     player = _rd(mem, _PLAYER)
     z = (_rd(mem, _OZH + player) + 1) & 0xFF
-    placed, _pcost = _put_object_in_random_tile_below_z(mem, slot, z)
+    placed, _pcost = _put_object_in_random_tile_below_z(mem, slot, z, idle)
     if not placed:
         _wr(mem, _OFLAGS + slot, _rd(mem, _OFLAGS + slot) | 0x80)  # $2159
         return
@@ -1143,7 +1358,7 @@ def _do_hyperspace(mem):
 
 
 @njit(cache=True)
-def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
+def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index, clk):
     """find_drainable_boulder_or_tree_on_stack $1AB0, resumable, one slot per unit.
 
     Returns (budget, index, drained slot / -1 exhausted / -2 suspended)."""
@@ -1153,18 +1368,21 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
             tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
             y = tb & 0x3F
             index = x - 1
-            _i, _f, _e, full, _t, _c = _can_see_object(
+            _i, _f, _e, full, _t, _c, _cw = _can_see_object(
                 mem, zp, enemy, y, _rd(mem, _OTYPE + y), _FOV_SCAN
             )
             if full:
                 _wr(mem, _TARGETED_SLOT, y)
-                return budget - np.int64(_TILE_SCAN_HIT), index, y
-            budget -= np.int64(_TILE_SCAN_NEXT)
-            if x == 0:  # $1AF0 BPL not taken
-                budget += np.int64(_TILE_SCAN_LAST)
+                return budget - charge(clk, 0x1AE6, np.int64(_TILE_SCAN_HIT)), index, y
+            budget -= charge(
+                clk,
+                0x1AE6,
+                np.int64(_TILE_SCAN_NEXT - (_TILE_SCAN_LAST if x == 0 else 0)),
+            )
             continue
         if index < 0:  # $1AF2: the whole scan came up empty
-            return budget - np.int64(_TILE_SCAN_EXHAUSTED), index, -1
+            gone = charge(clk, 0x1AF2, np.int64(_TILE_SCAN_EXHAUSTED))
+            return budget - gone, index, -1
         if budget <= 0:
             return budget, index, -2
         x = index
@@ -1172,38 +1390,41 @@ def _find_drainable_boulder_or_tree(mem, zp, enemy, budget, index):
         last = np.int64(_TILE_SCAN_LAST if x == 0 else 0)  # $1AF0 BPL not taken
         flags = _rd(mem, _OFLAGS + x)
         if flags & 0x80:  # empty slot
-            budget -= np.int64(_TILE_SCAN_EMPTY) - last
+            budget -= charge(clk, 0x1AB2, np.int64(_TILE_SCAN_EMPTY) - last)
             continue
         if not (flags >= 0x40 or _rd(mem, _OTYPE + x) == _T_BOULDER):
-            budget -= np.int64(_TILE_SCAN_OTHER) - last
+            budget -= charge(clk, 0x1AB7, np.int64(_TILE_SCAN_OTHER) - last)
             continue
-        budget -= np.int64(
-            (_TILE_SCAN_STACKED if flags >= 0x40 else _TILE_SCAN_LOOSE)
-            + _TILE_SCAN_TILE
-        )
+        if flags >= 0x40:
+            budget -= charge(clk, 0x1AB9, np.int64(_TILE_SCAN_STACKED))
+        else:
+            budget -= charge(clk, 0x1ABE, np.int64(_TILE_SCAN_LOOSE))
+        budget -= charge(clk, 0x1AC2, np.int64(_TILE_SCAN_TILE))
         tb = _tile_byte(mem, _rd(mem, _OX + x), _rd(mem, _OY + x))
         if tb < _OBJECT_TILE:
-            budget -= np.int64(_TILE_SCAN_NO_TILE) - last
+            budget -= charge(clk, 0x1AD3, np.int64(_TILE_SCAN_NO_TILE) - last)
             continue
         y = tb & 0x3F  # topmost object of the tile
         otype = _rd(mem, _OTYPE + y)
-        budget -= np.int64(_TILE_SCAN_TOP)
+        budget -= charge(clk, 0x1AD3, np.int64(_TILE_SCAN_TOP))
         if otype != _T_TREE and otype != _T_BOULDER:
-            budget -= np.int64(_TILE_SCAN_WRONG_TOP) - last
+            budget -= charge(clk, 0x1ADD, np.int64(_TILE_SCAN_WRONG_TOP) - last)
             continue
-        _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
+        _in_slot, _in_fov, _exp, full, _th, scost, sweight = _can_see_object(
             mem, zp, enemy, y, otype, _FOV_SCAN
         )
-        budget -= scost + np.int64(
-            _TILE_SCAN_SEE if otype == _T_TREE else _TILE_SCAN_SEE_BOULDER
-        )
+        if otype == _T_TREE:
+            budget -= charge(clk, 0x1ADD, np.int64(_TILE_SCAN_SEE))
+        else:
+            budget -= charge(clk, 0x1ADF, np.int64(_TILE_SCAN_SEE_BOULDER))
+        budget -= _see_charge(clk, scost, sweight)
         if not full:
-            budget -= np.int64(_TILE_SCAN_NEXT) - last
+            budget -= charge(clk, 0x1AE6, np.int64(_TILE_SCAN_NEXT) - last)
             continue
         if budget <= 0:  # the ROM has not reached $1AEA yet
             return budget, -2 - x, -2
         _wr(mem, _TARGETED_SLOT, y)
-        return budget - np.int64(_TILE_SCAN_HIT), index, y
+        return budget - charge(clk, 0x1AE6, np.int64(_TILE_SCAN_HIT)), index, y
 
 
 @njit(cache=True)
@@ -1216,7 +1437,7 @@ def _initialise_enemy_meanie_variables(mem, enemy):
 
 
 @njit(cache=True)
-def _consider_creating_meanie(mem, zp, enemy, budget, index):
+def _consider_creating_meanie(mem, zp, enemy, budget, index, clk):
     """consider_creating_meanie $197D plus target_object's $1852 tail, resumable.
 
     One search-counter step is one unit.  Returns (budget, stage, index)."""
@@ -1225,7 +1446,7 @@ def _consider_creating_meanie(mem, zp, enemy, budget, index):
         if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
             slot = _rd(mem, _M_SEARCH + enemy)
             index = 0
-            _i, _f, _e, full, _t, _c = _can_see_object(
+            _i, _f, _e, full, _t, _c, _cw = _can_see_object(
                 mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
             )
             if full:
@@ -1238,7 +1459,7 @@ def _consider_creating_meanie(mem, zp, enemy, budget, index):
             return budget, _BODY_MAKE_MEANIE, index
         sc = _rd(mem, _M_SEARCH + enemy)
         if sc == 0:  # $198D: scanned everything -> no meanie this pass
-            budget -= np.int64(_MEANIE_SCAN_DONE)
+            budget -= charge(clk, 0x198F, np.int64(_MEANIE_SCAN_DONE))
             _wr(mem, _M_SCANS + enemy, _rd(mem, _M_SCANS + enemy) + 1)
             _wr(mem, _M_FAILED + enemy, player)
             if _rd(mem, _M_SCANS + enemy) >= _MEANIE_MAX_ATTEMPTS:
@@ -1249,27 +1470,29 @@ def _consider_creating_meanie(mem, zp, enemy, budget, index):
         _wr(mem, _M_SEARCH + enemy, sc - 1)
         slot = sc - 1  # $199B DEY
         if mem[_OFLAGS + slot] & 0x80:
-            budget -= np.int64(_MEANIE_SCAN_SLOT)
+            budget -= charge(clk, 0x198F, np.int64(_MEANIE_SCAN_SLOT))
             continue
         if mem[_OTYPE + slot] != _T_TREE:
-            budget -= np.int64(_MEANIE_SCAN_OTHER)
+            budget -= charge(clk, 0x19AA, np.int64(_MEANIE_SCAN_OTHER))
             continue
-        budget -= np.int64(_MEANIE_SCAN_OTHER + _MEANIE_SCAN_DX)
+        budget -= charge(clk, 0x19AA, np.int64(_MEANIE_SCAN_OTHER))
+        budget -= charge(clk, 0x19B1, np.int64(_MEANIE_SCAN_DX))
         dx = (_rd(mem, _OX + player) - _rd(mem, _OX + slot)) & 0xFF
         if dx >= 0x80:
             dx = 0x100 - dx  # $19B5 abs
         if dx >= 0x0A:
             continue
-        budget -= np.int64(_MEANIE_SCAN_DY)
+        budget -= charge(clk, 0x19C7, np.int64(_MEANIE_SCAN_DY))
         dy = (_rd(mem, _OY + player) - _rd(mem, _OY + slot)) & 0xFF
         if dy >= 0x80:
             dy = 0x100 - dy
         if dy >= 0x0A:
             continue
-        _in_slot, _in_fov, _exp, full, _th, scost = _can_see_object(
+        _in_slot, _in_fov, _exp, full, _th, scost, sweight = _can_see_object(
             mem, zp, enemy, slot, _T_TREE, _FOV_CREATE_MEANIE
         )
-        budget -= np.int64(_MEANIE_SCAN_SEE) + scost
+        budget -= charge(clk, 0x19D9, np.int64(_MEANIE_SCAN_SEE))
+        budget -= _see_charge(clk, scost, sweight)
         if not full:
             continue
         if budget <= 0:  # the ROM has not reached $19E1 yet
@@ -1296,7 +1519,7 @@ def _remove_meanie_and_reset_enemy(mem, enemy):
 
 
 @njit(cache=True)
-def _update_meanie(mem, zp, enemy, budget, index):
+def _update_meanie(mem, zp, enemy, budget, index, clk):
     """update_meanie $16F2, resumable: rotate toward the player, then hyperspace it.
 
     Its one $1887 call is the unit.  Returns (budget, stage, index)."""
@@ -1305,11 +1528,11 @@ def _update_meanie(mem, zp, enemy, budget, index):
     if mem[_OFLAGS + target] & 0x80:  # $16F7: the object the player was in is gone
         _remove_meanie_and_reset_enemy(mem, enemy)
         return budget, _BODY_DONE, 0
-    in_slot, in_fov, exposure, _full, _th, cost = _can_see_object(
+    in_slot, in_fov, exposure, _full, _th, cost, cweight = _can_see_object(
         mem, zp, meanie, target, _T_ROBOT, _FOV_SCAN
     )
     if index >= 0:  # not yet charged
-        budget -= cost
+        budget -= _see_charge(clk, cost, cweight)
         if budget <= 0:
             return budget, _BODY_MEANIE, -2
     if in_fov == 0:  # $1706: not yet looking at the player -> rotate
@@ -1321,7 +1544,9 @@ def _update_meanie(mem, zp, enemy, budget, index):
         _wr(mem, _UPD_CD + enemy, _UPD_CD_MEANIE_ROTATE)
         _start_tune(mem, _SND_MEANIE)  # $1743 JSR $3470
         # $1755 JMP $187B: a meanie's turn redraws it too
-        return budget - np.int64(_MEANIE_ROTATE + _ROTATE_REDRAW), _BODY_DONE, 0
+        budget -= charge(clk, 0x1728, np.int64(_MEANIE_ROTATE))
+        redraw = _redraw_cost(mem, zp, clk, meanie)
+        return budget - redraw, _BODY_DONE, 0
     if target != _rd(mem, _PLAYER):  # $1708: player transferred out of the object
         _remove_meanie_and_reset_enemy(mem, enemy)
         return budget, _BODY_DONE, 0
@@ -1332,157 +1557,306 @@ def _update_meanie(mem, zp, enemy, budget, index):
     return budget, _BODY_DONE, 0
 
 
+@njit(cache=True, inline="always")
+def _reach(budget, spent, offset, clk, anchor):
+    """Charge a body stage forward to ``offset``, the ROM's own cycle for a write.
+
+    ``(budget, spent, what)``: 2 where an earlier frame already paid past it, _COMMIT
+    where this frame reaches it, _WAIT where the budget stops short of it.  A _WAIT
+    still spends the budget out on the clock and into ``spent``: the ROM runs the
+    segment on to the raster, it just does not reach the write.  The windows' own
+    refunds stay on the clock, so ``spent`` cannot overrun the write."""
+    if offset <= spent:
+        return budget, spent, 2
+    owed = np.int64(offset - spent)
+    if budget < owed:
+        if budget > 0:
+            spend(clk, anchor, budget)
+            spent = np.int64(spent + budget)
+            budget = np.int64(0)
+        return budget, spent, _WAIT
+    return budget - charge(clk, anchor, owed), np.int64(offset), _COMMIT
+
+
 @njit(cache=True)
-def _target_object(mem, enemy, target, exposure):
-    """target_object $1825 up to its $184D branch: record the target, drain it when
-    the timer expires.  Returns (next stage, the cycles $1825's own line spent)."""
-    _wr(mem, _TARGET + enemy, target)
-    _wr(mem, _TARGET_EXP + enemy, exposure)
-    cost = np.int64(_TARGET_HEAD)
+def _target_object(mem, zp, enemy, target, budget, spent, clk):
+    """target_object $1825 up to its $184D branch, resumable at its three CORE writes.
+
+    Returns (budget, stage, spent): stage BODY_TARGET means the frame ran out inside
+    the line and ``spent`` says how far into it the ROM had got."""
+    exposure = _rd(mem, _OBJ_EXPOSURE)  # $1829 reads what the last $1887 left
+    budget, spent, what = _reach(budget, spent, _TGT_SLOT, clk, 0x1825)
+    if what == _WAIT:
+        return budget, _BODY_TARGET, spent
+    if what == _COMMIT:
+        _wr(mem, _TARGET + enemy, target)  # $1826
+    budget, spent, what = _reach(budget, spent, _TGT_EXPOSURE, clk, 0x1829)
+    if what == _WAIT:
+        return budget, _BODY_TARGET, spent
+    if what == _COMMIT:
+        _wr(mem, _TARGET_EXP + enemy, exposure)  # $182B
+    budget, spent, what = _reach(budget, spent, _TGT_TIMER, clk, 0x182E)
+    if what == _WAIT:
+        return budget, _BODY_TARGET, spent
     cd = _rd(mem, _DRAIN_CD + enemy)
-    if cd < 0x01:  # first sight -> arm the drain timer
-        _wr(mem, _DRAIN_CD + enemy, _DRAIN_CD_RELOAD)
-        return _BODY_DONE, cost + np.int64(_TARGET_FIRST)
+    if spent > _TGT_TIMER or cd < 0x01:  # first sight -> arm the drain timer
+        budget, spent, what = _reach(budget, spent, _TGT_ARM, clk, 0x1833)
+        if what == _WAIT:
+            return budget, _BODY_TARGET, spent
+        _wr(mem, _DRAIN_CD + enemy, _DRAIN_CD_RELOAD)  # $1837
+        budget, spent, what = _reach(budget, spent, _TGT_ARM_END, clk, 0x183A)
+        if what == _WAIT:
+            return budget, _BODY_TARGET, spent
+        return budget, _BODY_DONE, np.int64(0)
     if cd != 0x01:  # still counting down
-        return _BODY_DONE, cost + np.int64(_TARGET_WAIT)
-    cost += np.int64(_TARGET_DUE)
+        cost = charge(clk, 0x1833, np.int64(_TARGET_WAIT))
+        return budget - cost, _BODY_DONE, np.int64(0)
+    cost = charge(clk, 0x183D, np.int64(_TARGET_DUE))
     if exposure & 0x80:  # fully visible -> drain
         _wr(mem, _TARGETED_SLOT, target)
         killed = target == _rd(mem, _PLAYER) and _rd(mem, _ENERGY) == 0
-        cost += np.int64(_TARGET_DRAIN) + _reduce_object_energy(mem, target, enemy)[1]
+        cost += charge(clk, 0x1843, np.int64(_TARGET_DRAIN))
+        cost += _reduce_object_energy(mem, target, enemy, clk)[1]
         if killed:  # kill_player $1A00 unwinds the stack
-            return _BODY_DONE, cost
+            return budget - cost, _BODY_DONE, np.int64(0)
         _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
         if target == _rd(mem, _PLAYER):  # $184D: a drained player skips the redraw
-            return _BODY_DONE, cost + np.int64(_TARGET_DRAIN_PLAYER)
-        return _BODY_DONE, cost + np.int64(
-            _TARGET_DRAIN_OBJ + _BODY_TAIL + _ROTATE_REDRAW
-        )
+            cost += charge(clk, 0x1884, np.int64(_TARGET_DRAIN_PLAYER))
+            return budget - cost, _BODY_DONE, np.int64(0)
+        cost += charge(clk, 0x184D, np.int64(_TARGET_DRAIN_OBJ))
+        cost += charge(clk, 0x1876, np.int64(_BODY_TAIL))
+        cost += _redraw_cost(mem, zp, clk, target)
+        return budget - cost, _BODY_DONE, np.int64(0)
     # $184D: only the head -> hunt a tree to convert
-    return _BODY_MAKE_MEANIE, cost + np.int64(_TARGET_MEANIE)
+    cost += charge(clk, 0x1841, np.int64(_TARGET_MEANIE))
+    return budget - cost, _BODY_MAKE_MEANIE, np.int64(0)
 
 
 @njit(cache=True)
-def _rotate_enemy(mem, enemy):
-    """rotate_enemy $1805: add the per-enemy step to the facing, reload $C8."""
-    _wr(mem, _OHANG + enemy, _rd(mem, _OHANG + enemy) + _rd(mem, _ROT_SPEED + enemy))
-    _wr(mem, _ROT_CD + enemy, _ROT_CD_RELOAD)
-    _start_tune(mem, _SND_ROTATE)  # $180F JSR $3470
-    _initialise_enemy_meanie_variables(mem, enemy)  # $1818
+def _rotate_enemy(mem, zp, enemy, budget, spent, clk):
+    """$1805..$1884, resumable at each of the six CORE writes its line makes."""
+    budget, spent, what = _reach(budget, spent, _ROTATE_ANGLE, clk, 0x1805)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:  # $1810: $9D37,X added to the facing
+        _wr(
+            mem, _OHANG + enemy, _rd(mem, _OHANG + enemy) + _rd(mem, _ROT_SPEED + enemy)
+        )
+    budget, spent, what = _reach(budget, spent, _ROTATE_CD, clk, 0x1813)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:
+        _wr(mem, _ROT_CD + enemy, _ROT_CD_RELOAD)  # $1815
+    budget, spent, what = _reach(budget, spent, _ROTATE_MEANIE, clk, 0x1818)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:
+        _wr(mem, _M_OBJECT + enemy, 0x80)  # $1975
+    budget, spent, what = _reach(budget, spent, _ROTATE_MEMORY, clk, 0x1978)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:
+        _wr(mem, _M_FAILED + enemy, 0x80)  # $1978
+    budget, spent, what = _reach(budget, spent, _ROTATE_SCANS, clk, 0x197B)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:
+        _wr(mem, _M_SCANS + enemy, 0)  # $197D
+    budget, spent, what = _reach(budget, spent, _ROTATE_SEARCH, clk, 0x1980)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    if what == _COMMIT:
+        _wr(mem, _M_SEARCH + enemy, 0x40)  # $1982
+    budget, spent, what = _reach(budget, spent, _ROTATE_RTS, clk, 0x1985)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    budget, spent, what = _reach(budget, spent, _ROTATE_END, clk, 0x181B)
+    if what == _WAIT:
+        return budget, _BODY_ROTATE, spent
+    _start_tune(mem, _SND_ROTATE)  # $181D JSR $3470
+    redraw = _redraw_cost(mem, zp, clk, enemy)
+    return budget - redraw, _BODY_DONE, np.int64(0)
 
 
 @njit(cache=True)
-def _scan_for_robot(mem, zp, enemy, budget, index, partial):
+def _scan_tail(mem, enemy, budget, spent, partial, clk):
+    """$17CD..$17E5, resumable: what the exhausted robot scan does with what it found."""
+    armed = partial != _rd(mem, _M_FAILED + enemy)
+    if partial >= 0 and armed:  # $17C4: fresh-arm the meanie hunt
+        budget, spent, what = _reach(budget, spent, _PT_HEAD, clk, 0x17CD)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        budget, spent, what = _reach(budget, spent, _PT_MEANIE, clk, 0x17D5)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            _wr(mem, _M_OBJECT + enemy, 0x80)  # $1975
+        budget, spent, what = _reach(budget, spent, _PT_MEMORY, clk, 0x1978)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            _wr(mem, _M_FAILED + enemy, 0x80)  # $1978
+        budget, spent, what = _reach(budget, spent, _PT_SCANS, clk, 0x197B)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            _wr(mem, _M_SCANS + enemy, 0)  # $197D
+        budget, spent, what = _reach(budget, spent, _PT_SEARCH, clk, 0x1980)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        if what == _COMMIT:
+            _wr(mem, _M_SEARCH + enemy, 0x40)  # $1982
+        budget, spent, what = _reach(budget, spent, _PT_RTS, clk, 0x1985)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        budget, spent, what = _reach(budget, spent, _PT_END, clk, 0x17DA)
+        if what == _WAIT:
+            return budget, _BODY_PARTIAL, spent, 0
+        _wr(mem, _OBJ_EXPOSURE, 0x40)  # $17DC
+        return budget, _BODY_TARGET, np.int64(0), partial
+    head = np.int64(_TREE_KNOWN if partial >= 0 else _TREE_GONE)
+    budget, spent, what = _reach(budget, spent, head, clk, 0x17CD)
+    if what == _WAIT:
+        return budget, _BODY_PARTIAL, spent, 0
+    budget, spent, what = _reach(budget, spent, head + _TREE_CLEAR, clk, 0x17E0)
+    if what == _WAIT:
+        return budget, _BODY_PARTIAL, spent, 0
+    if what == _COMMIT:
+        _wr(mem, _DRAIN_CD + enemy, 0)  # $17E2
+    budget, spent, what = _reach(budget, spent, head + _TREE_CALL, clk, 0x17E5)
+    if what == _WAIT:
+        return budget, _BODY_PARTIAL, spent, 0
+    budget -= charge(clk, 0x1AB0, np.int64(_TILE_SCAN_ENTRY))
+    return budget, _BODY_TREE, np.int64(0), np.int64(_NUM_SLOTS - 1)
+
+
+@njit(cache=True)
+def _scan_for_robot(mem, zp, enemy, budget, index, partial, clk):
     """find_drainable_robot_loop $17B2, resumable, one slot per unit."""
     player = _rd(mem, _PLAYER)
     while True:
-        if index <= -2:  # this slot's $1887 is paid; only its write is outstanding
-            y = -2 - index
-            in_slot, in_fov, exp_raw, _f, _t, _c = _can_see_object(
-                mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
-            )
-            stage, cost = _target_object(
-                mem, enemy, y, _exposure_byte(in_slot, in_fov, exp_raw)
-            )
-            return budget - cost, stage, 0, -1
         if index < 0:  # $17CB: the scan is exhausted
-            if partial >= 0:
-                return budget, _BODY_PARTIAL, 0, partial
-            _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
-            budget -= np.int64(_SCAN_END + _TREE_CALL + _TILE_SCAN_ENTRY)
-            return budget, _BODY_TREE, _NUM_SLOTS - 1, -1
+            return budget, _BODY_PARTIAL, 0, partial
         if budget <= 0:
             return budget, _BODY_SCAN, index, partial
         y = index
         index -= 1
-        last = np.int64(_SCAN_LAST if y == 0 else 0)  # $17CB BPL not taken
-        in_slot, in_fov, exp_raw, _full, tree_head, scost = _can_see_object(
+        step = np.int64(_SCAN_STEP - (_SCAN_LAST if y == 0 else 0))  # $17CB BPL
+        budget -= charge(clk, 0x17B2, np.int64(_SCAN_SLOT_CALL))
+        in_slot, in_fov, exp_raw, _full, tree_head, scost, sweight = _can_see_object(
             mem, zp, enemy, y, _T_ROBOT, _FOV_SCAN
         )
-        budget -= scost
+        budget -= _see_charge(clk, scost, sweight)
         if tree_head:  # $17B7: a tree hides this robot's head
-            budget -= np.int64(_SCAN_SLOT_HIDDEN) - last
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_HIDDEN))
+            budget -= charge(clk, 0x17CA, step)
             continue
         exposure = _exposure_byte(in_slot, in_fov, exp_raw)
         if exposure == 0:  # $17BE: not visible at all
-            budget -= np.int64(_SCAN_SLOT_UNSEEN) - last
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_UNSEEN))
+            budget -= charge(clk, 0x17CA, step)
             continue
         if exposure & 0x80:  # $17BA: fully visible -> drain target
-            budget -= np.int64(_SCAN_SLOT_FULL)
-            if budget <= 0:  # the ROM has not reached $1825 yet
-                return budget, _BODY_SCAN, -2 - y, partial
-            stage, cost = _target_object(mem, enemy, y, exposure)
-            return budget - cost, stage, 0, -1
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_FULL))
+            _wr(mem, _OBJ_EXPOSURE, exposure)  # $1887's own $14, as $1829 reads it
+            return budget, _BODY_TARGET, y, -1
         if y == player:  # $17C0: head only -> meanie candidate
             partial = y
-            budget -= np.int64(_SCAN_SLOT_PARTIAL) - last
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_PARTIAL))
         else:
-            budget -= np.int64(_SCAN_SLOT_OTHER) - last
+            budget -= charge(clk, 0x17B7, np.int64(_SCAN_TEST_OTHER))
+        budget -= charge(clk, 0x17CA, step)
 
 
 @njit(cache=True)
-def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
+def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial, spent, clk):
     """consider_enemy_state $16E6, resumable at its own write points.
 
-    Returns (budget, stage, index, partial); stage BODY_DONE means it reached RTS."""
+    Returns (budget, stage, index, partial, spent); BODY_DONE means it reached RTS."""
     while True:
         if stage == _BODY_DONE:
-            return budget, _BODY_DONE, 0, -1
+            return budget, _BODY_DONE, 0, -1, np.int64(0)
         if stage == _BODY_ENTRY:
-            if mem[_UPD_CD + enemy] >= _COOLDOWN_STICK:
-                return budget - np.int64(_UPDATE_GATE_CLOSED), _BODY_DONE, 0, -1
-            budget -= np.int64(_CONSIDER_ENTRY)
-            _wr(mem, _UPD_CD + enemy, _UPD_CD_SCAN)  # $16ED
-            _wr(mem, _FOV_WIDTH, _FOV_SCAN)  # $16F0
+            if spent == 0 and mem[_UPD_CD + enemy] >= _COOLDOWN_STICK:
+                gate = charge(clk, 0x16E6, np.int64(_UPDATE_GATE_CLOSED))
+                return budget - gate, _BODY_DONE, 0, -1, np.int64(0)
+            budget, spent, what = _reach(budget, spent, _ENTRY_CD, clk, 0x16E6)
+            if what == _WAIT:
+                return budget, _BODY_ENTRY, index, partial, spent
+            if what == _COMMIT:
+                _wr(mem, _UPD_CD + enemy, _UPD_CD_SCAN)  # $16ED
+            budget, spent, what = _reach(budget, spent, _ENTRY_END, clk, 0x16F2)
+            if what == _WAIT:
+                return budget, _BODY_ENTRY, index, partial, spent
+            _wr(mem, _FOV_WIDTH, _FOV_SCAN)  # $16F4
+            spent = np.int64(0)
             if not (mem[_M_OBJECT + enemy] & 0x80):  # $16EA: already owns a meanie
-                budget -= np.int64(_CONSIDER_MEANIE)
+                budget -= charge(clk, 0x16F7, np.int64(_CONSIDER_MEANIE))
                 stage = _BODY_MEANIE
                 index = 0
                 continue
-            budget -= np.int64(_CONSIDER_NO_MEANIE + _DISCHARGE_CALL)  # $1773
+            budget -= charge(clk, 0x16FC, np.int64(_CONSIDER_NO_MEANIE))
+            budget -= charge(clk, 0x1773, np.int64(_DISCHARGE_CALL))
             stage = _BODY_DISCHARGE
             index = 0
             continue
 
         if index > -1 and budget < 1:  # nothing charged is awaiting its write
-            return budget, stage, index, partial
+            return budget, stage, index, partial, spent
+
+        if stage == _BODY_TARGET:
+            budget, stage, spent = _target_object(
+                mem, zp, enemy, index, budget, spent, clk
+            )
+            if stage == _BODY_TARGET:
+                return budget, stage, index, partial, spent
+            index = 0
+            partial = -1
+            continue
 
         if stage == _BODY_MEANIE:
-            budget, stage, index = _update_meanie(mem, zp, enemy, budget, index)
+            budget, stage, index = _update_meanie(mem, zp, enemy, budget, index, clk)
             continue
 
         if stage == _BODY_DISCHARGE:
-            discharged, dcost = _consider_discharging_enemy_energy(mem, enemy)
+            discharged, dcost, slot = _consider_discharging_enemy_energy(
+                mem, enemy, clk
+            )
             budget -= dcost
             if discharged:  # $177A: the tail redraws, then the update is over
-                budget -= np.int64(_DISCHARGED + _BODY_TAIL + _ROTATE_REDRAW)
-                return budget, _BODY_DONE, 0, -1
-            budget -= np.int64(_NO_DISCHARGE)
+                budget -= charge(clk, 0x1778, np.int64(_DISCHARGED))
+                budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
+                budget -= _redraw_cost(mem, zp, clk, slot)
+                return budget, _BODY_DONE, 0, -1, np.int64(0)
+            budget -= charge(clk, 0x177D, np.int64(_NO_DISCHARGE))
             if mem[_CONSIDERING + enemy] & 0x80:  # $177F: mid meanie-hunt
-                budget -= np.int64(_HUNT_CALL + _TILE_SCAN_ENTRY)
+                budget -= charge(clk, 0x1784, np.int64(_HUNT_CALL))
+                budget -= charge(clk, 0x1AB0, np.int64(_TILE_SCAN_ENTRY))
                 stage = _BODY_HUNT
                 index = _NUM_SLOTS - 1
                 continue
-            budget -= np.int64(_HUNT_CLEAR)
+            budget -= charge(clk, 0x1782, np.int64(_HUNT_CLEAR))
             stage = _BODY_HELD
             index = 0
             continue
 
         if stage == _BODY_HUNT:
             budget, index, tb = _find_drainable_boulder_or_tree(
-                mem, zp, enemy, budget, index
+                mem, zp, enemy, budget, index, clk
             )
             if tb == -2:  # suspended mid-scan
-                return budget, stage, index, partial
+                return budget, stage, index, partial, spent
             if tb >= 0:
                 _wr(mem, _M_SEARCH + enemy, 0x40)  # $178B
-                drain = _reduce_object_energy(mem, tb, enemy)[1]  # $17EA
+                budget -= charge(clk, 0x178B, np.int64(_HUNT_HIT))
+                budget -= charge(clk, 0x17EA, np.int64(_DRAIN_CALL))
+                budget -= _reduce_object_energy(mem, tb, enemy, clk)[1]  # $17EA
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-                budget -= drain + np.int64(
-                    _HUNT_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
-                )
-                return budget, _BODY_DONE, 0, -1
-            budget -= np.int64(_HUNT_MISS)
+                budget -= charge(clk, 0x17ED, np.int64(_DRAIN_TAIL))
+                budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
+                budget -= _redraw_cost(mem, zp, clk, tb)
+                return budget, _BODY_DONE, 0, -1, np.int64(0)
+            budget -= charge(clk, 0x1787, np.int64(_HUNT_MISS))
             _wr(mem, _CONSIDERING + enemy, _rd(mem, _CONSIDERING + enemy) >> 1)
             stage = _BODY_HELD
             index = 0
@@ -1490,28 +1864,32 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
 
         if stage == _BODY_HELD:
             if mem[_DRAIN_CD + enemy] == 0:
-                budget -= np.int64(_HELD_NONE + _SCAN_INIT)
+                budget -= charge(clk, 0x1795, np.int64(_HELD_NONE))
+                budget -= charge(clk, 0x17AC, np.int64(_SCAN_INIT))
                 stage = _BODY_SCAN
                 index = _NUM_SLOTS - 1
                 partial = -1
                 continue
             held = _rd(mem, _TARGET + enemy)  # $178C: re-check a held target
-            in_slot, in_fov, exp_raw, _full, _th, scost = _can_see_object(
+            in_slot, in_fov, exp_raw, _full, _th, scost, sweight = _can_see_object(
                 mem, zp, enemy, held, _T_ROBOT, _FOV_SCAN
             )
             if index >= 0:
-                budget -= scost + np.int64(_HELD_CALL)
+                budget -= charge(clk, 0x179A, np.int64(_HELD_CALL))
+                budget -= _see_charge(clk, scost, sweight)
                 if budget <= 0:
-                    return budget, stage, -2, partial
+                    return budget, stage, -2, partial, spent
             exposure = _exposure_byte(in_slot, in_fov, exp_raw)
+            _wr(mem, _OBJ_EXPOSURE, exposure)  # $1887's own $14
             if exposure != 0:
-                budget -= np.int64(_HELD_KEPT)
-                stage, cost = _target_object(mem, enemy, held, exposure)
-                budget -= cost
-                index = 0
+                budget -= charge(clk, 0x17A6, np.int64(_HELD_KEPT))
+                stage = _BODY_TARGET
+                index = held
+                spent = np.int64(0)
                 continue
             _wr(mem, _DRAIN_CD + enemy, 0)  # target lost
-            budget -= np.int64(_HELD_LOST + _SCAN_INIT)
+            budget -= charge(clk, 0x17A2, np.int64(_HELD_LOST))
+            budget -= charge(clk, 0x17AC, np.int64(_SCAN_INIT))
             stage = _BODY_SCAN
             index = _NUM_SLOTS - 1
             partial = -1
@@ -1519,111 +1897,116 @@ def _consider_enemy_state(mem, zp, enemy, budget, stage, index, partial):
 
         if stage == _BODY_SCAN:
             budget, stage, index, partial = _scan_for_robot(
-                mem, zp, enemy, budget, index, partial
+                mem, zp, enemy, budget, index, partial, clk
             )
             continue
 
         if stage == _BODY_PARTIAL:
-            budget -= np.int64(_SCAN_END_PARTIAL)
-            if partial != _rd(mem, _M_FAILED + enemy):  # $17C4
-                _initialise_enemy_meanie_variables(mem, enemy)
-                budget -= np.int64(_PARTIAL_ARM)
-                stage, cost = _target_object(mem, enemy, partial, 0x40)
-                budget -= cost
-                index = 0
-                partial = -1
-                continue
-            _wr(mem, _DRAIN_CD + enemy, 0)  # $17E0
-            budget -= np.int64(_PARTIAL_KNOWN + _TREE_CALL + _TILE_SCAN_ENTRY)
-            stage = _BODY_TREE
-            index = _NUM_SLOTS - 1
+            budget, stage, spent, index = _scan_tail(
+                mem, enemy, budget, spent, partial, clk
+            )
+            if stage == _BODY_PARTIAL:
+                return budget, stage, index, partial, spent
             partial = -1
             continue
 
         if stage == _BODY_TREE:
             budget, index, tb = _find_drainable_boulder_or_tree(
-                mem, zp, enemy, budget, index
+                mem, zp, enemy, budget, index, clk
             )
             if tb == -2:
-                return budget, stage, index, partial
+                return budget, stage, index, partial, spent
             if tb >= 0:
                 _wr(mem, _TARGETED_SLOT, tb)
-                drain = _reduce_object_energy(mem, tb, enemy)[1]
+                budget -= charge(clk, 0x17E8, np.int64(_TREE_HIT))
+                budget -= charge(clk, 0x17EA, np.int64(_DRAIN_CALL))
+                budget -= _reduce_object_energy(mem, tb, enemy, clk)[1]
                 _wr(mem, _UPD_CD + enemy, _UPD_CD_DRAIN)
-                budget -= drain + np.int64(
-                    _TREE_HIT + _DRAIN_CALL + _DRAIN_TAIL + _BODY_TAIL + _ROTATE_REDRAW
-                )
-                return budget, _BODY_DONE, 0, -1
-            budget -= np.int64(_TREE_NONE)
+                budget -= charge(clk, 0x17ED, np.int64(_DRAIN_TAIL))
+                budget -= charge(clk, 0x1876, np.int64(_BODY_TAIL))
+                budget -= _redraw_cost(mem, zp, clk, tb)
+                return budget, _BODY_DONE, 0, -1, np.int64(0)
+            budget -= charge(clk, 0x17E8, np.int64(_TREE_NONE))
             stage = _BODY_ROTATE
             index = 0
             continue
 
         if stage == _BODY_ROTATE:
-            if mem[_ROT_CD + enemy] < _COOLDOWN_STICK:  # $17F9 no_drain
-                _rotate_enemy(mem, enemy)
-                budget -= np.int64(_ROTATE_GATE + _ROTATE + _ROTATE_REDRAW)
-                return budget, _BODY_DONE, 0, -1
-            return budget - np.int64(_ROTATE_GATE_HELD), _BODY_DONE, 0, -1
+            if spent == 0:  # $17F9 no_drain: the gate, once
+                if mem[_ROT_CD + enemy] >= _COOLDOWN_STICK:
+                    held_cd = charge(clk, 0x1802, np.int64(_ROTATE_GATE_HELD))
+                    return budget - held_cd, _BODY_DONE, 0, -1, np.int64(0)
+                budget, spent, what = _reach(budget, spent, _ROTATE_GATE, clk, 0x17F9)
+                if what == _WAIT:
+                    return budget, _BODY_ROTATE, index, partial, spent
+            budget, stage, spent = _rotate_enemy(mem, zp, enemy, budget, spent, clk)
+            if stage == _BODY_ROTATE:
+                return budget, stage, index, partial, spent
+            continue
 
-        budget, stage, index = _consider_creating_meanie(mem, zp, enemy, budget, index)
+        budget, stage, index = _consider_creating_meanie(
+            mem, zp, enemy, budget, index, clk
+        )
 
 
 @njit(cache=True)
-def _tick_cooldowns(mem):
+def _tick_cooldowns(mem, clk):
     """update_enemy_cooldowns $1317: the 1-in-3 gate, then every cooldown >= 2.
 
     Returns its cycles; the 24-byte walk is 6 dearer per byte that decrements."""
     if mem[_GATE] != 0:
         _wr(mem, _GATE, _rd(mem, _GATE) - 1)
-        return np.int64(_COOLDOWN_TICK_GATE)
-    cost = np.int64(_COOLDOWN_TICK_WALK - _COOLDOWN_TICK_LAST)
+        return charge(clk, 0x1317, np.int64(_COOLDOWN_TICK_GATE))
+    cost = charge(clk, 0x131C, np.int64(_COOLDOWN_TICK_WALK - _COOLDOWN_TICK_LAST))
     for addr in range(_DRAIN_CD, _UPD_CD + 8):
         if mem[addr] >= _COOLDOWN_STICK:
             mem[addr] = np.uint8(mem[addr] - 1)
-            cost += np.int64(_COOLDOWN_TICK_BYTE_DEC)
+            cost += charge(clk, 0x1325, np.int64(_COOLDOWN_TICK_BYTE_DEC))
         else:
-            cost += np.int64(_COOLDOWN_TICK_BYTE_STICK)
+            cost += charge(clk, 0x131E, np.int64(_COOLDOWN_TICK_BYTE_STICK))
     _wr(mem, _GATE, 2)
     return cost
 
 
 @njit(cache=True)
-def _dispatch_cycles(mem):
+def _dispatch_cycles(mem, clk):
     """$16B5..$16E6: the type dispatch and the $16CC absorbed test, which write nothing."""
     otype = _rd(mem, _OTYPE + _rd(mem, _CURSOR))
     if otype == _T_SENTINEL:
-        return np.int64(_UPDATE_DISPATCH_SENTINEL)
+        return charge(clk, 0x16B5, np.int64(_UPDATE_DISPATCH_SENTINEL))
     if otype == _T_SENTRY:
-        return np.int64(_UPDATE_DISPATCH_SENTRY)
-    return np.int64(_UPDATE_NOT_ENEMY)
+        return charge(clk, 0x16B5, np.int64(_UPDATE_DISPATCH_SENTRY))
+    return charge(clk, 0x16B5, np.int64(_UPDATE_NOT_ENEMY))
 
 
 @njit(cache=True)
-def _update_body(mem, zp, budget, stage, index, partial):
+def _update_body(mem, zp, budget, stage, index, partial, spent, clk):
     """$16E6..$16D6: every state write $16B5 makes before the prnd, resumable."""
     x = _rd(mem, _CURSOR)
     otype = _rd(mem, _OTYPE + x)
     if otype != _T_SENTRY and otype != _T_SENTINEL:  # $16BB
-        return budget, _BODY_DONE, 0, -1
+        return budget, _BODY_DONE, 0, -1, np.int64(0)
     if mem[_OFLAGS + x] & 0x80:  # $16CE: an absorbed slot discharges its bank only
-        budget -= np.int64(_UPDATE_ABSORBED)
+        budget -= charge(clk, 0x16CC, np.int64(_UPDATE_ABSORBED))
         return (
-            budget - _consider_discharging_enemy_energy(mem, x)[1],
+            budget - _consider_discharging_enemy_energy(mem, x, clk)[1],
             _BODY_DONE,
             0,
             -1,
+            np.int64(0),
         )
-    return _consider_enemy_state(mem, zp, x, budget, stage, index, partial)
+    return _consider_enemy_state(mem, zp, x, budget, stage, index, partial, spent, clk)
 
 
 @njit(cache=True)
-def _update_cursor(mem):
+def _update_cursor(mem, clk):
     """$16D9: store the advanced prnd stream and decrement the cursor (7->0 wrap)."""
     x = _rd(mem, _CURSOR)
     _prng_next(mem)
     _wr(mem, _CURSOR, (x - 1) if x > 0 else 7)
-    return np.int64(_UPDATE_CURSOR_WRAP) if x == 0 else np.int64(_UPDATE_CURSOR)
+    if x == 0:
+        return charge(clk, 0x16D9, np.int64(_UPDATE_CURSOR_WRAP))
+    return charge(clk, 0x16D9, np.int64(_UPDATE_CURSOR))
 
 
 _UNBOUNDED = np.int64(1) << 40  # a budget no single $16E6 can outrun
@@ -1632,109 +2015,202 @@ _UNBOUNDED = np.int64(1) << 40  # a budget no single $16E6 can outrun
 @njit(cache=True)
 def _update_enemies(mem, zp):
     """update_enemies $16B5 whole: dispatch, body, prnd and cursor."""
-    cost = _dispatch_cycles(mem)
-    left = _update_body(mem, zp, _UNBOUNDED, _BODY_ENTRY, 0, -1)[0]
+    clk = frame_clock(False)  # the isolated round places no badline
+    cost = _dispatch_cycles(mem, clk)
+    left = _update_body(mem, zp, _UNBOUNDED, _BODY_ENTRY, 0, -1, np.int64(0), clk)[0]
     cost += _UNBOUNDED - left
-    return cost + np.int64(_UPDATE_PRND) + _update_cursor(mem)
+    return cost + np.int64(_UPDATE_PRND) + _update_cursor(mem, clk)
 
 
 @njit(cache=True)
-def _cooldown_frame(mem):
+def _cooldown_frame(mem, clk):
     """$130C: the per-frame Bresenham gate on update_enemy_cooldowns, and its cycles."""
     if mem[_NOT_ACTED] & 0x80:  # $965C BMI $9669: no $130C and no $1635 either
-        return np.int64(_IRQ_GATE_SHUT)
-    cost = np.int64(_IRQ_GATE_OPEN)
+        return charge(clk, 0x9659, np.int64(_IRQ_GATE_SHUT))
+    cost = charge(clk, 0x965E, np.int64(_IRQ_GATE_OPEN))
     acc = _rd(mem, _BRESENHAM) + _BRESENHAM_STEP
     _wr(mem, _BRESENHAM, acc)
     if acc > 0xFF:  # $1315 BCC skip
-        return cost + _tick_cooldowns(mem)
-    return cost + np.int64(_COOLDOWN_TICK_NO_CARRY)
+        return cost + _tick_cooldowns(mem, clk)
+    return cost + charge(clk, 0x130C, np.int64(_COOLDOWN_TICK_NO_CARRY))
 
 
 @njit(cache=True)
-def _sound_frame(mem):
+def _sound_frame(mem, clk):
     """$8ED1: the three-voice note tick the raster IRQ runs every frame, and its cycles."""
-    cyc = np.int64(_SOUND_TICK_FIXED)
+    cyc = charge(clk, 0x963D, np.int64(_SOUND_TICK_FIXED))
     for x in range(2, -1, -1):
-        cyc += np.int64(_SOUND_VOICE_READ)
+        cyc += charge(clk, 0x8ED3, np.int64(_SOUND_VOICE_READ))
         note = _rd(mem, _SND_NOTE + x)
         gate_due = note == 0
         if gate_due:
-            cyc += np.int64(_SOUND_VOICE_SPENT)
+            cyc += charge(clk, 0x8ED6, np.int64(_SOUND_VOICE_SPENT))
         elif note & 0x80:
-            cyc += np.int64(_SOUND_VOICE_OFF)
+            cyc += charge(clk, 0x8ED6, np.int64(_SOUND_VOICE_OFF))
         else:
             note -= 1
             _wr(mem, _SND_NOTE + x, note)
-            cyc += np.int64(_SOUND_VOICE_TICK)
+            cyc += charge(clk, 0x8ED8, np.int64(_SOUND_VOICE_TICK))
             if note:
-                cyc += np.int64(_SOUND_VOICE_MORE)
+                cyc += charge(clk, 0x8EDD, np.int64(_SOUND_VOICE_MORE))
             else:
                 _wr(mem, _SND_GATE + x, _rd(mem, _SND_LENGTH + x))
-                cyc += np.int64(_SOUND_VOICE_NOTE)
+                cyc += charge(clk, 0x8EDF, np.int64(_SOUND_VOICE_NOTE))
                 gate_due = True
         if gate_due:
-            cyc += np.int64(_SOUND_GATE_READ)
+            cyc += charge(clk, 0x8EEE, np.int64(_SOUND_GATE_READ))
             gate = _rd(mem, _SND_GATE + x)
             if gate == 0:
-                cyc += np.int64(_SOUND_GATE_OFF)
+                cyc += charge(clk, 0x8EF1, np.int64(_SOUND_GATE_OFF))
             else:
                 gate -= 1
                 _wr(mem, _SND_GATE + x, gate)
-                cyc += np.int64(_SOUND_GATE_TICK)
+                cyc += charge(clk, 0x8EF3, np.int64(_SOUND_GATE_TICK))
                 if gate:
-                    cyc += np.int64(_SOUND_GATE_MORE)
+                    cyc += charge(clk, 0x8EF6, np.int64(_SOUND_GATE_MORE))
                 else:
                     _wr(mem, _SND_FLAG + x, 0x80)
-                    cyc += np.int64(_SOUND_GATE_END)
-        cyc += np.int64(_SOUND_VOICE_NEXT if x else _SOUND_VOICE_LAST)
+                    cyc += charge(clk, 0x8EF8, np.int64(_SOUND_GATE_END))
+        cyc += charge(
+            clk, 0x8F08, np.int64(_SOUND_VOICE_NEXT if x else _SOUND_VOICE_LAST)
+        )
     return cyc
 
 
 @njit(cache=True)
-def _advance(mem, zp, n_frames, plotting, residual, phase, stage, index, partial):
+def _advance(
+    mem,
+    zp,
+    n_frames,
+    plotting,
+    residual,
+    phase,
+    stage,
+    index,
+    partial,
+    paid,
+    shift,
+    at,
+    residue,
+    hang,
+    entry,
+    step,
+):
     """The frame loop: the raster cooldown tick, then the foreground's cycle budget.
 
     Returns the sub-pass resume point the last frame stopped at: the cycles it
-    overspent, which segment of the pass owes them, and where inside $16E6."""
-    for _ in range(n_frames):
-        irq = _sound_frame(mem) + _cooldown_frame(mem)
+    overspent, which segment of the pass owes them, where inside $16E6, and whether
+    the $1FC2 strip shift of the camera is still outstanding."""
+    for done in range(n_frames):
+        clk = frame_clock(True)  # the raster IRQ pins the frame's phase every frame
+        clk[4] = residue  # the fractional refund the last frame left over
+        if hang > 0:  # the instruction the raster caught finishes first, and only
+            clk[0] = entry  # then does the 6510 take the interrupt
+        irq = charge_run(clk, np.int64(_IRQ_BODY), np.int64(_IRQ_BODY_WEIGHT))
+        irq -= np.int64(_IRQ_BODY)
+        irq += _sound_frame(mem, clk) + _cooldown_frame(mem, clk)
         if plotting:
+            residue = clk[4]
+            hang = overhang(clk)
+            entry = np.int64(0)
+            step = clk[6]
             continue
-        budget = residual + np.int64(_FOREGROUND_CYCLES) - irq
+        rest = hang - entry  # the caught term's remaining tail, which the machine
+        back = np.int64(0)  # runs after the IRQ and before any fresh term; the windows
+        if rest > 0:  # it covers are this frame's, so their refund is this frame's too
+            back = carry(clk, rest, step)
+        budget = residual + np.int64(_FOREGROUND_CYCLES - _STEAL_CEILING) + back - irq
+        if budget > 0 and shift != 0:  # $2003/$2008: this frame's $2625 returned
+            _restore_camera(mem)
+            shift = 0
         while budget > 0:
             if phase == 0:
-                budget -= np.int64(_PASS_HEAD) + _dispatch_cycles(mem)
+                budget -= charge(clk, 0x1289, np.int64(_PASS_HEAD))
+                budget -= _dispatch_cycles(mem, clk)
                 phase = 1
                 if budget <= 0:
                     break
             if phase == 1:
-                budget, stage, index, partial = _update_body(
-                    mem, zp, budget, stage, index, partial
+                budget, stage, index, partial, paid = _update_body(
+                    mem, zp, budget, stage, index, partial, paid, clk
                 )
                 if stage != _BODY_DONE:  # the frame ran out INSIDE $16E6
                     break
-                stage, index, partial = _BODY_ENTRY, 0, -1
-                budget -= np.int64(_UPDATE_PRND)
+                stage, index, partial, paid = _BODY_ENTRY, 0, -1, np.int64(0)
+                budget -= charge(clk, 0x16D6, np.int64(_UPDATE_PRND))
                 phase = 2
-                if budget <= 0:
+                if budget <= 0 or zp[ZP_REPLOT] != 0:
                     break
-            budget -= _update_cursor(mem) + np.int64(_PASS_TAIL)
-            budget -= _exposure_cycles(mem)
+            budget -= _update_cursor(mem, clk)
+            budget -= charge(clk, 0x12A2, np.int64(_PASS_TAIL))
+            budget -= _exposure_cycles(mem, clk)
             phase = 0
+        # the replot stalls on: past its $2211 clear, $09C0,X keeps the $1FC2 shift
+        if shift != 0 and budget >= at:
+            _hold_camera(mem, shift)
         residual = budget
-    return residual, phase, stage, index, partial
+        residue = clk[4]
+        entry = clk[5]
+        step = clk[6]
+        hang = overhang(clk)
+        if zp[ZP_REPLOT] != 0:  # $1FFC: stop so the caller can price the replot
+            return (
+                residual,
+                phase,
+                stage,
+                index,
+                partial,
+                paid,
+                shift,
+                at,
+                residue,
+                hang,
+                entry,
+                step,
+                n_frames - done - 1,
+            )
+    return (
+        residual,
+        phase,
+        stage,
+        index,
+        partial,
+        paid,
+        shift,
+        at,
+        residue,
+        hang,
+        entry,
+        step,
+        0,
+    )
 
 
-def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, partial):
+def advance_frames(
+    mem,
+    n_frames,
+    plotting,
+    residual,
+    phase,
+    stage,
+    index,
+    partial,
+    paid,
+    shift,
+    at,
+    residue,
+    hang,
+    entry,
+    step,
+):
     """Advance ``n_frames`` video frames on the caller's 64 KB ``bytearray``, carrying
-    the sub-pass resume point (cycle residual, phase, $16E6 stage) in and out.
+    the sub-pass resume point and the outstanding $1FC2 camera shift in and out.
 
-    The numpy view shares the caller's buffer, so every mutation lands in the state
-    the caller holds -- exactly as :func:`sentinel.los._march_jit` does."""
+    Returns the resume point plus (frames left, replot target, left column, columns,
+    span): an on-screen $1F9F stops the run so the caller prices $1FA4..$1F9E."""
     view = np.frombuffer(mem, dtype=np.uint8)
-    zp = np.zeros(ZP_HI, dtype=np.int64)
-    res, ph, st, ix, pa = _advance(
+    zp = np.zeros(ZP_N, dtype=np.int64)
+    res, ph, st, ix, pa, pd, sh, cl, rd, hg, eb, sp, left_frames = _advance(
         view,
         zp,
         int(n_frames),
@@ -1744,5 +2220,31 @@ def advance_frames(mem, n_frames, plotting, residual, phase, stage, index, parti
         int(stage),
         int(index),
         int(partial),
+        int(paid),
+        int(shift),
+        int(at),
+        int(residue),
+        int(hang),
+        int(entry),
+        int(step),
     )
-    return int(res), int(ph), int(st), int(ix), int(pa)
+    target = int(zp[ZP_REPLOT]) - 1
+    return (
+        int(res),
+        int(ph),
+        int(st),
+        int(ix),
+        int(pa),
+        int(pd),
+        int(sh),
+        int(cl),
+        int(rd),
+        int(hg),
+        int(eb),
+        int(sp),
+        int(left_frames),
+        target,
+        int(zp[ZP_REPLOT_LEFT]),
+        int(zp[ZP_REPLOT_COLS]),
+        int(zp[ZP_REPLOT_SPAN]),
+    )

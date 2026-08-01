@@ -63,6 +63,9 @@ COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
 COOLDOWN_BRESENHAM = 0x1335  # $130C running accumulator ($1335)
 COOLDOWN_BRESENHAM_STEP = 0xCD  # $1310 ADC #$CD
 PLAYER_NOT_ACTED = 0x0CE5  # bit7 set until the player's first action ($12E1 clears it)
+# $9A51 is its only writer: $3577 stores $80 before play_landscape_loop $357D, $117E stores 0 for generation and the preview, so it is $80 for the whole of play.  $283D reads it to pick the plot_world examine ($2845's trig, or $37F2's table read), $95FA the raster split chain.
+PLAY_DISPLAY_FLAG = 0x9AF6
+FURTHEST_ROW_HINT = 0x0C48  # $26CD seeds $27D7's first column from it, $26D9 stores the furthest row's own start back: plot_world's only carry between passes
 TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
 FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
 TARGETED_OBJECT_IN_LOS = 0x0C56  # march sets bit7 when the ray reaches the target
@@ -119,6 +122,24 @@ ENERGY_IN_OBJECTS = {
     T_PLATFORM: 0,
 }
 ENERGY_MASK = 0x3F  # set_player_energy $2148 AND #$3F
+
+# object_screen_half_angle $2112: half the angle an object subtends, the $209B size term.
+OBJECT_SCREEN_HALF_ANGLE = {
+    T_ROBOT: 0x3E,
+    T_SENTRY: 0x46,
+    T_TREE: 0x72,
+    T_BOULDER: 0x7A,
+    T_MEANIE: 0x4A,
+    T_SENTINEL: 0x4E,
+    T_PLATFORM: 0xC1,
+}
+OBJECT_SIZE_FLOOR = 0x0CD4  # a pending size the next $209B takes as a minimum
+
+# update_object_on_screen $1F9F points the camera at the strip it replots and puts it
+# back at $2003/$2008, so $09C0,X carries the shift for as long as $2625 runs.
+CAMERA_OBJECT = 0x006E  # $1FC2/$2625 LDX $6E: the slot whose $09C0/$0140 is the camera
+CAMERA_SAVED = 0x211A  # $1FD5 keeps that slot's own bearing over the shift
+CAMERA_REF_LO = 0x001F  # $1FD0 the camera's half column, zeroed again at $2003
 
 # A tiles_table byte >= OBJECT_TILE holds an object index in its low 6 bits;
 # below it the byte is (height<<4)|slope terrain.

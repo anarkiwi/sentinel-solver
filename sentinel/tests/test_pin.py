@@ -7,7 +7,7 @@ boulder/stacked tree at $17E0 -- so leftovers in view stop an enemy turning.
 
 import pytest
 
-from sentinel import actions, enemies, memmap as mm, terrain
+from sentinel import actions, badline, enemies, memmap as mm, terrain
 from sentinel.game import Game
 from sentinel.playerbase import UNIT_FRAMES
 
@@ -29,7 +29,11 @@ def _bait_board(otype=mm.T_BOULDER):
                 continue
             st.obj_flags[st.player] = 0x80  # body off the board: only the bait remains
             scan = enemies._find_drainable_boulder_or_tree(
-                st, enemy, enemies.UNBOUNDED, mm.NUM_SLOTS - 1
+                st,
+                enemy,
+                enemies.UNBOUNDED,
+                mm.NUM_SLOTS - 1,
+                badline.frame_clock(False),
             )
             if scan[2] == slot:
                 return game, enemy, (x, y)

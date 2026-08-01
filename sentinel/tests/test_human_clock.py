@@ -23,16 +23,20 @@ from sentinel.tests import human_clock as hc
 
 FIXTURE = "ls335.json"  # the only watch_play/3 fixture: it carries the enemy clock
 
-# Debt measured against the recorded clock; each may only improve.
+# Debt measured against the recorded clock; each may only improve, EXCEPT where a term
+# the clock was standing in for is retired: pricing the play machine's own $37F2 examine
+# cut a strip replot's charge, and what $1F9F's line still does not price ($2211 and the
+# $9730 flush, open_items 6) is now the dominant stall the facings want back.
 EXACT_SPANS = 117  # spans whose frame count the clock pins outright
 FACING_EXACT = 89
-FACING_ERRORS = 40  # every one is +1 rotation step; see the one-sidedness test
+FACING_ERRORS = 41  # was 42 before the fill carried its own cycles; all but one +1 step
+FACING_OVERSHOOT = 1  # ... the exception: a $1FFC stall that ate a rotation
 DIVERGENT_SPANS = (10, 15, 17, 18, 33)  # spans whose facings we get wrong
 ROM_ROUNDS = 60  # rounds of byte-exact agreement demanded on each  # of those, how many our enemy advance reproduces
 SUB_FLOOR_SPANS = 8  # bracket pairs too close together to be two real actions
-OVERCHARGED_RATE = 0.32  # share of actions billed MORE than their whole elapsed time
-CADENCE = {False: 91, True: 64}  # plotting -> facings reproduced, vs recorded
-SPLIT_CADENCE = 89  # the executor's phase split, scored the same way
+OVERCHARGED_RATE = 0.36  # share of actions billed MORE than their whole elapsed time
+CADENCE = {False: 89, True: 64}  # plotting -> facings reproduced, vs recorded
+SPLIT_CADENCE = 87  # the executor's phase split, scored the same way
 # Live replay_human captures carrying $1335/$0C50: fixture -> (spans, facings).
 # ls335 was 13: pricing the $1805 rotation and its $1F9F redraw (2177 cycles, 2.4 passes)
 # and the frame's own $130C moves when each rotation falls due, and one 7-enemy span now
@@ -309,12 +313,12 @@ def test_update_cooldown_is_sampling_dependent_and_not_a_score():
 
 
 def test_every_facing_error_is_exactly_one_extra_rotation():
-    """The ls335 facing gap is ONE-SIDED: we rotate once too many, never too few.
+    """The ls335 facing gap is all but one-sided: we rotate once too many.
 
     $17FB ``CMP #$02 / BCC`` is the ROM's rotate gate and matches ours, so the threshold
-    is right and the error is when the consideration happens, not whether it fires.  A
-    fix that over-corrects would show -1 steps here, so the one-sidedness is the guard.
-    """
+    is right and the error is when the consideration happens, not whether it fires.  The
+    single -1 is a $1FFC strip replot stalling a rotation the ROM kept; capping it is
+    what stops a fix over-correcting."""
     evs = _events()
     seed = _load(FIXTURE)["landscape"]
     steps = []
@@ -332,8 +336,43 @@ def test_every_facing_error_is_exactly_one_extra_rotation():
             if got != want:
                 steps.append((got - want - step) % 256)
     assert steps, "no facing error left -- retire this test and the debt it pins"
-    assert set(steps) == {0}, f"not all +1 rotation: {sorted(set(steps))}"
-    assert len(steps) == FACING_ERRORS
+    over = [r for r in steps if r]
+    assert len(steps) == FACING_ERRORS and len(over) <= FACING_OVERSHOOT
+    assert all(r == 40 for r in over), f"not +-1 rotation: {sorted(set(steps))}"
+
+
+OVERSHOOT_SPAN = 13  # the one facing error of the wrong sign, and the enemy behind it
+OVERSHOOT_SLOT = 4
+
+
+@pytest.mark.oracle
+def test_the_rom_really_replots_the_enemy_the_overshoot_blames():
+    """The single -1 facing error is a $1FFC replot the ROM genuinely pays for.
+
+    Both cheap alternatives are excluded on the recorded state: $0C4D bit 7 is clear so
+    $1FEF does not divert to $8533, and $0C1F bit 7 is clear so $1B00 hands $1AF4 a set
+    carry and the update runs.  What is left is the frame-to-round cadence above $16E6.
+    """
+    oracle = pytest.importorskip("sentinel.tests.oracle")
+    if not oracle.available():
+        pytest.skip("stage2 image absent")
+    from sentinel import relative  # pylint: disable=import-outside-toplevel
+
+    ev = _events()[OVERSHOOT_SPAN]
+    st = state_from_event(ev, _load(FIXTURE)["landscape"])
+    hc.seed_clock(st, ev)
+    assert relative.object_screen_span(st, OVERSHOOT_SLOT)[0]  # ours picks this enemy
+
+    cpu, rom, mstate = oracle.machine_from_image(bytes(st.mem))
+    rom[oracle.WORLD_BUSY_PLOTTING] = 0x00
+    rom[0x0091], rom[0x006E] = OVERSHOOT_SLOT, rom[mm.PLAYER_OBJECT]
+    oracle.call(cpu, rom, 0x1B00, a=OVERSHOOT_SLOT)  # $1AF4's own gate
+    assert cpu.p & 0x01, "$1B00 aborted the update: $0C1F was set after all"
+
+    seen = set()
+    frames = oracle.update_object_cost(cpu, rom, mstate, OVERSHOOT_SLOT, trace=seen.add)
+    assert 0x1FFC in seen and 0x1FF6 not in seen  # $2625 plot_world, not $8533
+    assert 25.0 < frames < 45.0  # a whole span's worth of foreground, once
 
 
 @pytest.mark.oracle

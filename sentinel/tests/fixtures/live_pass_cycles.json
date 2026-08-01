@@ -87,10 +87,9 @@
    ]
   },
   "badline_steal": {
-   "41": 44,
-   "42": 51,
-   "43": 793,
-   "44": 112
+   "41": 229,
+   "42": 179,
+   "43": 4416
   },
   "badlines_per_frame": 25,
   "short_wall": {
@@ -118,7 +117,85 @@
    "median": 15575,
    "mean": 15460.2,
    "max": 15593
-  }
+  },
+  "frame_budget": {
+   "_what": "the whole 19656-cycle frame split four ways from cpuhistory (one absolute cycle stamp per instruction): the VIC steal (a delta 20 or more above the opcode's own minimum), the four short raster interrupts, the $9630 body ($95E9 to its RTI) and what is left for the play loop. Means over consecutive $9630 windows; jsr_* are the body's own top-level calls, inclusive of the JSR",
+   "boards": {
+    "0042": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1072.91,
+     "short": 477.0,
+     "body": 2633.49,
+     "foreground": 15472.54,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 68.18,
+     "jsr_130c": 143.49,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.82
+    },
+    "0335": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1073.96,
+     "short": 477.0,
+     "body": 2645.73,
+     "foreground": 15459.24,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 69.99,
+     "jsr_130c": 154.08,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.66
+    },
+    "9795": {
+     "frames": 140,
+     "frozen": false,
+     "steal": 1073.93,
+     "short": 477.0,
+     "body": 2648.15,
+     "foreground": 15456.96,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 70.64,
+     "jsr_130c": 155.86,
+     "jsr_1635": 25.0,
+     "jsr_119f": 2161.65
+    },
+    "9795_frozen": {
+     "frames": 80,
+     "frozen": true,
+     "steal": 1075.2,
+     "short": 477.0,
+     "body": 2454.34,
+     "foreground": 15649.27,
+     "jsr_ffc5": 56.0,
+     "jsr_ffc2": 63.0,
+     "jsr_119f": 2161.34
+    }
+   }
+  },
+  "pass_rate_drift": {
+   "_what": "$1289 hits counted off a silent checkpoint against the model's own pass count, frame-locked over 1200 frames with the sim's memory replaced from live truth every frame and only its cycle residual carried, so nothing but the clock can drift. ls9795's whole drift is discrete: 1045 of 1200 frames tie exactly, and the jumps are the frames the machine reaches no $1289 at all",
+   "boards": {
+    "0042": {
+     "frames": 1200,
+     "machine": 21354,
+     "sim": 21363
+    },
+    "0335": {
+     "frames": 1200,
+     "machine": 9410,
+     "sim": 9408
+    },
+    "9795": {
+     "frames": 1200,
+     "machine": 4974,
+     "sim": 5064,
+     "tied_frames": 1045,
+     "longest_flat_run": 275
+    }
+   }
+  },
+  "badline_steal_source": "driver/badline.py on ls0042/ls0335/ls9795 and ls9795 frozen; each instruction's unstolen cost is the minimum over its own (opcode, branch taken, index page crossed) class, so 43 is the maximum and the 44s this once carried were an opcode's own extra cycle charged to the VIC. Samples: fixtures/live_badline.json"
  },
  "pass_segments": {
   "_what": "the four sub-pass segments of one $1289 pass, inclusive, ls9795, 632 passes: head $1289..$129F, the $16B5 body up to $16D6, $16D6..$16E5 (prnd + cursor), and $12A2..$12C7 with and without the $191F it calls",
@@ -203,5 +280,17 @@
     "pass_cycles": 925.88
    }
   }
+ },
+ "strip_replot": {
+  "_what": "the one $1FFC strip replot ls9795 reaches in 400 live frames, caught by running to $1F9F until the call that takes the on-screen branch: the ROM's own $0C62/$0C69 span at that moment, and $9630 frames from that $1F9F to the next $1289. proxy_cycles and py65_cycles are projector.strip_replot_frames' two backends on the captured image, in PAL cycles. With the $2625 fill emulated block for block and the oracle's DEC abs corrected they read 20.4 and 20.7 wall frames against the machine's 22 (0.93 and 0.94 of it); the backends were 332100 and 338644 before, and the exact one's earlier 1.54x was its $9AF6/$37F2 examine and its $2993/$245B context. Measured against the machine's own foreground rather than its wall frames, a captured $1FFC JSR $2625 is 0.986-0.988x over four ls9795 passes",
+  "board": 9795,
+  "target": 3,
+  "rom_left": 37,
+  "rom_columns": 3,
+  "machine_wall_frames": 22,
+  "machine_2625_frame": 130,
+  "model_charge_frame": 129,
+  "proxy_cycles": 343185,
+  "py65_cycles": 347830
  }
 }

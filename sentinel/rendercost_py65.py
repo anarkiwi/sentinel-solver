@@ -46,6 +46,32 @@ def render_cost_exact(state, h_angle, v_angle):
     return frames
 
 
+def strip_replot_cost_exact(state, target):
+    """Exact $1FA4..$1F9E strip-replot frame cost for ``target`` on ``state``, memoized.
+
+    $1F9F re-points the camera itself ($1FC2), so the key is the board plus the
+    player's own view and the object being redrawn. $209B is the caller's to price."""
+    mem = state.mem
+    player = mem[0x000B]
+    key = _key(state, mem[0x09C0 + player], mem[0x0140 + player]) + bytes([target])
+    hit = _CACHE.get(key)
+    if hit is not None:
+        _CACHE.move_to_end(key)
+        _STATS["hits"] += 1
+        return hit
+    _STATS["misses"] += 1
+    from sentinel.tests import oracle
+
+    cpu, m, mstate = oracle.machine_from_image(state.mem)
+    frames = oracle.update_object_cost(
+        cpu, m, mstate, target, from_pc=oracle.REPLOT_LINE
+    )
+    _CACHE[key] = frames
+    if len(_CACHE) > _MAX:
+        _CACHE.popitem(last=False)
+    return frames
+
+
 def reset():
     """Clear the cache and counters (tests)."""
     _CACHE.clear()

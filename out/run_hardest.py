@@ -56,7 +56,11 @@ def one(code):
     try:
         pr = subprocess.run(
             [sys.executable, "-c", PROBE, str(code)],
-            cwd=ROOT, env=env(), capture_output=True, text=True, timeout=300,
+            cwd=ROOT,
+            env=env(),
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         row.update(json.loads(pr.stdout.strip().splitlines()[-1]))
     except Exception as exc:  # pragma: no cover - diagnostic path
@@ -64,13 +68,19 @@ def one(code):
     try:
         rn = subprocess.run(
             [sys.executable, "-m", "sentinel.phase_player", str(code), "--quiet"],
-            cwd=ROOT, env=env(), capture_output=True, text=True, timeout=TIMEOUT,
+            cwd=ROOT,
+            env=env(),
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
         )
         m = RESULT.search(rn.stdout)
         if m:
             row.update(
-                won=m.group(2) == "WON", actions=int(m.group(3)),
-                frames=int(m.group(4)), energy=int(m.group(5)),
+                won=m.group(2) == "WON",
+                actions=int(m.group(3)),
+                frames=int(m.group(4)),
+                energy=int(m.group(5)),
                 dead=m.group(6) == "True",
             )
         else:
@@ -87,7 +97,9 @@ def main():
     if os.path.exists(OUT):
         done = {json.loads(l)["code"] for l in open(OUT) if l.strip()}
     todo = [c for c in codes if c not in done]
-    print(f"{len(codes)} boards, {len(done)} already done, {len(todo)} to run", flush=True)
+    print(
+        f"{len(codes)} boards, {len(done)} already done, {len(todo)} to run", flush=True
+    )
     with open(OUT, "a") as fh, ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for row in pool.map(one, todo):
             fh.write(json.dumps(row) + "\n")

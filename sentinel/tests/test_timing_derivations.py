@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 
 from driver import kbd_aim
-from sentinel import actioncost, aimcost, enemies, enemies_jit, memmap as mm
-from sentinel import pancost, passcost, playerbase, projector
+from sentinel import actioncost, aimcost, badline, enemies, enemies_jit, memmap as mm
+from sentinel import pancost, passcost, playerbase, projector, relative, statecmp
 from sentinel.game import Game
 
 UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
@@ -174,6 +174,11 @@ def test_revolution_frames_is_a_full_cone_revolution():
         assert all(t >= 256 for t in turned.values()), (landscape, turned)
 
 
+# The frame budget is the counted foreground less the steal sentinel.badline charges;
+# a rate estimate off the constants alone can only use its ceiling.
+_CEILING = passcost.BADLINES_PER_FRAME * passcost.BADLINE_STEAL
+_FLOOR = passcost.BADLINES_PER_FRAME * (passcost.BADLINE_STEAL - 2)
+
 _LIVE_PASS_RATE = os.path.join(
     os.path.dirname(__file__), "fixtures", "live_pass_rate.json"
 )
@@ -187,7 +192,7 @@ def test_irq_cycles_matches_the_live_pass_rate():
     for digits, rec in boards.items():
         st = Game.typed(int(digits)).state
         counts = [int(k) for k in rec["idle_passes_per_frame"]]
-        budget = passcost.FOREGROUND_CYCLES - passcost.SOUND_TICK_IDLE
+        budget = passcost.FOREGROUND_CYCLES - _CEILING - passcost.SOUND_TICK_IDLE
         modelled = budget / passcost.idle_pass_cycles(st.mem)
         assert min(counts) <= modelled <= max(counts), (
             f"ls{digits}: modelled {modelled:.2f} passes/frame outside the live "
@@ -209,8 +214,11 @@ def _mode(hist):
     return int(max(hist.items(), key=lambda kv: kv[1])[0])
 
 
-def test_rotate_redraw_matches_the_live_object_redraw():
-    """ROTATE_REDRAW is the mean $1F9F a rotation forces, over every live rotation."""
+def test_the_priced_redraw_brackets_every_live_rotation_redraw():
+    """Every live $1F9F is a $209B reject, and the modelled rejects bracket them.
+
+    The redraw is bimodal, so no single number is right; what the live capture
+    constrains is the off-screen branch, the only one 16 rotations ever took."""
     samples = [
         c
         for board, vals in _live_cycles()["rotation_redraw_1f9f"].items()
@@ -218,8 +226,20 @@ def test_rotate_redraw_matches_the_live_object_redraw():
         for c in vals
     ]
     assert len(samples) >= 16
-    assert min(samples) <= passcost.ROTATE_REDRAW <= max(samples)
-    assert abs(passcost.ROTATE_REDRAW - sum(samples) / len(samples)) <= 1.0
+    modelled = []
+    for digits in ("0042", "0335", "9795"):
+        state = Game.typed(int(digits)).state
+        for slot in range(mm.NUM_SLOTS):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            for h_angle in range(0, 256, 8):
+                state.obj_h_angle[state.mem[mm.PLAYER_OBJECT]] = h_angle
+                cycles, columns, _l, _s = relative.update_object_on_screen_cycles(
+                    state, slot
+                )
+                if columns == 0:
+                    modelled.append(cycles)
+    assert min(modelled) <= min(samples) and max(samples) <= max(modelled)
 
 
 def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
@@ -239,30 +259,81 @@ def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
     """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: the badline steal,
     four short raster interrupts and the $9630 body, each measured on the machine.
 
-    A badline steals 40..43 by where in its instruction the CPU is, so the frame's own
-    total (the frozen pass rate below) lands just under 25 times the 43 mode."""
+    BADLINE_STEAL is the MAXIMUM a badline can take, so the frame's own total lands at
+    or under 25 times it; what it actually takes is test_badline.py's business."""
     irq = _live_cycles()["irq"]
-    assert passcost.BADLINE_STEAL == _mode(irq["badline_steal"])
+    assert passcost.BADLINE_STEAL == max(int(k) for k in irq["badline_steal"])
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
     assert passcost.SHORT_IRQ == _mode(irq["short_wall"])
-    per = passcost.BADLINE_FRAME / passcost.BADLINES_PER_FRAME
-    assert passcost.BADLINE_STEAL - 1 < per <= passcost.BADLINE_STEAL
-    shorts = (
-        passcost.SHORT_IRQS_PER_FRAME * passcost.SHORT_IRQ + passcost.SHORT_IRQ_WRAP
-    )
-    assert passcost.IRQ_CYCLES == passcost.BADLINE_FRAME + shorts + passcost.IRQ_BODY
+    assert passcost.IRQ_CYCLES == passcost.SHORT_IRQ_FRAME + passcost.IRQ_BODY
+    for board in irq["frame_budget"]["boards"].values():  # the steal is counted apart
+        assert board["steal"] <= _CEILING + 1
 
 
 def test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count():
     """With the clock frozen the $9659 gate shuts, the note tick idles and every pass
     is the idle one, so the frame budget IS the live $1289 rate -- on three boards."""
     rec = _live_cycles()["frozen_idle_rate"]["boards"]
-    budget = (
-        passcost.FOREGROUND_CYCLES - passcost.IRQ_GATE_SHUT - passcost.SOUND_TICK_IDLE
-    )
+    fixed = passcost.IRQ_GATE_SHUT + passcost.SOUND_TICK_IDLE
     for board, m in rec.items():
-        modelled = m["frames"] * budget / m["pass_cycles"]
-        assert abs(modelled - m["passes"]) <= 4, (board, modelled, m["passes"])
+        rate = m["frames"] / m["pass_cycles"]
+        least = (passcost.FOREGROUND_CYCLES - _CEILING - fixed) * rate
+        most = (passcost.FOREGROUND_CYCLES - _FLOOR - fixed) * rate
+        assert least - 4 <= m["passes"] <= most + 4, (board, least, most, m["passes"])
+
+
+def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
+    """The one live $1FFC on ls9795: the model's span is the ROM's own $0C62/$0C69,
+    it charges exactly one replot, and the stall brackets the machine's measured wall.
+    """
+    monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
+    rec = _live_cycles()["strip_replot"]
+    state = Game.typed(rec["board"]).state
+    state.mem[mm.PLAYER_NOT_ACTED] = 0x00
+    enemies.advance_frames(state, rec["model_charge_frame"] - 2)
+    on, left, columns, span, _cyc = relative.object_screen_span(state, rec["target"])
+    assert on and (left, columns) == (rec["rom_left"], rec["rom_columns"])
+    frames = projector.strip_replot_frames(state, rec["target"], left, columns, span)
+    stall = frames * passcost.PAL_FRAME_CYCLES / passcost.FOREGROUND_CYCLES
+    # both backends now read UNDER the machine's wall: the $2625 fill proxy is item 5's
+    assert 0.85 <= stall / rec["machine_wall_frames"] <= 1.05, stall
+
+
+def test_the_frame_budget_decomposition_matches_the_live_frame():
+    """Every cycle of a live frame is one of the model's four terms, measured apart.
+
+    The four short interrupts and the $9630 body are exact.  This split classifies a
+    steal as any delta over the opcode's own minimum, so its badline term is an UPPER
+    bound (a taken branch reads as 44); the exact one is test_badline.py's."""
+    rec = _live_cycles()["irq"]["frame_budget"]["boards"]
+    gaps = []
+    for board, m in rec.items():
+        parts = m["steal"] + m["short"] + m["body"] + m["foreground"]
+        assert abs(parts - passcost.PAL_FRAME_CYCLES) <= 1, (board, parts)
+        assert m["short"] == passcost.SHORT_IRQ_FRAME, (board, m["short"])
+        gate = passcost.IRQ_GATE_SHUT if m["frozen"] else passcost.IRQ_GATE_OPEN
+        tick = m.get("jsr_130c", 6) - 6  # IRQ_GATE_OPEN already carries the JSR
+        body = passcost.IRQ_BODY + gate + tick + m["jsr_ffc2"]
+        assert abs(body - m["body"]) <= 1, (board, body, m["body"])
+        assert m["jsr_ffc5"] == 56 and m.get("jsr_1635", 25) == 25, board
+        gaps.append(_CEILING - m["steal"])
+        assert m["steal"] <= _CEILING + 1
+    assert -1 <= min(gaps) and max(gaps) <= 6, gaps  # -0.2: the split reads a 44
+
+
+def test_the_model_pass_rate_tracks_the_machine_with_the_state_resynced():
+    """Frame-locked with the state replaced from live truth, only the clock can drift.
+
+    Under a pass a thousand frames on ls42 and ls335; ls9795's drift is not a rate at
+    all but the frames the machine reaches no $1289, which the clock does not price."""
+    rec = _live_cycles()["irq"]["pass_rate_drift"]["boards"]
+    for board, m in rec.items():
+        drift = abs(m["sim"] - m["machine"]) / m["frames"]
+        if board == "9795":
+            assert m["tied_frames"] / m["frames"] > 0.85, board
+            assert m["longest_flat_run"] >= 200, board
+            continue
+        assert drift <= 0.01, (board, drift)
 
 
 def test_the_cooldown_tick_prices_every_live_130c_sample():
@@ -432,7 +503,9 @@ def test_the_drain_cost_model_matches_the_roms_own_1a08():
             mem[mm.OBJECTS_FLAGS + slot] = flags
         mem[mm.TARGETED_OBJECT_SLOT] = slot
         st = State.from_mem(bytes(mem))
-        _drained, model = enemies._reduce_object_energy(st, slot, 0)
+        _drained, model = enemies._reduce_object_energy(
+            st, slot, 0, badline.frame_clock(False)
+        )
         state["stop"] = False
         c0 = cpu.processorCycles
         oracle.call(cpu, mem, 0x1A08, state=state)
@@ -468,9 +541,14 @@ def test_the_note_tick_cost_and_writes_match_the_roms_own_8ed1():
         for addr in addrs:
             mem[addr] = rng.choice([0x80, 0, 1, 2, 12, rng.randrange(256)])
         st = State.from_mem(bytes(mem))
-        model = enemies.sound_frame(st)
+        model = enemies.sound_frame(st, badline.frame_clock(False))
         jit = State.from_mem(bytes(mem))
-        assert enemies_jit._sound_frame(np.frombuffer(jit.mem, dtype=np.uint8)) == model
+        assert (
+            enemies_jit._sound_frame(
+                np.frombuffer(jit.mem, dtype=np.uint8), badline.frame_clock(False)
+            )
+            == model
+        )
         state["stop"] = False
         c0 = cpu.processorCycles
         oracle.call(cpu, mem, 0x8ED1, state=state)
@@ -503,7 +581,7 @@ def test_the_sub_pass_position_is_read_back_off_the_stack_frame():
         frame = (cpu.y, cpu.x, cpu.a, cpu.p, pc & 0xFF, pc >> 8)
         for i, val in enumerate(frame):
             mem[0x0100 + ((sp + 1 + i) & 0xFF)] = val
-        phase, stage, index, _p, _c = enemies.resume_from_stack(
+        phase, stage, index, _p, _c, _paid = enemies.resume_from_stack(
             mem, sp, mem[0x100:0x200]
         )
         if 0x17B2 <= pc < 0x17CD:  # in the scan loop itself: Y is the live index
@@ -587,24 +665,32 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
 
     Gated, marching, rotating, held-target and draining rounds alike; a slot the play
     loop would not dispatch ($16BB/$16CC) has no body to compare.  The ROM falls through
-    into $16D6, so its call costs UPDATE_TAIL more; $1F9F/$3470 are stubbed with RTS."""
+    into $16D6, so its call costs UPDATE_TAIL more; $1F9F/$3470 are stubbed with RTS.
+
+    ls9795 reaches a round of eighteen frames' foreground, so the comparison covers a
+    whole long $1887 march and not only rounds a frame can finish."""
     from sentinel.state import State  # pylint: disable=import-outside-toplevel
     from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
 
-    monkeypatch.setattr(passcost, "ROTATE_REDRAW", 6)
-    monkeypatch.setattr(passcost, "ROTATE", passcost.ROTATE - 323 + 6)
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
+    )
     monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
+    monkeypatch.setattr(enemies, "AT_ROTATE_END", enemies.AT_ROTATE_END - 323 + 6)
     cpu, mem, state = oracle.generate_machine(landscape)
     oracle.prime_enemy_driver(cpu, mem, state)
     mem[mm.PLAYER_NOT_ACTED] = 0
-    checked = 0
+    checked, longest = 0, 0
     for _ in range(400):
         state["stop"] = False
         oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=state)
         x = mem[mm.CURSOR]
         st = State.from_mem(bytes(mem))
         dispatched = st.obj_type[x] in mm.ENEMY_TYPES and not st.obj_flags[x] & 0x80
-        model = enemies.UNBOUNDED - enemies.update_body(st, enemies.UNBOUNDED)[0]
+        model = (
+            enemies.UNBOUNDED
+            - enemies.update_body(st, enemies.UNBOUNDED, badline.frame_clock(False))[0]
+        )
         c0 = cpu.processorCycles
         state["stop"] = False
         oracle.call(cpu, mem, 0x16E6, x=x, state=state)
@@ -614,4 +700,665 @@ def test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count(
         if dispatched:
             assert model == rom, f"ls{landscape:04x} slot {x}: {model} != {rom}"
             checked += 1
+            longest = max(longest, rom)
     assert checked > 50
+    if landscape == 0x9795:  # eighteen frames of foreground in one round
+        assert longest > 250_000, longest
+
+
+def _aim_at(state, observer, target):
+    """The observer facing that puts ``target`` dead ahead ($0C57 == $0A)."""
+    ra = relative.relative_angles(state, observer, target)
+    return (int(state.obj_h_angle[observer]) + ra["c57"] - 0x0A) & 0xFF
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_see_cost_model_matches_the_roms_own_1887(landscape):
+    """$1887 priced and answered from state against the real 6502, per call.
+
+    Every occupied slot as target, as the robot the $17B2 scan asks for and as its own
+    type (the $1AB0 tree/boulder call, the only $1887 whose $18DA takes the one-probe
+    branch), from every enemy aimed at the player and turned away from it -- so the
+    $1893/$189D rejects, the $18CA FOV reject, the partial and the full-sight marches
+    are all covered.  The exposure byte $0014 the answer rides on is compared too."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    player = snap[mm.PLAYER_OBJECT]
+    seen = set()
+    for e in range(8):
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+            continue
+        aim = _aim_at(base, e, player)
+        for facing in (aim, (aim + 128) & 0xFF):
+            for target in range(mm.NUM_SLOTS):
+                for etype in (mm.T_ROBOT, int(base.obj_type[target])):
+                    mem[:] = bytearray(snap)
+                    mem[mm.OBJECTS_H_ANGLE + e] = facing
+                    mem[0x6E] = e  # $16FF/$1773: the observer $8401 reads
+                    mem[mm.FOV_WIDTH] = enemies.FOV_SCAN  # $16F2
+                    st = State.from_mem(bytes(mem))
+                    see = relative.can_see_object(
+                        st, e, target, etype, enemies.FOV_SCAN
+                    )
+                    c0 = cpu.processorCycles
+                    mstate["stop"] = False
+                    oracle.call(cpu, mem, 0x1887, a=etype, y=target, state=mstate)
+                    rom = cpu.processorCycles - c0
+                    assert see["cycles"] == rom, (
+                        f"ls{landscape:04x} obs {e} tgt {target} type {etype}: "
+                        f"{see['cycles']} != {rom}"
+                    )
+                    assert st.mem[0x0014] == mem[0x0014]
+                    seen.add(
+                        "empty"
+                        if base.obj_flags[target] & 0x80
+                        else (
+                            "wrong_type"
+                            if not see["in_slot"]
+                            else (
+                                "reject"
+                                if not see["in_fov"]
+                                else ("full" if see["full"] else "partial")
+                            )
+                        )
+                    )
+    assert seen == {"empty", "wrong_type", "reject", "partial", "full"}
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_tile_scan_cost_model_matches_the_roms_own_1ab0(landscape):
+    """$1AB0 priced and decided from state against the real 6502, call for call.
+
+    A freshly generated board stacks nothing, so its $1AB0 only ever walks the empty
+    ($1AB5), rejected ($1AC0) and wrong-top ($1AE1) exits -- the drain half of the loop
+    ($1AC2 tile fetch, the $1AE3 JSR $1887 and the $1AEA hit) needs an object standing
+    on a stack, so the sweep restacks every top-of-tile tree/boulder as one.  A direct
+    call is first checked against $1AB0 as the play round itself reaches it."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+
+    def rom_call(image, enemy):
+        c, m, ms = oracle.wrap_image(image)
+        m[0x6E] = enemy
+        c0 = c.processorCycles
+        ms["stop"] = False
+        oracle.call(c, m, 0x1AB0, state=ms)
+        return c.processorCycles - c0, c.p & 1, m[mm.TARGETED_OBJECT_SLOT]
+
+    def model_call(image, enemy):
+        st = State.from_mem(bytes(image))
+        budget, _index, tb = enemies._find_drainable_boulder_or_tree(
+            st, enemy, enemies.UNBOUNDED, mm.NUM_SLOTS - 1, badline.frame_clock(False)
+        )
+        return passcost.TILE_SCAN_ENTRY + enemies.UNBOUNDED - budget, tb
+
+    # the direct call is the same call the round makes: same image, same cycles
+    inplay = 0
+    for _ in range(300):
+        if inplay >= 2:
+            break
+        mstate["stop"] = False
+        oracle.call(cpu, mem, oracle.TICK_COOLDOWNS, state=mstate)
+        for hit in _trace_calls(cpu, mem, mstate, oracle, 0x1AB0):
+            assert rom_call(hit[1], hit[2])[0] == hit[0]
+            inplay += 1
+    assert inplay >= 2
+
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    tops = [
+        s
+        for s in range(mm.NUM_SLOTS)
+        if not base.obj_flags[s] & 0x80
+        and base.obj_type[s] in (mm.T_TREE, mm.T_BOULDER)
+        and enemies._tile_top(base, s) == s
+    ]
+    assert tops
+    outcomes = set()
+    for otype in (mm.T_TREE, mm.T_BOULDER):
+        for e in range(8):
+            if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+                continue
+            aim = _aim_at(base, e, tops[0])
+            for facing in (aim, (aim + 96) & 0xFF, (aim + 160) & 0xFF):
+                image = bytearray(snap)
+                for s in tops:
+                    image[mm.OBJECTS_FLAGS + s] = 0x40  # $1AB9: standing on a stack
+                    image[mm.OBJECTS_TYPE + s] = otype
+                image[mm.OBJECTS_H_ANGLE + e] = facing
+                image[0x6E] = e
+                image[mm.FOV_WIDTH] = enemies.FOV_SCAN
+                model, tb = model_call(image, e)
+                rom, carry, slot = rom_call(bytes(image), e)
+                assert model == rom, f"ls{landscape:04x} enemy {e} type {otype}"
+                assert (tb >= 0) == (carry == 0)  # $1AED CLC hit / $1AF2 SEC exhausted
+                if tb >= 0:
+                    assert tb == slot
+                outcomes.add(tb >= 0)
+    assert outcomes == {True, False}
+
+
+def _trace_calls(cpu, mem, mstate, oracle, target):
+    """[(cycles, image at entry, $6E)] for each ``target`` call one $16B5 round makes."""
+    ret, hits, inside = 0xFFF0, [], None
+    mem[ret] = 0x60
+    cpu.a = cpu.x = cpu.y = 0
+    sp = cpu.sp
+    mem[0x0100 + sp] = (ret - 1) >> 8
+    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
+    cpu.sp = (sp - 2) & 0xFF
+    cpu.pc = oracle.UPDATE_ENEMIES
+    mstate["stop"] = False
+    while cpu.pc != ret and not mstate["stop"]:
+        if inside is None and cpu.pc == target:
+            inside = (cpu.sp, cpu.processorCycles, bytes(mem), mem[0x6E])
+        elif inside is not None and cpu.sp > inside[0]:
+            hits.append((cpu.processorCycles - inside[1], inside[2], inside[3]))
+            inside = None
+        cpu.step()
+    return hits
+
+
+_CORE_ADDRS = tuple(a for a, _n, tier in statecmp.FIELDS if tier == statecmp.CORE)
+BODY_EXIT = 0x16D6  # every consider_enemy_state exit is a JMP $16D6
+
+
+def _rom_body_writes(oracle, image, enemy):
+    """[(cycle, addr, value)] for each CORE byte the ROM's $16E6 changes, and its total.
+
+    Page 1 carries the object flags and v_angle arrays as well as the stack, so any
+    address the run's own stack pointer reached is dropped."""
+    cpu, mem, mstate = oracle.wrap_image(bytes(image))
+    cpu.a, cpu.x, cpu.y = 0, enemy, 0
+    cpu.pc = 0x16E6
+    mstate["stop"] = False
+    shadow = {a: mem[a] for a in _CORE_ADDRS}
+    pending, out = [], []
+
+    def note(addr, value):
+        if value != shadow[addr]:
+            pending.append((addr, value))
+        shadow[addr] = value
+
+    cpu._memory.subscribe_to_write(
+        _CORE_ADDRS, note
+    )  # pylint: disable=protected-access
+    c0, low, steps = cpu.processorCycles, cpu.sp, 0
+    while cpu.pc != BODY_EXIT and not mstate["stop"] and steps < 400_000:
+        cpu.step()
+        steps += 1
+        low = min(low, cpu.sp)
+        if pending:
+            at = cpu.processorCycles - c0
+            out.extend((at, a, v) for a, v in pending)
+            del pending[:]
+    assert low >= 0x80, "the stack reached the object arrays: page 1 is ambiguous"
+    stack = range(0x0100 + low, 0x0200)
+    return [w for w in out if w[1] not in stack], cpu.processorCycles - c0
+
+
+def _body_cases(oracle, landscape):
+    """(enemy, image) per aimed and turned-away body, with the meanie bytes dirtied.
+
+    A generated board leaves $1973's four writes at the values it already rewrites, so
+    the sweep would never see them land; seeding them non-default makes them changes."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, mstate = oracle.generate_machine(landscape)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    mem[mm.PLAYER_NOT_ACTED] = 0
+    snap = bytes(mem)
+    base = State.from_mem(snap)
+    player = mem[mm.PLAYER_OBJECT]
+    for e in range(8):
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+            continue
+        aim = _aim_at(base, e, player)
+        for off in (0, 96):
+            image = bytearray(snap)
+            image[mm.OBJECTS_H_ANGLE + e] = (aim + off) & 0xFF
+            image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+            image[mm.ENEMIES_FAILED_MEANIE_MEMORY + e] = 0x11
+            image[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + e] = 0x22
+            image[mm.ENEMIES_MEANIE_SEARCH_OBJECT + e] = 0x33
+            image[mm.CURSOR] = e
+            image[0x6E] = e
+            yield e, image
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_body_commits_its_core_writes_at_the_roms_own_cycle(landscape, monkeypatch):
+    """Every CORE byte $16E6 writes lands in the sim on the ROM's own cycle, exactly.
+
+    Stepping the real $16E6 records the cycle each CORE byte changes at; the model
+    given one cycle less must not have made that write and given that cycle must have.
+    $1F9F/$3470 are RTS-stubbed on both sides, as the $16E6 cost test stubs them."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
+    )
+    monkeypatch.setattr(passcost, "MEANIE_ROTATE", passcost.MEANIE_ROTATE - 323 + 6)
+    monkeypatch.setattr(enemies, "AT_ROTATE_END", enemies.AT_ROTATE_END - 323 + 6)
+    oracle = _oracle()
+
+    def at(image, budget, addr):
+        st = State.from_mem(bytes(image))
+        enemies.update_body(st, budget, badline.frame_clock(False))
+        return st.mem[addr]
+
+    seen = set()
+    for enemy, image in _body_cases(oracle, landscape):
+        writes, _total = _rom_body_writes(oracle, image, enemy)
+        for cycle, addr, value in writes:
+            where = f"ls{landscape:04x} enemy {enemy} ${addr:04X} at {cycle}"
+            assert at(image, cycle - 1, addr) != value, f"{where}: committed early"
+            assert at(image, cycle, addr) == value, f"{where}: not committed"
+        seen.update(a for _c, a, _v in writes)
+    assert seen, f"ls{landscape:04x}: no CORE write to check"
+
+
+def test_every_write_cycle_offset_sums_to_its_own_segment_term():
+    """The ladder's rungs are a partition of the segment terms, not new numbers.
+
+    Each rung is the instructions between two CORE writes, so the rungs of a segment
+    must add up to the whole-segment cost the $16E6 oracle already pins."""
+    assert passcost.ENTRY_UPDATE_CD + passcost.ENTRY_FOV == passcost.CONSIDER_ENTRY
+    assert (
+        passcost.TARGET_SLOT + passcost.TARGET_EXPOSURE + passcost.TARGET_TIMER
+        == passcost.TARGET_HEAD
+    )
+    assert passcost.TARGET_ARM + passcost.TARGET_ARM_TAIL == passcost.TARGET_FIRST
+    assert passcost.TREE_CLEAR + passcost.TREE_SCAN_CALL == passcost.TREE_CALL
+    meanie_tail = (
+        passcost.MEANIE_INIT_MEMORY
+        + passcost.MEANIE_INIT_SCANS
+        + passcost.MEANIE_INIT_SEARCH
+        + passcost.MEANIE_INIT_RTS
+    )
+    assert passcost.ROTATE_ARM + meanie_tail == 6 + passcost.MEANIE_INIT  # $1818 JSR
+    assert (
+        passcost.ROTATE_TURN
+        + passcost.ROTATE_RELOAD
+        + passcost.ROTATE_ARM
+        + meanie_tail
+        + passcost.ROTATE_TAIL
+        == passcost.ROTATE
+    )
+    assert enemies.AT_ROTATE_END == passcost.ROTATE_GATE + passcost.ROTATE
+    assert (
+        passcost.PARTIAL_ARM_MEANIE + meanie_tail + passcost.PARTIAL_ARM_TAIL
+        == passcost.PARTIAL_ARM
+    )
+    assert enemies.AT_ENTRY_END == passcost.CONSIDER_ENTRY
+    assert enemies.AT_TARGET_TIMER == passcost.TARGET_HEAD
+    assert enemies.AT_PARTIAL_END == passcost.SCAN_END_PARTIAL + passcost.PARTIAL_ARM
+
+
+def _rom_boundaries(oracle, image, start, stop, **regs):
+    """{pc: cycles from ``start``} at every instruction boundary before ``stop``."""
+    cpu, _mem, mstate = oracle.wrap_image(bytes(image))
+    cpu.pc = start
+    for name, value in regs.items():
+        setattr(cpu, name, value)
+    mstate["stop"] = False
+    c0, out, steps = cpu.processorCycles, {}, 0
+    while cpu.pc != stop and not mstate["stop"] and steps < 4000:
+        out.setdefault(cpu.pc, cpu.processorCycles - c0)
+        cpu.step()
+        steps += 1
+    out.setdefault(cpu.pc, cpu.processorCycles - c0)
+    return out
+
+
+@pytest.mark.oracle
+def test_a_resumed_segment_picks_up_at_the_roms_own_cycle_inside_it():
+    """``resume_from_stack``'s paid is the ROM's own spend at the PC it interrupted.
+
+    A resume that under-counted would repeat a write the machine already made and one
+    that over-counted would skip a write it had not reached; the model's per-PC tables
+    are checked against the cycles the real $16E6, $17F9 and $1825 lines spend."""
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(0x0335)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    mem[0x3470] = 0x60  # RTS: the rotate's tune player is out of the ladder
+    e = next(
+        s
+        for s in range(8)
+        if not mem[mm.OBJECTS_FLAGS + s] & 0x80
+        and mem[mm.OBJECTS_TYPE + s] in mm.ENEMY_TYPES
+    )
+    image = bytearray(mem)
+    image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+    image[mm.ENEMIES_ROTATION_COOLDOWN + e] = 0
+    image[mm.ENEMIES_DRAINING_COOLDOWN + e] = 0
+    image[mm.CURSOR] = e
+    lines = (
+        (enemies.BODY_ENTRY, 0x16E6, 0x16F7, {"x": e}),
+        (enemies.BODY_ROTATE, 0x17F9, 0x181B, {"x": e}),
+        (enemies.BODY_PARTIAL, 0x17CD, 0x1825, {"x": e}),
+        (enemies.BODY_TARGET, 0x1825, 0x183A, {"x": e, "y": e}),
+    )
+    checked = 0
+    for stage, start, stop, regs in lines:
+        rom = _rom_boundaries(oracle, image, start, stop, **regs)
+        table = dict(enemies._STAGE_SPENT[stage])
+        base = enemies._MEANIE_INIT_BASE.get(stage)
+        if base is not None:
+            table.update({a: base + c for a, c in enemies._MEANIE_INIT_SPENT.items()})
+        for pc, spent in sorted(table.items()):
+            if pc not in rom:
+                continue
+            assert spent == rom[pc], f"stage {stage} ${pc:04X}: {spent} != {rom[pc]}"
+            assert enemies._stage_paid(stage, pc, pc) == spent
+            checked += 1
+    assert checked >= 40
+    sp = 0xF0  # the six bytes $95E9 pushes over the interrupted $1810
+    page = bytearray(0x100)
+    page[(sp + 1) & 0xFF], page[(sp + 2) & 0xFF] = e, e
+    page[(sp + 5) & 0xFF], page[(sp + 6) & 0xFF] = 0x10, 0x18
+    resume = enemies.resume_from_stack(image, sp, page)
+    assert resume[1] == enemies.BODY_ROTATE
+    assert resume[5] == enemies.AT_ROTATE_ANGLE - 5  # $1810 has not stored yet
+
+
+@pytest.mark.oracle
+def test_a_body_split_at_every_single_cycle_repeats_and_skips_nothing():
+    """Suspending the rotating body at EVERY cycle leaves the same CORE bytes.
+
+    The coarse split sweep steps in fortieths, which can walk over a ladder whose
+    rungs are seven cycles apart; this one lands on every one of them."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    clk = badline.frame_clock(False)
+
+    def run(image, enemy, first):
+        st = State.from_mem(bytes(image))
+        budget, stage, index, partial, paid = enemies._consider_enemy_state(
+            st, enemy, first, enemies.BODY_ENTRY, 0, -1, 0, clk
+        )
+        spent = first - budget
+        while stage != enemies.BODY_DONE:
+            grant = budget + enemies.UNBOUNDED
+            budget, stage, index, partial, paid = enemies._consider_enemy_state(
+                st, enemy, grant, stage, index, partial, paid, clk
+            )
+            spent += grant - budget
+        fields = (
+            (mm.OBJECTS_H_ANGLE, mm.NUM_SLOTS),
+            (mm.ENEMIES_UPDATE_COOLDOWN, 8),
+            (mm.ENEMIES_ROTATION_COOLDOWN, 8),
+            (mm.ENEMIES_DRAINING_COOLDOWN, 8),
+            (mm.ENEMIES_TARGETED_OBJECT, 8),
+            (mm.ENEMIES_MEANIE_OBJECT, 8),
+            (mm.ENEMIES_FAILED_MEANIE_MEMORY, 8),
+            (mm.ENEMIES_MEANIE_ATTEMPT_SCANS, 8),
+            (mm.ENEMIES_MEANIE_SEARCH_OBJECT, 8),
+        )
+        return spent, tuple(bytes(st.mem[a : a + n]) for a, n in fields)
+
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.generate_machine(0x0042)
+    oracle.prime_enemy_driver(cpu, mem, mstate)
+    e = next(
+        s
+        for s in range(8)
+        if not mem[mm.OBJECTS_FLAGS + s] & 0x80
+        and mem[mm.OBJECTS_TYPE + s] in mm.ENEMY_TYPES
+    )
+    image = bytearray(mem)
+    image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+    image[mm.ENEMIES_ROTATION_COOLDOWN + e] = 0
+    image[mm.ENEMIES_DRAINING_COOLDOWN + e] = 0
+    image[mm.ENEMIES_FAILED_MEANIE_MEMORY + e] = 0x11
+    image[mm.ENEMIES_MEANIE_ATTEMPT_SCANS + e] = 0x22
+    image[mm.ENEMIES_MEANIE_SEARCH_OBJECT + e] = 0x33
+    image[mm.CURSOR] = e
+    whole = run(image, e, enemies.UNBOUNDED)
+    assert whole[0] > 500
+    for first in range(1, whole[0] + 1):
+        assert run(image, e, first) == whole, f"split at {first}"
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_body_split_is_exact_wherever_the_frame_ends(landscape, monkeypatch):
+    """Suspending $16E6 anywhere costs and does exactly what running it whole does.
+
+    The body is charged in units that are not one instruction wide, so a frame boundary
+    inside one leaves the model mid-unit; every resume point must still spend the same
+    total and leave the same CORE bytes, including the ones where the resume re-runs an
+    $1887 whose cycles are already paid ($0C56/$0CDD/$0C76 rotate on every call)."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(
+        relative, "update_object_on_screen_cycles", lambda state, target: (6, 0, 0, 0)
+    )
+    fields = (
+        (mm.OBJECTS_FLAGS, mm.NUM_SLOTS),
+        (mm.OBJECTS_TYPE, mm.NUM_SLOTS),
+        (mm.OBJECTS_H_ANGLE, mm.NUM_SLOTS),
+        (mm.ENEMIES_UPDATE_COOLDOWN, 8),
+        (mm.ENEMIES_DRAINING_COOLDOWN, 8),
+        (mm.ENEMIES_TARGETED_OBJECT, 8),
+        (mm.ENEMIES_ROTATION_COOLDOWN, 8),
+        (mm.ENEMIES_MEANIE_OBJECT, 8),
+    )
+
+    def core(st):
+        return tuple(bytes(st.mem[a : a + n]) for a, n in fields)
+
+    def run(image, enemy, first):
+        st = State.from_mem(bytes(image))
+        clk = badline.frame_clock(False)
+        budget, stage, index, partial, paid = enemies._consider_enemy_state(
+            st, enemy, first, enemies.BODY_ENTRY, 0, -1, 0, clk
+        )
+        spent = first - budget
+        while stage != enemies.BODY_DONE:
+            grant = budget + enemies.UNBOUNDED
+            budget, stage, index, partial, paid = enemies._consider_enemy_state(
+                st, enemy, grant, stage, index, partial, paid, clk
+            )
+            spent += grant - budget
+        return spent, core(st)
+
+    mem = bytearray(_oracle().generate(landscape))
+    base = State.from_mem(bytes(mem))
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for e in range(8):
+        if base.obj_flags[e] & 0x80 or base.obj_type[e] not in mm.ENEMY_TYPES:
+            continue
+        aim = _aim_at(base, e, player)
+        for off in (0, 5, 96):
+            image = bytearray(mem)
+            image[mm.OBJECTS_H_ANGLE + e] = (aim + off) & 0xFF
+            image[mm.ENEMIES_UPDATE_COOLDOWN + e] = 0
+            image[mm.CURSOR] = e
+            whole = run(image, e, enemies.UNBOUNDED)
+            for first in range(1, whole[0] + 1, max(1, whole[0] // 40)):
+                assert (
+                    run(image, e, first) == whole
+                ), f"ls{landscape:04x} enemy {e} split at {first}"
+                checked += 1
+    assert checked > 100
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_object_screen_span_is_exact_against_the_roms_own_209b(landscape):
+    """$209B priced and decided from state, cycle for cycle, against the real 6502.
+
+    Every occupied slot at every 8th player facing, so all four exits ($209F the
+    player, $20D6 off the right, $20EB left of the view, $2103 zero width) and the
+    on-screen branch are covered; the whole $1F9F is then checked on the rejects."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    cpu, mem, mstate = _oracle().generate_machine(landscape)
+    mem[0xFFF0] = 0x60
+    player = mem[mm.PLAYER_OBJECT]
+    seen = set()
+    for slot in list(range(8)) + [player]:
+        if mem[mm.OBJECTS_FLAGS + slot] & 0x80 and slot != player:
+            continue
+        for h_angle in range(0, 256, 8):
+            mem[mm.OBJECTS_H_ANGLE + player] = h_angle
+            mem[0x0091], mem[0x006E] = slot, player
+            rom = _run(cpu, mem, mstate, 0x209B)
+            rom_visible = not cpu.p & 0x01
+            state = State(bytearray(mem))
+            visible, left, columns, span, cycles = relative.object_screen_span(
+                state, slot
+            )
+            assert (cycles, visible) == (rom, rom_visible), (slot, h_angle)
+            if visible:
+                assert (left, columns, span) == (
+                    mem[0x0C62],
+                    mem[0x0C69],
+                    mem[0x211B],
+                )
+                seen.add("visible")
+                continue
+            seen.add("player" if slot == player else "reject")
+            rom = _run(cpu, mem, mstate, 0x1F9F)
+            state = State(bytearray(mem))
+            assert relative.update_object_on_screen_cycles(state, slot) == (
+                rom,
+                0,
+                0,
+                0,
+            )
+    assert seen == {"visible", "reject", "player"}
+
+
+def _oracle():
+    from sentinel.tests import oracle  # pylint: disable=import-outside-toplevel
+
+    return oracle
+
+
+def _run(cpu, mem, mstate, addr):
+    """One JSR-style call at `addr` on the oracle machine; returns its cycles."""
+    mstate["stop"] = False
+    c0 = cpu.processorCycles
+    _oracle().call(cpu, mem, addr)
+    return cpu.processorCycles - c0
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
+    """RENDER_COST_BACKEND=py65 prices $1FA4..$1F9E by running the real $1F9F.
+
+    The proxy prices the same camera through the same $29C7 window and adds the $2211
+    strip clear, the $9730 buffer flush and $1F9F's own line, all off the uncapped
+    $211B span. With the fill emulated block for block the residual is two-sided and
+    is the object term's, not the terrain's ($21AE is 65% of a strip's own $2625)."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    mem = bytearray(_oracle().generate(landscape))
+    state = State(mem)
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for h_angle in range(0, 256, 16):
+        state.obj_h_angle[player] = h_angle
+        for slot in range(8):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            visible, left, cols, span, _cyc = relative.object_screen_span(state, slot)
+            if not visible:
+                continue
+            monkeypatch.setenv("RENDER_COST_BACKEND", "py65")
+            exact = projector.strip_replot_frames(state, slot, left, cols, span)
+            monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
+            proxy = projector.strip_replot_frames(state, slot, left, cols, span)
+            assert exact > 1.0  # the replot is always many frames, never a redraw
+            assert 0.98 <= proxy / exact <= 1.02
+            checked += 1
+            break
+        if checked >= 2:
+            break
+    assert checked >= 1
+
+
+def _rom_replot_line(state, target):
+    """The ROM's own $1FA4..$1F9E on ``target``, less every $1FFC JSR $2625 under it."""
+    oracle = _oracle()
+    cpu, mem, mstate = oracle.machine_from_image(state.mem)
+    plot = [0]
+    inside = [None, 0]
+
+    def trace(pc):
+        if inside[0] is None:
+            if pc == oracle.PLOT_WORLD:
+                inside[0], inside[1] = cpu.sp, cpu.processorCycles
+        elif cpu.sp > inside[0]:
+            plot[0] += cpu.processorCycles - inside[1]
+            inside[0] = None
+
+    frames = oracle.update_object_cost(
+        cpu, mem, mstate, target, trace=trace, from_pc=oracle.REPLOT_LINE
+    )
+    return round(frames * oracle.FRAME_CYCLES) - plot[0], mem
+
+
+@pytest.mark.oracle
+@pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
+def test_the_strip_replot_line_is_the_roms_own_1fa4(landscape):
+    """$1FA4..$1F9E priced from state, cycle for cycle, less the $2625 chunks.
+
+    The $2211 clear and the $207E $9730 flush both run over the uncapped $211B span,
+    the $29C7 window and the $1FC2 camera shift once per <=20-column chunk."""
+    from sentinel.state import State  # pylint: disable=import-outside-toplevel
+
+    mem = bytearray(_oracle().generate(landscape))
+    state = State(mem)
+    player = mem[mm.PLAYER_OBJECT]
+    checked = 0
+    for h_angle in range(0, 256, 8):
+        state.obj_h_angle[player] = h_angle
+        for slot in range(8):
+            if state.obj_flags[slot] & 0x80:
+                continue
+            visible, left, cols, span, _cyc = relative.object_screen_span(state, slot)
+            if not visible:
+                continue
+            rom, rom_mem = _rom_replot_line(state, slot)
+            assert (rom_mem[0x211B], rom_mem[0x211C]) == (span, left)
+            chunks = projector.replot_chunks(left, span)
+            assert chunks[0][1] == cols
+            model = projector.strip_line_cycles(
+                span, len(chunks), state.mem[projector.SCREEN_SCROLL]
+            )
+            assert model == rom, (h_angle, slot, span, model, rom)
+            checked += 1
+            break
+        if checked >= 2:
+            break
+    assert checked >= 2
+
+
+def test_the_strip_buffer_window_is_the_roms_own_29c7():
+    """$29C7 halves the $0C69 column count into $0007, folds it into $0012 and rotates
+    the halving's carry into $0028, so an odd strip drops the left column's near half.
+
+    A 40-column A is the whole play screen, which is $2993 mode 0's own triple."""
+    assert projector.strip_window(40) == projector.BUF_WINDOW[projector.PLAY_MODE]
+    for columns in range(1, 21):
+        left, right, frac = projector.strip_window(columns)
+        assert (left, right) == (columns >> 1, ((columns >> 1) >> 1) ^ 0x80)
+        assert frac == (0x80 if columns & 1 else 0x00)
+        assert projector._window_columns((left, right, frac)) == columns

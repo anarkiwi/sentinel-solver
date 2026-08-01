@@ -231,12 +231,21 @@ _PN = "sentinel.pancost"
 _EN = "sentinel.enemies"
 _ENJ = "sentinel.enemies_jit"
 _PC = "sentinel.passcost"
+_BL = "sentinel.badline"
+_WM = "sentinel.writemap"
+_BLJ = "sentinel.badline_jit"
 _MM = "sentinel.memmap"
 _LOS = "sentinel.los"
 _KBD = "driver.kbd_aim"
 _CORE = "driver.core"
 _TICK_EVIDENCE = "test_the_cooldown_tick_prices_every_live_130c_sample"
 _BODY_ORACLE = "test_the_body_cost_model_matches_the_roms_own_16e6_cycle_count"
+_WRITE_CYCLE_ORACLE = "test_the_body_commits_its_core_writes_at_the_roms_own_cycle"
+
+
+def _write_cycle(module, note):
+    """A sub-segment length that puts a CORE write on the ROM's own cycle."""
+    return entry(module, DERIVED, note, _WRITE_CYCLE_ORACLE)
 
 
 def _tick(note):
@@ -246,7 +255,18 @@ def _tick(note):
 
 _ROW = "ray-march/sweep iteration cap; unmeasured"
 _RELOAD = "ROM cooldown reload value; no derivation test"
+_REDRAW = (
+    "$1F9F update_object_on_screen around the $209B screen-span query, counted "
+    "instruction by instruction against the ROM's own $209B/$1F9F"
+)
 _GUARD = "wall-clock guard; unmeasured"
+_REPLOT_LINE = "test_the_strip_replot_line_is_the_roms_own_1fa4"
+
+
+def _line(note):
+    """A counted piece of $1FA4..$1F9E, the strip replot's own line around $2625."""
+    return entry(_PC, DERIVED, note, _REPLOT_LINE)
+
 
 REGISTRY = {
     "FRAME_TICKS": _u(_AC, "unit scalar; no test pins it to a ROM primitive"),
@@ -314,28 +334,79 @@ REGISTRY = {
     ),
     "MEANIE_ARM_FRAMES": _d(_PB, "$171B half-turn x $173A rounds x UNIT_FRAMES"),
     "FRAME_CYCLES": _d(_PR, "PAL frame cycle count 19656"),
-    "PAL_FRAME_CYCLES": _d(_PC, "PAL 6569: 312 raster lines x 63 cycles"),
+    "PAL_FRAME_CYCLES": _d(_BL, "PAL 6569: 312 raster lines x 63 cycles"),
+    "_PAL_FRAME_CYCLES": _d(_BLJ, "passcost.PAL_FRAME_CYCLES, bound njit-visible"),
+    "LINE_CYCLES": entry(
+        _BL,
+        DERIVED,
+        "PAL_FRAME_CYCLES / 312; the badline windows sit 8 lines apart on it",
+        "test_the_badline_window_is_the_25_lines_of_a_pal_frame",
+    ),
+    "DEC_ABS_CYCLES": entry(
+        _WM,
+        MEASURED,
+        "jennings' own cycletime reads 3 for $CE DEC abs; 6 is what the machine takes, "
+        "as its five RMW-abs siblings do, on every live $9630 marker and every other "
+        "opcode class the captures timed",
+        "test_the_opcode_cost_table_prices_every_live_instruction",
+    ),
+    "WRITE_CYCLES": entry(
+        _BL,
+        DERIVED,
+        "the NMOS 6510's own write cycles per opcode; a run is at most two, which is "
+        "why a badline never steals 40, and 4824 live badlines are each BADLINE_STEAL "
+        "less the run at their BA window",
+        "test_every_live_badline_steal_is_the_derived_one",
+    ),
     "IRQ_CYCLES": entry(
         _PC,
         MEASURED,
-        "BADLINE_FRAME + the four short raster interrupts + IRQ_BODY. The handler is "
-        "COUNTED off the image (KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, "
-        "so py65 walks it); only the VIC-II DMA steal is hardware, and BADLINE_FRAME is "
-        "the frozen-clock $1289 rate on three boards to under a pass in 50000 "
+        "the four short raster interrupts + IRQ_BODY, both COUNTED off the image "
+        "(KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, so py65 walks it). "
+        "The VIC-II DMA steal is no longer in it: sentinel.badline charges each of the "
+        "25 windows off the term the model is executing there "
         "(fixtures/live_pass_cycles.json frozen_idle_rate)",
         "test_the_frozen_frame_budget_reproduces_the_live_idle_pass_count",
     ),
     "FOREGROUND_CYCLES": _d(_PC, "PAL_FRAME_CYCLES - IRQ_CYCLES"),
-    "ROTATE_REDRAW": entry(
+    "REDRAW_CALL": _d(_PC, _REDRAW),
+    "REDRAW_NONE": _d(_PC, _REDRAW),
+    "REDRAW_PLOT_ENTRY": entry(
         _PC,
-        MEASURED,
-        "$1F9F update_object_on_screen, the redraw a $1805 rotation forces; the mean "
-        "of the 16 live rotations in fixtures/live_pass_cycles.json (1576..1843, 3 "
-        "boards). It varies with the enemy's screen geometry, so the mean is a "
-        "central value, not a bound",
-        "test_rotate_redraw_matches_the_live_object_redraw",
+        DERIVED,
+        "$1FA2 BCS not taken. Past it lies $1FA4..$1F9E -- the $2211 clear, the "
+        "$1FFC JSR $2625 chunks at the $1FC2 camera and the $9730 flush -- which "
+        "projector.strip_replot_frames prices, exactly under "
+        "RENDER_COST_BACKEND=py65, else with the render_cost proxy for $2625",
+        "test_the_object_screen_span_is_exact_against_the_roms_own_209b",
     ),
-    "_ROTATE_REDRAW": _d(_ENJ, "jit alias of passcost.ROTATE_REDRAW"),
+    "REDRAW_CLEAR_CALL": _line("$1FA4..$1FBF, up to and including the JSR $2211"),
+    "REDRAW_CHUNK_HEAD": _line("$1FC2..$1FFC, the camera shift and the two JSRs"),
+    "REDRAW_CHUNK_TAIL": _line("$1FFF..$201C, the camera restore and the width step"),
+    "REDRAW_CHUNK_MORE": _line("$201C..$2029, re-entering $1FC2 with the remainder"),
+    "REDRAW_CHUNK_RESUME": _line("$1FEB/$1FED on every chunk after the first"),
+    "REDRAW_TAIL": _line("$202C..$206A, with $992C 22 and $9A3C 16 counted in"),
+    "REDRAW_FLUSH_LOOP": _line("$206F..$2083, one $207E JSR $9730 flush's own loop"),
+    "REDRAW_FLUSH_ENTRY": _line("$206C JMP $207C, less the first step and last BNE"),
+    "REDRAW_EXIT": _line("$2085..$2092 and the $1F93 flag reset and RTS"),
+    "CHUNK_CYCLES": entry(
+        _PR,
+        DERIVED,
+        "one $1FC2..$201C strip chunk: REDRAW_CHUNK_HEAD + REDRAW_CHUNK_TAIL + the "
+        "BUF_WINDOW_CALL its $1FE5 JSR $29C7 buys",
+        _REPLOT_LINE,
+    ),
+    "SCREEN_SCROLL": entry(
+        _PR,
+        DERIVED,
+        "$0095, the first screen bank $2043 copies into $0097 for the $9730 flush "
+        "loop; $9730's own row window skips bank $0095 - 1, so the count of $3A40 "
+        "page-straddling banks it copies, and its cost, follow from it",
+        _REPLOT_LINE,
+    ),
+    "_REDRAW_CALL": _d(_ENJ, "jit alias of passcost.REDRAW_CALL"),
+    "_REDRAW_NONE": _d(_ENJ, "jit alias of passcost.REDRAW_NONE"),
+    "_REDRAW_PLOT_ENTRY": _d(_ENJ, "jit alias of passcost.REDRAW_PLOT_ENTRY"),
     "PARTIAL_ARM": entry(
         _PC,
         DERIVED,
@@ -343,6 +414,27 @@ REGISTRY = {
         "player, counted instruction by instruction against the per-round $16E6 oracle",
         _BODY_ORACLE,
     ),
+    "TARGET_ARM": _write_cycle(
+        _PC, "$1833 BCS nt 2 + $1835 LDA #$78 2 + $1837 STA $0C20,X 5"
+    ),
+    "TARGET_ARM_TAIL": _write_cycle(_PC, "$183A JMP $16D6"),
+    "ROTATE_ARM": _write_cycle(
+        _PC, "$1818 JSR $1973 6 + $1973 LDA #$80 2 + $1975 STA $0CA0,X 5"
+    ),
+    "PARTIAL_ARM_MEANIE": _write_cycle(
+        _PC, "$17D5 BEQ nt 2 + $17D7 JSR 6 + $1973 LDA 2 + $1975 STA $0CA0,X 5"
+    ),
+    "PARTIAL_ARM_TAIL": _write_cycle(
+        _PC, "$17DA LDA #$40 2 + $17DC STA $14 3 + $17DE BNE $1825 4"
+    ),
+    "AT_TARGET_ARM": _write_cycle(
+        _EN, "TARGET_HEAD + TARGET_ARM: $1837 STA $0C20,X, from $1825"
+    ),
+    "AT_TARGET_ARM_END": _write_cycle(
+        _EN, "+ TARGET_ARM_TAIL: $183A JMP $16D6, from $1825"
+    ),
+    "_TGT_ARM": _d(_ENJ, "jit alias of enemies.AT_TARGET_ARM"),
+    "_TGT_ARM_END": _d(_ENJ, "jit alias of enemies.AT_TARGET_ARM_END"),
     "TARGET_WAIT": entry(
         _PC,
         DERIVED,
