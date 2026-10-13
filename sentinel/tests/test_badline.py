@@ -180,7 +180,7 @@ def test_every_badline_window_lands_in_a_run_the_cost_model_anchors():
     a $XXXX the cost model itself counts from."""
     windows = sum(b["windows"] for b in _live().values())
     covered = sum(b["anchor_covered"] for b in _live().values())
-    assert windows > 6000 and covered == windows
+    assert 6000 < windows == covered 
     march = _live()["9795_march"]
     assert march["window_routine"]["$1CBB march"] > march["windows"] // 2
 
