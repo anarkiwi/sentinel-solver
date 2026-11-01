@@ -1128,8 +1128,9 @@ CUDA simulator keeps numpy scalar widths, so int16/int32 inputs are widened with
 at the first use. `test_kern.py` also asserts CPU/CUDA bit identity on random lattice slices
 of several boards, on a real device or, with `NUMBA_ENABLE_CUDASIM=1`, in the simulator
 (the `cudasim` CI job, built from the `Dockerfile`). `python -m sentinel.tests.trace_suite
---out FILE` records the nine suite boards' full action traces and `--compare FILE` gates a
-change on byte-identical traces under either backend.
+--out FILE` records the nine suite boards' results with a digest of each full action trace
+(committed as `docs/results/offline.json`) and `--compare [FILE]` gates a change on identical
+results under either backend; `test_readme_results.py` replays every board against that file.
 
 ## Batched queries (`batch.py`)
 

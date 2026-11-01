@@ -1,0 +1,26 @@
+[
+ {
+  "landscape": 42,
+  "mode": "frozen",
+  "actions": 36,
+  "energy": null,
+  "media": null,
+  "digest": null
+ },
+ {
+  "landscape": 335,
+  "mode": "live",
+  "actions": 66,
+  "energy": 25,
+  "media": "docs/media/ls335_phase_win.png",
+  "digest": null
+ },
+ {
+  "landscape": 1442,
+  "mode": "live",
+  "actions": 29,
+  "energy": 5,
+  "media": "docs/media/ls1442_phase_win.png",
+  "digest": null
+ }
+]

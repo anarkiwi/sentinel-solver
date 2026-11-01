@@ -12,8 +12,7 @@ against the running game by the divergence instrument.
 
 The phase player wins **live, on the real game**, verified by the ROM's own
 landscape-complete flag (`$0CDE` bit 6) — including landscape 1442, which carries the
-game's full complement of **eight enemies** (the Sentinel and seven sentries), in 29
-actions, final energy 5:
+game's full complement of **eight enemies** (the Sentinel and seven sentries), as the results table records:
 
 ![the phase player winning eight-enemy landscape 1442 live in VICE](docs/media/ls1442_phase_win.png)
 
@@ -29,25 +28,29 @@ python -m driver.instrument 42          # race the model against the ROM, frame 
 python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```
 
-| landscape | enemies | offline | live |
-|---|---|---|---|
-| 0 | 1 | 29 | — |
-| 42 | 2 | 32 | **36 actions** (enemies frozen) |
-| 60 | 7 | 44 | — |
-| 110 | 3 | 35 | — |
-| 298 | 7 | 36 | — |
-| 321 | 7 | 28 | — |
-| 335 | 7 | 60 | **66 actions** |
-| 373 | 7 | 32 | — |
-| 1442 | 8 | 47 | **29 actions** |
+<!-- results:begin -->
+| landscape | enemies | offline actions | offline energy | live |
+|---|---|---|---|---|
+| 0 | 1 | 29 | 9 | — |
+| 42 | 2 | 32 | 2 | **36 actions** (enemies frozen)† |
+| 60 | 7 | 43 | 0 | — |
+| 110 | 3 | 51 | 11 | — |
+| 298 | 7 | 36 | 13 | — |
+| 321 | 7 | 28 | 2 | — |
+| 335 | 7 | 60 | 23 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
+| 373 | 7 | 32 | 2 | — |
+| 1442 | 8 | 45 | 18 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
 
-Offline counts are under the ROM-derived settle prices (`sentinel/settlecost.py`). The ls42
-live entry is a `driver.frozen_run` win (`update_enemies $16B5` RTS-stubbed): it verifies
-frame-cost fidelity, not survival under fire.
+† Live run recorded against an older model: its trace digest is unrecorded or differs from the current offline trace for that board.
 
-Enemy counts include the Sentinel, so eight is the game's maximum. The ls1442 live run is
-recorded in full: [media.md](docs/media.md) covers turning that AVI into the APNG above.
-A still from the ls335 win is [here](docs/media/ls335_phase_win.png).
+Regenerate with `python -m sentinel.tests.trace_suite --out docs/results/offline.json --readme`.
+<!-- results:end -->
+
+Results are generated from [docs/results/](docs/results/) (offline records with a trace
+digest, live runs with their media); the staleness tests fail when the table or the data
+drifts from the solver. Enemy counts include the Sentinel, so eight is the game's maximum.
+Settle prices, the frozen-run mode and the ls1442 media are described in
+[players.md](docs/players.md#results) and [media.md](docs/media.md).
 
 A landscape is identified by one number: the one a player types on the keypad. Every tool
 here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sentinel.isoview`
@@ -58,7 +61,7 @@ here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sent
 | Area | Path | Role |
 |------|------|------|
 | Model | `sentinel/` | standalone forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). Transition primitives are byte-for-byte against the 6502; see [architecture.md](docs/architecture.md) for what is exact and what is not |
-| Phase player | `sentinel/phase_player.py` | the default player: freedom first, then convert. Wins all eight measured boards |
+| Phase player | `sentinel/phase_player.py` | the default player: freedom first, then convert. Wins every suite board |
 | Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer` |
 | Landscape atlas | `sentinel/atlas.py`, `sentinel/statecache.py` | per-landscape metrics (enemies, energy, terrain shape) over a cache of generated boards; `--like` matches one board to another |
 | Driver | `driver/` | boot, enter a landscape, run memory-verified live keyboard operations (aim → fire → verify), record. Imports only `sentinel/` |
