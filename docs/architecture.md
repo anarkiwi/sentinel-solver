@@ -1632,6 +1632,15 @@ a whole board. The fidelity gate — restoring at tick *t* and replaying to the 
 run's own trace tail entry for entry — must assert a non-zero `actions_replayed`; both deep-copy
 bugs above first presented as `identical: true` over an empty tail.
 
+A state is named by board and action count: `replay_to(code, n)` checkpoints the first tick whose
+trace holds `n` actions, and `cached_replay` memoizes that under `out/ckpt/<signature>/`, keyed on
+every `sentinel/*.py` source since the planner decides which state an index lands on. The image is
+ROM memory, so tests regenerate it from the cached release rather than commit it
+(`test_trap_states.py`). `explain(player)` dumps what the tick weighs — each affordable climb with
+its landing verdict, and each arbitrated policy as its fork plays it, actions and final score:
+
+    python -m sentinel.tests.ckpt 9760 5
+
 **Determinism contract.** Anything whose result is compared must be bounded by node budget only,
 never a wall clock: a wall-clock cut makes the search a function of host load, and with the clock
 out of the loop parallelism changes wall time and never a verdict.

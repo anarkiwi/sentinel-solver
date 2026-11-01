@@ -37,3 +37,4 @@ sentinel/tests/*.tmp
 # CSDb release cache (copyrighted, fetched by sentinel.tests.csdb)
 /out/csdb/
 /out/logs/
+/out/ckpt/
