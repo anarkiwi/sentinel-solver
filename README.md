@@ -68,7 +68,8 @@ The game is copyrighted and is **not** included.
 
 `out/sentinel_stage2.bin`, the 64 KB memory image of the loaded game that the `oracle`-marked
 tests run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is
-downloaded once into `out/csdb/` (SHA-256 pinned) and booted headless in jennings. `pytest`
+downloaded once into `out/csdb/` (SHA-256 pinned) and booted headless in jennings, running the
+game's own setup and title screen under a PAL raster interrupt to its keyboard wait. `pytest`
 builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
 without it (CI does).
 
