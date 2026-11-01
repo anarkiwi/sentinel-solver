@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS deps
+FROM python:3.15-slim AS deps
 WORKDIR /app
 COPY requirements.txt requirements-gpu.txt ./
 RUN grep -v '^numpy' requirements.txt > base.txt \
