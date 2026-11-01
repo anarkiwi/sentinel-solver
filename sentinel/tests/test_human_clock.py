@@ -375,9 +375,9 @@ def test_the_rom_really_replots_the_enemy_the_overshoot_blames():
     oracle.call(cpu, rom, 0x1B00, a=OVERSHOOT_SLOT)  # $1AF4's own gate
     assert cpu.p & 0x01, "$1B00 aborted the update: $0C1F was set after all"
 
-    seen = set()
-    frames = oracle.update_object_cost(cpu, rom, mstate, OVERSHOOT_SLOT, trace=seen.add)
-    assert 0x1FFC in seen and 0x1FF6 not in seen  # $2625 plot_world, not $8533
+    frames, tr = oracle.update_object_cost(cpu, rom, mstate, OVERSHOOT_SLOT, trace=True)
+    seen = tr.hits()
+    assert seen[0x1FFC] and not seen[0x1FF6]  # $2625 plot_world, not $8533
     assert 25.0 < frames < 45.0  # a whole span's worth of foreground, once
 
 

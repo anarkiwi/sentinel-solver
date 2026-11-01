@@ -38,50 +38,27 @@ VIEWS = [
 ]
 
 
-_MARKS = frozenset((0x283D, 0x2A24, 0x21AE))  # the examine, plot_tile and object stack
-
-
 def _measure_plot_world(cpu, mem, h_angle, v_angle):
-    """Run plot_world ($2625) headless in py65 on a machine :func:`_prepared` has already
+    """Run plot_world ($2625) headless on a machine :func:`_prepared` has already
     put in the $357D render context; return per-view exact cycles split by SUBTREE --
     the $283D examinations, the $21AE object stacks and the terrain fill left over."""
     player = mem[0x000B]
     mem[0x006E] = player
     mem[0x09C0 + player] = h_angle  # objects_h_angle
     mem[0x0140 + player] = v_angle  # objects_v_angle
-    ret = 0xFFF0
-    mem[ret] = 0x60
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = 0x2625
+    filled = [0]
+
+    def plot_tile(c):  # $2A24 plot_tile, byte not hidden
+        filled[0] += mem[0x0180 + c.x] != 0
+
+    oracle.enter(cpu, mem, oracle.PLOT_WORLD)
     c0 = cpu.processorCycles
-    n_examine = n_filled = examine_cycles = object_cycles = 0
-    exam_sp = obj_sp = exam_c0 = obj_c0 = -1
-    hits = [0] * 0x10000
-    step = cpu.step
-    for _ in range(20_000_000):
-        pc = cpu.pc
-        if pc == ret:
-            break
-        hits[pc] += 1
-        if pc in _MARKS:
-            if pc == 0x283D and exam_sp < 0:  # the examine, either branch of $2840
-                exam_sp, exam_c0 = cpu.sp, cpu.processorCycles
-                n_examine += 1
-            elif pc == 0x2A24 and mem[0x0180 + cpu.x]:  # plot_tile, byte not hidden
-                n_filled += 1
-            elif pc == 0x21AE and obj_sp < 0:  # plot_stack_of_objects subtree
-                obj_sp, obj_c0 = cpu.sp, cpu.processorCycles
-        step()
-        if 0 <= exam_sp < cpu.sp:
-            examine_cycles += cpu.processorCycles - exam_c0
-            exam_sp = -1
-        if 0 <= obj_sp < cpu.sp:
-            object_cycles += cpu.processorCycles - obj_c0
-            obj_sp = -1
-    total = cpu.processorCycles - c0
+    tr = oracle.run_traced(cpu, {0x2A24: plot_tile})
+    total = int(tr.end) - c0
+    hits = tr.hits().tolist()
+    examine_cycles, n_examine = tr.subtree({0x283D})  # either branch of $2840
+    object_cycles = tr.subtree({0x21AE})[0]  # plot_stack_of_objects
+    n_filled = filled[0]
     examine_cycles += 6 * n_examine  # the JSR the caller pays, which the model charges
     return {
         "cycles": total,
@@ -92,7 +69,7 @@ def _measure_plot_world(cpu, mem, h_angle, v_angle):
         "n_filled": n_filled,
         "geometry": {  # the loops whose iteration counts the fill model must reproduce
             "span_rows": hits[0x2377],
-            "span_bytes": sum(hits[a] for a in range(0x23DE, 0x2458, 4)),
+            "span_bytes": sum(hits[0x23DE:0x2458:4]),
             "steep": hits[0x2F58],
             "shallow": hits[0x2FA1],
             "wide_steep": hits[0x3113],
@@ -149,7 +126,7 @@ def _check(data):
 
 @pytest.mark.oracle
 def test_regenerate_render_cost_golden():
-    """Cycle-count plot_world across VIEWS in py65, dump the golden, and confirm the
+    """Cycle-count plot_world across VIEWS on the oracle, dump the golden, and confirm the
     projector matches the exact examination count and frame cost."""
     data = _build_golden()
     with open(GOLDEN, "w") as f:

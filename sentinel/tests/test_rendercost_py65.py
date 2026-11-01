@@ -44,6 +44,18 @@ def test_memoization_hits_and_bounds():
 
 
 @pytest.mark.oracle
+def test_threaded_batch_equals_serial():
+    """render_costs_exact over threads gives each view's serial cost, one prepare per board."""
+    st = landscape.generate(66)
+    views = [(h, v) for h in range(0, 256, 32) for v in (0x00, 0x10)]
+    rendercost_py65.reset()
+    serial = [rendercost_py65.render_cost_exact(st, h, v) for h, v in views]
+    rendercost_py65.reset()
+    assert rendercost_py65.render_costs_exact(st, views, workers=8) == serial
+    assert rendercost_py65._PREPARED_STATS["misses"] == 1
+
+
+@pytest.mark.oracle
 def test_wired_backend_replaces_proxy():
     """With RENDER_COST_BACKEND=py65, projector.render_cost returns the exact cost;
     the default proxy differs, confirming the selection hook is live."""

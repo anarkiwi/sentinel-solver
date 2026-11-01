@@ -34,3 +34,5 @@ __pycache__/
 /CLAUDE.md
 /.claude/
 sentinel/tests/*.tmp
+# CSDb release cache (copyrighted, fetched by sentinel.tests.csdb)
+/out/csdb/

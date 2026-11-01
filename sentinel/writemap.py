@@ -11,10 +11,7 @@ from sentinel import passcost
 
 MODE = tuple(mode for _, mode in MPU.disassemble)
 MNEMONIC = tuple(name for name, _ in MPU.disassemble)
-DEC_ABS_CYCLES = 6  # jennings' table reads 3; the machine takes 6, as $0E/$2E/$4E do
-OP_CYCLES = tuple(
-    DEC_ABS_CYCLES if op == 0xCE else c for op, c in enumerate(MPU.cycletime)
-)
+OP_CYCLES = tuple(MPU.cycletime)
 _MODE_LENGTH = {
     "imp": 1,
     "acc": 1,

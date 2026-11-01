@@ -411,14 +411,6 @@ REGISTRY = {
         "PAL_FRAME_CYCLES / 312; the badline windows sit 8 lines apart on it",
         "test_the_badline_window_is_the_25_lines_of_a_pal_frame",
     ),
-    "DEC_ABS_CYCLES": entry(
-        _WM,
-        MEASURED,
-        "jennings' own cycletime reads 3 for $CE DEC abs; 6 is what the machine takes, "
-        "as its five RMW-abs siblings do, on every live $9630 marker and every other "
-        "opcode class the captures timed",
-        "test_the_opcode_cost_table_prices_every_live_instruction",
-    ),
     "WRITE_CYCLES": entry(
         _BL,
         DERIVED,

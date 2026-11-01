@@ -921,22 +921,28 @@ def test_the_tile_scan_cost_model_matches_the_roms_own_1ab0(landscape):
 
 def _trace_calls(cpu, mem, mstate, oracle, target):
     """[(cycles, image at entry, $6E)] for each ``target`` call one $16B5 round makes."""
-    ret, hits, inside = 0xFFF0, [], None
-    mem[ret] = 0x60
-    cpu.a = cpu.x = cpu.y = 0
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = oracle.UPDATE_ENEMIES
+    entries = []
+    oracle.enter(cpu, mem, oracle.UPDATE_ENEMIES)
+    s0 = cpu.steps
     mstate["stop"] = False
-    while cpu.pc != ret and not mstate["stop"]:
-        if inside is None and cpu.pc == target:
-            inside = (cpu.sp, cpu.processorCycles, bytes(mem), mem[0x6E])
-        elif inside is not None and cpu.sp > inside[0]:
-            hits.append((cpu.processorCycles - inside[1], inside[2], inside[3]))
-            inside = None
-        cpu.step()
+    cpu.halt = True
+    try:
+        tr = oracle.run_traced(
+            cpu,
+            {target: lambda c: entries.append((c.steps - s0, bytes(mem), mem[0x6E]))},
+        )
+    finally:
+        cpu.halt = False
+    sp, sp_before, after = tr.sp[:-1], tr.sp_before, tr.cycles_after
+    hits, free = [], 0
+    for i, image, obj in entries:
+        if i < free:
+            continue
+        ends = np.flatnonzero(sp[i:] > sp_before[i])
+        if not ends.size:
+            break
+        free = i + int(ends[0]) + 1
+        hits.append((int(after[free - 1] - tr.cycles[i]), image, obj))
     return hits
 
 
@@ -954,28 +960,21 @@ def _rom_body_writes(oracle, image, enemy):
     cpu.pc = 0x16E6
     mstate["stop"] = False
     shadow = {a: mem[a] for a in _CORE_ADDRS}
-    pending, out = [], []
+    s0, c0, writes = cpu.steps, cpu.processorCycles, []
 
     def note(addr, value):
         if value != shadow[addr]:
-            pending.append((addr, value))
+            writes.append((cpu.steps - s0, addr, value))
         shadow[addr] = value
 
-    cpu._memory.subscribe_to_write(
-        _CORE_ADDRS, note
-    )  # pylint: disable=protected-access
-    c0, low, steps = cpu.processorCycles, cpu.sp, 0
-    while cpu.pc != BODY_EXIT and not mstate["stop"] and steps < 400_000:
-        cpu.step()
-        steps += 1
-        low = min(low, cpu.sp)
-        if pending:
-            at = cpu.processorCycles - c0
-            out.extend((at, a, v) for a, v in pending)
-            del pending[:]
+    cpu.memory.subscribe_to_write(_CORE_ADDRS, note)
+    cpu.halt = True
+    tr = oracle.run_traced(cpu, stops=(BODY_EXIT,))
+    low = min(tr.sp0, int(tr.sp.min()))
     assert low >= 0x80, "the stack reached the object arrays: page 1 is ambiguous"
     stack = range(0x0100 + low, 0x0200)
-    return [w for w in out if w[1] not in stack], cpu.processorCycles - c0
+    after = (tr.cycles_after - c0).tolist()
+    return [(after[i], a, v) for i, a, v in writes if a not in stack], int(tr.end) - c0
 
 
 def _body_cases(oracle, landscape):
@@ -1084,12 +1083,12 @@ def _rom_boundaries(oracle, image, start, stop, **regs):
     for name, value in regs.items():
         setattr(cpu, name, value)
     mstate["stop"] = False
-    c0, out, steps = cpu.processorCycles, {}, 0
-    while cpu.pc != stop and not mstate["stop"] and steps < 4000:
-        out.setdefault(cpu.pc, cpu.processorCycles - c0)
-        cpu.step()
-        steps += 1
-    out.setdefault(cpu.pc, cpu.processorCycles - c0)
+    cpu.halt = True
+    c0 = cpu.processorCycles
+    tr = oracle.run_traced(cpu, stops=(stop,))
+    pcs, first = np.unique(tr.pc, return_index=True)
+    out = dict(zip(pcs.tolist(), (tr.cycles[first] - c0).tolist()))
+    out.setdefault(cpu.pc, int(tr.end) - c0)
     return out
 
 
@@ -1368,21 +1367,10 @@ def _rom_replot_line(state, target):
     """The ROM's own $1FA4..$1F9E on ``target``, less every $1FFC JSR $2625 under it."""
     oracle = _oracle()
     cpu, mem, mstate = oracle.machine_from_image(state.mem)
-    plot = [0]
-    inside = [None, 0]
-
-    def trace(pc):
-        if inside[0] is None:
-            if pc == oracle.PLOT_WORLD:
-                inside[0], inside[1] = cpu.sp, cpu.processorCycles
-        elif cpu.sp > inside[0]:
-            plot[0] += cpu.processorCycles - inside[1]
-            inside[0] = None
-
-    frames = oracle.update_object_cost(
-        cpu, mem, mstate, target, trace=trace, from_pc=oracle.REPLOT_LINE
+    frames, tr = oracle.update_object_cost(
+        cpu, mem, mstate, target, trace=True, from_pc=oracle.REPLOT_LINE
     )
-    return round(frames * oracle.FRAME_CYCLES) - plot[0], mem
+    return round(frames * oracle.FRAME_CYCLES) - tr.subtree({oracle.PLOT_WORLD})[0], mem
 
 
 @pytest.mark.oracle

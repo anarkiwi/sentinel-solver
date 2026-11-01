@@ -21,22 +21,9 @@ def _measure(cpu, mem):
     mem[0x0CDE] = 0
     mem[0x0CCE] = 0x80
     mem[0x0CDF] = mem[0x0C73] = 0
-    ret = 0xFFF0
-    mem[ret] = 0x60
     img = oracle._rom_image()
     mem[0xFFF1:0x10000] = img[0xFFF1:0x10000]
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = 0x245B
-    start = cpu.processorCycles
-    for _ in range(6_000_000):
-        if cpu.pc == ret:
-            break
-        cpu.step()
-    assert cpu.pc == ret
-    return cpu.processorCycles - start
+    return oracle.cycles(cpu, mem, 0x245B)
 
 
 def _relocate(mem, nx, ny):

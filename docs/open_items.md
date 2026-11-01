@@ -193,9 +193,8 @@ builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vert
 byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
 **Closed — the terrain fill, and the oracle's own `DEC abs`.** Two errors, one of each sign.
-py65 declares `$CE DEC abs` at 3 cycles where the 6502 takes 6 (`deity_informant`'s
-`CYCLETIME` inherits it; `writemap.DEC_ABS_CYCLES` already corrected the static table but
-nothing corrected execution), and `$CE` is the self-modified loop counter of every plot_world
+py65 declared `$CE DEC abs` at 3 cycles where the 6502 takes 6 (jennings now charges 6
+on both its table and its core), and `$CE` is the self-modified loop counter of every plot_world
 DDA — 8328 executions and 24984 cycles on 2024,184,244, ~3% of a fill, missing from every
 golden and from `RENDER_COST_BACKEND=py65`. Against a corrected profile the fill's own blocks
 were 85189 cycles light on that view: `span_fill`'s row body 25 cycles a row (`$238C..$239C`
@@ -561,8 +560,7 @@ The four short interrupts land on rasters 53/93/133/173 by the same law, so the 
 whole IRQ layout is placeable.
 
 **2. The write-cycle map per term exists, and the march resolves.** `sentinel/writemap.py`
-walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables, with
-`$CE DEC abs` corrected from its table's 3 to the machine's 6 — and reads the write cycles
+walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables — and reads the write cycles
 straight off the addressing mode, so no hand table is needed. Measured against **6424**
 live BA windows over five captures, one of them taken 112 frames into ls9795 so the loop
 is inside a single 274578-cycle `$1887` march:

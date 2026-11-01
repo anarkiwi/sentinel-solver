@@ -901,7 +901,7 @@ foreground work folded into a settle constant.
 | `dithercost.py` | exact cycles of the `$86A5` dissolve: the ×5 pointer chain, span mask and lap structure, chain threaded across calls |
 | `occlusioncost.py` | exact cycles of the `$245B` occlusion raytrace per (board, position), no emulator |
 | `projector.py`, `projector_jit.py` | `plot_world $2625` terrain projector, ported bit-exactly; feeds the render-cost proxy |
-| `rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in py65, memoized; ROM-gated |
+| `rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in jennings, memoized per board and view, thread-parallel; ROM-gated |
 | `actioncost.py` | frame→tick glue (`FRAME_TICKS`, the `$1335`/`$0C50` cadence); its `SETTLE` dict is only the tile-less per-verb fallback — per-scene pricing is `settlecost.py` |
 | `actions.py` | absorb / create / transfer / hyperspace / win (the LOS gate is the caller's) |
 | `energy.py` | the energy economy (`$2136`, table `$214F`, 6-bit mask, underflow) |
@@ -1096,7 +1096,7 @@ player has already built and transferred on.
 
 The game is compute-bound, so drawing the height field *is* the world clock: what a view costs
 to plot is how many frames an action spends. `FRAME_CYCLES` = 19656 (PAL). Validated against
-`golden_render_cost.json` (py65 cycle counts, 15 views over generated boards
+`golden_render_cost.json` (jennings cycle counts, 15 views over generated boards
 0/42/66/335/777/2024) with the raytraced occlusion table active.
 
 `plot_world $2625` is an equirectangular rasteriser walking the 32×32 grid furthest-to-nearest
@@ -1123,9 +1123,11 @@ golden view's plot_world cost by 0.23-0.85×.
 the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), over
 `FRAME_CYCLES`, memoized on `(scene_key, observer, h, v, mode, window, rows, ref_lo)`. It lands
 within 0.995-1.000× of the ROM on every golden view (median 0.997), at
-0.13-0.17 ms an uncached call against the exact backend's ~1.3 s. With
+0.13-0.17 ms an uncached call against the exact backend's ~2.5 ms per view once the board's
+view-independent prologue (`$245B`/`$3700`/`$2993`, memoized per board) is prepared. With
 `RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
-exact py65 cycle count instead ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
+exact emulated cycle count instead; `rendercost_py65.render_costs_exact` prices many views
+on threads ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
 
 | term | exactness |
 | --- | --- |
@@ -1173,13 +1175,11 @@ rasterise each into `$AD00`/`$AE00` with the ROM's own DDA, and `$22AA` walks
 cycles are `passcost.TILE_*`/`PREP_*`/`LINE_*`/`EDGE_*`/`STEEP_*`/`SHALLOW_*`/`WIDE_*`/`SPAN_*`,
 each the block's own instruction line.
 
-**py65 prices `DEC abs` at 3 cycles; the 6502 takes 6.** `py65.devices.mpu6502` declares
-`$CE` `cycles=3` and `deity_informant`'s `CYCLETIME` — which jennings reads — carries the
-same value, while ASL/LSR/ROL/ROR/INC absolute all measure 6. `$CE` is the self-modified
-loop counter of every plot_world DDA (`$2F62`, `$2FA8`, `$2FCB`, `$2FD6`, `$3122`, `$3179`),
-so an uncorrected oracle run understates a fill by ~3% — 8328 executions and 24984 cycles on
-2024,184,244 alone. `oracle.MPU` adds the missing 3 per `$CE`; `writemap.DEC_ABS_CYCLES`
-already corrected the static table. Every golden rose 0.0-3.3% and not one loop count moved.
+**`DEC abs` is 6 cycles.** py65's table declares `$CE` at 3; jennings 0.8.0 charges the
+machine's 6, as ASL/LSR/ROL/ROR/INC absolute do, on both the static `cycletime` table that
+`writemap.OP_CYCLES` reads and the native core the oracle runs. `$CE` is the self-modified
+loop counter of every plot_world DDA (`$2F62`, `$2FA8`, `$2FCB`, `$2FD6`, `$3122`, `$3179`):
+8328 executions and 24984 cycles on 2024,184,244 alone.
 
 **`$352C` is not stubbed any more.** `prepare_render_context` zeroes `$0CDF`/`$0C73`
 instead, which is what a live `$1FFC` image carries, so `update_sound` runs its real
@@ -1514,7 +1514,11 @@ the planner modelled empty.
 
 ### The 6502 oracle (`sentinel/tests/oracle.py`)
 
-Runs the real ROM under py65 so a model routine can be diffed against it. Two setup steps
+Runs the real ROM on jennings' native 6510 core so a model routine can be diffed against it.
+The machine's `NativeMemory` shares the caller's `bytearray` (Python writes bypass the watches),
+whole calls run in `run_until` with the GIL released, and `run_traced` returns every executed
+instruction as numpy columns (`Trace.hits`, `Trace.subtree` for call-tree cycle splits, probes
+for memory sampled at a PC) instead of a per-instruction Python loop. Two setup steps
 mutate state the caller usually means to control, and either one makes a comparison read as a
 model defect:
 

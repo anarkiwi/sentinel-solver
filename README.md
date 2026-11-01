@@ -64,21 +64,21 @@ here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sent
 
 ## Fixtures (not distributed)
 
-The game is copyrighted and is **not** included. There is **one** supplied fixture: place
-your own copy of the C64 tape image at `sentinel-gold.tap`.
+The game is copyrighted and is **not** included.
 
-`out/sentinel_stage2.bin` — the 64 KB memory image of the loaded game, used by the
-`oracle`-marked tests that regenerate the goldens — is **not** a second supplied file: it is
-**generated** from the tape. `driver/dump_stage2.py` boots the tape in asid-vice, dumps RAM,
-and verifies the image by running the ROM's own generator against the model:
+`out/sentinel_stage2.bin`, the 64 KB memory image of the loaded game that the `oracle`-marked
+tests run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is
+downloaded once into `out/csdb/` (SHA-256 pinned) and booted headless in jennings. `pytest`
+builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
+without it (CI does).
 
 ```bash
-python -m driver.dump_stage2                    # --out PATH, --force to re-dump
+python -m sentinel.tests.csdb                   # --out PATH, --force to rebuild
 ```
 
-Both files are gitignored; tests that need them auto-skip when absent. Generating the image
-and running the live driver need Docker and the `anarkiwi/asid-vice:latest` image (build
-from https://github.com/anarkiwi/asid-vice).
+The live driver plays your own copy of the tape image at `sentinel-gold.tap`, and needs Docker
+and the `anarkiwi/asid-vice:latest` image (build from https://github.com/anarkiwi/asid-vice).
+`python -m driver.dump_stage2` dumps the oracle image from that tape instead.
 
 ## Docs
 
