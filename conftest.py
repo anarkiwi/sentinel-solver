@@ -10,6 +10,9 @@ def pytest_configure(config):
         "markers",
         "oracle: test drives the real 6502 code (needs out/sentinel_stage2.bin)",
     )
+    config.addinivalue_line(
+        "markers", "gpu: needs numba-cuda (real device or the simulator)"
+    )
     _cap_numba_threads()
     _build_image()
 

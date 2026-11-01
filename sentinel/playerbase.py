@@ -316,6 +316,10 @@ def _sweep(st, v_primary, aim_from):
     """
     grids = landtable.lattice(v_primary=v_primary)
     slot = st.player
+    gpu = landtable._gpu()
+    if gpu is not None:
+        lit, key, _first = gpu.landing_table(st, slot, None, grids, landtable.MAX_STEPS)
+        return _Landings(st.clone(), lit, key, grids, aim_from)
     idx = landtable.landing_rays(st, slot, None, grids, landtable.MAX_STEPS)
     status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
     hit = np.flatnonzero(status == los.los_jit.LOS_CLEAR)

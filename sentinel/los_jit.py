@@ -28,6 +28,7 @@ import numba  # noqa: E402  pylint: disable=wrong-import-position
 from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import passcost  # noqa: E402
+from sentinel.kern import spec  # noqa: E402
 from sentinel.writeweight import MARCH as wcost  # noqa: E402
 
 LOS_CLEAR = 1
@@ -159,7 +160,7 @@ _OZFRAC = 0x0A00
 _OTYPE = 0x0A40
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _tile_byte(mem, x, y):
     """terrain.tile_byte: the raw tiles_table byte via the ROM address arithmetic
     ``page=(x&3)+4``, ``lo=((x<<3)&0xE0)|(y&0x1F)``."""
@@ -170,7 +171,7 @@ def _tile_byte(mem, x, y):
     return int(mem[page * 256 + lo])
 
 
-@njit(cache=True)
+@spec
 def _corner_z(mem, x, y):
     """los._slope_corner_z: one $1D4E/$1D55/$1D5C corner read.  Returns (z, cycles)."""
     cyc = np.int64(_TILE_Z_CALL + _TILE_ADDR + _TILE_Z_READ)
@@ -189,7 +190,7 @@ def _corner_z(mem, x, y):
     return int(mem[_OZHEIGHT + o]), cyc + np.int64(_OBJ_GHOL_RTS)
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _edge(y):
     """The $1DF1-$1DF8 edge table."""
     if y == 0:
@@ -209,7 +210,7 @@ def _edge(y):
     return 0x03  # y == 7
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _corner_at(i, p73, p74, p75, p76):
     """The zero-page corner square $73..$77 == [p73,p74,p75,p76,p73], indexed."""
     if i == 0:
@@ -223,7 +224,7 @@ def _corner_at(i, p73, p74, p75, p76):
     return p73  # i == 4
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _quad_head(nib):
     """The position-independent half of the $1D8A-$1DAE edge pick.  Returns ``(flip,
     x0, x1, cycles)``: the edge is ``x1`` when ``(px_sub ^ flip) >= py_sub``, else
@@ -243,7 +244,7 @@ def _quad_head(nib):
     return flip, _edge(s78 << 1), _edge((s78 << 1) | 1), cyc
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _quad_edge(x, p73, p74, p75, p76):
     """use_edge_for_slope $1DAF-$1DEE for edge ``x``, as ``(axis, invert, base, slope,
     cycles)``: the ray is blocked iff ``(pz16 - base - s02 * slope) & 0x8000`` (mod
@@ -270,7 +271,7 @@ def _quad_edge(x, p73, p74, p75, p76):
     )
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _edge_miss(b8, p73, p74, p75, p76):
     """The nibble 4/$C edge test: index of the first corner the ray byte clears (the
     $1D66 miss count), 4 when it clears none (blocked).  Non-increasing in ``b8``."""
@@ -285,7 +286,7 @@ def _edge_miss(b8, p73, p74, p75, p76):
     return 4
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _tile_steps(a, v):
     """Further sub-steps a 16-bit in-tile accumulator ``a`` takes before carrying out."""
     if v > 0:
@@ -295,7 +296,7 @@ def _tile_steps(a, v):
     return np.int64(1) << 62
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _flat_run(z, za, vz, n):
     """Leading sub-steps of ``1..n`` that stay below flat height ``z``.
 
@@ -314,7 +315,7 @@ def _flat_run(z, za, vz, n):
     return min(m - 1, n)
 
 
-@njit(cache=True)
+@spec
 def _popcount_sum(c, v, r):
     """``sum(popcount((c + j*v) >> 8) for j in 1..r)``: the run's summed $0D03
     multiplier set bits, by table over its s02 bytes."""
@@ -325,7 +326,7 @@ def _popcount_sum(c, v, r):
     return tot
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _floor_ge(a1, a2, b1, b2):
     """Whether ``floor(La/256) >= floor(Lb/256)`` over a run on which the linear ``La``,
     ``Lb`` go from ``a1``/``b1`` to ``a2``/``b2``: 1 always, 0 never, -1 undecided."""
@@ -336,13 +337,13 @@ def _floor_ge(a1, a2, b1, b2):
     return -1
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _centred(a, side):
     """The linear accumulator whose high byte is the $1EAF centre distance (_min_xy)."""
     return a - 0x8000 if side else 0x7FFF - a
 
 
-@njit(cache=True)
+@spec
 def _object_ok(z0, z2, x0, x2, y0, y2, zs, uses, tk):
     """:func:`_run_ok` for an object tile: sub-steps ``0..L`` (accumulators from ``*0``
     to ``*2``) share sub-step 0's walk path and stay below its surface ``zs``.
@@ -387,7 +388,7 @@ def _object_ok(z0, z2, x0, x2, y0, y2, zs, uses, tk):
     return (qlo >> 16) == (qhi >> 16) and (qlo & 0xFFFF) >= 0x8000
 
 
-@njit(cache=True)
+@spec
 def _run_ok(L, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses, tk):
     """Whether sub-steps ``1..L`` of an in-tile run all keep marching along one branch
     path, as ``(ok, class)``.  Every input is monotone or linear-plus-floor over the run
@@ -439,7 +440,7 @@ def _run_ok(L, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, us
     return (qlo >> 16) == (qhi >> 16) and (qhi & 0xFFFF) < 0x8000, c
 
 
-@njit(cache=True)
+@spec
 def _run(n, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses, tk):
     """The longest prefix ``r <= n`` :func:`_run_ok` proves, with its class, by
     galloping then bisection on the monotone predicate."""
@@ -471,7 +472,7 @@ def _run(n, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses,
     return lo, lo_cls
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _min_xy(px_sub, py_sub):
     """los._get_min_xy_fraction $1EAF: min tile-centre fraction of x/y (the exact
     6502 form, not plain abs).  Returns (fraction, cycles)."""
@@ -492,7 +493,7 @@ def _min_xy(px_sub, py_sub):
     return t74 & 0xFF, cyc
 
 
-@njit(cache=True)
+@spec
 def _is_tree_cdd(mem, Y, pz_sub, pz_whole, minxy, c56, cdd):
     """los._is_tree $1E69: the enemy-can-see-a-tree marker ($0CDD).  Works in a
     scratch byte, not $0079, so it only (maybe) sets $0CDD; the $1E8C compare reuses
@@ -523,7 +524,7 @@ def _is_tree_cdd(mem, Y, pz_sub, pz_whole, minxy, c56, cdd):
     return ((cdd >> 1) | 0x80) & 0xFF, _OBJ_TREE_SEEN, 1
 
 
-@njit(cache=True)
+@spec
 def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
     """los._get_tile_z_from_object $1E3F and its helpers, flattened into one bounded
     iterative walk of the object stack.  Returns ``(z, s79, c0c, c67, c56, cdd, s60,
@@ -636,18 +637,18 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
     return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, _USE_MULTI, tk, seen)
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _s16(hi, lo):
     v = ((hi & 0xFF) << 8) | (lo & 0xFF)
     return v - 0x10000 if v >= 0x8000 else v
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _acc(whole, sub, frac):
     return ((whole & 0xFF) << 16) | ((sub & 0xFF) << 8) | (frac & 0xFF)
 
 
-@njit(cache=True)
+@spec
 def march(
     mem,
     ax_lo,
@@ -990,18 +991,18 @@ def march(
     )
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _march_one(mem, i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs):
     """One lattice ray of :func:`march_batch`: ``(status, tx, ty, centre)``."""
     r = march(
         mem,
-        ax_lo[i],
-        ax_hi[i],
-        az_lo[i],
-        az_hi[i],
-        ay_lo[i],
-        ay_hi[i],
-        s30[i],
+        np.int64(ax_lo[i]),
+        np.int64(ax_hi[i]),
+        np.int64(az_lo[i]),
+        np.int64(az_hi[i]),
+        np.int64(ay_lo[i]),
+        np.int64(ay_hi[i]),
+        np.int64(s30[i]),
         seed[0],
         seed[1],
         seed[2],
@@ -1154,7 +1155,7 @@ def _vinvert16(high, frac):
     return (neg >> 8) & 0xFF, neg & 0xFF
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _bits(v):
     """Set bits of a $0D03 multiplier: each costs MUL8_BIT more than a clear one."""
     n = np.int64(0)

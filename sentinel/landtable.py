@@ -10,6 +10,8 @@ import math
 import numpy as np
 
 from sentinel import los, memmap as mm, terrain
+from sentinel import kern
+from sentinel.kern import spec
 
 try:
     import numba
@@ -50,6 +52,11 @@ def lattice(v_primary=False, coarse=False):
     if coarse:
         return los.kbd_grids(COARSE_CX, COARSE_CY)
     return los.kbd_grids(v_primary=v_primary)
+
+
+def vectors(grids):
+    """The seven int16 component arrays of a lattice (:func:`los._lattice_vectors`)."""
+    return los._lattice_vectors(*grids)
 
 
 def components(grids):
@@ -95,7 +102,7 @@ def heading_components(grids):
     return got
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _cell_span(v, d, max_steps):
     """The sub-step interval ``[first, last]`` in which the ray's tile offset on one axis
     equals ``d`` (empty when ``last < first``): ``d*65536 <= $8000 + i*v < (d+1)*65536``.
@@ -109,11 +116,11 @@ def _cell_span(v, d, max_steps):
     qa = (d * 65536 - 0x8000) / v
     qb = (d * 65536 + 0x8000) / v
     if v > 0:
-        return math.ceil(qa), math.ceil(qb) - 1
-    return math.floor(qb) + 1, math.floor(qa)
+        return int(math.ceil(qa)), int(math.ceil(qb)) - 1
+    return int(math.floor(qb)) + 1, int(math.floor(qa))
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _crosses(ax, ay, az, dx, dy, tlo, thi, max_steps):
     """Whether a ray ``(ax, ay, az)`` can land on cell ``(dx, dy)`` with surface z in
     [tlo, thi].
@@ -226,6 +233,48 @@ def surface_maps(state):
     return lo, hi, slope
 
 
+@spec
+def _stop_one(ax, ay, az, surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, edge):
+    """One ray's ``(first candidate tile, count)`` for :func:`stop_cells`."""
+    first = -1
+    ncand = 0
+    i0 = 1
+    while i0 <= max_steps:
+        dx = (0x8000 + i0 * ax) >> 16
+        dy = (0x8000 + i0 * ay) >> 16
+        x = ex + dx
+        y = ey + dy
+        if x < 0 or x > edge or y < 0 or y > edge:
+            break
+        _fx, lx = _cell_span(ax, dx, max_steps)
+        _fy, ly = _cell_span(ay, dy, max_steps)
+        i1 = min(lx, ly, max_steps)
+        zin = (i0 * az) >> 8
+        zout = (i1 * az) >> 8
+        c = x * 32 + y
+        if (x != ex or y != ey) and slope[c] == 0:
+            tlo = surf_lo[c] - zseed
+            thi = surf_hi[c] - zseed
+            zmin = zout if az < 0 else zin
+            zmax = zin if az < 0 else zout
+            alias = zmax >= WRAP_D + tlo
+            if az > 0:
+                cand = alias or (tlo - LAND_BAND < zin <= thi)
+            elif az < 0:
+                cand = alias or (zin > tlo - LAND_BAND and zout <= thi)
+            else:
+                zmin = 0
+                cand = tlo - LAND_BAND < 0 <= thi
+            if cand:
+                if ncand == 0:
+                    first = c
+                ncand += 1
+            if not alias and zmin <= tlo:
+                break  # the ray reaches this surface: the ROM stops in this cell
+        i0 = i1 + 1
+    return first, ncand
+
+
 @njit(cache=True, parallel=True)
 def stop_cells(vx, vy, vz, surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, edge):
     """Per ray: its first candidate landing tile (packed ``x*32+y``, -1 none) and count.
@@ -238,43 +287,9 @@ def stop_cells(vx, vy, vz, surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, ed
     first = np.full(n, -1, dtype=np.int32)
     ncand = np.zeros(n, dtype=np.int32)
     for j in prange(n):  # pylint: disable=not-an-iterable
-        ax = vx[j]
-        ay = vy[j]
-        az = vz[j]
-        i0 = 1
-        while i0 <= max_steps:
-            dx = (0x8000 + i0 * ax) >> 16
-            dy = (0x8000 + i0 * ay) >> 16
-            x = ex + dx
-            y = ey + dy
-            if x < 0 or x > edge or y < 0 or y > edge:
-                break
-            _fx, lx = _cell_span(ax, dx, max_steps)
-            _fy, ly = _cell_span(ay, dy, max_steps)
-            i1 = min(lx, ly, max_steps)
-            zin = (i0 * az) >> 8
-            zout = (i1 * az) >> 8
-            c = x * 32 + y
-            if (x != ex or y != ey) and slope[c] == 0:
-                tlo = surf_lo[c] - zseed
-                thi = surf_hi[c] - zseed
-                zmin = zout if az < 0 else zin
-                zmax = zin if az < 0 else zout
-                alias = zmax >= WRAP_D + tlo
-                if az > 0:
-                    cand = alias or (tlo - LAND_BAND < zin <= thi)
-                elif az < 0:
-                    cand = alias or (zin > tlo - LAND_BAND and zout <= thi)
-                else:
-                    zmin = 0
-                    cand = tlo - LAND_BAND < 0 <= thi
-                if cand:
-                    if ncand[j] == 0:
-                        first[j] = c
-                    ncand[j] += 1
-                if not alias and zmin <= tlo:
-                    break  # the ray reaches this surface: the ROM stops in this cell
-            i0 = i1 + 1
+        first[j], ncand[j] = _stop_one(
+            vx[j], vy[j], vz[j], surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, edge
+        )
     return first, ncand
 
 
@@ -298,23 +313,38 @@ def candidates(state, tile, slot, eye_z=None, grids=None, max_steps=MAX_STEPS):
     return np.sort(np.concatenate(parts))
 
 
+def _march_params(state, slot, eye_z, max_steps):
+    """The march's scalar inputs: the 9 seed bytes then the 7 observer values."""
+    return (
+        *(int(v) for v in los._seed_position(state, slot, eye_z)),
+        int(state.obj_x[slot] & 0xFF),
+        int(state.obj_y[slot] & 0xFF),
+        int(state.mem[0x0C6E] & 0x7F),
+        int(state.mem[0x0C58] & 0xFF),
+        int((state.mem[0x0C56] >> 1) & 0xFF),
+        int((state.mem[0x0CDD] >> 1) & 0xFF),
+        max_steps,
+    )
+
+
 def _march(state, slot, eye_z, grids, idx, max_steps):
     """March the given lattice indices against ``state``; ``(status, tx, ty)``."""
-    sub = [np.ascontiguousarray(a[idx]) for a in los._lattice_vectors(*grids)]
-    seed = los._seed_position(state, slot, eye_z)
+    sub = [np.ascontiguousarray(a[idx]) for a in vectors(grids)]
     status, tx, ty, _centre = los.los_jit.march_batch(
         np.frombuffer(state.mem, dtype=np.uint8),
         *sub,
-        *seed,
-        state.obj_x[slot] & 0xFF,
-        state.obj_y[slot] & 0xFF,
-        state.mem[0x0C6E] & 0x7F,
-        state.mem[0x0C58] & 0xFF,
-        (state.mem[0x0C56] >> 1) & 0xFF,
-        (state.mem[0x0CDD] >> 1) & 0xFF,
-        max_steps,
+        *_march_params(state, slot, eye_z, max_steps),
     )
     return status, tx, ty
+
+
+def _gpu():
+    """The CUDA launch layer when the backend is cuda, else None."""
+    if kern.backend() != "cuda":
+        return None
+    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+    return kern_cuda
 
 
 def landable_view(state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
@@ -331,6 +361,15 @@ def landable_view(state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_
     grids = lattice() if grids is None else grids
     if never_lands(state, tile, slot):
         return None
+    gpu = _gpu()
+    if gpu is not None:
+        low = gpu.landing_table(state, slot, eye_z, grids, max_steps)[2][
+            tile[0] * mm.N + tile[1]
+        ]
+        if low < 0:
+            return None
+        h, v, cx, cy = los._meta_at(int(low), *grids)
+        return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
     idx = candidates(state, tile, slot, eye_z, grids, max_steps)
     lo, step = 0, MARCH_CHUNK
     while lo < idx.size:
@@ -374,6 +413,21 @@ def landing_rays(state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
     if slot is None:
         slot = state.player
     grids = lattice() if grids is None else grids
+    gpu = _gpu()
+    if gpu is not None:
+        lo, hi, slope = surface_maps(state)
+        mask = gpu.stop_mask(
+            gpu.device_components(tuple(tuple(g) for g in grids)),
+            lo,
+            hi,
+            slope,
+            int(state.obj_x[slot]),
+            int(state.obj_y[slot]),
+            seed_z(state, slot, eye_z),
+            max_steps,
+            RADIUS,
+        )
+        return np.flatnonzero(mask)
     _first, ncand = _partition(state, slot, eye_z, grids, max_steps)
     return np.flatnonzero(ncand > 0)
 
@@ -392,6 +446,10 @@ def landable_set(
     grids = lattice(coarse=True) if grids is None else grids
     if not los._HAVE_JIT:  # pragma: no cover - numba absent
         return set(los.landable_views(state, slot, eye_z, max_steps))
+    gpu = _gpu()
+    if gpu is not None:
+        tiles = gpu.landing_table(state, slot, eye_z, grids, max_steps)[1]
+        return {(t // mm.N, t % mm.N) for t in np.unique(tiles).tolist()}
     first, ncand = _partition(state, slot, eye_z, grids, max_steps)
     todo = np.flatnonzero(ncand > 0)
     cell = first[todo]
