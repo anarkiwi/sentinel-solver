@@ -36,3 +36,4 @@ __pycache__/
 sentinel/tests/*.tmp
 # CSDb release cache (copyrighted, fetched by sentinel.tests.csdb)
 /out/csdb/
+/out/logs/
