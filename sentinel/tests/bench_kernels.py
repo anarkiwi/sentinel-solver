@@ -1,6 +1,6 @@
 """Per-call timings of the solver's hot kernels on one board: ``python -m
-sentinel.tests.bench_kernels [landscape]``; ``python -m sentinel.tests.bench_kernels
-grain`` derives :data:`landtable.CROSS_GRAIN`."""
+sentinel.tests.bench_kernels [landscape]``; ``... sweep [landscape [actions]]`` times the
+landable-view sweep's steps; ``... grain`` derives :data:`landtable.CROSS_GRAIN`."""
 
 import sys
 import time
@@ -8,7 +8,7 @@ import time
 import numba
 import numpy as np
 
-from sentinel import landtable, occlusioncost
+from sentinel import landtable, occlusioncost, pancost, playerbase, projector
 from sentinel.game import Game
 from sentinel.playerbase import BOARD_TILES
 
@@ -91,8 +91,47 @@ def crossing_grain(reps=7):
     return g
 
 
+def sweep(landscape=335, actions=0):
+    """Each step of :func:`playerbase._sweep` per lattice, on ``landscape`` after the phase
+    player's first ``actions`` ticks; pricing is timed with cold and warm render caches.
+    """
+    from sentinel.phase_player import PhasePlayer
+
+    player = PhasePlayer(Game.typed(landscape), verbose=False)
+    if actions:
+        player.run(max_actions=actions)
+    st = player.st
+    slot = st.player
+    aim_from = (st.obj_h_angle[slot], st.obj_v_angle[slot])
+    for v_primary in (True, False):
+        grids = landtable.lattice(v_primary=v_primary)
+        idx = landtable.landing_rays(st, slot, None, grids)
+        print(f"v_primary={v_primary}: {idx.size} landing rays")
+        _time("landing_rays", lambda: landtable.landing_rays(st, slot, None, grids), 3)
+        _time(
+            "_march",
+            lambda: landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS),
+            3,
+        )
+        _time(
+            "_sweep (unpriced)", lambda: playerbase._sweep(st, v_primary, aim_from), 3
+        )
+        for label in ("price all (cold)", "price all (warm)"):
+            if "cold" in label:
+                pancost._NOTCH_CACHE.clear()
+                projector._COST_CACHE.clear()
+            got = playerbase._sweep(st, v_primary, aim_from)
+            t = time.perf_counter()
+            views = got.views()
+            print(
+                f"{label:28s} {(time.perf_counter() - t) * 1e3:8.3f} ms, {len(views)} tiles"
+            )
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["grain"]:
         crossing_grain()
+    elif sys.argv[1:2] == ["sweep"]:
+        sweep(*(int(a) for a in sys.argv[2:]))
     else:
         main(*(int(a) for a in sys.argv[1:]))
