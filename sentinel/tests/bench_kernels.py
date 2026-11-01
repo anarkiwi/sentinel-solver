@@ -1,9 +1,11 @@
 """Per-call timings of the solver's hot kernels on one board: ``python -m
-sentinel.tests.bench_kernels [landscape]``."""
+sentinel.tests.bench_kernels [landscape]``; ``python -m sentinel.tests.bench_kernels
+grain`` derives :data:`landtable.CROSS_GRAIN`."""
 
 import sys
 import time
 
+import numba
 import numpy as np
 
 from sentinel import landtable, occlusioncost
@@ -43,5 +45,54 @@ def main(landscape=335):
     )
 
 
+def _best(fn, args, reps):
+    fn(*args)
+    t = []
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        fn(*args)
+        t.append(time.perf_counter() - t0)
+    return min(t)
+
+
+def crossing_grain(reps=7):
+    """The rays per thread from which threading :func:`landtable.crossing_mask` beats
+    the serial kernel at every thread count, on contiguous heading-ordered slices."""
+    vx, vy, vz = landtable.heading_components(landtable.lattice())[2:]
+    top = numba.get_num_threads()
+    rng = np.random.default_rng(0)
+
+    def rays(n):
+        a = int(rng.integers(0, vx.size - n + 1))
+        return (vx[a : a + n], vy[a : a + n], vz[a : a + n], 5, 3, -0x300, 0x100, 6000)
+
+    args = rays(1 << 16)
+    ser = _best(landtable._crossing_ser, args, reps)
+    print(f"serial crossing: {ser / (1 << 16) * 1e9:.1f} ns/ray")
+    g = 256
+    while g * top <= vx.size:
+        wins = True
+        for p in sorted({2, 4, 8, 16, top} & set(range(2, top + 1))):
+            args = rays(p * g)
+            ser = _best(landtable._crossing_ser, args, reps)
+            numba.set_num_threads(p)
+            try:
+                par = _best(landtable._crossing_par, args, reps)
+            finally:
+                numba.set_num_threads(top)
+            print(
+                f"grain {g:6d} threads {p:3d}: {ser * 1e3:8.3f} / {par * 1e3:8.3f} ms"
+            )
+            wins &= par < ser
+        if wins:
+            break
+        g *= 2
+    print(f"CROSS_GRAIN = {g}")
+    return g
+
+
 if __name__ == "__main__":
-    main(*(int(a) for a in sys.argv[1:]))
+    if sys.argv[1:] == ["grain"]:
+        crossing_grain()
+    else:
+        main(*(int(a) for a in sys.argv[1:]))

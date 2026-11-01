@@ -5,11 +5,14 @@ ray's track of (tile offset, ray z) is a pure function of its aim; terrain only 
 where the march stops.  Derivation, soundness and sizing: docs/architecture.md.
 """
 
+import math
+
 import numpy as np
 
 from sentinel import los, memmap as mm, terrain
 
 try:
+    import numba
     from numba import njit, prange
 
     _HAVE_JIT = True
@@ -35,6 +38,9 @@ MAX_STEPS = 6000  # the los sweep's march cap
 MARCH_CHUNK = 1 << 13  # first early-exit march chunk: ~20us/call fixed cost, <1% here
 LAND_BAND = 0x80  # check_flat_tile $1D1C lands only for surface-z in [0, $80)
 WRAP_D = 0x10000 - LAND_BAND  # z distance at which the 8-bit high-byte compare aliases
+# Rays per numba thread below which another fork/join costs more than its share of a
+# crossing_mask call saves (:func:`sentinel.tests.bench_kernels.crossing_grain`).
+CROSS_GRAIN = 8192
 
 
 def lattice(v_primary=False, coarse=False):
@@ -71,61 +77,96 @@ def cached_components(grids):
     return got
 
 
-@njit(cache=True, inline="always")
-def _ceil_div(p, q):  # q > 0
-    return -((-p) // q)
+_ARC_CACHE = {}
+
+
+def heading_components(grids):
+    """``(head_sorted, order, vx, vy, vz)``: :func:`los._lattice_headings` plus the
+    :func:`components` permuted into that heading order (int16, their native width), so
+    a heading arc is a contiguous slice rather than a gather over the whole lattice."""
+    key = tuple(tuple(g) for g in grids)
+    got = _ARC_CACHE.get(key)
+    if got is None:
+        head, order = los._lattice_headings(*grids)
+        got = (head, order) + tuple(
+            c[order].astype(np.int16) for c in components(grids)
+        )
+        _ARC_CACHE[key] = got
+    return got
 
 
 @njit(cache=True, inline="always")
 def _cell_span(v, d, max_steps):
     """The sub-step interval ``[first, last]`` in which the ray's tile offset on one axis
-    equals ``d`` (empty when ``last < first``)."""
+    equals ``d`` (empty when ``last < first``): ``d*65536 <= $8000 + i*v < (d+1)*65536``.
+
+    The float quotients round exactly: numerators stay far below 2**37 and ``|v|`` below
+    2**15, so a non-integer quotient lies >= 2**-15 from any integer while its rounding
+    error is under 2**-15, and an integer quotient is represented exactly.
+    """
+    if v == 0:
+        return 1, max_steps if d == 0 else 0
+    qa = (d * 65536 - 0x8000) / v
+    qb = (d * 65536 + 0x8000) / v
     if v > 0:
-        return (
-            _ceil_div(d * 65536 - 0x8000, v),
-            _ceil_div((d + 1) * 65536 - 0x8000, v) - 1,
-        )
-    if v < 0:
-        return (
-            _ceil_div(0x8000 + 1 - (d + 1) * 65536, -v),
-            _ceil_div(0x8000 + 1 - d * 65536, -v) - 1,
-        )
-    if d == 0:
-        return 1, max_steps
-    return 1, 0
+        return math.ceil(qa), math.ceil(qb) - 1
+    return math.floor(qb) + 1, math.floor(qa)
 
 
-@njit(cache=True, parallel=True)
-def crossing_mask(vx, vy, vz, sel, dx, dy, tlo, thi, max_steps):
-    """Which rays of ``sel`` can land on cell ``(dx, dy)`` with surface z in [tlo, thi].
+@njit(cache=True, inline="always")
+def _crosses(ax, ay, az, dx, dy, tlo, thi, max_steps):
+    """Whether a ray ``(ax, ay, az)`` can land on cell ``(dx, dy)`` with surface z in
+    [tlo, thi].
 
     Bounds are relative to the ray seed z, 1/256 units.  Landing needs ``surface-ray_z``
     in ``[0, $80)`` inside the cell, so the ray must ENTER above ``surface - $80`` and
     reach ``surface`` before leaving; 8-bit-alias risks are kept unconditionally.
     """
-    n = sel.shape[0]
-    out = np.zeros(n, dtype=np.bool_)
-    wrap_z = WRAP_D + tlo
-    for e in prange(n):  # pylint: disable=not-an-iterable
-        j = sel[e]
-        az = vz[j]
-        fx, lx = _cell_span(vx[j], dx, max_steps)
-        fy, ly = _cell_span(vy[j], dy, max_steps)
-        i0 = fx if fx > fy else fy
-        if i0 < 1:
-            i0 = 1
-        i1 = min(lx, ly, max_steps)
-        if i0 > i1:
-            continue
-        zin = (i0 * az) >> 8
-        zout = (i1 * az) >> 8
-        if az > 0:  # climbing: z only leaves the band, so the entry must be inside it
-            out[e] = zout >= wrap_z or (tlo - LAND_BAND < zin <= thi)
-        elif az < 0:  # descending: enter above the band's floor, reach the surface
-            out[e] = zin >= wrap_z or (zin > tlo - LAND_BAND and zout <= thi)
-        else:
-            out[e] = tlo - LAND_BAND < 0 <= thi
+    fx, lx = _cell_span(ax, dx, max_steps)
+    fy, ly = _cell_span(ay, dy, max_steps)
+    i0 = max(fx, fy, 1)
+    i1 = min(lx, ly, max_steps)
+    if i0 > i1:
+        return False
+    zin = (i0 * az) >> 8
+    zout = (i1 * az) >> 8
+    if az > 0:  # climbing: z only leaves the band, so the entry must be inside it
+        return zout >= WRAP_D + tlo or (tlo - LAND_BAND < zin <= thi)
+    if az < 0:  # descending: enter above the band's floor, reach the surface
+        return zin >= WRAP_D + tlo or (zin > tlo - LAND_BAND and zout <= thi)
+    return tlo - LAND_BAND < 0 <= thi
+
+
+@njit(cache=True, parallel=True)
+def _crossing_par(vx, vy, vz, dx, dy, tlo, thi, max_steps):
+    out = np.empty(vx.shape[0], dtype=np.bool_)
+    for e in prange(vx.shape[0]):  # pylint: disable=not-an-iterable
+        out[e] = _crosses(vx[e], vy[e], vz[e], dx, dy, tlo, thi, max_steps)
     return out
+
+
+@njit(cache=True)
+def _crossing_ser(vx, vy, vz, dx, dy, tlo, thi, max_steps):
+    out = np.empty(vx.shape[0], dtype=np.bool_)
+    for e in range(vx.shape[0]):
+        out[e] = _crosses(vx[e], vy[e], vz[e], dx, dy, tlo, thi, max_steps)
+    return out
+
+
+def crossing_mask(vx, vy, vz, dx, dy, tlo, thi, max_steps):
+    """:func:`_crosses` per ray, one thread per :data:`CROSS_GRAIN` rays."""
+    args = (vx, vy, vz, dx, dy, tlo, thi, max_steps)
+    if not _HAVE_JIT:  # pragma: no cover - numba absent
+        return _crossing_ser(*args)
+    prev = numba.get_num_threads()
+    threads = min(prev, vx.shape[0] // CROSS_GRAIN)
+    if threads <= 1:
+        return _crossing_ser(*args)
+    numba.set_num_threads(threads)
+    try:
+        return _crossing_par(*args)
+    finally:
+        numba.set_num_threads(prev)
 
 
 def surface_bounds(state, x, y):
@@ -239,23 +280,22 @@ def stop_cells(vx, vy, vz, surf_lo, surf_hi, slope, ex, ey, zseed, max_steps, ed
 
 def candidates(state, tile, slot, eye_z=None, grids=None, max_steps=MAX_STEPS):
     """Ascending lattice indices that can land on ``tile`` -- a proven superset of the
-    rays the sweep finds, from the heading arc (:func:`los._tile_arc_indices`) narrowed
-    by :func:`crossing_mask`.  Sorting the survivors (~3x fewer) rather than the arc is
-    the same set for a third of the sort."""
+    rays the sweep finds: the heading arc (:func:`los._tile_arc_ranges`) over the
+    heading-ordered components, narrowed by :func:`crossing_mask` and mapped back to
+    lattice indices through ``order``."""
     grids = lattice() if grids is None else grids
-    vx, vy, vz = cached_components(grids)
+    head, order, vx, vy, vz = heading_components(grids)
     ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
-    idx = los._tile_arc_indices(
-        *los._lattice_headings(*grids), ex, ey, tile[0], tile[1]
-    )
-    if idx is None:
-        idx = np.arange(vx.size)
     zs = seed_z(state, slot, eye_z)
     lo, hi = surface_bounds(state, tile[0], tile[1])
-    keep = crossing_mask(
-        vx, vy, vz, idx, tile[0] - ex, tile[1] - ey, lo - zs, hi - zs, max_steps
-    )
-    return np.sort(idx[keep])
+    dx, dy, tlo, thi = tile[0] - ex, tile[1] - ey, lo - zs, hi - zs
+    parts = [
+        order[a:b][
+            crossing_mask(vx[a:b], vy[a:b], vz[a:b], dx, dy, tlo, thi, max_steps)
+        ]
+        for a, b in los._tile_arc_ranges(head, ex, ey, tile[0], tile[1])
+    ]
+    return np.sort(np.concatenate(parts))
 
 
 def _march(state, slot, eye_z, grids, idx, max_steps):

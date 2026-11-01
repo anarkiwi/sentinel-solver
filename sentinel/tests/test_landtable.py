@@ -405,3 +405,78 @@ def test_surface_bounds_bracket_the_stack(new_state):
             break
         slot = flags & 0x3F
     assert seen >= 3
+
+
+def _arc_ref(head, order, ex, ey, tx, ty):
+    """Lattice indices whose heading lies within cell ``(tx, ty)``'s angular span."""
+    dx = np.array([tx - ex - 0.5, tx - ex + 0.5])
+    dy = np.array([ty - ey - 0.5, ty - ey + 0.5])
+    if dx[0] <= 0 <= dx[1] and dy[0] <= 0 <= dy[1]:
+        return order
+    angs = np.arctan2(*np.meshgrid(dy, dx)).ravel()
+    rel = (angs - angs[0] + np.pi) % (2 * np.pi) - np.pi
+    a_lo = (angs[0] + rel.min() + np.pi) % (2 * np.pi) - np.pi - 1e-9
+    a_hi = a_lo + np.ptp(rel) + 2e-9
+    lo = np.searchsorted(head, a_lo, side="left")
+    if a_hi <= np.pi:
+        return order[lo : np.searchsorted(head, a_hi, side="right")]
+    return np.concatenate(
+        (order[lo:], order[: np.searchsorted(head, a_hi - 2 * np.pi, side="right")])
+    )
+
+
+def _span_ref(v, d):
+    """Vectorised ``[first, last]`` sub-steps with tile offset ``d`` on one axis."""
+    q = np.where(v == 0, 1, np.abs(v))
+    pos = (-((0x8000 - d * 65536) // q), -((0x8000 - (d + 1) * 65536) // q) - 1)
+    neg = (
+        -((-(0x8001 - (d + 1) * 65536)) // q),
+        -((-(0x8001 - d * 65536)) // q) - 1,
+    )
+    zero = (1, lt.MAX_STEPS) if d == 0 else (1, 0)
+    return tuple(
+        np.where(v > 0, p, np.where(v < 0, n, z)) for p, n, z in zip(pos, neg, zero)
+    )
+
+
+def _candidates_ref(st, tile, slot, grids):
+    """Gather-based numpy reference for :func:`landtable.candidates`."""
+    head, order = los._lattice_headings(*grids)
+    ex, ey = int(st.obj_x[slot]), int(st.obj_y[slot])
+    idx = _arc_ref(head, order, ex, ey, *tile)
+    vx, vy, vz = (c[idx].astype(np.int64) for c in lt.components(grids))
+    zs = lt.seed_z(st, slot)
+    tlo, thi = (b - zs for b in lt.surface_bounds(st, *tile))
+    fx, lx = _span_ref(vx, tile[0] - ex)
+    fy, ly = _span_ref(vy, tile[1] - ey)
+    i0 = np.maximum(np.maximum(fx, fy), 1)
+    i1 = np.minimum(np.minimum(lx, ly), lt.MAX_STEPS)
+    zin, zout = (i0 * vz) >> 8, (i1 * vz) >> 8
+    alias_up, alias_dn = zout >= lt.WRAP_D + tlo, zin >= lt.WRAP_D + tlo
+    floor = tlo - lt.LAND_BAND
+    up = alias_up | ((floor < zin) & (zin <= thi))
+    dn = alias_dn | ((zin > floor) & (zout <= thi))
+    keep = np.where(vz > 0, up, np.where(vz < 0, dn, floor < 0 <= thi)) & (i0 <= i1)
+    return np.sort(idx[keep])
+
+
+@pytest.mark.parametrize("number", [0, 42, 335, 1442])
+def test_candidates_match_gather_reference(new_state, number):
+    """Every landable tile of a board: the contiguous heading-ordered candidates equal
+    the gather-over-the-arc reference, index for index."""
+    st = new_state(number)
+    slot = st.player
+    grids = lt.lattice()
+    for tile in playerbase.BOARD_TILES:
+        if not lt.never_lands(st, tile, slot):
+            got = lt.candidates(st, tile, slot, grids=grids)
+            assert np.array_equal(got, _candidates_ref(st, tile, slot, grids)), tile
+
+
+def test_crossing_mask_serial_equals_parallel():
+    """Both crossing kernels agree on the whole band lattice, every cell direction."""
+    vx, vy, vz = lt.heading_components(lt.lattice())[2:]
+    for dx, dy in ((0, 0), (5, -3), (-30, 30), (0, 17), (-1, 0)):
+        args = (vx, vy, vz, dx, dy, -0x300, 0x100, lt.MAX_STEPS)
+        par = lt._crossing_par(*args)
+        assert par.any() and np.array_equal(par, lt._crossing_ser(*args))
