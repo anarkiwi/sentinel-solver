@@ -1,7 +1,7 @@
 """The terrain render-projector reproduces plot_world's per-tile projection ($2845).
 
 ``golden_projector.json`` holds, per landscape and view, the ROM's per-grid-point
-$2845 outputs captured via py65 with occlusion disabled; the non-oracle test replays
+$2845 outputs captured via jennings with occlusion disabled; the non-oracle test replays
 them with :mod:`sentinel.projector` and asserts byte-exact equality.
 """
 

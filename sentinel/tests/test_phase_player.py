@@ -152,14 +152,14 @@ def test_a_stance_with_a_move_is_not_barren():
     assert not player.trace
 
 
-def test_barren_asks_per_tile_and_short_circuits():
-    """It runs on EVERY tick, so finding that ONE action is available must not cost a
-    whole 3,538,944-ray lattice."""
+def test_barren_reads_one_band_sweep_and_short_circuits():
+    """It runs on EVERY tick, so finding that ONE action is available costs at most the
+    band lattice's one sweep, never the plane's too."""
     player = _player(42)
     views = _Views(player.st)
     playerbase._VIEW_CACHE.clear()
     assert not player._barren(views)
-    assert not playerbase._VIEW_CACHE
+    assert len(playerbase._VIEW_CACHE) == 1 and True not in views._lat
 
 
 @pytest.mark.xfail(

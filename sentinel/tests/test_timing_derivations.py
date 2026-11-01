@@ -150,7 +150,7 @@ def _settle_rows():
 
 def test_the_settle_fallback_is_the_fixture_verb_mean():
     """actioncost.SETTLE is the tile-less fallback: each verb's value sits on the
-    fixture's own live-measured mean (absorb 86.7, create 109.6, transfer 332)."""
+    fixture's own live mean."""
     frames = {}
     for row in _settle_rows():
         if row["live_ok"]:
@@ -161,7 +161,7 @@ def test_the_settle_fallback_is_the_fixture_verb_mean():
 
 
 def test_the_settle_rate_prices_every_fixture_wall():
-    """measured == BRACKET + cycles/SETTLE_FG within 1 f on every live row, so the
+    """measured == BRACKET + cycles/SETTLE_FG within a frame on every live row, so the
     FLAT/CARRY body mix and the steal are validated inside the rate they compose."""
     for row in _settle_rows():
         if not row["live_ok"]:
@@ -285,10 +285,10 @@ def _mode(hist):
 
 
 def test_the_priced_redraw_brackets_every_live_rotation_redraw():
-    """Every live $1F9F is a $209B reject, and the modelled rejects bracket them.
+    """Every live `$1F9F` is a `$209B` reject, and the modelled rejects bracket them.
 
     The redraw is bimodal, so no single number is right; what the live capture
-    constrains is the off-screen branch, the only one 16 rotations ever took."""
+    constrains is the off-screen branch, the only one the captured rotations reach."""
     samples = [
         c
         for board, vals in _live_cycles()["rotation_redraw_1f9f"].items()
@@ -313,7 +313,7 @@ def test_the_priced_redraw_brackets_every_live_rotation_redraw():
 
 
 def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
-    """$1805..$1884 counted off the image, its three fixed callees measured live."""
+    """`$1805..$1884` counted off the image, its three fixed callees measured live."""
     parts = _live_cycles()["rotate_parts"]
     straight = 32 + 12  # $1805..$1822 and $187B..$1884, the four JSR opcodes apart
     jsrs = 4 * 6  # $1AF4, $1973, $3470 and the $1881 JSR $1F9F charged separately
@@ -327,10 +327,10 @@ def test_rotate_is_the_counted_straight_line_plus_its_measured_callees():
 
 def test_irq_cycles_is_the_measured_badline_steal_and_handler_time():
     """IRQ_CYCLES is the FIXED cycles a frame denies the play loop: the badline steal,
-    four short raster interrupts and the $9630 body, each measured on the machine.
+    four short raster interrupts and the `$9630` body, each counted on the machine.
 
     BADLINE_STEAL is the MAXIMUM a badline can take, so the frame's own total lands at
-    or under 25 times it; what it actually takes is test_badline.py's business."""
+    or under `25` times it; what it actually takes is test_badline.py's business."""
     irq = _live_cycles()["irq"]
     assert passcost.BADLINE_STEAL == max(int(k) for k in irq["badline_steal"])
     assert passcost.BADLINES_PER_FRAME == irq["badlines_per_frame"]
@@ -370,11 +370,11 @@ def test_the_strip_replot_lands_where_the_machine_puts_it(monkeypatch):
 
 
 def test_the_frame_budget_decomposition_matches_the_live_frame():
-    """Every cycle of a live frame is one of the model's four terms, measured apart.
+    """Every cycle of a live frame is one of the model's four terms, captured apart.
 
-    The four short interrupts and the $9630 body are exact.  This split classifies a
+    The four short interrupts and the `$9630` body are exact.  This split classifies a
     steal as any delta over the opcode's own minimum, so its badline term is an UPPER
-    bound (a taken branch reads as 44); the exact one is test_badline.py's."""
+    bound (a taken branch reads as `44`); the exact one is test_badline.py's."""
     rec = _live_cycles()["irq"]["frame_budget"]["boards"]
     gaps = []
     for board, m in rec.items():
@@ -921,22 +921,28 @@ def test_the_tile_scan_cost_model_matches_the_roms_own_1ab0(landscape):
 
 def _trace_calls(cpu, mem, mstate, oracle, target):
     """[(cycles, image at entry, $6E)] for each ``target`` call one $16B5 round makes."""
-    ret, hits, inside = 0xFFF0, [], None
-    mem[ret] = 0x60
-    cpu.a = cpu.x = cpu.y = 0
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = oracle.UPDATE_ENEMIES
+    entries = []
+    oracle.enter(cpu, mem, oracle.UPDATE_ENEMIES)
+    s0 = cpu.steps
     mstate["stop"] = False
-    while cpu.pc != ret and not mstate["stop"]:
-        if inside is None and cpu.pc == target:
-            inside = (cpu.sp, cpu.processorCycles, bytes(mem), mem[0x6E])
-        elif inside is not None and cpu.sp > inside[0]:
-            hits.append((cpu.processorCycles - inside[1], inside[2], inside[3]))
-            inside = None
-        cpu.step()
+    cpu.halt = True
+    try:
+        tr = oracle.run_traced(
+            cpu,
+            {target: lambda c: entries.append((c.steps - s0, bytes(mem), mem[0x6E]))},
+        )
+    finally:
+        cpu.halt = False
+    sp, sp_before, after = tr.sp[:-1], tr.sp_before, tr.cycles_after
+    hits, free = [], 0
+    for i, image, obj in entries:
+        if i < free:
+            continue
+        ends = np.flatnonzero(sp[i:] > sp_before[i])
+        if not ends.size:
+            break
+        free = i + int(ends[0]) + 1
+        hits.append((int(after[free - 1] - tr.cycles[i]), image, obj))
     return hits
 
 
@@ -954,28 +960,21 @@ def _rom_body_writes(oracle, image, enemy):
     cpu.pc = 0x16E6
     mstate["stop"] = False
     shadow = {a: mem[a] for a in _CORE_ADDRS}
-    pending, out = [], []
+    s0, c0, writes = cpu.steps, cpu.processorCycles, []
 
     def note(addr, value):
         if value != shadow[addr]:
-            pending.append((addr, value))
+            writes.append((cpu.steps - s0, addr, value))
         shadow[addr] = value
 
-    cpu._memory.subscribe_to_write(
-        _CORE_ADDRS, note
-    )  # pylint: disable=protected-access
-    c0, low, steps = cpu.processorCycles, cpu.sp, 0
-    while cpu.pc != BODY_EXIT and not mstate["stop"] and steps < 400_000:
-        cpu.step()
-        steps += 1
-        low = min(low, cpu.sp)
-        if pending:
-            at = cpu.processorCycles - c0
-            out.extend((at, a, v) for a, v in pending)
-            del pending[:]
+    cpu.memory.subscribe_to_write(_CORE_ADDRS, note)
+    cpu.halt = True
+    tr = oracle.run_traced(cpu, stops=(BODY_EXIT,))
+    low = min(tr.sp0, int(tr.sp.min()))
     assert low >= 0x80, "the stack reached the object arrays: page 1 is ambiguous"
     stack = range(0x0100 + low, 0x0200)
-    return [w for w in out if w[1] not in stack], cpu.processorCycles - c0
+    after = (tr.cycles_after - c0).tolist()
+    return [(after[i], a, v) for i, a, v in writes if a not in stack], int(tr.end) - c0
 
 
 def _body_cases(oracle, landscape):
@@ -1084,12 +1083,12 @@ def _rom_boundaries(oracle, image, start, stop, **regs):
     for name, value in regs.items():
         setattr(cpu, name, value)
     mstate["stop"] = False
-    c0, out, steps = cpu.processorCycles, {}, 0
-    while cpu.pc != stop and not mstate["stop"] and steps < 4000:
-        out.setdefault(cpu.pc, cpu.processorCycles - c0)
-        cpu.step()
-        steps += 1
-    out.setdefault(cpu.pc, cpu.processorCycles - c0)
+    cpu.halt = True
+    c0 = cpu.processorCycles
+    tr = oracle.run_traced(cpu, stops=(stop,))
+    pcs, first = np.unique(tr.pc, return_index=True)
+    out = dict(zip(pcs.tolist(), (tr.cycles[first] - c0).tolist()))
+    out.setdefault(cpu.pc, int(tr.end) - c0)
     return out
 
 
@@ -1331,7 +1330,7 @@ def _run(cpu, mem, mstate, addr):
 @pytest.mark.oracle
 @pytest.mark.parametrize("landscape", (0x0042, 0x0335, 0x9795))
 def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
-    """RENDER_COST_BACKEND=py65 prices $1FA4..$1F9E by running the real $1F9F.
+    """RENDER_COST_BACKEND=exact prices $1FA4..$1F9E by running the real $1F9F.
 
     The proxy prices the same camera through the same $29C7 window and adds the $2211
     strip clear, the $9730 buffer flush and $1F9F's own line, all off the uncapped
@@ -1351,7 +1350,7 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
             visible, left, cols, span, _cyc = relative.object_screen_span(state, slot)
             if not visible:
                 continue
-            monkeypatch.setenv("RENDER_COST_BACKEND", "py65")
+            monkeypatch.setenv("RENDER_COST_BACKEND", "exact")
             exact = projector.strip_replot_frames(state, slot, left, cols, span)
             monkeypatch.setenv("RENDER_COST_BACKEND", "proxy")
             proxy = projector.strip_replot_frames(state, slot, left, cols, span)
@@ -1367,22 +1366,11 @@ def test_the_strip_replot_backend_is_the_roms_own_1f9f(landscape, monkeypatch):
 def _rom_replot_line(state, target):
     """The ROM's own $1FA4..$1F9E on ``target``, less every $1FFC JSR $2625 under it."""
     oracle = _oracle()
-    cpu, mem, mstate = oracle.machine_from_image(state.mem)
-    plot = [0]
-    inside = [None, 0]
-
-    def trace(pc):
-        if inside[0] is None:
-            if pc == oracle.PLOT_WORLD:
-                inside[0], inside[1] = cpu.sp, cpu.processorCycles
-        elif cpu.sp > inside[0]:
-            plot[0] += cpu.processorCycles - inside[1]
-            inside[0] = None
-
-    frames = oracle.update_object_cost(
-        cpu, mem, mstate, target, trace=trace, from_pc=oracle.REPLOT_LINE
+    cpu, mem, _ = oracle.machine_from_image(state.mem)
+    frames, tr = oracle.update_object_cost(
+        cpu, mem, target, trace=True, from_pc=oracle.REPLOT_LINE
     )
-    return round(frames * oracle.FRAME_CYCLES) - plot[0], mem
+    return round(frames * oracle.FRAME_CYCLES) - tr.subtree({oracle.PLOT_WORLD})[0], mem
 
 
 @pytest.mark.oracle

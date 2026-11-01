@@ -11,6 +11,20 @@ def pytest_configure(config):
         "oracle: test drives the real 6502 code (needs out/sentinel_stage2.bin)",
     )
     _cap_numba_threads()
+    _build_image()
+
+
+def _build_image():
+    """Build the oracle image from the CSDb release when absent, once, in the
+    controller (xdist workers start after it); offline it stays absent and skips."""
+    if os.path.exists(IMG) or os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    try:
+        from sentinel.tests import csdb
+
+        csdb.build(IMG)
+    except OSError as exc:
+        print(f"oracle image unavailable ({exc}); oracle tests skip")
 
 
 def _cap_numba_threads():
@@ -31,6 +45,8 @@ def pytest_collection_modifyitems(config, items):
     # Only `oracle` tests (differential against the real 6502) need the ROM fixture.
     if os.path.exists(IMG):
         return
+    if os.environ.get("SENTINEL_REQUIRE_ORACLE"):
+        raise pytest.UsageError(f"SENTINEL_REQUIRE_ORACLE set but {IMG} is absent")
     no_img = pytest.mark.skip(reason="needs out/sentinel_stage2.bin fixture")
     for item in items:
         if item.get_closest_marker("oracle"):

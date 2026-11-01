@@ -43,19 +43,7 @@ def _rom_plot_object(img, h, v, target):
     # $2AA9's span_fill reads $0035/$0036, which the raytrace clobbers: the ROM
     # re-runs $2993 ($35C0 JSR $1090) between the two.
     oracle.call(cpu, mem, 0x2993, a=0, state=state)
-    ret = 0xFFF0
-    mem[ret] = 0x60
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.y = target
-    cpu.pc = 0x8533
-    c0 = cpu.processorCycles
-    steps = 0
-    while cpu.pc != ret and steps < 5_000_000:
-        cpu.step()
-        steps += 1
+    c = oracle.cycles(cpu, mem, 0x8533, y=target)
     verts = [
         [
             mem[0x0BA0 + 0x40 + i],
@@ -65,7 +53,7 @@ def _rom_plot_object(img, h, v, target):
         ]
         for i in range(objmodel.MAX_VERTICES)
     ]
-    return cpu.processorCycles - c0 + 6, verts
+    return c + 6, verts
 
 
 def _model_plot_object(state, h, v, target):

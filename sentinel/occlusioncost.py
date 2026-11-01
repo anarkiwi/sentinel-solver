@@ -6,8 +6,9 @@ $0CDE=0, $0CCE bit7 set, $0CDF=$0C73=0 ($352C idles at 29 cycles).
 """
 
 import numpy as np
+from numba import njit
 
-from sentinel import terrain
+from sentinel import memmap as mm
 
 N = 32
 CALL = 6  # JSR
@@ -70,27 +71,33 @@ ROW_LOOP = 3  # $24D7 BPL taken (last 2)
 _RAMP = np.arange(256, dtype=np.int64)
 
 
-def _reader(state):
-    """$25C4 pass 1: returns (tz[y][x] = (z<<1)|slope, cycles)."""
+@njit(cache=True)
+def _reader_mem(mem):
+    """:func:`_reader` over the raw memory image."""
     tz = np.zeros((N, N), np.int64)
     cyc = READER_HEAD + N * (READER_ROW + READER_ROW_TAIL + N * READER_TILE) - N - 1
     for y in range(N):
         for x in range(N):
-            b = terrain.tile_byte(state, x, y)
+            b = mem[mm.TILES_TABLE + ((x & 3) << 8) + ((x << 3) & 0xE0) + y]
             if b < 0xC0:
-                z, slope = b >> 4, 1 if b & 0x0F else 0
+                z, slope = b >> 4, (b & 0x0F) != 0
                 cyc += TILE_Z_TERRAIN
             else:
                 slot, depth = b & 0x3F, 1
                 for _ in range(63):
-                    if state.obj_flags[slot] < 0x40:
+                    if mem[mm.OBJECTS_FLAGS + slot] < 0x40:
                         break
-                    slot = state.obj_flags[slot] & 0x3F
+                    slot = mem[mm.OBJECTS_FLAGS + slot] & 0x3F
                     depth += 1
-                z, slope = state.obj_z_height[slot], 0
+                z, slope = mem[mm.OBJECTS_Z_HEIGHT + slot], False
                 cyc += TILE_Z_OBJ_BASE + TILE_Z_OBJ_LEVEL * depth
-            tz[y, x] = ((z << 1) | slope) & 0xFF
+            tz[y, x] = ((np.int64(z) << 1) | slope) & 0xFF
     return tz, cyc
+
+
+def _reader(state):
+    """$25C4 pass 1: returns (tz[y][x] = (z<<1)|slope, cycles)."""
+    return _reader_mem(np.frombuffer(state.mem, dtype=np.uint8))
 
 
 def _corner_min(tz):
@@ -116,7 +123,7 @@ def _overlay(state, tz, mz):
 
     Pages $40-$59 are fresh RAM (zero), $5A-$5F carry the ROM identity-ramp
     pages outside the freshly written rows, $3E80 was just zero-filled."""
-    ov = np.frombuffer(bytes(state.mem), dtype=np.uint8).astype(np.int64)
+    ov = np.array(state.mem, dtype=np.uint8)
     ov[0x4000:0x5A00] = 0
     ov[0x5A00:0x6000] = np.tile(_RAMP, 6)
     ov[0x3E80:0x3F00] = 0
@@ -168,43 +175,46 @@ def _tile_terms(tz, objx, objy, objz, zfrac):
     return cost, cheap, sh, ext, laps
 
 
+@njit(cache=True)
+def _march_rays(ov, cheap, laps, e0, e1, e2, s0hi, s2hi, s1lo, s1hi, x0, y0, z0, zf):
+    """$2576 march per ray: per-lap cost incl the CMP ($72),Y page-cross penalty, exit
+    by occlusion (BCC) or lap-budget exhaustion."""
+    cyc = np.zeros(cheap.size, np.int64)
+    for r in range(cheap.size):
+        if cheap[r]:
+            continue
+        xlo, xin, ylo, yrow = 0x80, x0, 0x80, (y0 + 0x40) & 0xFF
+        zlo, zmid, zhi = 0, zf, z0
+        lap = 0
+        while True:
+            lap += 1
+            t = xlo + s0hi[r]
+            xlo = t & 0xFF
+            xin = (xin + e0[r] + (t >> 8)) & 0xFF
+            t = ylo + s2hi[r]
+            ylo = t & 0xFF
+            yrow = (yrow + e2[r] + (t >> 8)) & 0xFF
+            t = zlo + s1lo[r]
+            t2 = zmid + s1hi[r] + (t >> 8)
+            zlo = t & 0xFF
+            zmid = t2 & 0xFF
+            zhi = (zhi + e1[r] + (t2 >> 8)) & 0xFF
+            cyc[r] += xin >= 0xE0
+            if zhi < ov[((yrow << 8) + 0x20 + xin) & 0xFFFF]:
+                cyc[r] += LAP_OCCL
+                break
+            if lap == laps[r]:
+                cyc[r] += LAP_EXHAUST
+                break
+            cyc[r] += LAP_FULL
+    return cyc
+
+
 def _march(ov, cheap, sh, ext, laps, objx, objy, objz, zfrac):
-    """$2576 march, all 1024 rays in lockstep: per-lap cost incl the CMP ($72),Y
-    page-cross penalty, exit by occlusion (BCC) or lap-budget exhaustion."""
-    active = ~cheap.ravel()
-    lapsf = laps.ravel()
-    e0, e1, e2 = (ext[k].ravel() for k in (0, 1, 2))
-    s0hi, s2hi = sh[0][1].ravel(), sh[2][1].ravel()
-    s1lo, s1hi = sh[1][0].ravel(), sh[1][1].ravel()
-    n = active.size
-    xlo = np.full(n, 0x80, np.int64)
-    xin = np.full(n, objx, np.int64)
-    ylo = np.full(n, 0x80, np.int64)
-    yrow = np.full(n, (objy + 0x40) & 0xFF, np.int64)
-    zlo = np.zeros(n, np.int64)
-    zmid = np.full(n, zfrac, np.int64)
-    zhi = np.full(n, objz, np.int64)
-    cyc = np.zeros(n, np.int64)
-    lap = 0
-    while active.any():
-        lap += 1
-        t = xlo + s0hi
-        xlo = np.where(active, t & 0xFF, xlo)
-        xin = np.where(active, (xin + e0 + (t >> 8)) & 0xFF, xin)
-        t = ylo + s2hi
-        ylo = np.where(active, t & 0xFF, ylo)
-        yrow = np.where(active, (yrow + e2 + (t >> 8)) & 0xFF, yrow)
-        t = zlo + s1lo
-        t2 = zmid + s1hi + (t >> 8)
-        zlo = np.where(active, t & 0xFF, zlo)
-        zmid = np.where(active, t2 & 0xFF, zmid)
-        zhi = np.where(active, (zhi + e1 + (t2 >> 8)) & 0xFF, zhi)
-        addr = ((yrow << 8) + 0x20 + xin) & 0xFFFF
-        occl = zhi < ov[addr]
-        exhausted = lapsf == lap
-        add = np.where(occl, LAP_OCCL, np.where(exhausted, LAP_EXHAUST, LAP_FULL))
-        cyc += np.where(active, add + (xin >= 0xE0), 0)
-        active &= ~(occl | exhausted)
+    """:func:`_march_rays` over the 32x32 tile grid."""
+    flat = [a.ravel() for a in (cheap, laps, ext[0], ext[1], ext[2])]
+    flat += [sh[0][1].ravel(), sh[2][1].ravel(), sh[1][0].ravel(), sh[1][1].ravel()]
+    cyc = _march_rays(ov, *flat, int(objx), int(objy), int(objz), int(zfrac))
     return cyc.reshape((N, N))
 
 

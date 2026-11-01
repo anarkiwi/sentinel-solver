@@ -1,6 +1,6 @@
 """The recorded clock as ground truth for what an action COST, and what it moved.
 
-Every span here is measured from the fixture's own $1335/$0C50/$0C28 readings, so these
+Every span here is measured from the fixture's own `$1335`/`$0C50`/`$0C28` readings, so these
 tests grade the cost model and the enemy advance against the real game rather than
 against each other.
 """
@@ -94,7 +94,8 @@ def test_recorded_clock_pins_the_span_of_most_actions():
 
 def test_advance_frames_reproduces_the_cooldown_clock_exactly():
     """Seeded with the recorded clock and advanced by the measured span, the
-    $1335/$0C50 accumulator lands on the next event's recorded reading every time."""
+    `$1335`/`$0C50` accumulator lands on the next event's recorded reading every time.
+    """
     evs = _events()
     seed = _load(FIXTURE)["landscape"]
     for i, n in _exact_spans(evs):
@@ -369,15 +370,15 @@ def test_the_rom_really_replots_the_enemy_the_overshoot_blames():
     hc.seed_clock(st, ev)
     assert relative.object_screen_span(st, OVERSHOOT_SLOT)[0]  # ours picks this enemy
 
-    cpu, rom, mstate = oracle.machine_from_image(bytes(st.mem))
+    cpu, rom, _ = oracle.machine_from_image(bytes(st.mem))
     rom[oracle.WORLD_BUSY_PLOTTING] = 0x00
     rom[0x0091], rom[0x006E] = OVERSHOOT_SLOT, rom[mm.PLAYER_OBJECT]
     oracle.call(cpu, rom, 0x1B00, a=OVERSHOOT_SLOT)  # $1AF4's own gate
     assert cpu.p & 0x01, "$1B00 aborted the update: $0C1F was set after all"
 
-    seen = set()
-    frames = oracle.update_object_cost(cpu, rom, mstate, OVERSHOOT_SLOT, trace=seen.add)
-    assert 0x1FFC in seen and 0x1FF6 not in seen  # $2625 plot_world, not $8533
+    frames, tr = oracle.update_object_cost(cpu, rom, OVERSHOOT_SLOT, trace=True)
+    seen = tr.hits()
+    assert seen[0x1FFC] and not seen[0x1FF6]  # $2625 plot_world, not $8533
     assert 25.0 < frames < 45.0  # a whole span's worth of foreground, once
 
 
@@ -437,9 +438,9 @@ def test_spans_below_the_rom_floor_are_not_two_actions():
 
 
 def test_billed_cost_against_measured_elapsed():
-    """What the executor bills for an action, against what the action really took.
+    """What the executor bills for an action, against the action's real elapsed span.
 
-    ``span = settle(prev) + think + aim``, and think >= 0, so billing more than the whole
+    ``span = settle(prev) + think + aim`` with non-negative think, so billing more than the whole
     span is proof of overcharge.  In aggregate the bill is close, and the measured side
     still CONTAINS think time, so a correct bill should sit under it.
     """

@@ -3,12 +3,12 @@
 A bit-exact numba transcription of the HOT part of the ROM ray-march
 (check_for_line_of_sight_to_tile $1CDD): the per-sub-step ``add_vector``, the
 board-edge test, and the flat-tile / sloping-tile surface comparison, all over a
-raw ``numpy.uint8`` view of the 64 KB memory image.
+raw ``numpy.uint8`` view of the whole memory image.
 
-It reproduces exactly the pure-Python march in :mod:`sentinel.los` for every tile
-EXCEPT a *primary object tile* (the ray's current tile byte >= $C0): that case
-walks the recursive object stack (get_tile_z_from_object $1E3F), which stays in
-tested Python.
+Flat, sloping and object tiles are all resolved here.  Within a tile the sub-steps
+that provably keep marching on one branch path are taken in closed form with their
+exact summed cost, so a march costs O(tiles crossed); the per-sub-step reference it
+matches bit for bit lives in ``tests/test_los_jit.py``.
 
 Return status:
   * ``LOS_CLEAR`` (1) -- the ray reached a visible tile (ROM carry clear).
@@ -24,6 +24,7 @@ from sentinel import jitcache
 
 jitcache.install()  # must precede numba: the cache key carries the cost constants
 
+import numba  # noqa: E402  pylint: disable=wrong-import-position
 from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import passcost  # noqa: E402
@@ -31,6 +32,20 @@ from sentinel.writeweight import MARCH as wcost  # noqa: E402
 
 LOS_CLEAR = 1
 BLOCKED = 0
+
+# march_batch runs batch // BATCH_GRAIN threads (serially below two): the rays per
+# thread at the measured fastest thread count (sentinel.tests.test_los_jit.batch_grain).
+BATCH_GRAIN = 8
+
+_RUN_QUAD = 0
+_RUN_EDGE = 1
+_RUN_OBJECT = 2
+# object-walk position dependences: the $1EAF fraction against $40 / $64, is_tree
+_USE_40 = 1
+_USE_64 = 2
+_USE_TREE = 4
+_USE_MULTI = 8
+_POPCOUNT = np.array([bin(i).count("1") for i in range(256)], dtype=np.int64)
 
 # Per-sub-step 6502 cost, bound as njit-visible globals (sentinel.passcost).
 _ADD_VECTOR = wcost.ADD_VECTOR
@@ -135,7 +150,7 @@ _MUL_DBL_DBL_CARRY = passcost.MUL_DBL_DBL_CARRY
 _MUL_DBL_DBL_NEG = passcost.MUL_DBL_DBL_NEG
 _PREP_VEC = passcost.PREP_VEC
 
-# Object-array bases in the 64 KB image (sentinel.memmap), inlined so the njit
+# Object-array bases in the memory image (sentinel.memmap), inlined so the njit
 # code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
 # OBJECTS_Z_FRACTION $0A00, OBJECTS_TYPE $0A40.
 _OFLAGS = 0x0100
@@ -208,96 +223,252 @@ def _corner_at(i, p73, p74, p75, p76):
     return p73  # i == 4
 
 
-@njit(cache=True)
-def _slope_quad(nib, p73, p74, p75, p76, px_sub, py_sub, pz_sub, pz_whole):
-    """los._slope_corner_or_quad $1D8A-$1DEE, opcode-faithful.  Returns (verdict,
-    cycles): 1 blocked (ray below the slope) or 0 loop (above it)."""
-    cyc = np.int64(0)
-    A = nib & 0xFF
-    C = A & 1
-    A >>= 1
-    if C == 0:
-        cyc += np.int64(_SLOPE_Q_C2)
-        C = A & 1
-        A >>= 1
-        s78 = A
-        C = A & 1
-        A >>= 1
-        A = px_sub & 0xFF
-        if C != 0:
-            A ^= 0xFF
-            cyc += np.int64(_SLOPE_Q_CORNER_EOR)
-        cyc += np.int64(_SLOPE_Q_CORNER)
-        C = 1 if A >= (py_sub & 0xFF) else 0
-        A = ((s78 << 1) | C) & 0xFF
-        A = _edge(A)
+@njit(cache=True, inline="always")
+def _quad_head(nib):
+    """The position-independent half of the $1D8A-$1DAE edge pick.  Returns ``(flip,
+    x0, x1, cycles)``: the edge is ``x1`` when ``(px_sub ^ flip) >= py_sub``, else
+    ``x0`` (the same edge for the fixed-edge nibbles)."""
+    if (nib & 1) == 0:
+        s78 = (nib >> 2) & 3
+        cyc = np.int64(_SLOPE_Q_C2 + _SLOPE_Q_CORNER)
+    elif nib & 2:
+        s78 = ((nib >> 2) + 2) & 3
+        cyc = np.int64(_SLOPE_Q_C1 + _SLOPE_Q_CORNER)
     else:
-        C = A & 1
-        A >>= 1
-        if C == 1:
-            cyc += np.int64(_SLOPE_Q_C1)
-            A = (A + 1 + C) & 0xFF
-            A &= 0x03
-            s78 = A
-            C = A & 1
-            A >>= 1
-            A = px_sub & 0xFF
-            if C != 0:
-                A ^= 0xFF
-                cyc += np.int64(_SLOPE_Q_CORNER_EOR)
-            cyc += np.int64(_SLOPE_Q_CORNER)
-            C = 1 if A >= (py_sub & 0xFF) else 0
-            A = ((s78 << 1) | C) & 0xFF
-            A = _edge(A)
-        else:
-            cyc += np.int64(_SLOPE_Q_EDGE)
-            A = A & 1
+        x = (nib >> 2) & 1
+        return 0, x, x, np.int64(_SLOPE_Q_EDGE)
+    flip = 0xFF if s78 & 1 else 0
+    if flip:
+        cyc += np.int64(_SLOPE_Q_CORNER_EOR)
+    return flip, _edge(s78 << 1), _edge((s78 << 1) | 1), cyc
 
-    # use_edge_for_slope $1DAF
-    cyc += np.int64(_SLOPE_Q_TAIL)
-    X = A & 0xFF
-    C = A & 1
-    A >>= 1
-    yreg = px_sub & 0xFF
-    if C == 0:
-        yreg = py_sub & 0xFF
+
+@njit(cache=True, inline="always")
+def _quad_edge(x, p73, p74, p75, p76):
+    """use_edge_for_slope $1DAF-$1DEE for edge ``x``, as ``(axis, invert, base, slope,
+    cycles)``: the ray is blocked iff ``(pz16 - base - s02 * slope) & 0x8000`` (mod
+    2^16), ``s02`` being the sub-tile byte of x (``axis`` 1) or y (0) XOR ``invert``.
+    ``cycles`` excludes the per-set-bit multiply cost and the blocked exit."""
+    cyc = np.int64(_SLOPE_Q_TAIL)
+    axis = x & 1
+    if axis == 0:
         cyc += np.int64(_SLOPE_Q_USE_Y)
-    C = A & 1
-    A >>= 1
-    A = yreg
-    if C != 0:
-        A ^= 0xFF
+    inv = 0xFF if x & 2 else 0
+    if inv:
         cyc += np.int64(_SLOPE_Q_INVERT)
-    s02 = A & 0xFF
+    c0 = _corner_at(x & 3, p73, p74, p75, p76)
+    res = (_corner_at((x & 3) + 1, p73, p74, p75, p76) - c0) & 0xFF
+    slope = res - 0x100 if res & 0x80 else res
+    if slope < 0:
+        cyc += np.int64(_SLOPE_Q_ABS + _SLOPE_Q_NEG)
+    return (
+        np.int64(axis),
+        np.int64(inv),
+        np.int64(c0 << 8),
+        np.int64(slope),
+        cyc,
+    )
 
-    s78 = _corner_at(X & 3, p73, p74, p75, p76)
-    a = (
-        _corner_at((X & 3) + 1, p73, p74, p75, p76)
-        - _corner_at(X & 3, p73, p74, p75, p76)
-    ) & 0x1FF
-    res = a & 0xFF
-    neg = (res & 0x80) != 0
-    if neg:
-        res = ((res ^ 0xFF) + 1) & 0xFF
-        cyc += np.int64(_SLOPE_Q_ABS)
-    s75 = res
-    cyc += np.int64(_MUL8_BIT) * _bits(s02)
-    prod = (s02 & 0xFF) * (s75 & 0xFF)
-    prod_h = (prod >> 8) & 0xFF
-    prod_lo = prod & 0xFF
-    if neg:
-        val = ((prod_h & 0xFF) << 8) | (prod_lo & 0xFF)
-        negv = (-val) & 0xFFFF
-        prod_h = (negv >> 8) & 0xFF
-        prod_lo = negv & 0xFF
-        cyc += np.int64(_SLOPE_Q_NEG)
-    s75b = (prod_h + s78) & 0xFF
-    lo = (pz_sub & 0xFF) - prod_lo
-    borrow = 1 if lo < 0 else 0
-    hi8 = ((pz_whole & 0xFF) - s75b - borrow) & 0xFF
-    if hi8 & 0x80:
-        return 1, cyc + np.int64(_SLOPE_Q_BLOCK)  # blocked
-    return 0, cyc  # loop
+
+@njit(cache=True, inline="always")
+def _edge_miss(b8, p73, p74, p75, p76):
+    """The nibble 4/$C edge test: index of the first corner the ray byte clears (the
+    $1D66 miss count), 4 when it clears none (blocked).  Non-increasing in ``b8``."""
+    if b8 >= p73:
+        return 0
+    if b8 >= p74:
+        return 1
+    if b8 >= p75:
+        return 2
+    if b8 >= p76:
+        return 3
+    return 4
+
+
+@njit(cache=True, inline="always")
+def _tile_steps(a, v):
+    """Further sub-steps a 16-bit in-tile accumulator ``a`` takes before carrying out."""
+    if v > 0:
+        return (0xFFFF - a) // v
+    if v < 0:
+        return a // (-v)
+    return np.int64(1) << 62
+
+
+@njit(cache=True, inline="always")
+def _flat_run(z, za, vz, n):
+    """Leading sub-steps of ``1..n`` that stay below flat height ``z``.
+
+    Below means ``((z << 8) - pz16) & 0x8000`` with ``pz16 = za_j >> 8``; that is
+    ``ceil(w_j / 256) mod 2^16 >= 0x8000`` for ``w_j = ((z << 16) - za) mod 2^24 - j*vz``.
+    Step 0 is below, so ``ceil(w_0/256)`` is in [0x8000, 0xFFFF]; it moves by at most
+    0x80 per step, so it leaves that band only through 0x7FFF (climbing) or 0x10000
+    (descending), at the first ``j`` solving the matching linear inequality."""
+    if vz == 0:
+        return n
+    w = ((z << 16) - za) & 0xFFFFFF
+    if vz > 0:
+        m = -(((0x7FFF << 8) - w) // vz)
+    else:
+        m = ((0xFFFF << 8) - w) // (-vz) + 1
+    return min(m - 1, n)
+
+
+@njit(cache=True)
+def _popcount_sum(c, v, r):
+    """``sum(popcount((c + j*v) >> 8) for j in 1..r)``: the run's summed $0D03
+    multiplier set bits, by table over its s02 bytes."""
+    tot = np.int64(0)
+    for _ in range(r):
+        c += v
+        tot += _POPCOUNT[c >> 8]
+    return tot
+
+
+@njit(cache=True, inline="always")
+def _floor_ge(a1, a2, b1, b2):
+    """Whether ``floor(La/256) >= floor(Lb/256)`` over a run on which the linear ``La``,
+    ``Lb`` go from ``a1``/``b1`` to ``a2``/``b2``: 1 always, 0 never, -1 undecided."""
+    if min(a1, a2) >> 8 >= max(b1, b2) >> 8 or min(a1 - b1, a2 - b2) >= 0:
+        return 1
+    if max(a1, a2) >> 8 < min(b1, b2) >> 8 or max(a1 - b1, a2 - b2) <= -0x100:
+        return 0
+    return -1
+
+
+@njit(cache=True, inline="always")
+def _centred(a, side):
+    """The linear accumulator whose high byte is the $1EAF centre distance (_min_xy)."""
+    return a - 0x8000 if side else 0x7FFF - a
+
+
+@njit(cache=True)
+def _object_ok(z0, z2, x0, x2, y0, y2, zs, uses, tk):
+    """:func:`_run_ok` for an object tile: sub-steps ``0..L`` (accumulators from ``*0``
+    to ``*2``) share sub-step 0's walk path and stay below its surface ``zs``.
+    A tree walk also holds its is_tree class (``tk`` = its $1E69 height + $E0)."""
+    if uses:
+        sx = x0 >> 15
+        sy = y0 >> 15
+        if sx != x2 >> 15 or sy != y2 >> 15:
+            return False
+        u0, u2 = _centred(x0, sx), _centred(x2, sx)
+        w0, w2 = _centred(y0, sy), _centred(y2, sy)
+        ywins = _floor_ge(w0, w2, u0, u2)
+        if ywins < 0:
+            return False
+        f0, f2 = (w0, w2) if ywins else (u0, u2)
+        fa = f0 >> 8
+        fb = f2 >> 8
+        if uses & _USE_40 and (fa >= 0x40) != (fb >= 0x40):
+            return False
+        if uses & _USE_64 and (fa >= 0x64) != (fb >= 0x64):
+            return False
+        if uses & _USE_TREE:
+            # V = (tk - pz16) mod 2^16: >= $8000 below, >= $400 high, else near iff
+            # V >> 2 < frac, i.e. 256*tk' - Z - 4*Lf < -(Z mod 256) - 4*(Lf mod 256)
+            vlo = tk - (max(z0, z2) >> 8)
+            vhi = tk - (min(z0, z2) >> 8)
+            if vlo >> 16 != vhi >> 16:
+                return False
+            lo = vlo & 0xFFFF
+            hi = vhi & 0xFFFF
+            if (lo >= 0x8000) != (hi >= 0x8000) or (lo >= 0x400) != (hi >= 0x400):
+                return False
+            if hi < 0x400:
+                base = (tk - (vlo >> 16 << 16)) << 8
+                h0 = base - z0 - 4 * f0
+                h2 = base - z2 - 4 * f2
+                near = hi >> 2 < min(fa, fb) or max(h0, h2) < -0x4FB
+                if not near and not (lo >> 2 >= max(fa, fb) or min(h0, h2) >= 0):
+                    return False
+    qlo = zs - (max(z0, z2) >> 8)
+    qhi = zs - (min(z0, z2) >> 8)
+    return (qlo >> 16) == (qhi >> 16) and (qlo & 0xFFFF) >= 0x8000
+
+
+@njit(cache=True)
+def _run_ok(L, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses, tk):
+    """Whether sub-steps ``1..L`` of an in-tile run all keep marching along one branch
+    path, as ``(ok, class)``.  Every input is monotone or linear-plus-floor over the run
+    (x/y never carry), so endpoints bound it, and ``ok`` is monotone in ``L``."""
+    za1 = za + vz
+    za2 = za + L * vz
+    if mode == _RUN_EDGE:
+        wa = za1 >> 16
+        wb = za2 >> 16
+        if (wa >> 8) != (wb >> 8):
+            return False, 0
+        ka = _edge_miss(wa & 0xFF, corners[0], corners[1], corners[2], corners[3])
+        kb = _edge_miss(wb & 0xFF, corners[0], corners[1], corners[2], corners[3])
+        return ka == kb < 4, ka
+    x2 = xa + L * vx
+    y2 = ya + L * vy
+    if mode == _RUN_OBJECT:
+        return _object_ok(za, za2, xa, x2, ya, y2, zs, uses, tk), 0
+    x1 = xa + vx
+    y1 = ya + vy
+    pa = za1 >> 8
+    pb = za2 >> 8
+    c = 0
+    if not cfix:
+        if flip:
+            c = _floor_ge(0xFFFF - x1, 0xFFFF - x2, y1, y2)
+        else:
+            c = _floor_ge(x1, x2, y1, y2)
+        if c < 0:
+            return False, 0
+    e = e1 if c else e0
+    if e[0]:
+        l1, l2 = x1, x2
+    else:
+        l1, l2 = y1, y2
+    if e[1]:
+        l1, l2 = 0xFFFF - l1, 0xFFFF - l2
+    ds = e[3]
+    sa = e[2] + (l1 >> 8) * ds
+    sb = e[2] + (l2 >> 8) * ds
+    # 256*(pz16 - S) = Z - ds*Ls - 256*base - (Z mod 256) + ds*(Ls mod 256)
+    g1 = za1 - ds * l1 - (e[2] << 8)
+    g2 = za2 - ds * l2 - (e[2] << 8)
+    qlo = max(
+        min(pa, pb) - max(sa, sb),
+        -((0xFF + 0xFF * max(0, -ds) - min(g1, g2)) >> 8),
+    )
+    qhi = min(max(pa, pb) - min(sa, sb), (max(g1, g2) + 0xFF * max(0, ds)) >> 8)
+    return (qlo >> 16) == (qhi >> 16) and (qhi & 0xFFFF) < 0x8000, c
+
+
+@njit(cache=True)
+def _run(n, mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses, tk):
+    """The longest prefix ``r <= n`` :func:`_run_ok` proves, with its class, by
+    galloping then bisection on the monotone predicate."""
+    if n <= 0:
+        return 0, 0
+    args = (mode, za, vz, xa, vx, ya, vy, flip, cfix, e0, e1, corners, zs, uses, tk)
+    ok, cls = _run_ok(n, *args)
+    if ok:
+        return n, cls
+    lo = 0
+    lo_cls = 0
+    hi = 1
+    while hi < n:
+        ok, cls = _run_ok(hi, *args)
+        if not ok:
+            break
+        lo = hi
+        lo_cls = cls
+        hi *= 2
+    hi = min(hi, n)
+    while hi - lo > 1:
+        mid = (lo + hi) >> 1
+        ok, cls = _run_ok(mid, *args)
+        if ok:
+            lo = mid
+            lo_cls = cls
+        else:
+            hi = mid
+    return lo, lo_cls
 
 
 @njit(cache=True, inline="always")
@@ -336,29 +507,34 @@ def _is_tree_cdd(mem, Y, pz_sub, pz_whole, minxy, c56, cdd):
     carry = 1 if t2 > 0xFF else 0
     a = (saved_hi + carry) & 0xFF
     if a & 0x80:
-        return cdd, _OBJ_TREE_BELOW
+        return cdd, _OBJ_TREE_BELOW, 0
     c = a & 1
     a >>= 1
     s75 = ((s75 >> 1) | (c << 7)) & 0xFF
     c = a & 1
     a >>= 1
     if a != 0:
-        return cdd, _OBJ_TREE_HIGH
+        return cdd, _OBJ_TREE_HIGH, 0
     a = ((s75 >> 1) | (c << 7)) & 0xFF
     if a < minxy:
-        return cdd, _OBJ_TREE_NEAR
+        return cdd, _OBJ_TREE_NEAR, 0
     if c56 & 0x80:
-        return cdd, _OBJ_TREE_TARGETED
-    return ((cdd >> 1) | 0x80) & 0xFF, _OBJ_TREE_SEEN
+        return cdd, _OBJ_TREE_TARGETED, 0
+    return ((cdd >> 1) | 0x80) & 0xFF, _OBJ_TREE_SEEN, 1
 
 
 @njit(cache=True)
 def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
     """los._get_tile_z_from_object $1E3F and its helpers, flattened into one bounded
-    iterative walk of the object stack.  Returns the 8-tuple
-    ``(z, s79, c0c, c67, c56, cdd, s60, cycles)`` -- the object surface the flat-tile
-    check compares against, the $0C56/$0CDD trackers, and the walk's own 6502 cost."""
+    iterative walk of the object stack.  Returns ``(z, s79, c0c, c67, c56, cdd, s60,
+    cycles, hits, uses, tk, seen)``: the surface, the $0C56/$0CDD trackers, the walk's
+    6502 cost, the targeted-slot visits, its ``_USE_*`` position dependences, and the
+    is_tree height + $E0 and $0CDD marks of its tree."""
     s60 = 0x80
+    hits = 0
+    uses = 0
+    tk = 0
+    seen = 0
     s79 = 0
     c0c = 0x80
     c67 = 0
@@ -376,6 +552,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
             cyc += _OBJ_HEAD_LOS
             if Y == (c58 & 0xFF):
                 c56 = ((c56 >> 1) | 0x80) & 0xFF
+                hits += 1
                 cyc += _OBJ_TARGET_HIT
             else:
                 cyc += _OBJ_TARGET_MISS
@@ -386,12 +563,18 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                 go_skip = False
                 frac, fcyc = _min_xy(px_sub, py_sub)
                 cyc += fcyc
+                uses |= _USE_40
                 if frac >= 0x40:
                     cyc += _OBJ_BT_SKIP
                     go_skip = True
                 elif otype == 2:  # is_tree $1E69
                     cyc += _OBJ_BT_TYPE + _OBJ_BT_TREE
-                    cdd, tcyc = _is_tree_cdd(mem, Y, pz_sub, pz_whole, frac, c56, cdd)
+                    uses |= _USE_MULTI if uses & _USE_TREE else _USE_TREE
+                    tk = (int(mem[_OZHEIGHT + Y]) << 8) + int(mem[_OZFRAC + Y]) + 0xE0
+                    cdd, tcyc, tseen = _is_tree_cdd(
+                        mem, Y, pz_sub, pz_whole, frac, c56, cdd
+                    )
+                    seen += tseen
                     cyc += tcyc
                     go_skip = True
                 else:
@@ -402,7 +585,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                     s79 = t & 0xFF
                     borrow = 1 if t < 0 else 0
                     z = (int(mem[_OZHEIGHT + Y]) - borrow) & 0xFF
-                    return (z, s79, c0c, c67, c56, cdd, s60, cyc)
+                    return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, uses, tk, seen)
                 if go_skip:
                     # skip_targeting_object $1E99, then fall into ghol
                     if int(mem[_OTYPE + Y]) != 2:
@@ -420,6 +603,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                 cyc += _OBJ_TYPE_PLATFORM
                 frac, fcyc = _min_xy(px_sub, py_sub)
                 cyc += fcyc
+                uses |= _USE_64
                 if frac >= 0x64:
                     cyc += _OBJ_PLAT_SKIP
                     if int(mem[_OTYPE + Y]) != 2:
@@ -435,7 +619,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                     s79 = t & 0xFF
                     carry = 1 if t > 0xFF else 0
                     z = (int(mem[_OZHEIGHT + Y]) + carry) & 0xFF
-                    return (z, s79, c0c, c67, c56, cdd, s60, cyc)
+                    return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, uses, tk, seen)
         if do_ghol:
             # get_height_of_lowest_object $1EA4: stacked -> recurse on the object
             # beneath (raw = flags); else the bottom object's z_height.
@@ -445,9 +629,22 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                 raw = flags
                 continue
             cyc += _OBJ_GHOL_RTS
-            return (int(mem[_OZHEIGHT + Y]), s79, c0c, c67, c56, cdd, s60, cyc)
+            z = int(mem[_OZHEIGHT + Y])
+            return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, uses, tk, seen)
     # safety: corrupt/deep stack
-    return (int(mem[_OZHEIGHT + (raw & 0x3F)]), s79, c0c, c67, c56, cdd, s60, cyc)
+    z = int(mem[_OZHEIGHT + (raw & 0x3F)])
+    return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, _USE_MULTI, tk, seen)
+
+
+@njit(cache=True, inline="always")
+def _s16(hi, lo):
+    v = ((hi & 0xFF) << 8) | (lo & 0xFF)
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+@njit(cache=True, inline="always")
+def _acc(whole, sub, frac):
+    return ((whole & 0xFF) << 16) | ((sub & 0xFF) << 8) | (frac & 0xFF)
 
 
 @njit(cache=True)
@@ -492,44 +689,38 @@ def march(
     ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
     do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.
     ``c58`` is the targeted-object slot; ``c56``/``cdd`` are the $0C56/$0CDD
-    trackers (seeded/LSR'd by the caller, returned so the caller can persist them)."""
+    trackers (seeded/LSR'd by the caller, returned so the caller can persist them).
+
+    add_vector $1CBB is a signed 16-bit step on each 24-bit (whole:sub:frac)
+    accumulator.  Once a flat or sloping tile's sub-step keeps marching, the run of
+    further sub-steps inside that tile that provably keep marching (:func:`_flat_run`,
+    :func:`_slope_run`) is taken in closed form with its exact summed cost, so the
+    march costs O(tiles crossed), not O(sub-steps); object tiles go sub-step by sub-step.
+    """
+    vx = _s16(ax_hi, ax_lo)
+    vy = _s16(ay_hi, ay_lo)
+    vz = _s16(az_hi, az_lo)
+    xa = _acc(px_whole, px_sub, px_frac)
+    ya = _acc(py_whole, py_sub, py_frac)
+    za = _acc(pz_whole, pz_sub, pz_frac)
     ty = 0
     tx = 0
     steps = 0
     cycles = np.int64(0)
     status = BLOCKED
-    # Signed 16-bit per-axis vectors: each march sub-step adds this (sign-extended)
-    # to the 24-bit (whole:sub:frac) position accumulator.  Used by the flat-tile
-    # intra-tile fast-forward below.
-    vx16 = ((ax_hi & 0xFF) << 8) | (ax_lo & 0xFF)
-    if vx16 >= 0x8000:
-        vx16 -= 0x10000
-    vy16 = ((ay_hi & 0xFF) << 8) | (ay_lo & 0xFF)
-    if vy16 >= 0x8000:
-        vy16 -= 0x10000
-    vz16 = ((az_hi & 0xFF) << 8) | (az_lo & 0xFF)
-    if vz16 >= 0x8000:
-        vz16 -= 0x10000
-    # Per-tile cache: the tile byte and (for a sloping tile) the four corner
-    # heights depend only on (tx,ty), not on the sub-step position, so they are
-    # computed once per tile and reused across its ~tens of sub-steps.
     cur_tx = -1
     cur_ty = -1
     cb = 0
     cnib = 0
     cz = 0
-    cp73 = 0
-    cp74 = 0
-    cp75 = 0
-    cp76 = 0
+    corners = (0, 0, 0, 0)
     ccorner = np.int64(0)
-    neg = 0
-    if ax_hi & 0x80:
-        neg += 1
-    if az_hi & 0x80:
-        neg += 1
-    if ay_hi & 0x80:
-        neg += 1
+    flip = 0
+    cfix = True
+    hcyc = np.int64(0)
+    e0 = (np.int64(0), np.int64(0), np.int64(0), np.int64(0), np.int64(0))
+    e1 = e0
+    neg = (vx < 0) + (vy < 0) + (vz < 0)
     step_fixed = np.int64(_ADD_VECTOR + _ADD_VECTOR_NEG * neg + 2 * _STEP_EDGE)
     # $1CFB..$1DFE: only reached once both edge tests fall through.
     tile_fixed = np.int64(_STEP_SETUP + _TILE_Z_CALL + _TILE_ADDR + _TILE_Z_READ)
@@ -538,41 +729,22 @@ def march(
         + tile_fixed
         + np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF + _FLAT_BELOW)
     )
+    obj_step = step_fixed + tile_fixed + np.int64(_TILE_Z_OBJ + _FLAT_BRANCH)
+    obj_step += np.int64(_FLAT_DIFF + _FLAT_BELOW)
+    slope_fixed = step_fixed + tile_fixed + np.int64(_TILE_Z_FLAT + _SLOPE_BRANCH)
+    slope_fixed += np.int64(_SLOPE_HEAD)
     while steps < max_steps:
         steps += 1
-        cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
-        # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
-        # the axes are independent).
-        t = (px_frac & 0xFF) + (ax_lo & 0xFF)
-        px_frac = t & 0xFF
-        carry = 1 if t > 0xFF else 0
-        ext = -1 if (ax_hi & 0x80) else 0
-        t2 = (px_sub & 0xFF) + (ax_hi & 0xFF) + carry
-        px_sub = t2 & 0xFF
-        px_whole = (px_whole + ext + (1 if t2 > 0xFF else 0)) & 0xFF
-
-        t = (pz_frac & 0xFF) + (az_lo & 0xFF)
-        pz_frac = t & 0xFF
-        carry = 1 if t > 0xFF else 0
-        ext = -1 if (az_hi & 0x80) else 0
-        t2 = (pz_sub & 0xFF) + (az_hi & 0xFF) + carry
-        pz_sub = t2 & 0xFF
-        pz_whole = (pz_whole + ext + (1 if t2 > 0xFF else 0)) & 0xFF
-
-        t = (py_frac & 0xFF) + (ay_lo & 0xFF)
-        py_frac = t & 0xFF
-        carry = 1 if t > 0xFF else 0
-        ext = -1 if (ay_hi & 0x80) else 0
-        t2 = (py_sub & 0xFF) + (ay_hi & 0xFF) + carry
-        py_sub = t2 & 0xFF
-        py_whole = (py_whole + ext + (1 if t2 > 0xFF else 0)) & 0xFF
-
-        tx = px_whole & 0xFF
+        cycles += step_fixed
+        xa = (xa + vx) & 0xFFFFFF
+        za = (za + vz) & 0xFFFFFF
+        ya = (ya + vy) & 0xFFFFFF
+        tx = xa >> 16
         if tx >= 0x1F:
             cycles += np.int64(_STEP_EDGE_EXIT - _STEP_EDGE + _LEAVE_SET)
             status = BLOCKED
             break
-        ty = py_whole & 0xFF
+        ty = ya >> 16
         if ty >= 0x1F:
             cycles += np.int64(_STEP_EDGE_EXIT + _LEAVE_SET)
             status = BLOCKED
@@ -586,25 +758,72 @@ def march(
             cnib = cb & 0x0F
             cz = (cb >> 4) & 0x0F
             if cb < 0xC0 and cnib != 0:
-                cp73 = cz
-                cp76, c1 = _corner_z(mem, tx + 1, ty)
-                cp75, c2 = _corner_z(mem, tx + 1, ty + 1)
-                cp74, c3 = _corner_z(mem, tx, ty + 1)
+                p76, c1 = _corner_z(mem, tx + 1, ty)
+                p75, c2 = _corner_z(mem, tx + 1, ty + 1)
+                p74, c3 = _corner_z(mem, tx, ty + 1)
+                corners = (cz, p74, p75, p76)
                 ccorner = c1 + c2 + c3
-        b = cb
-        if b >= 0xC0:
+                flip, x0, x1, hcyc = _quad_head(cnib)
+                cfix = x0 == x1
+                e0 = _quad_edge(x0, cz, p74, p75, p76)
+                e1 = _quad_edge(x1, cz, p74, p75, p76)
+        px_sub = (xa >> 8) & 0xFF
+        py_sub = (ya >> 8) & 0xFF
+        pz_sub = (za >> 8) & 0xFF
+        pz_whole = za >> 16
+        budget = min(
+            _tile_steps(xa & 0xFFFF, vx),
+            _tile_steps(ya & 0xFFFF, vy),
+            max_steps - steps,
+        )
+        if cb >= 0xC0:
             cycles += np.int64(_TILE_Z_OBJ + _FLAT_BRANCH + _FLAT_DIFF)
             # object tile: stack surface $1E3F, then object-aware check_flat_tile $1D0D
-            z, s79, c0c, c67, c56, cdd, s60, ocyc = _object_surface(
-                mem, b, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd
+            c56_0 = c56
+            z, s79, c0c, c67, c56, cdd, s60, ocyc, hits, uses, tk, seen = (
+                _object_surface(
+                    mem, cb, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd
+                )
             )
             cycles += ocyc
-            t = (s79 & 0xFF) - (pz_sub & 0xFF)
+            zs = ((z & 0xFF) << 8) + (s79 & 0xFF)
+            t = (s79 & 0xFF) - pz_sub
             borrow = 1 if t < 0 else 0
             s79 = t & 0xFF
-            d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
+            d = ((z & 0xFF) - pz_whole - borrow) & 0xFF
             if d & 0x80:
                 cycles += np.int64(_FLAT_BELOW)
+                if budget == 0 or uses & _USE_MULTI:
+                    continue
+                if uses & _USE_TREE and hits and not c56_0 & 0x80:
+                    continue  # the targeted test of is_tree flips once $0C56 bit7 sets
+                r, _cls = _run(
+                    budget,
+                    _RUN_OBJECT,
+                    za,
+                    vz,
+                    xa & 0xFFFF,
+                    vx,
+                    ya & 0xFFFF,
+                    vy,
+                    flip,
+                    cfix,
+                    e0,
+                    e1,
+                    corners,
+                    zs,
+                    uses,
+                    tk,
+                )
+                steps += r
+                cycles += r * (obj_step + ocyc)
+                k = min(r * hits, 8)
+                c56 = ((c56 >> k) | (0xFF00 >> k)) & 0xFF
+                k = min(r * seen, 8)
+                cdd = ((cdd >> k) | (0xFF00 >> k)) & 0xFF
+                xa += r * vx
+                ya += r * vy
+                za = (za + r * vz) & 0xFFFFFF
                 continue
             if d != 0:
                 cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
@@ -642,99 +861,25 @@ def march(
             status = LOS_CLEAR
             break
 
-        slope = cnib
-        z = cz
-        if slope == 0:
+        if cnib == 0:
             cycles += np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF)
             # check_flat_tile $1D0D, fast path (s79=0, tolerance $000C=$80,
             # $0060 bit6 clear, $0C67 clear).
-            s79 = (0 - (pz_sub & 0xFF)) & 0xFF
-            borrow = 1 if pz_sub & 0xFF else 0
-            d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
+            s79 = (-pz_sub) & 0xFF
+            d = (cz - pz_whole - (1 if pz_sub else 0)) & 0xFF
             if d & 0x80:
-                # Tile below the ray -> keep marching.  The tile (tx,ty) is fixed
-                # for a closed-form run of sub-steps (position accumulators are
-                # linear); fast-forward that run, replaying ONLY the z surface
-                # comparison per sub-step and skipping the redundant x/y add_vector,
-                # edge tests and tile_byte re-read.  Bit-identical to per-sub-step.
+                # the observer's own tile is charged no FLAT_BELOW
+                below = np.int64(_FLAT_BELOW)
                 if tx == (ox & 0xFF) and ty == (oy & 0xFF):
-                    continue
-                xacc = ((px_sub & 0xFF) << 8) | (px_frac & 0xFF)
-                yacc = ((py_sub & 0xFF) << 8) | (py_frac & 0xFF)
-                if vx16 > 0:
-                    nx = (0xFFFF - xacc) // vx16
-                elif vx16 < 0:
-                    nx = xacc // (-vx16)
-                else:
-                    nx = max_steps
-                if vy16 > 0:
-                    ny = (0xFFFF - yacc) // vy16
-                elif vy16 < 0:
-                    ny = yacc // (-vy16)
-                else:
-                    ny = max_steps
-                n_tile = min(nx, ny, max_steps - steps)
-                zacc = (
-                    ((pz_whole & 0xFF) << 16)
-                    | ((pz_sub & 0xFF) << 8)
-                    | (pz_frac & 0xFF)
-                )
-                m = 0
-                hit = 0
-                while m < n_tile:
-                    m += 1
-                    zacc = (zacc + vz16) & 0xFFFFFF
-                    pzw = (zacc >> 16) & 0xFF
-                    pzs = (zacc >> 8) & 0xFF
-                    dd = (z - pzw - (1 if pzs else 0)) & 0xFF
-                    if dd & 0x80:
-                        continue
-                    hit = 1
-                    break
-                steps += m
-                cycles += np.int64(_FLAT_BELOW) + m * flat_step  # replayed flat steps
-                xacc = (xacc + m * vx16) & 0xFFFF
-                yacc = (yacc + m * vy16) & 0xFFFF
-                px_frac = xacc & 0xFF
-                px_sub = (xacc >> 8) & 0xFF
-                py_frac = yacc & 0xFF
-                py_sub = (yacc >> 8) & 0xFF
-                pz_frac = zacc & 0xFF
-                pz_sub = (zacc >> 8) & 0xFF
-                pz_whole = (zacc >> 16) & 0xFF
-                if hit == 0:
-                    continue  # left the tile (or hit budget) -> resume march
-                # terminated inside the tile: flat verdict at this sub-step
-                cycles -= np.int64(_FLAT_BELOW)
-                s79 = (0 - (pz_sub & 0xFF)) & 0xFF
-                if (
-                    ((z & 0xFF) - (pz_whole & 0xFF) - (1 if pz_sub & 0xFF else 0))
-                    & 0xFF
-                ) != 0:
-                    cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
-                    status = BLOCKED
-                    break
-                cycles += np.int64(_FLAT_TOL)
-                if s79 >= 0x80:
-                    cycles += np.int64(_FLAT_TOL_HIT + _LEAVE_SET)
-                    status = BLOCKED
-                    break
-                cycles += np.int64(_FLAT_BIT60 + _FLAT_ANGLE)
-                if (c6e & 0x80) == 0:
-                    cycles += np.int64(_FLAT_LOOKUP)
-                    if (s30 & 0x80) == 0:
-                        cycles += np.int64(_FLAT_LOOKING_UP + _LEAVE_SET)
-                        status = BLOCKED
-                        break
-                else:
-                    cycles += np.int64(_FLAT_ANGLE_SKIP)
-                cycles += np.int64(_FLAT_SAME)
-                if tx != (ox & 0xFF):
-                    cycles += np.int64(_FLAT_SAME_X_DIFF)
-                else:
-                    cycles += np.int64(_FLAT_SAME_Y + _FLAT_SAME_Y_DIFF)
-                status = LOS_CLEAR
-                break
+                    below = np.int64(0)
+                cycles += below
+                r = _flat_run(cz, za, vz, budget)
+                steps += r
+                cycles += r * (flat_step - _FLAT_BELOW + below)
+                xa += r * vx
+                ya += r * vy
+                za = (za + r * vz) & 0xFFFFFF
+                continue
             if d != 0:
                 cycles += np.int64(_FLAT_ABOVE + _LEAVE_SET)
                 status = BLOCKED
@@ -765,54 +910,116 @@ def march(
             cycles += np.int64(_FLAT_SAME_Y_DIFF)
             status = LOS_CLEAR
             break
-        else:
-            # check_sloping_tile $1D46, corner heights hoisted out of the sub-step loop
-            cycles += np.int64(_TILE_Z_FLAT + _SLOPE_BRANCH + _SLOPE_HEAD) + ccorner
-            if cnib == 0x04 or cnib == 0x0C:
-                cycles += np.int64(
-                    _SLOPE_NIB_4 if cnib == 0x04 else _SLOPE_NIB_12
-                ) + np.int64(_SLOPE_EDGE_LDA)
-                b8 = pz_whole & 0xFF
-                hit = 0
-                for corner in (cp73, cp74, cp75, cp76):
-                    if b8 >= corner:
-                        hit = 1
-                        break
-                    cycles += np.int64(_SLOPE_EDGE_MISS)
-                if hit:
-                    cycles += np.int64(_SLOPE_EDGE_HIT)
-                    continue  # ray above the slope -> keep marching
+
+        # check_sloping_tile $1D46, corner heights hoisted out of the sub-step loop
+        cycles += slope_fixed - step_fixed - tile_fixed + ccorner
+        edge_mode = cnib == 0x04 or cnib == 0x0C
+        if edge_mode:
+            per = np.int64(_SLOPE_NIB_4 if cnib == 0x04 else _SLOPE_NIB_12)
+            per += np.int64(_SLOPE_EDGE_LDA)
+            k = _edge_miss(pz_whole, corners[0], corners[1], corners[2], corners[3])
+            cycles += per + k * np.int64(_SLOPE_EDGE_MISS)
+            if k == 4:
                 cycles += np.int64(_SLOPE_EDGE_BLOCK + _LEAVE_SET)
                 status = BLOCKED
                 break
-            cycles += np.int64(_SLOPE_NIB_QUAD)
-            verdict, qcyc = _slope_quad(
-                cnib, cp73, cp74, cp75, cp76, px_sub, py_sub, pz_sub, pz_whole
-            )
-            cycles += qcyc
-            if verdict == 0:
-                continue  # ray above the slope -> keep marching
-            cycles += np.int64(_LEAVE_SET)  # $1D44 SEC + RTS
-            status = BLOCKED
-            break
+            per += np.int64(_SLOPE_EDGE_HIT)
+            cycles += np.int64(_SLOPE_EDGE_HIT)
+        else:
+            e = e1 if (px_sub ^ flip) >= py_sub else e0
+            s02 = (px_sub if e[0] else py_sub) ^ e[1]
+            per = np.int64(_SLOPE_NIB_QUAD) + hcyc + e[4]
+            cycles += per + np.int64(_MUL8_BIT) * _bits(s02)
+            if (((za >> 8) & 0xFFFF) - e[2] - s02 * e[3]) & 0x8000:
+                cycles += np.int64(_SLOPE_Q_BLOCK + _LEAVE_SET)  # $1D44 SEC + RTS
+                status = BLOCKED
+                break
+        r, cls = _run(
+            budget,
+            _RUN_EDGE if edge_mode else _RUN_QUAD,
+            za,
+            vz,
+            xa & 0xFFFF,
+            vx,
+            ya & 0xFFFF,
+            vy,
+            flip,
+            cfix,
+            e0,
+            e1,
+            corners,
+            0,
+            0,
+            0,
+        )
+        if r == 0:
+            continue
+        if edge_mode:
+            cycles += r * (slope_fixed + ccorner + per + cls * _SLOPE_EDGE_MISS)
+        else:
+            e = e1 if cls else e0
+            if e[0]:
+                c, v = xa & 0xFFFF, vx
+            else:
+                c, v = ya & 0xFFFF, vy
+            if e[1]:
+                c, v = 0xFFFF - c, -v
+            cycles += r * (slope_fixed + ccorner + np.int64(_SLOPE_NIB_QUAD) + hcyc)
+            cycles += r * e[4] + np.int64(_MUL8_BIT) * _popcount_sum(c, v, r)
+        steps += r
+        xa += r * vx
+        ya += r * vy
+        za = (za + r * vz) & 0xFFFFFF
     return (
         status,
         tx,
         ty,
-        px_frac,
-        px_sub,
-        px_whole,
-        pz_frac,
-        pz_sub,
-        pz_whole,
-        py_frac,
-        py_sub,
-        py_whole,
+        xa & 0xFF,
+        (xa >> 8) & 0xFF,
+        xa >> 16,
+        za & 0xFF,
+        (za >> 8) & 0xFF,
+        za >> 16,
+        ya & 0xFF,
+        (ya >> 8) & 0xFF,
+        ya >> 16,
         c56,
         cdd,
         steps,
         cycles,
     )
+
+
+@njit(cache=True, inline="always")
+def _march_one(mem, i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs):
+    """One lattice ray of :func:`march_batch`: ``(status, tx, ty, centre)``."""
+    r = march(
+        mem,
+        ax_lo[i],
+        ax_hi[i],
+        az_lo[i],
+        az_hi[i],
+        ay_lo[i],
+        ay_hi[i],
+        s30[i],
+        seed[0],
+        seed[1],
+        seed[2],
+        seed[3],
+        seed[4],
+        seed[5],
+        seed[6],
+        seed[7],
+        seed[8],
+        obs[0],
+        obs[1],
+        obs[2],
+        obs[3],
+        obs[4],
+        obs[5],
+        obs[6],
+    )
+    return r[0], r[1], r[2], _min_xy(r[4], r[10])[0]
 
 
 @njit(cache=True, inline="always")
@@ -835,6 +1042,31 @@ def _balance_stride(n):
 
 
 @njit(cache=True, parallel=True)
+def _march_batch_parallel(
+    mem, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs
+):
+    n = ax_lo.shape[0]
+    out = np.empty((4, n), dtype=np.int64)
+    stride = _balance_stride(n)  # interleave: contiguous chunks stall the join
+    for k in prange(n):  # pylint: disable=not-an-iterable
+        i = (k * stride) % n
+        out[0, i], out[1, i], out[2, i], out[3, i] = _march_one(
+            mem, i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs
+        )
+    return out
+
+
+@njit(cache=True)
+def _march_batch_serial(mem, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs):
+    n = ax_lo.shape[0]
+    out = np.empty((4, n), dtype=np.int64)
+    for i in range(n):
+        out[0, i], out[1, i], out[2, i], out[3, i] = _march_one(
+            mem, i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs
+        )
+    return out
+
+
 def march_batch(
     mem,
     ax_lo,
@@ -873,40 +1105,9 @@ def march_batch(
     seeded fresh (not threaded through memory between rays), which never changes the
     ``(status, tx, ty)`` verdict -- within a single march they feed only the $0CDD tree
     marker, not the LOS result."""
-    n = ax_lo.shape[0]
-    status = np.empty(n, dtype=np.int64)
-    tx = np.empty(n, dtype=np.int64)
-    ty = np.empty(n, dtype=np.int64)
-    centre = np.empty(n, dtype=np.int64)
-    stride = _balance_stride(n)  # interleave: contiguous chunks stall the join
-    for k in prange(n):  # pylint: disable=not-an-iterable
-        i = (k * stride) % n
-        (
-            st,
-            txi,
-            tyi,
-            _pxf,
-            pxs,
-            _pxw,
-            _pzf,
-            _pzs,
-            _pzw,
-            _pyf,
-            pys,
-            _pyw,
-            _c56,
-            _cdd,
-            _steps,
-            _cycles,
-        ) = march(
-            mem,
-            ax_lo[i],
-            ax_hi[i],
-            az_lo[i],
-            az_hi[i],
-            ay_lo[i],
-            ay_hi[i],
-            s30[i],
+    seed = tuple(
+        int(v)
+        for v in (
             px_frac0,
             px_sub0,
             px_whole0,
@@ -916,19 +1117,21 @@ def march_batch(
             py_frac0,
             py_sub0,
             py_whole0,
-            ox,
-            oy,
-            c6e,
-            c58,
-            c56,
-            cdd,
-            max_steps,
         )
-        status[i] = st
-        tx[i] = txi
-        ty[i] = tyi
-        centre[i] = _min_xy(pxs, pys)[0]
-    return status, tx, ty, centre
+    )
+    obs = tuple(int(v) for v in (ox, oy, c6e, c58, c56, cdd, max_steps))
+    vecs = (ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30)
+    threads = min(numba.get_num_threads(), ax_lo.shape[0] // BATCH_GRAIN)
+    if threads <= 1:
+        out = _march_batch_serial(mem, *vecs, seed, obs)
+    else:
+        prev = numba.get_num_threads()
+        numba.set_num_threads(threads)
+        try:
+            out = _march_batch_parallel(mem, *vecs, seed, obs)
+        finally:
+            numba.set_num_threads(prev)
+    return out[0], out[1], out[2], out[3]
 
 
 # ============================================================================

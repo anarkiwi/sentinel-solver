@@ -172,6 +172,12 @@ def _midgame(new_state, number=321):
     return st
 
 
+def _cheapest(st, rays, grids, aim_from):
+    """:func:`playerbase._cheapest_rays` over one tile's landing rays."""
+    one = np.zeros(rays.size, dtype=np.int64)
+    return int(playerbase._cheapest_rays(st, rays, one, grids, aim_from)[1][0])
+
+
 @pytest.mark.parametrize("number", [0, 42, 110, 321, 335])
 @pytest.mark.parametrize("kind", ["plane", "band"])
 def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
@@ -188,10 +194,7 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
     land = _landings(st, slot, grids)
     kept = set(lt.landing_rays(st, slot, grids=grids).tolist())
     assert kept.issuperset(int(r) for rays in land.values() for r in rays)
-    winner = {
-        tile: playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
-        for tile, rays in land.items()
-    }
+    winner = {tile: _cheapest(st, rays, grids, aim_from) for tile, rays in land.items()}
     want = {
         tile: playerbase._view_at(ray, grids)
         for tile, ray in sorted(winner.items(), key=lambda kv: kv[1])
@@ -204,7 +207,7 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
 def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
     """The chosen view is the frame-cheapest landing ray, checked exhaustively.
 
-    ``_cheapest_ray`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
+    ``_cheapest_rays`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
     every ray is priced with no pruning at all, which is the same minimum only if the
     bound is admissible and the per-group cursor representative is the right one."""
     st = new_game(42).state
@@ -215,7 +218,7 @@ def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
     assert len(land) > 8
     checked = 0
     for tile, rays in sorted(land.items())[:6]:
-        got = playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
+        got = _cheapest(st, rays, grids, aim_from)
         cell, _nu, _ns, _dv, cur = playerbase._lattice_terms(rays, grids, aim_from)
         order = np.lexsort((rays, cur, cell))
         cs = cell[order]
@@ -276,19 +279,19 @@ def test_views_answer_from_the_board_pinned_at_the_first_query(new_state):
     assert {t: plane.get(t, band.get(t)) for t in tiles} == before
 
 
-def test_band_ordered_is_the_sweep_order_without_buying_it(new_state):
-    """``band_ordered`` reproduces the band sweep's ORDER, not merely its membership.
-
-    The climb tie-break reads the sweep positionally, so a per-tile generator is only
-    substitutable if its order is the sweep's own -- asserted here against a sweep built
-    afterwards, with the sweep cache empty while the targeted path answers."""
+def test_band_ordered_is_the_sweep_order_pricing_only_the_asked_tiles(new_state):
+    """``band_ordered`` prices just the tiles ``pick`` takes, yet keeps the full band
+    sweep's ORDER -- the climb tie-break reads it positionally."""
     st = _midgame(new_state)
-    step = 3  # a sparse ask stays under BAND_SWEEP_TILES, so the targeted path answers
-    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, step) for y in range(0, 31, step)}
+    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, 3) for y in range(0, 31, 3)}
     playerbase._VIEW_CACHE.clear()
-    got = playerbase._Views(st).band_ordered(tiles.__contains__)
-    assert not playerbase._VIEW_CACHE  # answered per tile: no lattice was swept
+    views = playerbase._Views(st)
+    got = views.band_ordered(tiles.__contains__)
+    lat = views._lat[False]
+    unasked = [i for t, i in lat.index.items() if t not in tiles]
+    assert unasked and (lat.won[unasked] < 0).all()
     assert len(got) > 4
+    playerbase._VIEW_CACHE.clear()
     want = [(t, v) for t, v in playerbase._Views(st).band().items() if t in tiles]
     assert got == want
 
@@ -405,3 +408,78 @@ def test_surface_bounds_bracket_the_stack(new_state):
             break
         slot = flags & 0x3F
     assert seen >= 3
+
+
+def _arc_ref(head, order, ex, ey, tx, ty):
+    """Lattice indices whose heading lies within cell ``(tx, ty)``'s angular span."""
+    dx = np.array([tx - ex - 0.5, tx - ex + 0.5])
+    dy = np.array([ty - ey - 0.5, ty - ey + 0.5])
+    if dx[0] <= 0 <= dx[1] and dy[0] <= 0 <= dy[1]:
+        return order
+    angs = np.arctan2(*np.meshgrid(dy, dx)).ravel()
+    rel = (angs - angs[0] + np.pi) % (2 * np.pi) - np.pi
+    a_lo = (angs[0] + rel.min() + np.pi) % (2 * np.pi) - np.pi - 1e-9
+    a_hi = a_lo + np.ptp(rel) + 2e-9
+    lo = np.searchsorted(head, a_lo, side="left")
+    if a_hi <= np.pi:
+        return order[lo : np.searchsorted(head, a_hi, side="right")]
+    return np.concatenate(
+        (order[lo:], order[: np.searchsorted(head, a_hi - 2 * np.pi, side="right")])
+    )
+
+
+def _span_ref(v, d):
+    """Vectorised ``[first, last]`` sub-steps with tile offset ``d`` on one axis."""
+    q = np.where(v == 0, 1, np.abs(v))
+    pos = (-((0x8000 - d * 65536) // q), -((0x8000 - (d + 1) * 65536) // q) - 1)
+    neg = (
+        -((-(0x8001 - (d + 1) * 65536)) // q),
+        -((-(0x8001 - d * 65536)) // q) - 1,
+    )
+    zero = (1, lt.MAX_STEPS) if d == 0 else (1, 0)
+    return tuple(
+        np.where(v > 0, p, np.where(v < 0, n, z)) for p, n, z in zip(pos, neg, zero)
+    )
+
+
+def _candidates_ref(st, tile, slot, grids):
+    """Gather-based numpy reference for :func:`landtable.candidates`."""
+    head, order = los._lattice_headings(*grids)
+    ex, ey = int(st.obj_x[slot]), int(st.obj_y[slot])
+    idx = _arc_ref(head, order, ex, ey, *tile)
+    vx, vy, vz = (c[idx].astype(np.int64) for c in lt.components(grids))
+    zs = lt.seed_z(st, slot)
+    tlo, thi = (b - zs for b in lt.surface_bounds(st, *tile))
+    fx, lx = _span_ref(vx, tile[0] - ex)
+    fy, ly = _span_ref(vy, tile[1] - ey)
+    i0 = np.maximum(np.maximum(fx, fy), 1)
+    i1 = np.minimum(np.minimum(lx, ly), lt.MAX_STEPS)
+    zin, zout = (i0 * vz) >> 8, (i1 * vz) >> 8
+    alias_up, alias_dn = zout >= lt.WRAP_D + tlo, zin >= lt.WRAP_D + tlo
+    floor = tlo - lt.LAND_BAND
+    up = alias_up | ((floor < zin) & (zin <= thi))
+    dn = alias_dn | ((zin > floor) & (zout <= thi))
+    keep = np.where(vz > 0, up, np.where(vz < 0, dn, floor < 0 <= thi)) & (i0 <= i1)
+    return np.sort(idx[keep])
+
+
+@pytest.mark.parametrize("number", [0, 42, 335, 1442])
+def test_candidates_match_gather_reference(new_state, number):
+    """Every landable tile of a board: the contiguous heading-ordered candidates equal
+    the gather-over-the-arc reference, index for index."""
+    st = new_state(number)
+    slot = st.player
+    grids = lt.lattice()
+    for tile in playerbase.BOARD_TILES:
+        if not lt.never_lands(st, tile, slot):
+            got = lt.candidates(st, tile, slot, grids=grids)
+            assert np.array_equal(got, _candidates_ref(st, tile, slot, grids)), tile
+
+
+def test_crossing_mask_serial_equals_parallel():
+    """Both crossing kernels agree on the whole band lattice, every cell direction."""
+    vx, vy, vz = lt.heading_components(lt.lattice())[2:]
+    for dx, dy in ((0, 0), (5, -3), (-30, 30), (0, 17), (-1, 0)):
+        args = (vx, vy, vz, dx, dy, -0x300, 0x100, lt.MAX_STEPS)
+        par = lt._crossing_par(*args)
+        assert par.any() and np.array_equal(par, lt._crossing_ser(*args))

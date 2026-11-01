@@ -56,6 +56,17 @@ def _frames(cycles):
     return cycles / SETTLE_FG
 
 
+def _prologue_cycles(state, obs):
+    """$35BA-$35C0's $245B + $3700 from ``obs``: run on the ROM by the exact backend,
+    else the occlusion model plus the table band."""
+    from sentinel import occlusioncost, rendercost_exact
+
+    exact = rendercost_exact.backend()
+    if exact is not None:
+        return sum(exact.prologue_cycles(exact.viewer(state, obs)))
+    return occlusioncost.occlusion_cycles(state, obs) + TAB_3700
+
+
 def viewpoint_settle_frames(state, observer=None, view=None, tune=0x19, eye_view=None):
     """Transfer/u-turn settle: the $357D redraw from ``observer``'s own facing
     (or ``eye_view``), overlapped with ``tune`` (started at $1B84, waited at $35D5)."""
@@ -65,14 +76,11 @@ def viewpoint_settle_frames(state, observer=None, view=None, tune=0x19, eye_view
             "h_angle": int(state.obj_h_angle[obs]),
             "v_angle": int(state.obj_v_angle[obs]),
         }
-    from sentinel import occlusioncost
-
     fg = (
         HEAD_BASE
         + fire_ray_cycles(state, view)
         + REDRAW_HEAD
-        + occlusioncost.occlusion_cycles(state, obs)
-        + TAB_3700
+        + _prologue_cycles(state, obs)
         + FILL_1090
         + projector.FRAME_CYCLES * projector.render_cost(state, eye_view, obs)
         + STATUS_9508

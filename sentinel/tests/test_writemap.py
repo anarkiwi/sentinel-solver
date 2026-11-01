@@ -37,10 +37,9 @@ def test_the_derived_write_cycles_reproduce_the_proven_hand_table():
 
 def test_the_opcode_cost_table_prices_every_live_instruction():
     """Each capture times every opcode class it executed by its own minimum delta; the
-    table must equal all of them, which is what caught jennings' $CE DEC abs."""
+    table must equal all of them."""
     for name, board in _live().items():
         assert board["op_cycle_mismatch"] == {}, name
-    assert writemap.OP_CYCLES[0xCE] == writemap.DEC_ABS_CYCLES
 
 
 @pytest.mark.oracle

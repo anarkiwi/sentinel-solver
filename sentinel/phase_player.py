@@ -492,8 +492,8 @@ class PhasePlayer(BasePlayer):
         """Whether NO action of any class exists from this stance -- gaps and timing aside.
 
         Every generator empty is a different state from every generator refused: the
-        second is a wait, the first cannot change by waiting.  Asked per tile and
-        short-circuiting, since this runs on every tick.
+        second is a wait, the first cannot change by waiting.  Short-circuits on the first
+        action found, since this runs on every tick.
         """
         st = self.st
         for e in enemies.enemy_slots(st):

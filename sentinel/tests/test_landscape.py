@@ -3,7 +3,7 @@ byte for byte.
 
 ``golden_landscape.json`` holds, per landscape, the game-state regions the ROM
 produced (terrain, object tables, platform, cooldowns, enemy rotation speeds,
-energy and PRNG state), captured via py65.  ``test_generate_matches_golden``
+energy and PRNG state), captured via jennings.  ``test_generate_matches_golden``
 replays them with no emulator, proving the pure-Python generator reproduces the
 game's own generator byte for byte.  Live re-derivation against the 6502 code is
 exercised by the oracle-parity suite (Phase 6).

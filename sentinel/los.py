@@ -1302,8 +1302,8 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
 
     ``v_primary`` restricts the body v_angle to :data:`KBD_V_ANGLE` ($F5) alone -- the
     up/level pitch of every non-regressing climb build (a foothold whose top is at or above
-    the eye is never reached by pitching the body DOWN).  Dropping the pitch band is much
-    cheaper (one v-plane vs the whole band) and loses only the down/adjacent tiles a climb
+    the eye is never reached by pitching the body DOWN).  Dropping the pitch band marches
+    one v-plane instead of the whole band and loses only the down/adjacent tiles a climb
     discards anyway; the full band stays the default for the completeness-critical endgame
     launch gate.
 
@@ -1362,7 +1362,7 @@ def landable_sweep_with_centres(
     (:data:`_V_PRIORITY`, $F5 first) so near/below builds are covered.
 
     ``v_primary=True`` restricts the sweep to :data:`KBD_V_ANGLE` -- the up/level pitch of
-    every non-regressing climb foothold -- for a ~100x cheaper sweep in the hot climb loop.
+    every non-regressing climb foothold -- for a single-plane sweep in the hot climb loop.
     """
     if slot is None:
         slot = state.player
@@ -1421,30 +1421,27 @@ def _lattice_headings(hgrid, vgrid, cxs, cys):
     return rec
 
 
-def _tile_arc_indices(head_sorted, order, ex, ey, tx, ty):
-    """Lattice-ray indices whose heading points into cell ``(tx, ty)`` from the eye
-    centre ``(ex+.5, ey+.5)`` -- a PROVABLE superset of the rays that can land on the cell (a
-    straight ray reaching a convex cell has heading within its angular span from the fixed
-    seed).  ``None`` == eye centre inside the cell (whole circle: keep every ray).  In
-    HEADING order (a view into the cached ``order``): :func:`landtable.candidates` sorts
-    the survivors of its crossing filter, ~3x fewer elements than this arc."""
+def _tile_arc_ranges(head_sorted, ex, ey, tx, ty):
+    """``[lo, hi)`` slices of ``head_sorted`` whose heading points into cell ``(tx, ty)``
+    from the eye centre ``(ex+.5, ey+.5)`` -- a PROVABLE superset of the rays that can land
+    on the cell (a straight ray reaching a convex cell has heading within its angular span
+    from the fixed seed).  One slice, two when the arc wraps past +pi, the whole circle
+    when the eye centre is inside the cell."""
     dxlo, dxhi = tx - ex - 0.5, tx - ex + 0.5
     dylo, dyhi = ty - ey - 0.5, ty - ey + 0.5
     if dxlo <= 0.0 <= dxhi and dylo <= 0.0 <= dyhi:
-        return None
+        return ((0, head_sorted.size),)
     corners = ((dxlo, dylo), (dxlo, dyhi), (dxhi, dylo), (dxhi, dyhi))
     angs = [math.atan2(dy, dx) for dx, dy in corners]
     ref = angs[0]
     deltas = [((a - ref + math.pi) % _TWO_PI) - math.pi for a in angs]
     a_lo = ((ref + min(deltas) + math.pi) % _TWO_PI) - math.pi - 1e-9
     a_hi = a_lo + (max(deltas) - min(deltas)) + 2e-9
-    lo_i = np.searchsorted(head_sorted, a_lo, side="left")
+    lo_i = int(np.searchsorted(head_sorted, a_lo, side="left"))
     if a_hi <= math.pi:
-        idx = order[lo_i : np.searchsorted(head_sorted, a_hi, side="right")]
-    else:  # arc wraps past +pi
-        hi_i = np.searchsorted(head_sorted, a_hi - _TWO_PI, side="right")
-        idx = np.concatenate((order[lo_i:], order[:hi_i]))
-    return idx
+        return ((lo_i, int(np.searchsorted(head_sorted, a_hi, side="right"))),)
+    hi_i = int(np.searchsorted(head_sorted, a_hi - _TWO_PI, side="right"))
+    return ((lo_i, head_sorted.size), (0, hi_i))
 
 
 def landable_view_targeted(
@@ -1459,9 +1456,8 @@ def landable_view_targeted(
 ):
     """Build view for ONE ``tile``, bit-identical to its entry in that lattice's full sweep.
 
-    Marches only the rays that can land there: the heading arc (:func:`_tile_arc_indices`)
-    narrowed by the landability filter (:func:`sentinel.landtable.landable_view`, ~4x fewer
-    rays).  ``cxs``/``cys`` override the cursor grid (1px window); ``v_primary`` =
+    Marches only the rays that can land there: the heading arc (:func:`_tile_arc_ranges`)
+    narrowed by the landability filter (:func:`sentinel.landtable.landable_view`).  ``cxs``/``cys`` override the cursor grid (1px window); ``v_primary`` =
     :func:`_landable_sweep`'s $F5 plane, cys CURSOR_CY_FULL.
     """
     if slot is None:
@@ -1476,7 +1472,7 @@ def landable_view_targeted(
 
 def _prepare_vector(state, h_angle, v_angle, cur_x, cur_y, player_slot):
     """The action-time ray vector for one aim.  When numba is present this is the njit
-    :func:`sentinel.los_jit._prep_vec` (bit-identical to, but ~16x cheaper than, the pure
+    :func:`sentinel.los_jit._prep_vec` (bit-identical to the pure
     Python :func:`prepare_vector_from_player_sights`); otherwise the pure-Python path.  The
     player aim reads neither `state` nor `player_slot` (obj_h/obj_v are the aim params), so
     both accept them only for signature parity."""
@@ -1515,8 +1511,8 @@ def aim_target(
 
     The ray vector is built by the numba :func:`sentinel.los_jit._prep_vec` when numba is
     present -- bit-for-bit identical to :func:`prepare_vector_from_player_sights` (locked by
-    tests/test_landable.py::test_prep_vec_matches_python) but ~16x cheaper per probe, so the
-    1px single-tile short-circuit stays fast."""
+    tests/test_landable.py::test_prep_vec_matches_python) so the 1px single-tile
+    short-circuit runs compiled."""
     vec = _prepare_vector(state, h_angle, v_angle, cur_x, cur_y, player_slot)
     # do_line_of_sight_checks $0C6E: the player aim path clears its top bit ($1B40
     # LSR $0C6E). Read it from live memory and mask, matching the ROM exactly.

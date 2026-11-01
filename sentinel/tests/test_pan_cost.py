@@ -1,4 +1,4 @@
-"""pancost reproduces one pan_viewpoint notch, cycle-counted in py65.
+"""pancost reproduces one pan_viewpoint notch, cycle-counted on the oracle.
 
 ``golden_pan_cost.json`` holds the exact $10B7 cycle count per (landscape, bearing,
 pitch, direction), split into strip-clear / examine / rest, plus the $283D and $2A24
@@ -11,6 +11,7 @@ import os
 import statistics
 import tempfile
 
+import numpy as np
 import pytest
 
 from sentinel import landscape, objmodel, pancost, projector
@@ -22,58 +23,29 @@ LANDSCAPES = (0, 42, 335)
 PITCHES = (0x00, 0x04, 0xF8)
 BEARINGS = tuple(range(0, 256, 32))
 
-_RET = 0xFFF0
 # $283D's entry plus both examine bodies: $2845's trig one and the play path's $37F2.
-_EXAMINE = (
-    (0x283D, 0x295C),
-    (0x37F2, 0x38AC),
-    (0x9287, 0x93AC),
-    (0x0D4A, 0x0F49),
-    (0x0F4A, 0x1000),
-)
-
-
-def _in_examine_tree(pc):
-    return any(lo <= pc <= hi for lo, hi in _EXAMINE)
+_EXAMINE = np.zeros(0x10000, np.bool_)
+_EXAMINE[np.r_[0x283D:0x295D, 0x37F2:0x38AD, 0x9287:0x93AD, 0x0D4A:0x1001]] = True
 
 
 def _measure_notch(cpu, mem):
     """Run one pan_viewpoint ($10B7) headless and split its cycles into the strip
     clear ($3912/$38AD), the $283D examine call-tree and everything else."""
-    mem[_RET] = 0x60
-    sp = cpu.sp
-    mem[0x0100 + sp] = (_RET - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (_RET - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = 0x10B7
+    filled = [0]
+
+    def plot_tile(c):
+        filled[0] += mem[0x0180 + c.x] != 0
+
+    oracle.enter(cpu, mem, 0x10B7)
     c0 = cpu.processorCycles
-    n_examine = n_filled = examine_cycles = clear_cycles = steps = 0
-    in_clear = False
-    clear_sp = 0
-    while cpu.pc != _RET and steps < 20_000_000:
-        pc = cpu.pc
-        if pc == 0x283D:
-            n_examine += 1
-        elif pc == 0x2A24 and mem[0x0180 + cpu.x]:
-            n_filled += 1
-        if pc in (0x3912, 0x38AD) and not in_clear:
-            in_clear, clear_sp = True, cpu.sp
-        c1 = cpu.processorCycles
-        cpu.step()
-        d = cpu.processorCycles - c1
-        if _in_examine_tree(pc):
-            examine_cycles += d
-        if in_clear:
-            clear_cycles += d
-            if cpu.sp > clear_sp:
-                in_clear = False
-        steps += 1
+    tr = oracle.run_traced(cpu, {0x2A24: plot_tile})
+    examine = _EXAMINE[tr.pc]
     return {
-        "cycles": cpu.processorCycles - c0,
-        "clear_cycles": clear_cycles,
-        "examine_cycles": examine_cycles,
-        "n_examine": n_examine,
-        "n_filled": n_filled,
+        "cycles": int(tr.end) - c0,
+        "clear_cycles": tr.subtree({0x3912, 0x38AD})[0],
+        "examine_cycles": int((tr.cycles_after[examine] - tr.cycles[examine]).sum()),
+        "n_examine": int(np.count_nonzero(tr.pc == 0x283D)),
+        "n_filled": filled[0],
     }
 
 
@@ -85,7 +57,7 @@ def _build_golden():
         player = mem[0x000B]
         mem[0x006E] = player
         # $245B and $3700 are both position-only and a notch rebuilds neither, so one prologue per landscape is what $10B7 sees for the whole sweep.
-        oracle.prepare_render_context(cpu, mem, state, projector.PLAY_MODE)
+        oracle.prepare_render_context(cpu, mem, projector.PLAY_MODE)
         for v in PITCHES:
             for h in BEARINGS:
                 for d in range(4):
@@ -116,7 +88,7 @@ def _rows():
 
 @pytest.mark.oracle
 def test_regenerate_pan_cost_golden():
-    """Cycle-count pan_viewpoint across the sweep in py65 and dump the golden.
+    """Cycle-count pan_viewpoint across the sweep on the oracle and dump the golden.
     Writes via rename so a concurrent xdist worker never reads a half-written file;
     the temp name is unlinked on any failure so an abort leaves nothing behind."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(GOLDEN), suffix=".tmp")
@@ -186,9 +158,9 @@ def test_pan_notch_cost_matches_the_measured_plot():
     not objmodel.available(), reason="the notch's object fill needs the game image"
 )
 def test_derived_notch_beats_the_flat_base_it_replaced():
-    """The reason this model exists: a flat per-notch base cannot span a redraw that
-    swings by an order of magnitude across a board, whatever value it takes. The
-    derived model must beat the BEST such constant, not merely the old 34."""
+    """A flat per-notch base cannot span a redraw whose cost swings widely across a
+    board, whatever value it takes, so the derived model must beat the BEST such
+    constant."""
     meas, pred = [], []
     for _key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)

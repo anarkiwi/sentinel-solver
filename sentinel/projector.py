@@ -575,7 +575,7 @@ def _occlusion_visible(state, observer=None):
     return _occlusion_tables(state, obs)[0]
 
 
-# Every byte plot_world reads: tiles_table ($0400) + the object flags/v_angle ($0100) and x/z/y/h_angle/z_frac/type ($0900) arrays + the $283D examine flag and the $26CD row hint -- 1538 bytes, ~1us to digest.
+# Every byte plot_world reads: tiles_table (`$0400`) + the object flags/v_angle (`$0100`) and x/z/y/h_angle/z_frac/type (`$0900`) arrays + the `$283D` examine flag and the `$26CD` row hint -- 1538 bytes.
 _SCENE_SPANS = (
     (0x0400, 0x0800),
     (0x0100, 0x0180),
@@ -896,36 +896,22 @@ def _object_base_cycles(state, tile_bytes):
     return total
 
 
-_EXACT_WARNED = [False]
-
-
 def _exact_render_cost(state, h, v, observer):
-    """The py65 exact backend when ``RENDER_COST_BACKEND=py65`` selects it and the ROM
-    is present, else None (warn once and fall back to the proxy). Player-view only."""
-    if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() != "py65":
-        return None
-    if observer is not None and observer != state.player:
-        return None
-    try:
-        from sentinel.tests import oracle
+    """The exact backend's cost of ``observer``'s view when
+    :func:`rendercost_exact.backend` is selected and available, else None."""
+    from sentinel import rendercost_exact
 
-        if not oracle.available():
-            raise FileNotFoundError("ROM fixture absent")
-        from sentinel import rendercost_py65
-
-        return rendercost_py65.render_cost_exact(state, h, v)
-    except (ImportError, FileNotFoundError) as exc:
-        if not _EXACT_WARNED[0]:
-            _EXACT_WARNED[0] = True
-            print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
+    exact = rendercost_exact.backend()
+    if exact is None:
         return None
+    return exact.render_cost_exact(exact.viewer(state, observer), h, v)
 
 
 def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=None):
     """One plot_world pass in PAL frames (docs/architecture.md): examine floor +
     terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
     buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
-    ``RENDER_COST_BACKEND=py65`` (ROM present) replaces the proxy for the play buffer.
+    ``RENDER_COST_BACKEND=exact`` (ROM present) replaces the proxy for the play buffer.
     """
     if not view or view.get("h_angle") is None:
         return 0.0
@@ -1107,11 +1093,12 @@ def strip_replot_frames(state, target, left, columns, span=None):
 
     Around the $2625 chunks sit the $2211 clear and the $9730 flush, both over the
     uncapped ``span`` ($0C6A; ``columns`` when not given).
-    ``RENDER_COST_BACKEND=py65`` runs the real $1F9F and is exact."""
-    if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() == "py65":
-        exact = _exact_strip_cost(state, target)
-        if exact is not None:
-            return exact
+    ``RENDER_COST_BACKEND=exact`` runs the real $1F9F."""
+    from sentinel import rendercost_exact
+
+    exact = rendercost_exact.backend()
+    if exact is not None:
+        return exact.strip_replot_cost_exact(state, target)
     span = columns if span is None else span
     player = state.player
     chunks = replot_chunks(left, span)
@@ -1126,23 +1113,6 @@ def strip_replot_frames(state, target, left, columns, span=None):
             window=strip_window(chunk_columns),
         )
     return frames
-
-
-def _exact_strip_cost(state, target):
-    """The py65 $1F9F backend, or None when the ROM fixture is absent."""
-    try:
-        from sentinel.tests import oracle
-
-        if not oracle.available():
-            raise FileNotFoundError("ROM fixture absent")
-        from sentinel import rendercost_py65
-
-        return rendercost_py65.strip_replot_cost_exact(state, target)
-    except (ImportError, FileNotFoundError) as exc:
-        if not _EXACT_WARNED[0]:
-            _EXACT_WARNED[0] = True
-            print(f"RENDER_COST_BACKEND=py65 unavailable ({exc}); using proxy")
-        return None
 
 
 def replot_owed(state, row, column, in_plot):

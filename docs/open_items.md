@@ -5,54 +5,6 @@ shows it, what would resolve it. Anything not here is either correct or out of s
 ([architecture.md](architecture.md), "Not modelled"); a mechanism once understood moves there
 and stops being an open item.
 
-## 1. A per-tile candidate generator only pays once the eye is up
-
-**Wrong.** The phase player's candidate generators now ask per tile
-([candidate generators](architecture.md#the-landability-filter-landtablepy)) instead of reading
-the whole pitch-band dict, but that is cheaper only while the cheap filter prunes. Early, with
-a low eye, it prunes nothing and the sweep is still the better answer, so `BAND_SWEEP_TILES`
-buys one — an unresolved cost, not an unresolved decision.
-
-**Measured — the change.** `_climb_candidates`, `_establish`'s supply hop and `_barren` ask
-`_Views.band_ordered`; `_barren` short-circuits on the first available action and reads no
-whole dict on a tick. Bit-identical on all eight suite boards and on the two relocation wins
-(ls7414 59, ls8589 46). Solo, one numba thread, idle host:
-
-| board | before | after |
-|---|---|---|
-| ls42 | 180.9 s | 157.4 s |
-| ls335 | 78.8 s | 60.5 s |
-| ls373 | 85.5 s | 69.2 s |
-| ls7545 (dies in 17) | 37.0 s | 42.9 s |
-| ls8271 (dies in 13) | 48.3 s | 53.2 s |
-| ls9090 (dies in 13) | 23.4 s | 24.2 s |
-
-Boards that climb get faster and boards that die in their first twenty actions get slower, and
-those are the same regime split: a climb candidate needs `base >= my_eye - 2.275`, so at entry
-`gain > 0` holds for ~930 of the ~950 stackable tiles and nothing is pruned. On the 24-board
-sample of [12](#12-the-hardest-boards-are-unsolved-and-mostly-unfinished) the net is 1-2 more
-boards reaching a verdict, both of them wins.
-
-**Measured — why batching does not rescue the entry state.** At the ls42/ls335 entry the union
-of the asked tiles' candidate ray sets is 721,275 / 495,372 rays against the 696,699 / 765,328
-the whole sweep marches, so one batched multi-tile march is not cheaper than the sweep. The
-per-tile path is linear and clean (3.7-4.4 ms/tile over 25..200 tiles on ls42/ls335/ls8644)
-against 0.83-1.08 s/sweep, hence the 205-260-tile crossover `BAND_SWEEP_TILES` = 200 sits
-under.
-
-**Measured — `_settle_tie` does not re-sweep.** The allegation that a tie buys a sweep per fork
-is false: `_VIEW_CACHE` keys on `projector.scene_key`, so a fresh clone of an unchanged board
-hits the memo. Over a full ls110 solve, 6 ties and 22 forks, 45 sweeps are built and **0** of
-them at a tie's own entry scene key.
-
-**Measured — `player._climb_scan` is genuinely whole-set.** It ranks on each candidate's
-`_aim_frames`, so every candidate needs its view, and its visibility-free gates leave 946
-(ls42) and 932 (ls335) tiles — ~6 s of targeted marches against a 1.2-1.4 s sweep. Per tile is
-4-5x *worse* there, so it keeps the sweep.
-
-**Resolves.** A cheap sound prune that survives a low eye, which the gain test is not. Then
-`BAND_SWEEP_TILES` and the sweep path go away.
-
 ## 2. Live frame accounting leaks across a tie
 
 **Wrong.** Frame counts from a live run are not trustworthy across a tie-breaking rollout.
@@ -100,7 +52,7 @@ aim side, not the settle:
   serial from the ROM (the `$363D..$3694` loop: the `$0CC1` queue, the `$0CD8` once-per-frame
   drain, the `$130B` accept gate) and empirically unbiased (24 rows, mean resid −0.5 f,
   RMS 13.5 f) — but only because a notch divides raw proxy cycles by 19656 while the proxy's
-  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the py65 backend
+  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the exact backend
   **alone** breaks it ~25%, in opposite directions. Move both sides or neither.
 - **Live bracket attribution.** The sd-71 residual sits in how the live `$9630` bracket
   splits an action between aim and settle, not in either law's own bias — the settle's
@@ -193,11 +145,10 @@ builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vert
 byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
 **Closed — the terrain fill, and the oracle's own `DEC abs`.** Two errors, one of each sign.
-py65 declares `$CE DEC abs` at 3 cycles where the 6502 takes 6 (`deity_informant`'s
-`CYCLETIME` inherits it; `writemap.DEC_ABS_CYCLES` already corrected the static table but
-nothing corrected execution), and `$CE` is the self-modified loop counter of every plot_world
+The oracle once charged `$CE DEC abs` 3 cycles where the 6502 takes 6 (jennings charges 6
+on both its table and its core), and `$CE` is the self-modified loop counter of every plot_world
 DDA — 8328 executions and 24984 cycles on 2024,184,244, ~3% of a fill, missing from every
-golden and from `RENDER_COST_BACKEND=py65`. Against a corrected profile the fill's own blocks
+golden and from `RENDER_COST_BACKEND=exact`. Against a corrected profile the fill's own blocks
 were 85189 cycles light on that view: `span_fill`'s row body 25 cycles a row (`$238C..$239C`
 priced 26 for 31, `$23B5..$23CF` 29 for 45, `$23D0..$23DA` 13 for 20, `$22E0..$2306` 24 for
 39), its two off-buffer branches missing the `$2380`/`$2384` compare that decides them,
@@ -286,14 +237,14 @@ Frame cost is 0.995-1.000x (median 0.997).
 - **The object term without the game image.** `objectcost` needs the model geometry, so a
   checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
   `_inview_object_base`'s floor and under-charges every object
-  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
+  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_exactpy)).
 
 **Resolves.** Threading `$0078` through `_divide_and_arctan` from the image, so the one call
 in seventy whose round-10 bit the residue tips takes the machine's interpolation branch.
 
-## 6. The py65 exact backend cannot price another slot's view
+## 6. The exact backend cannot price another slot's view
 
-**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path.
+**Wrong.** `RENDER_COST_BACKEND=exact` falls back to the proxy on the whole transfer path.
 
 **Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
 `observer != state.player`, and a transfer settle is always priced from the post-transfer slot
@@ -561,8 +512,7 @@ The four short interrupts land on rasters 53/93/133/173 by the same law, so the 
 whole IRQ layout is placeable.
 
 **2. The write-cycle map per term exists, and the march resolves.** `sentinel/writemap.py`
-walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables, with
-`$CE DEC abs` corrected from its table's 3 to the machine's 6 — and reads the write cycles
+walks a cost term's ROM run over the image — jennings' own 6510 length/cycle tables — and reads the write cycles
 straight off the addressing mode, so no hand table is needed. Measured against **6424**
 live BA windows over five captures, one of them taken 112 frames into ls9795 so the loop
 is inside a single 274578-cycle `$1887` march:
@@ -1165,7 +1115,7 @@ missing datum is `plot_world`'s own progress, [5](#5-one-object-vertex-angle-is-
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
 `$1289`. `strip_replot_frames`' proxy charges 387392 cycles = 24.6 frames of stall,
-**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=py65` backend, on the
+**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=exact` backend, on the
 same captured image, returns **534090** cycles = 34.0 frames, **1.54x**. The machine cannot
 have spent 534090 cycles in 22 PAL frames — that is 24277 a frame against the frame's
 19656 — so the *exact* backend's render context is dear, and the proxy calibrated against
@@ -1186,7 +1136,7 @@ classification below puts more than a quarter of what is left inside `$1AB0`
 **57 -> 57**, ls0042 **0 -> 0** over 3000 frames; the 64 -> 67 was pricing the play machine's
 own `$37F2` examine, which took a strip replot's over-charge away, and the 67 -> 64 is
 `$1F9F`'s own line replacing it with the real thing
-([6](#6-the-py65-exact-backend-cannot-price-another-slots-view),
+([6](#6-the-exact-backend-cannot-price-another-slots-view),
 [architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
 Classifying every surviving event by the `$95E9` chain the halt exposes:
 
@@ -1349,7 +1299,7 @@ It is now charged, by `projector.strip_replot_frames`, at the camera `$1FC2` shi
 (`$09C0 += $0C62/2`) rather than the player's own, and through the strip's own buffer
 window: `$1FE5 JSR $29C7` halves `$0C69` into `$0007` and folds that into `$0012`, exactly
 as `$2993` does from its table, so `render_cost` takes the window as an argument.
-`RENDER_COST_BACKEND=py65` runs the real `$1F9F` instead and is exact — 19..29 frames on
+`RENDER_COST_BACKEND=exact` runs the real `$1F9F` instead and is exact — 19..29 frames on
 the three boards — but costs ~1.3 s per uncached call, so the default is the windowed
 proxy. The window matters: without it the proxy priced all 40 columns, ran 1.3..2.8x dear
 and the clock over-stalled (ls335 grew a second facing error of the wrong sign, which the
@@ -1504,7 +1454,7 @@ that reaches a win would separate an executor-timing limit from a forward-model 
 **Measured.** Alias landings (the 8-bit z compare wrapping) are kept unconditionally as
 wildcards (`crossing_mask`'s `wrap_z` branch), so the answer is sound either way, but they are
 not proved unreachable: band rays do exceed the alias distance at a non-origin cell. The filter
-also inherits `los._tile_arc_indices`'s superset claim; `test_landtable.py` would catch a
+also inherits `los._tile_arc_ranges`'s superset claim; `test_landtable.py` would catch a
 violation but it is not independently proved. Both are keyed to `landtable.MAX_STEPS = 6000`,
 still an explicit argument, so a caller marching further must re-query with the same cap.
 
@@ -1550,7 +1500,7 @@ Three distinct failures sit underneath that, and they need different fixes:
 
 * **Runtime, 84 boards.** Two thirds never reach a verdict. This is not a strategy limit
   and it dominates every other signal here; see
-  [1](#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up). 82 of the 84 had
+  [landability callers](architecture.md#the-landability-filter-landtablepy). 82 of the 84 had
   climbs available at entry, so they were playing, not stuck. A 24-board **sample** —
   every 5th code of `out/hardest_128.txt`, indices 0..115 — re-run at the same 180 s cap,
   24 at a time, went from **10 finished / 0 won** to **11-12 finished / 1-2 won** on the
@@ -1607,7 +1557,7 @@ four that both horizons finished, horizon 2 is shorter or equal on every one (35
 against, so the effect is not a fit to the eight.
 
 **Measured — not the safety probes.** This item previously read that the probes rest on an
-over-priced aim (`playerbase._cheapest_ray`, mean 9 f and up to 141 f cheaper per action, took
+over-priced aim (`playerbase._Landings`, mean 9 f and up to 141 f cheaper per action, took
 ls373 from a 65-action win to a loss in 13). That diagnosis does not survive measurement.
 
 * One probe carries the board: `_landing_holds((8,8), 0)` inside the tick-0 `_breakout` fork,
@@ -1728,7 +1678,7 @@ Each is a hypothesis and the measurement that killed it.
   entry states).
 - **A `_settle_tie` fork re-sweeps the board it forked from.** `_VIEW_CACHE` keys on
   `projector.scene_key`, so a clone of an unchanged board hits the memo: 0 of 45 sweeps over an
-  ls110 solve are at a tie's entry key ([1](#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up)).
+  ls110 solve are at a tie's entry key.
 - **A K-pruned landability table.** The first landing hit sits deep inside a candidate row, so a
   stored-first-`K` row decides almost no landing query at any affordable `K`: at K=64 it costs
   tens of MB per lattice, falls back on nearly every query and is no faster than the exact path,

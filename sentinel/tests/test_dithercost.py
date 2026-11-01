@@ -41,21 +41,9 @@ def _run_rom(machine, span, chain, laps, d9d=0, org=(0, 0)):
         mem[addr] = val
     for addr in (0x0CDF, 0x0C73, 0x0C1E):
         mem[addr] = 0
-    ret = 0xFFF0
-    mem[ret] = 0x60
-    sp = cpu.sp
-    mem[0x0100 + sp] = (ret - 1) >> 8
-    mem[0x0100 + ((sp - 1) & 0xFF)] = (ret - 1) & 0xFF
-    cpu.sp = (sp - 2) & 0xFF
-    cpu.pc = dithercost.DITHER_ENTRY
-    start = cpu.processorCycles
-    steps = 0
-    while cpu.pc != ret and steps < 2_000_000:
-        cpu.step()
-        steps += 1
-    assert cpu.pc == ret
+    c = oracle.cycles(cpu, mem, dithercost.DITHER_ENTRY)
     return (
-        cpu.processorCycles - start,
+        c,
         dithercost.chain_from_mem(mem),
         mem[dithercost.D9D_ADDR],
     )
