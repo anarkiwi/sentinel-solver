@@ -172,6 +172,12 @@ def _midgame(new_state, number=321):
     return st
 
 
+def _cheapest(st, rays, grids, aim_from):
+    """:func:`playerbase._cheapest_rays` over one tile's landing rays."""
+    one = np.zeros(rays.size, dtype=np.int64)
+    return int(playerbase._cheapest_rays(st, rays, one, grids, aim_from)[1][0])
+
+
 @pytest.mark.parametrize("number", [0, 42, 110, 321, 335])
 @pytest.mark.parametrize("kind", ["plane", "band"])
 def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
@@ -188,10 +194,7 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
     land = _landings(st, slot, grids)
     kept = set(lt.landing_rays(st, slot, grids=grids).tolist())
     assert kept.issuperset(int(r) for rays in land.values() for r in rays)
-    winner = {
-        tile: playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
-        for tile, rays in land.items()
-    }
+    winner = {tile: _cheapest(st, rays, grids, aim_from) for tile, rays in land.items()}
     want = {
         tile: playerbase._view_at(ray, grids)
         for tile, ray in sorted(winner.items(), key=lambda kv: kv[1])
@@ -204,7 +207,7 @@ def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
 def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
     """The chosen view is the frame-cheapest landing ray, checked exhaustively.
 
-    ``_cheapest_ray`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
+    ``_cheapest_rays`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
     every ray is priced with no pruning at all, which is the same minimum only if the
     bound is admissible and the per-group cursor representative is the right one."""
     st = new_game(42).state
@@ -215,7 +218,7 @@ def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
     assert len(land) > 8
     checked = 0
     for tile, rays in sorted(land.items())[:6]:
-        got = playerbase._cheapest_ray(st, rays, grids, aim_from, slot)
+        got = _cheapest(st, rays, grids, aim_from)
         cell, _nu, _ns, _dv, cur = playerbase._lattice_terms(rays, grids, aim_from)
         order = np.lexsort((rays, cur, cell))
         cs = cell[order]
@@ -276,19 +279,19 @@ def test_views_answer_from_the_board_pinned_at_the_first_query(new_state):
     assert {t: plane.get(t, band.get(t)) for t in tiles} == before
 
 
-def test_band_ordered_is_the_sweep_order_without_buying_it(new_state):
-    """``band_ordered`` reproduces the band sweep's ORDER, not merely its membership.
-
-    The climb tie-break reads the sweep positionally, so a per-tile generator is only
-    substitutable if its order is the sweep's own -- asserted here against a sweep built
-    afterwards, with the sweep cache empty while the targeted path answers."""
+def test_band_ordered_is_the_sweep_order_pricing_only_the_asked_tiles(new_state):
+    """``band_ordered`` prices just the tiles ``pick`` takes, yet keeps the full band
+    sweep's ORDER -- the climb tie-break reads it positionally."""
     st = _midgame(new_state)
-    step = 3  # a sparse ask stays under BAND_SWEEP_TILES, so the targeted path answers
-    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, step) for y in range(0, 31, step)}
+    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, 3) for y in range(0, 31, 3)}
     playerbase._VIEW_CACHE.clear()
-    got = playerbase._Views(st).band_ordered(tiles.__contains__)
-    assert not playerbase._VIEW_CACHE  # answered per tile: no lattice was swept
+    views = playerbase._Views(st)
+    got = views.band_ordered(tiles.__contains__)
+    lat = views._lat[False]
+    unasked = [i for t, i in lat.index.items() if t not in tiles]
+    assert unasked and (lat.won[unasked] < 0).all()
     assert len(got) > 4
+    playerbase._VIEW_CACHE.clear()
     want = [(t, v) for t, v in playerbase._Views(st).band().items() if t in tiles]
     assert got == want
 

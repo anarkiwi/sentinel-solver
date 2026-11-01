@@ -16,10 +16,6 @@ V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
 SCROLL = (H_SCROLL, V_SCROLL)  # sentinel.pancost.pan_frames, indexed by notch axis
 _VIEW_CACHE = {}
 _VIEW_CACHE_MAX = int(os.environ.get("VIEW_CACHE_MAX", "512"))
-_TILE_VIEW_CACHE = {}  # per-(sweep key, tile) targeted (view, winning ray) pairs
-_TILE_VIEW_CACHE_MAX = (
-    1 << 16
-)  # a per-tile candidate generator asks hundreds per tick, and every fork of one tick re-asks the same keys
 CURSOR_REPEAT_MASK = 0x6B  # $11E0: move_sights auto-repeat mask, reloaded on every scan with no direction key down
 CURSOR_RAMP = float(
     bin(CURSOR_REPEAT_MASK).count("1")
@@ -38,7 +34,6 @@ EDGE = (
     landtable.RADIUS
 )  # highest in-board tile coord: LOS quits at $1F, so 31 never lands
 BOARD_TILES = [(x, y) for x in range(EDGE + 1) for y in range(EDGE + 1)]
-BAND_SWEEP_TILES = 200  # targeted marches at which a board has paid a whole-lattice sweep's price, so one sweep answers every remaining tile of it: measured 3.7-4.4 ms/march (linear in tiles) against 0.83-1.08 s/band sweep over ls42/ls335/ls8644, crossover 205-260. Both paths return the same views, so this trades no decision.
 ROBOT_EYE = 0.875  # a robot's eye above its foot tile ($E0 fraction)
 BOULDER_H = 0.5  # a boulder raises a stack half a unit
 HOP_COST = 5  # boulder (2) + robot (3)
@@ -130,27 +125,183 @@ def _aim_bound(nu, ns, dv, cur):
     )
 
 
-def _cheapest_ray(st, rays, grids, aim_from, observer):
-    """The frame-cheapest of ``rays`` (ascending), proved rather than sampled:
-    :func:`aim_frames` pans by (h, v) alone and drives the cursor by the cursor alone,
-    so one representative per cell -- the cursor nearest :data:`SIGHTS_CENTRE` -- covers
-    the minimum, and pricing in :func:`_aim_bound` order stops at the first bound hit.
+def _sum_step(t, c, x):
+    """One term of CPython's float ``sum`` (Neumaier-compensated), elementwise: running
+    total ``t`` and compensation ``c``; the sum is ``t + c``."""
+    s = t + x
+    return s, c + np.where(np.abs(t) >= np.abs(x), (t - s) + x, (x - s) + t)
+
+
+def aim_table(st, cells, grids, aim_from, observer):
+    """``(t, c)``: :func:`aim_frames`'s ``sum`` state after its toggle, u-turn and pan
+    terms, per lattice (bearing, pitch) ``cells`` entry; :func:`aim_total` adds the cursor.
+
+    :func:`pancost.notch_plots` pans along ``v0`` first, so per (bearing, pitch direction)
+    every pan's notches are a prefix of the farthest one's."""
+    hgrid, vgrid = grids[0], grids[1]
+    h0, v0 = int(aim_from[0]), int(aim_from[1])
+    vi, hi = np.divmod(np.asarray(cells, dtype=np.int64), len(hgrid))
+    v1 = np.asarray(vgrid, dtype=np.int64)[vi]
+    vs = np.abs((v1 - v0 + 128) % 256 - 128) // aimcost.PITCH_STEP
+    up = (v1 - v0) % 256 < 0x80
+    pan = np.empty(vi.size)
+    turn = np.zeros(vi.size)
+    skey = projector.scene_key(st)
+    uturn = None
+    for h in np.unique(hi):
+        h1 = int(hgrid[h])
+        nu, ns = aimcost.h_press_count(h0, h1)
+        col = hi == h
+        if nu:
+            if uturn is None:
+                uturn = settlecost.uturn_settle_frames(st, observer)
+            turn[col] = uturn
+        for d in (True, False):
+            sel = np.flatnonzero(col & (up == d))
+            if not sel.size:
+                continue
+            far = sel[np.argmax(vs[sel])]
+            notches = [
+                pancost.notch_frames(st, dn, ph, pv, observer, skey)
+                + SCROLL[0 if dn < pancost.V_UP else 1]
+                for dn, ph, pv in pancost.notch_plots(h0, v0, h1, int(v1[far]))
+            ]
+            sums = np.array([sum(notches[:k]) for k in range(len(notches) + 1)], float)
+            pan[sel] = sums[ns + vs[sel]]
+    return _sum_step(*_sum_step(np.full(vi.size, TOGGLE_FRAMES), 0.0, turn), pan)
+
+
+def aim_total(table, drive):
+    """:func:`aim_frames` from an :func:`aim_table` entry and the cursor ``drive`` term."""
+    t, c = _sum_step(*table, drive + TAP_FRAMES)
+    return t + c
+
+
+_DRIVE_CACHE = {}
+
+
+def _cursor_drive(grids):
+    """Cursor drive distance from :data:`SIGHTS_CENTRE` per in-cell lattice offset: a
+    lattice index ``i`` lies in cell ``i // len(table)`` at drive ``table[i % len(table)]``.
     """
-    cell, nu, ns, dv, cur = _lattice_terms(rays, grids, aim_from)
-    order = np.lexsort((rays, cur, cell))
-    cs = cell[order]
-    head = order[np.concatenate(([True], cs[1:] != cs[:-1]))]
-    reps = rays[head]
-    bound = _aim_bound(nu[head], ns[head], dv[head], cur[head])
-    best_frames, best = math.inf, -1
-    for j in np.argsort(bound, kind="stable"):
-        if bound[j] > best_frames:  # ties still priced: the winner is the lowest ray
-            break
-        ray = int(reps[j])
-        frames = aim_frames(st, _view_at(ray, grids), aim_from, observer)
-        if frames < best_frames or (frames == best_frames and ray < best):
-            best_frames, best = frames, ray
-    return best
+    key = (tuple(grids[2]), tuple(grids[3]))
+    got = _DRIVE_CACHE.get(key)
+    if got is None:
+        cx = np.abs(np.asarray(grids[2], dtype=np.int64) - SIGHTS_CENTRE[0])
+        cy = np.abs(np.asarray(grids[3], dtype=np.int64) - SIGHTS_CENTRE[1])
+        got = _DRIVE_CACHE[key] = np.maximum.outer(cx, cy).ravel()
+    return got
+
+
+def _starts(a):
+    """Mask of each run's first element in ``a`` (empty-safe)."""
+    m = np.ones(a.size, dtype=bool)
+    m[1:] = a[1:] != a[:-1]
+    return m
+
+
+def _first_per(group, order):
+    """``order`` kept at each run start of ``group[order]`` (``group`` sorted by it)."""
+    return order[_starts(group[order])]
+
+
+class _Landings:
+    """Per tile, the frame-cheapest of its landing ``rays`` (lowest ray on ties), priced
+    on first ask; ``tiles`` are packed ``x * N + y`` keys, ``st`` the board aims price on.
+
+    The pan prices by (h, v) and the cursor drive is monotone, so one representative per
+    (tile, cell) -- least drive, then lowest ray -- holds each minimum.  The asked tiles run
+    one branch-and-bound over :func:`_aim_bound` together, a priced cell pricing every rep.
+    """
+
+    def __init__(self, st, rays, tiles, grids, aim_from):
+        self.st, self.grids, self.aim_from = st, grids, aim_from
+        drive_of = _cursor_drive(grids)
+        ncell = len(grids[0]) * len(grids[1])
+        rb = (ncell * drive_of.size - 1).bit_length()
+        db = int(drive_of.max()).bit_length()
+        cell, off = np.divmod(rays, drive_of.size)
+        key = np.sort(
+            (((tiles * ncell + cell) << db | drive_of[off]) << rb)
+            | rays.astype(np.int64)
+        )
+        key = key[_starts(key >> (rb + db))]
+        self.ray = key & ((1 << rb) - 1)
+        tile, self.cell = np.divmod(key >> (rb + db), ncell)
+        cur = (key >> rb) & ((1 << db) - 1)
+        _cell, nu, ns, dv, _cur = _lattice_terms(self.ray, grids, aim_from)
+        self.bound = _aim_bound(nu, ns, dv, cur)
+        self.drive = np.where(cur > 0, cur + CURSOR_RAMP, 0.0)
+        start = _starts(tile)
+        self.tid = np.cumsum(start) - 1
+        self.tiles = tile[start]
+        self.index = {
+            (int(t) // mm.N, int(t) % mm.N): i for i, t in enumerate(self.tiles)
+        }
+        self.by_bound = np.lexsort((self.bound, self.tid))
+        self.known = np.zeros(ncell, dtype=bool)
+        self.table = np.zeros((2, ncell))
+        self.frames = np.full(self.ray.size, np.inf)
+        self.won = np.full(self.tiles.size, -1, dtype=np.int64)
+
+    def _fill(self, sel):
+        """Frames of the ``sel`` reps whose cells are priced; ``sel`` returned unpriced."""
+        hit = sel[self.known[self.cell[sel]] & np.isinf(self.frames[sel])]
+        self.frames[hit] = aim_total(self.table[:, self.cell[hit]], self.drive[hit])
+        return hit
+
+    def price(self, tids):
+        """Winning rays (``self.won``) of tile ids ``tids``, priced if not yet."""
+        want = np.zeros(self.tiles.size, dtype=bool)
+        want[tids] = True
+        want &= self.won < 0
+        if not want.any():
+            return self.won[tids]
+        order = self.by_bound[want[self.tid[self.by_bound]]]
+        tid, bound, frames = self.tid, self.bound, self.frames
+        best = np.full(self.tiles.size, np.inf)
+        self._fill(order)
+        np.minimum.at(best, tid[order], frames[order])
+        while True:
+            live = order[np.isinf(frames[order]) & (bound[order] <= best[tid[order]])]
+            if not live.size:
+                break
+            new = np.unique(self.cell[_first_per(tid, live)])
+            self.table[:, new] = aim_table(
+                self.st, new, self.grids, self.aim_from, self.st.player
+            )
+            self.known[new] = True
+            hit = self._fill(order)
+            np.minimum.at(best, tid[hit], frames[hit])
+        won = _first_per(
+            tid, order[np.lexsort((self.ray[order], frames[order], tid[order]))]
+        )
+        self.won[tid[won]] = self.ray[won]
+        return self.won[tids]
+
+    def views(self, pick=None):
+        """``{tile: view}`` in winning-ray order over the landed tiles ``pick`` takes."""
+        tids = np.array(
+            [i for t, i in self.index.items() if pick is None or pick(t)],
+            dtype=np.int64,
+        )
+        rays = self.price(tids)
+        by_ray = np.argsort(rays)
+        return {
+            (int(t) // mm.N, int(t) % mm.N): _view_at(r, self.grids)
+            for t, r in zip(self.tiles[tids[by_ray]], rays[by_ray])
+        }
+
+    def view(self, tile):
+        """``tile``'s view, or None if no lattice ray lands on it."""
+        i = self.index.get((int(tile[0]), int(tile[1])))
+        return None if i is None else _view_at(self.price([i])[0], self.grids)
+
+
+def _cheapest_rays(st, rays, tiles, grids, aim_from):
+    """``(tiles, rays)``: every distinct ``tiles`` key's :class:`_Landings` winner."""
+    got = _Landings(st, rays, tiles, grids, aim_from)
+    return got.tiles, got.price(np.arange(got.tiles.size))
 
 
 def _view_at(idx, grids):
@@ -159,160 +310,86 @@ def _view_at(idx, grids):
     return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
 
 
-def _cheap_views(st, v_primary, aim_from):
-    """Landable views choosing, per tile, the FRAME-CHEAPEST keyboard view from facing
-    ``aim_from`` (:func:`_cheapest_ray`) -- the tile membership of
-    ``los.landable_sweep_with_centres``, for ~15% of its rays.  Only
-    :func:`landtable.landing_rays` is marched; insertion order is by winning ray."""
-    if not los._HAVE_JIT:
-        return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
+def _sweep(st, v_primary, aim_from):
+    """:class:`_Landings` of one lattice from facing ``aim_from``, on a pinned copy of
+    ``st``: only :func:`landtable.landing_rays` is marched, once, for the whole board.
+    """
     grids = landtable.lattice(v_primary=v_primary)
     slot = st.player
     idx = landtable.landing_rays(st, slot, None, grids, landtable.MAX_STEPS)
-    views = {}
-    if not idx.size:
-        return views
     status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
     hit = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
-    if not hit.size:
-        return views
-    clear = idx[hit]
-    key = (tx[hit].astype(np.int64) << 16) | ty[hit].astype(np.int64)
-    order = np.argsort(key, kind="stable")  # rays stay ascending inside each tile
-    ks = key[order]
-    cuts = np.flatnonzero(np.concatenate(([True], ks[1:] != ks[:-1], [True])))
-    won = sorted(
-        (_cheapest_ray(st, clear[order[a:b]], grids, aim_from, slot), int(ks[a]))
-        for a, b in zip(cuts[:-1], cuts[1:])
-    )
-    for ray, tile in won:
-        views[(tile >> 16, tile & 0xFFFF)] = _view_at(ray, grids)
-    return views
+    key = tx[hit].astype(np.int64) * mm.N + ty[hit].astype(np.int64)
+    return _Landings(st.clone(), idx[hit], key, grids, aim_from)
 
 
-def _cheap_view(st, tile, v_primary, aim_from):
-    """``(view, winning ray)`` for ONE tile -- the :func:`_cheap_views` entry, no sweep.
-
-    Only :func:`landtable.candidates` is marched, a proven superset, so a set landing
-    nothing is a proven "no view" (``(None, -1)``).  The sweep inserts BY winning ray,
-    so sorting per-tile answers on it reproduces the order a positional reader sees."""
-    tile = (int(tile[0]), int(tile[1]))
-    slot = st.player
-    if landtable.never_lands(st, tile, slot):
-        return None, -1
-    grids = landtable.lattice(v_primary=v_primary)
-    idx = landtable.candidates(st, tile, slot, None, grids, landtable.MAX_STEPS)
-    if not idx.size:
-        return None, -1
-    status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
-    hit = np.flatnonzero(
-        (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
-    )
-    if not hit.size:
-        return None, -1
-    ray = _cheapest_ray(st, idx[hit], grids, aim_from, slot)
-    return _view_at(ray, grids), ray
+def _cheap_views(st, v_primary, aim_from):
+    """Landable views choosing, per tile, the FRAME-CHEAPEST keyboard view from facing
+    ``aim_from`` -- the tile membership of ``los.landable_sweep_with_centres``, in
+    winning-ray order."""
+    if not los._HAVE_JIT:
+        return los.landable_sweep_with_centres(st, v_primary=v_primary)[0]
+    return _sweep(st, v_primary, aim_from).views()
 
 
 class _Views:
     """Per-tick lazy cache of the keyboard-aim landable views.
 
-    A lattice is PINNED (board snapshot + memo key) at its first query and every later
-    answer read off that pin: the caller keeps acting -- builds, transfers, advanced
-    frames -- while holding the instance, and a built sweep dict froze that board too.
-    """
+    Each lattice is marched whole at its first query and every answer is read off that
+    sweep: the caller keeps acting -- builds, transfers, advanced frames -- while holding
+    the instance, and the sweep pinned the board it was taken on."""
 
     def __init__(self, st):
         self.st = st
         me = st.player
         self.aim_from = (st.obj_h_angle[me], st.obj_v_angle[me])
-        self._primary = None
-        self._full = None
-        self._pin = {}
+        self._lat = {}
+        self._dict = {}
 
-    def _pinned(self, v_primary):
-        """``(state, memo key)`` for one lattice, fixed at its first query."""
-        got = self._pin.get(v_primary)
+    def _landings(self, v_primary):
+        """The lattice's :class:`_Landings`, memoized across ticks: a pure function of
+        the board and the facing it costs aims from, so a tick that gates out or a fork
+        of an unchanged board re-enters it, priced tiles and all."""
+        got = self._lat.get(v_primary)
         if got is None:
             st = self.st
             key = (projector.scene_key(st), st.player, self.aim_from, v_primary)
-            got = self._pin[v_primary] = (st.clone(), key)
+            got = self._lat[v_primary] = projector.memo(
+                _VIEW_CACHE,
+                key,
+                _VIEW_CACHE_MAX,
+                lambda: _sweep(st, v_primary, self.aim_from),
+            )
         return got
 
-    def _sweep(self, v_primary):
-        """The lattice sweep, memoized across ticks: it is a pure function of the board
-        and the facing it costs aims from, and a tick that gates out (a wait, a rejected
-        step) re-enters with both unchanged -- the sweep is ~90% of a player's runtime.
-        """
-        st, key = self._pinned(v_primary)
-        return projector.memo(
-            _VIEW_CACHE,
-            key,
-            _VIEW_CACHE_MAX,
-            lambda: _cheap_views(st, v_primary, self.aim_from),
-        )
-
-    def _built(self, v_primary):
-        """A whole sweep for this lattice if one is already in hand, else None."""
-        built = self._primary if v_primary else self._full
-        if built is not None:
-            return built
-        return _VIEW_CACHE.get(self._pinned(v_primary)[1])
+    def _views(self, v_primary):
+        got = self._dict.get(v_primary)
+        if got is None:
+            if los._HAVE_JIT:
+                got = self._landings(v_primary).views()
+            else:
+                got = los.landable_sweep_with_centres(self.st, v_primary=v_primary)[0]
+            self._dict[v_primary] = got
+        return got
 
     def _one(self, tile, v_primary):
-        """One tile's sweep entry: read off a sweep already in hand, else marched
-        targeted (:func:`_cheap_view`) -- the same answer for a fraction of the rays."""
-        built = self._built(v_primary)
-        if built is not None:
-            return built.get(tuple(tile))
-        return self._targeted(tile, v_primary)[0]
-
-    def _targeted(self, tile, v_primary):
-        """``(view, winning ray)`` marched for one tile, memoized on (sweep key, tile)."""
-        st, key = self._pinned(v_primary)
-        return projector.memo(
-            _TILE_VIEW_CACHE,
-            key + (tuple(tile),),
-            _TILE_VIEW_CACHE_MAX,
-            lambda: _cheap_view(st, tile, v_primary, self.aim_from),
-        )
+        if v_primary in self._dict or not los._HAVE_JIT:
+            return self._views(v_primary).get(tuple(tile))
+        return self._landings(v_primary).view(tile)
 
     def band_ordered(self, pick):
-        """``[(tile, view)]`` in the band sweep's OWN order for every tile ``pick`` takes.
-
-        A sweep inserts by winning lattice ray and a targeted march knows that ray, so
-        sorting on it IS that order -- what a positional reader of :meth:`band` sees.
-        Whichever side is smaller is the one scanned: a sweep in hand is filtered, an ask
-        worth a sweep (:data:`BAND_SWEEP_TILES`) buys one, a smaller ask marches."""
-        built = self._built(False)
-        if built is not None:
-            return [(t, v) for t, v in built.items() if pick(t)]
-        st, _key = self._pinned(False)
-        slot = st.player
-        todo = [
-            t for t in BOARD_TILES if not landtable.never_lands(st, t, slot) and pick(t)
-        ]
-        if len(todo) >= BAND_SWEEP_TILES:
-            want = set(todo)
-            return [(t, v) for t, v in self.band().items() if t in want]
-        got = []
-        for tile in todo:
-            view, ray = self._targeted(tile, False)
-            if view is not None:
-                got.append((ray, tile, view))
-        got.sort()
-        return [(t, v) for _ray, t, v in got]
+        """``[(tile, view)]`` in the band sweep's own (winning-ray) order for every tile
+        ``pick`` takes -- what a positional reader of :meth:`band` sees."""
+        if False in self._dict or not los._HAVE_JIT:
+            return [(t, v) for t, v in self._views(False).items() if pick(t)]
+        return list(self._landings(False).views(pick).items())
 
     def primary(self):
-        if self._primary is None:
-            self._primary = self._sweep(True)
-        return self._primary
+        return self._views(True)
 
     def band(self):
         """The full pitch-band landable views (down-looks included)."""
-        if self._full is None:
-            self._full = self._sweep(False)
-        return self._full
+        return self._views(False)
 
     def get(self, tile, band=False):
         """The landable view for `tile`, or None; `band` falls back to the
