@@ -2,7 +2,7 @@
 
 ``golden_actions.json`` holds, per operation, the game-state regions before and
 after the real 6502 routine ran (create / stack / absorb / transfer), captured
-via py65.  This test rebuilds a State from the "before" regions, applies the same
+via jennings.  This test rebuilds a State from the "before" regions, applies the same
 op through :mod:`sentinel.actions`, and asserts the state matches the ROM's
 "after" -- with no emulator.
 """

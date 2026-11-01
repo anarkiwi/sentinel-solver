@@ -1,14 +1,15 @@
-"""Exact plot_world render cost by running the real 6502 code in jennings, memoized.
+"""Exact render costs by running the real 6502 code on jennings' native core, memoized.
 
-jennings executes the machine code byte- and cycle-exact (it generates
-``golden_render_cost.json``) on its native core with the GIL released, so misses
-computed through :func:`render_costs_exact` run in parallel threads. ROM-gated.
+jennings is byte- and cycle-exact (it generates ``golden_render_cost.json``) and runs
+with the GIL released, so :func:`render_costs_exact` misses run in parallel threads.
+Selected by ``RENDER_COST_BACKEND=exact``; ROM-gated (:func:`backend`).
 """
 
 import collections
 import concurrent.futures
 import hashlib
 import os
+import sys
 import threading
 
 # Render-relevant board (memmap): flags/v_angle, terrain grid, object arrays; the fingerprint adds view (h,v) + player index.
@@ -20,18 +21,49 @@ _MAX = int(os.environ.get("RENDER_CACHE_MAX", "8192"))
 _STATS = {"hits": 0, "misses": 0}
 _PREPARED_STATS = {"hits": 0, "misses": 0}
 _LOCK = threading.Lock()
+_WARNED = [False]
 
 
-def _key(state, h_angle, v_angle):
-    mem = state.mem
+def backend():
+    """This module when ``RENDER_COST_BACKEND=exact`` selects it and the ROM image is
+    present, else None (warning once when selected but unavailable)."""
+    if os.environ.get("RENDER_COST_BACKEND", "proxy").lower() != "exact":
+        return None
+    from sentinel.tests import oracle
+
+    if oracle.available():
+        return sys.modules[__name__]
+    if not _WARNED[0]:
+        _WARNED[0] = True
+        print(
+            f"RENDER_COST_BACKEND=exact unavailable ({oracle.IMG} absent); using proxy"
+        )
+    return None
+
+
+def viewer(state, observer):
+    """``state`` as the ROM redraws it from ``observer``: ``$000B`` holds the viewing
+    slot (a transfer sets it before its $357D redraw), so any slot's view is exact."""
+    if observer is None or observer == state.player:
+        return state
+    view = state.clone()
+    view.player = observer
+    return view
+
+
+def _board_key(state):
     dig = hashlib.blake2b(digest_size=16)
     for a, b in _REGIONS:
-        dig.update(mem[a:b])
-    dig.update(bytes([mem[0x000B], h_angle & 0xFF, v_angle & 0xFF]))
+        dig.update(state.mem[a:b])
+    dig.update(bytes([state.mem[0x000B]]))
     return dig.digest()
 
 
-def _memo(cache, key, compute, stats=_STATS):
+def _key(state, h_angle, v_angle):
+    return _board_key(state) + bytes([h_angle & 0xFF, v_angle & 0xFF])
+
+
+def _memo(cache, key, compute, stats):
     with _LOCK:
         hit = cache.get(key)
         if hit is not None:
@@ -47,16 +79,8 @@ def _memo(cache, key, compute, stats=_STATS):
     return value
 
 
-def _board_key(state):
-    dig = hashlib.blake2b(digest_size=16)
-    for a, b in _REGIONS:
-        dig.update(state.mem[a:b])
-    dig.update(bytes([state.mem[0x000B]]))
-    return dig.digest()
-
-
 def _prepared(state):
-    """The board after the view-independent render prologue, memoized per board."""
+    """The board after the view-independent $357D prologue, memoized per board."""
     from sentinel.tests import oracle
 
     image = bytes(state.mem)
@@ -66,6 +90,12 @@ def _prepared(state):
         lambda: oracle.prepared_image(image),
         _PREPARED_STATS,
     )
+
+
+def prologue_cycles(state):
+    """``(occlusion, tables)``: the CPU cycles of the player's $245B and $3700."""
+    prep = _prepared(state)
+    return prep.occlusion_cycles, prep.table_cycles
 
 
 def render_cost_exact(state, h_angle, v_angle):
@@ -84,6 +114,7 @@ def render_costs_exact(state, views, workers=None):
             _CACHE,
             _key(state, h, v),
             lambda: oracle.plot_world_frames(_prepared(state), h, v),
+            _STATS,
         )
 
     if workers == 1 or len(views) == 1:
@@ -94,7 +125,7 @@ def render_costs_exact(state, views, workers=None):
 
 
 def strip_replot_cost_exact(state, target):
-    """Exact $1FA4..$1F9E strip-replot frame cost for ``target`` on ``state``, memoized.
+    """Exact $1FA4..$1F9E frames of update_object_on_screen redrawing ``target``.
 
     $1F9F re-points the camera itself ($1FC2), so the key is the board plus the
     player's own view and the object being redrawn. $209B is the caller's to price."""
@@ -103,14 +134,9 @@ def strip_replot_cost_exact(state, target):
     mem = state.mem
     player = mem[0x000B]
     key = _key(state, mem[0x09C0 + player], mem[0x0140 + player]) + bytes([target])
-
-    def compute():
-        cpu, m, mstate = oracle.machine_from_image(mem)
-        return oracle.update_object_cost(
-            cpu, m, mstate, target, from_pc=oracle.REPLOT_LINE
-        )
-
-    return _memo(_CACHE, key, compute)
+    return _memo(
+        _CACHE, key, lambda: oracle.strip_frames(_prepared(state), target), _STATS
+    )
 
 
 def reset():

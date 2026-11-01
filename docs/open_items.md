@@ -100,7 +100,7 @@ aim side, not the settle:
   serial from the ROM (the `$363D..$3694` loop: the `$0CC1` queue, the `$0CD8` once-per-frame
   drain, the `$130B` accept gate) and empirically unbiased (24 rows, mean resid −0.5 f,
   RMS 13.5 f) — but only because a notch divides raw proxy cycles by 19656 while the proxy's
-  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the py65 backend
+  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the exact backend
   **alone** breaks it ~25%, in opposite directions. Move both sides or neither.
 - **Live bracket attribution.** The sd-71 residual sits in how the live `$9630` bracket
   splits an action between aim and settle, not in either law's own bias — the settle's
@@ -193,10 +193,10 @@ builds that byte as `(($A800,X + $0011) : ($0BA0,X + $0029)) >> 5`, and the vert
 byte-identical. The two extra `$2FA1` laps are what a one-column-wider shallow line costs.
 
 **Closed — the terrain fill, and the oracle's own `DEC abs`.** Two errors, one of each sign.
-py65 declared `$CE DEC abs` at 3 cycles where the 6502 takes 6 (jennings now charges 6
+The oracle once charged `$CE DEC abs` 3 cycles where the 6502 takes 6 (jennings charges 6
 on both its table and its core), and `$CE` is the self-modified loop counter of every plot_world
 DDA — 8328 executions and 24984 cycles on 2024,184,244, ~3% of a fill, missing from every
-golden and from `RENDER_COST_BACKEND=py65`. Against a corrected profile the fill's own blocks
+golden and from `RENDER_COST_BACKEND=exact`. Against a corrected profile the fill's own blocks
 were 85189 cycles light on that view: `span_fill`'s row body 25 cycles a row (`$238C..$239C`
 priced 26 for 31, `$23B5..$23CF` 29 for 45, `$23D0..$23DA` 13 for 20, `$22E0..$2306` 24 for
 39), its two off-buffer branches missing the `$2380`/`$2384` compare that decides them,
@@ -285,14 +285,14 @@ Frame cost is 0.995-1.000x (median 0.997).
 - **The object term without the game image.** `objectcost` needs the model geometry, so a
   checkout without `out/sentinel_stage2.bin` (or without numba) falls back to
   `_inview_object_base`'s floor and under-charges every object
-  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_py65py)).
+  ([render cost](architecture.md#render-cost-projectorpy-pancostpy-rendercost_exactpy)).
 
 **Resolves.** Threading `$0078` through `_divide_and_arctan` from the image, so the one call
 in seventy whose round-10 bit the residue tips takes the machine's interpolation branch.
 
-## 6. The py65 exact backend cannot price another slot's view
+## 6. The exact backend cannot price another slot's view
 
-**Wrong.** `RENDER_COST_BACKEND=py65` falls back to the proxy on the whole transfer path.
+**Wrong.** `RENDER_COST_BACKEND=exact` falls back to the proxy on the whole transfer path.
 
 **Measured — the transfer path.** `projector._exact_render_cost` returns `None` for any
 `observer != state.player`, and a transfer settle is always priced from the post-transfer slot
@@ -1163,7 +1163,7 @@ missing datum is `plot_world`'s own progress, [5](#5-one-object-vertex-angle-is-
 **Measured — the length, and a backend that is dearer than the machine.** Caught at
 `$1F9F` with a stopping checkpoint, that replot takes **22 whole frames** to the next
 `$1289`. `strip_replot_frames`' proxy charges 387392 cycles = 24.6 frames of stall,
-**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=py65` backend, on the
+**1.12x** — inside its own 0.93..1.21 band. Its `RENDER_COST_BACKEND=exact` backend, on the
 same captured image, returns **534090** cycles = 34.0 frames, **1.54x**. The machine cannot
 have spent 534090 cycles in 22 PAL frames — that is 24277 a frame against the frame's
 19656 — so the *exact* backend's render context is dear, and the proxy calibrated against
@@ -1184,7 +1184,7 @@ classification below puts more than a quarter of what is left inside `$1AB0`
 **57 -> 57**, ls0042 **0 -> 0** over 3000 frames; the 64 -> 67 was pricing the play machine's
 own `$37F2` examine, which took a strip replot's over-charge away, and the 67 -> 64 is
 `$1F9F`'s own line replacing it with the real thing
-([6](#6-the-py65-exact-backend-cannot-price-another-slots-view),
+([6](#6-the-exact-backend-cannot-price-another-slots-view),
 [architecture.md](architecture.md#the-divergence-instrument-driverinstrumentpy)).
 Classifying every surviving event by the `$95E9` chain the halt exposes:
 
@@ -1347,7 +1347,7 @@ It is now charged, by `projector.strip_replot_frames`, at the camera `$1FC2` shi
 (`$09C0 += $0C62/2`) rather than the player's own, and through the strip's own buffer
 window: `$1FE5 JSR $29C7` halves `$0C69` into `$0007` and folds that into `$0012`, exactly
 as `$2993` does from its table, so `render_cost` takes the window as an argument.
-`RENDER_COST_BACKEND=py65` runs the real `$1F9F` instead and is exact — 19..29 frames on
+`RENDER_COST_BACKEND=exact` runs the real `$1F9F` instead and is exact — 19..29 frames on
 the three boards — but costs ~1.3 s per uncached call, so the default is the windowed
 proxy. The window matters: without it the proxy priced all 40 columns, ran 1.3..2.8x dear
 and the clock over-stalled (ls335 grew a second facing error of the wrong sign, which the
@@ -1502,7 +1502,7 @@ that reaches a win would separate an executor-timing limit from a forward-model 
 **Measured.** Alias landings (the 8-bit z compare wrapping) are kept unconditionally as
 wildcards (`crossing_mask`'s `wrap_z` branch), so the answer is sound either way, but they are
 not proved unreachable: band rays do exceed the alias distance at a non-origin cell. The filter
-also inherits `los._tile_arc_indices`'s superset claim; `test_landtable.py` would catch a
+also inherits `los._tile_arc_ranges`'s superset claim; `test_landtable.py` would catch a
 violation but it is not independently proved. Both are keyed to `landtable.MAX_STEPS = 6000`,
 still an explicit argument, so a caller marching further must re-query with the same cap.
 

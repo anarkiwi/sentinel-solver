@@ -1,7 +1,7 @@
 """The PRNG port reproduces the real ROM stream (prnd $31CA).
 
 The golden vectors in ``golden_prng.json`` were captured from the actual 6502
-routine driven under py65 (seed after the reset that does ``INC $0C7D``), so this
+routine driven under jennings (seed after the reset that does ``INC $0C7D``), so this
 test proves bit-exact parity with the game with no emulator in the loop.
 """
 

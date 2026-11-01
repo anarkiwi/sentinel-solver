@@ -30,7 +30,7 @@ tree into one, ``_update_meanie`` ($16F2) rotates it round to face the player, a
 :func:`meanie_threat` is only a query over the same visibility test.
 
 The cooldown, rotation, targeting, drain and meanie machinery reproduce the ROM
-round for round, validated bit-exact against the py65 oracle over the full state
+round for round, validated bit-exact against the jennings oracle over the full state
 (object table, enemy + meanie arrays, player/energy, PRNG, tiles, death/hyperspace
 flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
@@ -202,22 +202,24 @@ SAVED_X = 0x191E  # $1889 STX $191E: $1887 saves its caller's X here
 SAVED_Y = mm.TARGETED_OBJECT_SLOT  # $188C STY $0C58: ... and its caller's Y here
 PARTIAL_SLOT = 0x000F  # $17AE/$17C8: the head-only player the robot scan remembers
 
-_HEAD_SPENT = {  # cycles spent at each boundary of $1289..$16CC, the head and dispatch
-    0x1289: 0,
-    0x128C: 4,
-    0x128E: 6,
-    0x1291: 12,
-    0x1294: 16,
-    0x129F: 19,
-    0x16B5: 25,
-    0x16B6: 27,
-    0x16B9: 31,
-    0x16BB: 34,
-    0x16BE: 38,
-    0x16C0: 40,
-    0x16C2: 42,
-    0x16C4: 44,
-}
+_HEAD_SPENT = (
+    {  # cycles spent at each boundary of `$1289..$16CC`, the head and dispatch
+        0x1289: 0,
+        0x128C: 4,
+        0x128E: 6,
+        0x1291: 12,
+        0x1294: 16,
+        0x129F: 19,
+        0x16B5: 25,
+        0x16B6: 27,
+        0x16B9: 31,
+        0x16BB: 34,
+        0x16BE: 38,
+        0x16C0: 40,
+        0x16C2: 42,
+        0x16C4: 44,
+    }
+)
 _DISPATCH_SPENT = {  # $16C6..$16CC: the two enemy types take different compare chains
     mm.T_SENTRY: {0x16C6: 43, 0x16C9: 47, 0x16CC: 51},
     mm.T_SENTINEL: {0x16C6: 46, 0x16C9: 50, 0x16CC: 54},
@@ -289,7 +291,7 @@ def _segment_offset(mem, pc, y):
     negative: the machine still owes cycles the model's resume point will not charge.
     None where the position is not on a straight line this can count."""
     if pc in _HEAD_SPENT:
-        if pc >= 0x129F and mem[0x0CDC] & 0x80:  # $1296 took the longer $1223 path
+        if pc >= 0x129F and mem[0x0CDC] & 0x80:  # `$1296` took the longer `$1223` path
             return None
         return _HEAD_SPENT[pc]
     dispatch = _DISPATCH_SPENT.get(mem[mm.OBJECTS_TYPE + mem[mm.CURSOR]], {})
@@ -555,10 +557,10 @@ def _exposure_byte(see):
 # target_object $1825
 # ---------------------------------------------------------------------------
 def _target_object(state, enemy, target, budget, spent, clk):
-    """$1825 up to its $184D branch, resumable at each of its three CORE writes.
+    """`$1825` up to its `$184D` branch, resumable at each of its three CORE writes.
 
-    Records the target and, once the draining cooldown counts down to 1, drains it if
-    fully visible ($1838).  Returns (budget, stage, spent): stage BODY_TARGET means the
+    Records the target and, once the draining cooldown counts down to one, drains it if
+    fully visible (`$1838`).  Returns `(budget, stage, spent)`: stage BODY_TARGET means the
     frame ran out inside the line and ``spent`` says how far into it the ROM had got."""
     mem = state.mem
     exposure = mem[mm.OBJECT_EXPOSURE]  # $1829 reads what the last $1887 left
@@ -611,11 +613,11 @@ def _target_object(state, enemy, target, budget, spent, clk):
 # rotate_enemy $1805
 # ---------------------------------------------------------------------------
 def _rotate_enemy(state, enemy, budget, spent, clk):
-    """$1805..$1884, resumable at each of the six CORE writes its line makes.
+    """`$1805..$1884`, resumable at each of the six CORE writes its line makes.
 
     Adds the per-enemy rotation step to the facing, reloads the rotation cooldown to
-    200 and re-arms the meanie hunt ($1818 JSR $1973), each on the frame that pays the
-    ROM's own cycle for it.  Returns (budget, stage, spent)."""
+    `200` and re-arms the meanie hunt (`$1818` JSR `$1973`), each on the frame that pays the
+    ROM's own cycle for it.  Returns `(budget, stage, spent)`."""
     mem = state.mem
     budget, spent, what = _reach(budget, spent, AT_ROTATE_ANGLE, clk, 0x1805)
     if what == _WAIT:
@@ -662,10 +664,10 @@ def _rotate_enemy(state, enemy, budget, spent, clk):
 # consider_enemy_state $16E6 (no-meanie path)
 # ---------------------------------------------------------------------------
 def _consider_enemy_state(state, enemy, budget, stage, index, partial, spent, clk):
-    """$16E6, resumable at its own write points.
+    """`$16E6`, resumable at its own write points.
 
     Spends ``budget`` and suspends where the ROM would be when the frame ran out --
-    between an $1887 query and the CORE write its answer causes, and inside a segment
+    between an `$1887` query and the CORE write its answer causes, and inside a segment
     at each write's own cycle.  Returns (budget, stage, index, partial, spent)."""
     mem = state.mem
     while True:
@@ -834,10 +836,10 @@ def _consider_enemy_state(state, enemy, budget, stage, index, partial, spent, cl
 
 
 def _scan_tail(state, enemy, budget, spent, partial, clk):
-    """$17CD..$17E5, resumable: what the exhausted robot scan does with what it found.
+    """`$17CD..$17E5`, resumable: what the exhausted robot scan does with what it found.
 
-    A head-only player arms the meanie hunt ($1973's four writes) and targets it; any
-    other exit drops the held target at $17E2 and calls the tile scan.  Returns
+    A head-only player arms the meanie hunt (`$1973`'s four writes) and targets it; any
+    other exit drops the held target at `$17E2` and calls the tile scan.  Returns
     (budget, stage, spent, index) -- stage BODY_PARTIAL means the frame ran out."""
     mem = state.mem
     if partial >= 0 and partial != mem[mm.ENEMIES_FAILED_MEANIE_MEMORY + enemy]:
@@ -1366,7 +1368,7 @@ def step(state):
     """Advance the world by one game round: cooldown tick + one enemy update.
 
     This is the ISOLATED-ROUTINE round (tick_cooldowns + update_enemies, 1:1) that the
-    py65 oracle (tests/oracle.step_enemy_round) captures the golden with -- a valid
+    jennings oracle (tests/oracle.step_enemy_round) captures the golden with -- a valid
     transition-function unit, but NOT the running game's cadence.  Real-time advance goes
     through :func:`advance_frames` (the two decoupled ROM clocks)."""
     tick_cooldowns(state, badline.frame_clock(armed=False))

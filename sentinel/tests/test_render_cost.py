@@ -1,7 +1,7 @@
-"""render_cost reproduces plot_world's exact per-scene cost, cycle-counted in py65.
+"""render_cost reproduces plot_world's exact per-scene cost, cycle-counted in jennings.
 
 ``golden_render_cost.json`` holds, per view, the exact plot_world cycle count and $283D
-examination count from py65 under play conditions (no ROM bytes); the non-oracle test
+examination count from jennings under play conditions (no ROM bytes); the non-oracle test
 asserts the projector reproduces the examination count byte-for-byte and the frame cost
 within tolerance.
 """
@@ -90,9 +90,9 @@ def _prepared(landscape_number):
     (h, v) differ only in the angle bytes -- so one prepare serves all of its views."""
     image = _PREPARED.get(landscape_number)
     if image is None:
-        cpu, mem, state = oracle.generate_machine(landscape_number)
+        cpu, mem, _ = oracle.generate_machine(landscape_number)
         mem[0x006E] = mem[0x000B]
-        oracle.prepare_render_context(cpu, mem, state)
+        oracle.prepare_render_context(cpu, mem)
         image = _PREPARED[landscape_number] = bytes(mem)
     return oracle.wrap_image(image)[:2]
 
@@ -167,10 +167,10 @@ def test_object_base_never_overshoots_and_is_present():
     assert seen_object_view
 
 
-def _py65_occlusion(cpu, mem, state):
-    """Decode the real $3E80/$24DA bitmap after the $357D render prologue in py65."""
+def _rom_occlusion(cpu, mem):
+    """Decode the real $3E80/$24DA bitmap after the $357D render prologue in jennings."""
     mem[0x006E] = mem[0x000B]
-    oracle.prepare_render_context(cpu, mem, state)
+    oracle.prepare_render_context(cpu, mem)
     vis = [[False] * 32 for _ in range(32)]
     for ty in range(32):
         for tx in range(32):
@@ -189,8 +189,8 @@ def test_occlusion_table_is_byte_exact():
     """projector._occlusion_visible reproduces the ROM $245B/$3E80 bitmap byte-for-byte
     (every one of the 32x32 tiles) on a spread of landscapes."""
     for ls in _OCCLUSION_LANDSCAPES:
-        cpu, mem, state = oracle.generate_machine(ls)
-        ref = _py65_occlusion(cpu, mem, state)
+        cpu, mem, _ = oracle.generate_machine(ls)
+        ref = _rom_occlusion(cpu, mem)
         got = projector._occlusion_visible(landscape.generate(ls))
         mism = [(x, y) for y in range(32) for x in range(32) if ref[y][x] != got[y][x]]
         assert not mism, f"landscape {ls}: {len(mism)} occlusion mismatches {mism[:8]}"

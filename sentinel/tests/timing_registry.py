@@ -363,7 +363,7 @@ REGISTRY = {
     "CLEAR_FRAMES": entry(
         _PN,
         MEASURED,
-        "within 1 f of the py65-measured clear subtree in golden_pan_cost.json",
+        "within 1 f of the ROM-measured clear subtree in golden_pan_cost.json",
         _PAN_FIT,
     ),
     "H_SCROLL": _u(_PB, "pan scroll step; no derivation test"),
@@ -411,6 +411,13 @@ REGISTRY = {
         "PAL_FRAME_CYCLES / 312; the badline windows sit 8 lines apart on it",
         "test_the_badline_window_is_the_25_lines_of_a_pal_frame",
     ),
+    "OP_CYCLES": entry(
+        _WM,
+        DERIVED,
+        "jennings' own 6510 cycletime table, the one its native core charges; it "
+        "prices every live $9630 marker and every opcode class the captures timed",
+        "test_the_opcode_cost_table_prices_every_live_instruction",
+    ),
     "WRITE_CYCLES": entry(
         _BL,
         DERIVED,
@@ -423,7 +430,7 @@ REGISTRY = {
         _PC,
         MEASURED,
         "the four short raster interrupts + IRQ_BODY, both COUNTED off the image "
-        "(KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, so py65 walks it). "
+        "(KERNAL banked out, $FFC2/$FFC5 are the game's own RAM, so the oracle walks it). "
         "The VIC-II DMA steal is no longer in it: sentinel.badline charges each of the "
         "25 windows off the term the model is executing there "
         "(fixtures/live_pass_cycles.json frozen_idle_rate)",
@@ -438,7 +445,7 @@ REGISTRY = {
         "$1FA2 BCS not taken. Past it lies $1FA4..$1F9E -- the $2211 clear, the "
         "$1FFC JSR $2625 chunks at the $1FC2 camera and the $9730 flush -- which "
         "projector.strip_replot_frames prices, exactly under "
-        "RENDER_COST_BACKEND=py65, else with the render_cost proxy for $2625",
+        "RENDER_COST_BACKEND=exact, else with the render_cost proxy for $2625",
         "test_the_object_screen_span_is_exact_against_the_roms_own_209b",
     ),
     "REDRAW_CLEAR_CALL": _line("$1FA4..$1FBF, up to and including the JSR $2211"),

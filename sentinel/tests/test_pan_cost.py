@@ -57,7 +57,7 @@ def _build_golden():
         player = mem[0x000B]
         mem[0x006E] = player
         # $245B and $3700 are both position-only and a notch rebuilds neither, so one prologue per landscape is what $10B7 sees for the whole sweep.
-        oracle.prepare_render_context(cpu, mem, state, projector.PLAY_MODE)
+        oracle.prepare_render_context(cpu, mem, projector.PLAY_MODE)
         for v in PITCHES:
             for h in BEARINGS:
                 for d in range(4):
@@ -158,9 +158,9 @@ def test_pan_notch_cost_matches_the_measured_plot():
     not objmodel.available(), reason="the notch's object fill needs the game image"
 )
 def test_derived_notch_beats_the_flat_base_it_replaced():
-    """The reason this model exists: a flat per-notch base cannot span a redraw that
-    swings by an order of magnitude across a board, whatever value it takes. The
-    derived model must beat the BEST such constant, not merely the old 34."""
+    """A flat per-notch base cannot span a redraw whose cost swings widely across a
+    board, whatever value it takes, so the derived model must beat the BEST such
+    constant."""
     meas, pred = [], []
     for _key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)

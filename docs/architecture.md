@@ -24,7 +24,7 @@ aiming, occlusion, draining and render cost follow from it.
   effect, model function, validation.
 - Then the derived subsystems: [the model](#the-model-sentinel),
   [the landability filter](#the-landability-filter-landtablepy),
-  [render cost](#render-cost-projectorpy-pancostpy-rendercost_py65py),
+  [render cost](#render-cost-projectorpy-pancostpy-rendercost_exactpy),
   [the live driver](#the-live-driver-driver),
   [the instrument](#the-divergence-instrument-driverinstrumentpy),
   [the measurement tools](#measurement-and-iteration-tools).
@@ -171,7 +171,7 @@ Everything else in this document is one of these queries wearing a different hat
 - **Occlusion and render cost** walk the same height field. `populate_tile_visibility_bit_table
   $245B` raytraces the field into a bitmap that only zeroes a tile's plot byte, so an occluded
   tile is still *examined* — it pays the trig floor and not the fill. That split is the
-  [render-cost model](#render-cost-projectorpy-pancostpy-rendercost_py65py), and render cost
+  [render-cost model](#render-cost-projectorpy-pancostpy-rendercost_exactpy), and render cost
   is time, because the game is not frame-locked.
 
 ---
@@ -349,7 +349,7 @@ straight to `render_cost`. `$9730` copies 24 of the 25 `$3A00` screen banks, ski
 `$0095 - 1`, and a bank with a nonzero `$3A40` entry straddles two buffer pages and buys a
 second `$9888` — so the flush price follows from `$0095` alone. Every term is counted
 instruction by instruction and is exact against the ROM's own `$1F9F`
-(`test_the_strip_replot_line_is_the_roms_own_1fa4`); with `RENDER_COST_BACKEND=py65` the
+(`test_the_strip_replot_line_is_the_roms_own_1fa4`); with `RENDER_COST_BACKEND=exact` the
 `$2625` term is the real one too and the whole thing is exact (19..29 frames on
 ls0042/ls0335/ls9795, ~1.3 s per uncached call, memoized). `enemies` charges the result in
 cycles.
@@ -534,7 +534,7 @@ The parent enemy holds at most one meanie and does nothing else while it lives. 
 meanie (`try_to_absorb_meanie $1BEC`) is +1 energy and clears the link.
 
 Implemented in `sentinel/enemies.py` with a bit-identical numba twin `enemies_jit.py`;
-`enemies.step` is the isolated-routine round the py65 oracle compares against, and
+`enemies.step` is the isolated-routine round the jennings oracle compares against, and
 `advance_frame`/`advance_frames` are the running cadence.
 
 ### The player action
@@ -901,7 +901,7 @@ foreground work folded into a settle constant.
 | `dithercost.py` | exact cycles of the `$86A5` dissolve: the ×5 pointer chain, span mask and lap structure, chain threaded across calls |
 | `occlusioncost.py` | exact cycles of the `$245B` occlusion raytrace per (board, position), no emulator |
 | `projector.py`, `projector_jit.py` | `plot_world $2625` terrain projector, ported bit-exactly; feeds the render-cost proxy |
-| `rendercost_py65.py` | exact `plot_world` frame cost by running the real 6502 in jennings, memoized per board and view, thread-parallel; ROM-gated |
+| `rendercost_exact.py` | exact `plot_world` frame cost by running the real 6502 in jennings, memoized per board and view, thread-parallel; ROM-gated |
 | `actioncost.py` | frame→tick glue (`FRAME_TICKS`, the `$1335`/`$0C50` cadence); its `SETTLE` dict is only the tile-less per-verb fallback — per-scene pricing is `settlecost.py` |
 | `actions.py` | absorb / create / transfer / hyperspace / win (the LOS gate is the caller's) |
 | `energy.py` | the energy economy (`$2136`, table `$214F`, 6-bit mask, underflow) |
@@ -1030,7 +1030,7 @@ bounds `z16` to 16 per sub-step. So the ray must, at some sub-step inside the ce
 entered above the band (`z_entry > surface16 - $80`) **and** reach the surface
 (`min z16 <= surface16`); for a climbing ray the entry sub-step must satisfy both.
 `crossing_mask` tests that in O(1) per ray, needs no storage, and composes with the
-heading-arc bisection `los._tile_arc_indices`. It is a superset because terrain can only stop
+heading-arc bisection `los._tile_arc_ranges`. It is a superset because terrain can only stop
 a march *earlier*; a flat-terrain table would not be sound — keying on the crossing height is
 what makes it hold. `surface_bounds` returns `(lo, hi)`, exact for bare terrain and over the
 whole stack otherwise (platform `$1E30` `+$20` on top, boulder `$1E5A` `-$60` at the bottom).
@@ -1092,7 +1092,7 @@ states alone do not exercise the object-stack surface bracket, so
 `test_landable_view_matches_sweep_every_tile_midgame` re-checks every tile of a board the
 player has already built and transferred on.
 
-## Render cost (`projector.py`, `pancost.py`, `rendercost_py65.py`)
+## Render cost (`projector.py`, `pancost.py`, `rendercost_exact.py`)
 
 The game is compute-bound, so drawing the height field *is* the world clock: what a view costs
 to plot is how many frames an action spends. `FRAME_CYCLES` = 19656 (PAL). Validated against
@@ -1125,9 +1125,9 @@ the walk around them + the emulated fill (`rendercost.py`, `objectcost.py`), ove
 within 0.995-1.000× of the ROM on every golden view (median 0.997), at
 0.13-0.17 ms an uncached call against the exact backend's ~2.5 ms per view once the board's
 view-independent prologue (`$245B`/`$3700`/`$2993`, memoized per board) is prepared. With
-`RENDER_COST_BACKEND=py65` and the ROM fixture present, the play-buffer player view is the
-exact emulated cycle count instead; `rendercost_py65.render_costs_exact` prices many views
-on threads ([open item 6](open_items.md#6-the-py65-exact-backend-cannot-price-another-slots-view)).
+`RENDER_COST_BACKEND=exact` and the ROM fixture present, the play-buffer player view is the
+exact emulated cycle count instead; `rendercost_exact.render_costs_exact` prices many views
+on threads ([open item 6](open_items.md#6-the-exact-backend-cannot-price-another-slots-view)).
 
 | term | exactness |
 | --- | --- |
@@ -1175,7 +1175,7 @@ rasterise each into `$AD00`/`$AE00` with the ROM's own DDA, and `$22AA` walks
 cycles are `passcost.TILE_*`/`PREP_*`/`LINE_*`/`EDGE_*`/`STEEP_*`/`SHALLOW_*`/`WIDE_*`/`SPAN_*`,
 each the block's own instruction line.
 
-**`DEC abs` is 6 cycles.** py65's table declares `$CE` at 3; jennings 0.8.0 charges the
+**`DEC abs` is 6 cycles.** jennings charges the
 machine's 6, as ASL/LSR/ROL/ROR/INC absolute do, on both the static `cycletime` table that
 `writemap.OP_CYCLES` reads and the native core the oracle runs. `$CE` is the self-modified
 loop counter of every plot_world DDA (`$2F62`, `$2FA8`, `$2FCB`, `$2FD6`, `$3122`, `$3179`):
