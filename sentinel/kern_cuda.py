@@ -74,29 +74,36 @@ def resident_threads():
     return dev.MULTIPROCESSOR_COUNT * dev.MAX_THREADS_PER_MULTIPROCESSOR
 
 
+def landing_dense(mems, vecs, params):
+    """``(B, rays)`` int16 on the device for the ``(B, 65536)`` image stack ``mems`` and
+    ``params`` rows (seed then observer, as :func:`landtable._march_params`): the packed
+    landing tile of every ray of ``vecs`` against each image, -1 where it does not land.
+    One launch; the result stays a device array."""
+    n = vecs[0].shape[0]
+    rows = np.asarray(params, dtype=np.int64)
+    dense = cuda.device_array((len(mems), n), dtype=np.int16)
+    _clear_kernel[(_blocks(n), len(mems)), BLOCK](
+        cuda.to_device(np.ascontiguousarray(mems, dtype=np.uint8)),
+        *vecs,
+        cuda.to_device(np.ascontiguousarray(rows[:, :9])),
+        cuda.to_device(np.ascontiguousarray(rows[:, 9:])),
+        dense,
+    )
+    return dense
+
+
 def landing_many(mems, vecs, params):
     """``[(index, tile)]`` per image of ``mems``: every CLEAR ray of ``vecs`` marched
-    against that image from its ``params`` (seed then observer, as
-    :func:`landtable._march_params`), ascending.  Images go in launches of as many as
-    :data:`landtable.RESULT_BYTES` of dense results hold."""
-    n = vecs[0].shape[0]
-    step = max(1, landtable.RESULT_BYTES // (2 * n))
+    against that image from its ``params``, ascending.  Images go in launches of as many
+    as :data:`landtable.RESULT_BYTES` of dense results hold."""
+    step = max(1, landtable.RESULT_BYTES // (2 * vecs[0].shape[0]))
     out = []
     for lo in range(0, len(mems), step):
         part = slice(lo, lo + step)
         images = np.stack([np.asarray(m, dtype=np.uint8) for m in mems[part]])
-        rows = np.asarray(params[part], dtype=np.int64)
-        dense = cuda.device_array((len(images), n), dtype=np.int16)
-        _clear_kernel[(_blocks(n), len(images)), BLOCK](
-            cuda.to_device(images),
-            *vecs,
-            cuda.to_device(np.ascontiguousarray(rows[:, :9])),
-            cuda.to_device(np.ascontiguousarray(rows[:, 9:])),
-            dense,
+        out += landtable._compact(
+            landing_dense(images, vecs, params[part]).copy_to_host()
         )
-        for row in dense.copy_to_host():
-            idx = np.flatnonzero(row >= 0)
-            out.append((idx, row[idx].astype(np.int64)))
     return out
 
 

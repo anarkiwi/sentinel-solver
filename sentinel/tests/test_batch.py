@@ -172,3 +172,63 @@ def test_cuda_batch_landings_match_cpu(new_game, monkeypatch):
     for (gr, gt), (wr, wt) in zip(got, want):
         assert np.array_equal(gr, wr) and np.array_equal(gt, wt)
     assert got[0][0] is got[2][0]
+
+
+def test_first_by_tile_takes_the_lowest_ray_per_tile():
+    dense = np.full((2, 8), -1, dtype=np.int16)
+    dense[0, [1, 3, 4]] = [7, 5, 7]
+    dense[1, 6] = 1023
+    got = batch.first_by_tile(dense)
+    assert got.shape == (2, 1024)
+    assert (got[0, 7], got[0, 5], got[1, 1023]) == (1, 3, 6)
+    assert (got >= 0).sum() == 3
+
+
+def test_pool_advance_matches_single_states_and_dedupes(new_game):
+    sts = [new_game(b).state for b in (42, 335, 42, 0)]
+    pool = batch.Pool.from_states(sts)
+    frames = [300, 900, 300, 50]
+    want = [st.clone() for st in sts]
+    for st, n in zip(want, frames):
+        enemies.advance_frames(st, n)
+    pool.advance(np.arange(4), frames)
+    assert all(_same(pool.state(i), w) for i, w in enumerate(want))
+    assert np.array_equal(pool.mem[0], pool.mem[2])
+
+
+def test_pool_advance_prices_replots(monkeypatch):
+    found = _replot_advances(monkeypatch, 3)
+    pool = batch.Pool.from_states([st for st, _ in found])
+    want = [st.clone() for st, _ in found]
+    for st, (_, n) in zip(want, found):
+        enemies.advance_frames(st, n)
+    pool.advance(np.arange(3), [n for _, n in found])
+    assert all(_same(pool.state(i), w) for i, w in enumerate(want))
+
+
+def test_pool_fork_is_independent_and_state_round_trips(new_game):
+    st = new_game(42).state
+    pool = batch.Pool.from_states([st])
+    kid = pool.fork([0, 0])
+    assert kid.tolist() == [1, 2] and len(pool) == 3
+    pool.advance(kid[:1], 500)
+    assert np.array_equal(pool.mem[0], pool.mem[2])
+    assert not np.array_equal(pool.mem[0], pool.mem[1])
+    assert _same(pool.state(0), st)
+
+
+def test_pool_landing_is_first_ray_per_tile_of_the_pairs(new_game):
+    sts = [new_game(b).state for b in (42, 335, 42)]
+    pool = batch.Pool.from_states(sts)
+    got = pool.landing(np.arange(3), GRIDS)
+    assert got.shape == (3, 1024)
+    assert np.array_equal(got[0], got[2])
+    for st, row in zip(sts[:2], got):
+        rays, tiles = landtable.landing_pairs(
+            st, st.player, None, GRIDS, landtable.MAX_STEPS
+        )
+        assert rays.size
+        want = np.full(1024, -1)
+        for ray, tile in zip(rays[::-1].tolist(), tiles[::-1].tolist()):
+            want[tile] = ray
+        assert np.array_equal(row, want)

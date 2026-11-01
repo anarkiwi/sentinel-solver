@@ -49,6 +49,7 @@ from sentinel import (
     writeweight,
 )
 from sentinel.prng import Prng
+from sentinel.state import State
 from sentinel.terrain import tile_byte, set_tile_byte
 
 try:
@@ -1572,39 +1573,53 @@ def _price_replot(state, target, left, columns, span):
         projector.hold_camera(state, left)
 
 
-def advance_frames_many(states, n_frames, plotting=False):
-    """:func:`advance_frames` of every ``states[i]`` by ``n_frames[i]`` (or one count for
-    all), the independent runs in parallel, each state byte-identical to its own call.
+def advance_rows(mems, clock, n_frames, plotting=False):
+    """Advance row ``i`` of a ``(B, 65536)`` uint8 image stack, with the ``(B, 12)`` int64
+    :data:`CLOCK` resume fields in ``clock``, by ``n_frames[i]`` frames, in place: each row
+    byte-identical to :func:`advance_frames` of that state.
 
-    Rounds of the jit frame loop run one state per thread; a state it stopped at a strip
-    replot is priced here (that is Python) and re-enters the next round."""
-    frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), (len(states),))
-    left = {i: int(f) for i, f in enumerate(frames) if f > 0}
-    if len(left) < 2 or not all(_jit_usable(states[i]) for i in left):
-        for i, f in left.items():
-            advance_frames(states[i], f, plotting=plotting)
-        return
+    Rounds of the jit frame loop run one row per thread; a row it stopped at a strip replot
+    is priced here on a temporary :class:`State` (that is Python) and re-enters the next
+    round."""
+    left = {i: int(f) for i, f in enumerate(n_frames) if f > 0}
     while left:
-        live = list(left)
-        mems = np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in live])
-        carry = np.array(
-            [[getattr(states[i], f) for f in CLOCK] for i in live], dtype=np.int64
-        )
+        live = np.fromiter(left, dtype=np.int64)
+        sub, carry = mems[live], clock[live]
         carry, rest, replot = enemies_jit.advance_many(
-            mems, np.array([left[i] for i in live], dtype=np.int64), plotting, carry
+            sub, np.array([left[i] for i in live], dtype=np.int64), plotting, carry
         )
-        for row, i in enumerate(live):
-            state = states[i]
-            np.frombuffer(state.mem, dtype=np.uint8)[:] = mems[row]
-            for f, v in zip(CLOCK, carry[row].tolist()):
-                setattr(state, f, v)
+        mems[live], clock[live] = sub, carry
+        for row, i in enumerate(live.tolist()):
             target, at, columns, span = replot[row].tolist()
             if target >= 0:
+                state = State(bytearray(mems[i].tobytes()), *clock[i].tolist())
                 _price_replot(state, target, at, columns, span)
+                mems[i] = np.frombuffer(state.mem, dtype=np.uint8)
+                clock[i] = [getattr(state, f) for f in CLOCK]
             if target < 0 or rest[row] <= 0:
                 del left[i]
             else:
                 left[i] = int(rest[row])
+
+
+def advance_frames_many(states, n_frames, plotting=False):
+    """:func:`advance_frames` of every ``states[i]`` by ``n_frames[i]`` (or one count for
+    all), the independent runs in parallel (:func:`advance_rows`)."""
+    frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), (len(states),))
+    live = [i for i, f in enumerate(frames) if f > 0]
+    if len(live) < 2 or not all(_jit_usable(states[i]) for i in live):
+        for i in live:
+            advance_frames(states[i], int(frames[i]), plotting=plotting)
+        return
+    mems = np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in live])
+    clock = np.array(
+        [[getattr(states[i], f) for f in CLOCK] for i in live], dtype=np.int64
+    )
+    advance_rows(mems, clock, frames[live], plotting)
+    for row, i in enumerate(live):
+        np.frombuffer(states[i].mem, dtype=np.uint8)[:] = mems[row]
+        for f, v in zip(CLOCK, clock[row].tolist()):
+            setattr(states[i], f, v)
 
 
 def advance_frames(state, n_frames, plotting=False):

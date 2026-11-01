@@ -1174,6 +1174,32 @@ own `advance_frames`. It is not ported to CUDA:
   would each need conversion to the spec subset, and `frame_clock`/`zp` allocate per call
   (fixable with per-thread scratch).
 
+**State pool.** `batch.Pool` holds states as arrays addressed by row: `mem` `(P, 65536)`
+uint8 and `clock` `(P, 12)` int64. `add`, `fork(idx)` (the expansion primitive: append copies of
+rows), `state(i)`, `keys(idx)`, `advance(idx, n_frames)` (in place, identical rows run once,
+rows stopped at a strip replot priced on a temporary `State` between jit rounds) and
+`landing(idx, grids)` returning a fixed-shape `(B, 1024)` matrix of the lowest landing ray per
+packed tile (-1 none), so pruning and scoring are vectorized numpy over the batch. Nothing in
+it is specific to the phase player.
+
+*Mutable bytes.* Over the first 40 actions of boards 42, 335, 0 and 110, the bytes of `mem`
+that ever change (between two `advance_frames` calls or across the run) number 309 to 528 per
+board and 1005 in the union, 1.5% of the image: the zero page (a handful of bytes), the object
+table pages ($0100 flags, $0900/$0A00 z, and neighbours), the tile map $0400-$07FF, and a few
+bytes of $0C00, $1300, $2100 and $8E00. The rest is the static code and table image.
+Compacting the pool to that region plus one shared image means every kernel that reads
+`mem[addr]` indirects through an address map; it is not done here because it touches every
+spec's memory access, and the union above is a lower bound that a compaction must replace with
+the writes' static footprint.
+
+*Device-side expansion.* A resident pool is `mem`/`clock` as device arrays. `fork` is a
+row-copy kernel; `landing` is `_clear_kernel` over the pool rows (it already takes the stack and
+per-row seed/observer parameters, which would be derived in-kernel from the row's object table
+instead of the host `State`); `advance` needs the enemy clock on device (see above) with the
+replot price as a device kernel; `actions.create/absorb/transfer` become spec kernels writing a
+row's tile map and object table. Until those exist the pool round-trips rows through the host
+only at replot stops and for params.
+
 **Callers.** `PhasePlayer._probe_landings` advances the landing probes of a window of
 candidates as one `batch.advance`; `_leaders`/`_any_climb` walk the candidates in the original
 order through `_probe_ahead`, whose windows double from one up to the thread count, so the

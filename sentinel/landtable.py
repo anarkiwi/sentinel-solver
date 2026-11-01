@@ -404,6 +404,25 @@ def _landing_states(mems, vecs, comps, params, zseed, max_steps, edge):
     return out
 
 
+def _compact(dense):
+    """``[(rays, tiles)]`` per row of a dense per-ray tile matrix (-1 = no landing)."""
+    out = []
+    for row in dense:
+        idx = np.flatnonzero(row >= 0)
+        out.append((idx, row[idx].astype(np.int64)))
+    return out
+
+
+def landing_dense(mems, grids, params, zseed, max_steps):
+    """``(B, rays)`` int16 on the CPU, one image per thread: the packed landing tile of
+    each lattice ray of ``grids`` against image ``b`` (``params[b]`` as
+    :func:`_march_params`, ``zseed[b]`` as :func:`seed_z`), -1 where it does not land.
+    """
+    return _landing_states(
+        mems, vectors(grids), cached_components(grids), params, zseed, max_steps, RADIUS
+    )
+
+
 def landing_pairs_many(states, slots, eye_z, grids, max_steps):
     """:func:`landing_pairs` of every state, one state per thread: for a batch that fills
     the threads this beats the ray-parallel loops, which stop scaling well within one
@@ -413,24 +432,24 @@ def landing_pairs_many(states, slots, eye_z, grids, max_steps):
     step = max(1, RESULT_BYTES // (2 * n))
     out = []
     for lo in range(0, len(states), step):
-        part = list(range(lo, min(lo + step, len(states))))
-        dense = _landing_states(
-            np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in part]),
-            vectors(grids),
-            cached_components(grids),
-            np.array(
-                [_march_params(states[i], slots[i], eye_z, max_steps) for i in part],
-                dtype=np.int64,
-            ),
-            np.array(
-                [seed_z(states[i], slots[i], eye_z) for i in part], dtype=np.int64
-            ),
-            max_steps,
-            RADIUS,
+        part = range(lo, min(lo + step, len(states)))
+        out += _compact(
+            landing_dense(
+                np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in part]),
+                grids,
+                np.array(
+                    [
+                        _march_params(states[i], slots[i], eye_z, max_steps)
+                        for i in part
+                    ],
+                    dtype=np.int64,
+                ),
+                np.array(
+                    [seed_z(states[i], slots[i], eye_z) for i in part], dtype=np.int64
+                ),
+                max_steps,
+            )
         )
-        for row in dense:
-            idx = np.flatnonzero(row >= 0)
-            out.append((idx, row[idx].astype(np.int64)))
     return out
 
 
