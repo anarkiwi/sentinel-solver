@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 
-from sentinel import actions, enemies, memmap as mm, projector, terrain
+from sentinel import actions, batch, enemies, memmap as mm, projector, terrain
 from sentinel.game import Game
 from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _Views
 from sentinel.state import State
@@ -291,19 +291,55 @@ class PhasePlayer(BasePlayer):
             lambda: self._probe_landing(tile, k),
         )
 
-    def _probe_landing(self, tile, k):
+    def _probe_setup(self, tile, k):
+        """``(probe, span)``: a clone with the ``k``-boulder hop built and transferred
+        to, and the frames to run it; None when the hop cannot be made."""
         probe = self.st.clone()
         for _ in range(k):
             if actions.create(probe, mm.T_BOULDER, tile) is None:
-                return False
+                return None
         slot = actions.create(probe, mm.T_ROBOT, tile)
         if slot is None or not actions.transfer(probe, slot):
-            return False
+            return None
         span = self._hop_span(tile, k)  # the whole hop plus one act, not a fragment
-        if span == math.inf:
-            return False
-        enemies.advance_frames(probe, int(span))
+        return None if span == math.inf else (probe, int(span))
+
+    @staticmethod
+    def _alive(probe):
         return probe.energy > 0 and not actions.player_dead(probe)
+
+    def _probe_landing(self, tile, k):
+        got = self._probe_setup(tile, k)
+        if got is None:
+            return False
+        enemies.advance_frames(got[0], got[1])
+        return self._alive(got[0])
+
+    def _probe_landings(self, cands):
+        """Warm the landing cache for every uncached ``cands`` entry at once: the hops
+        are independent, so their enemy clocks advance as one batch."""
+        want = {}
+        for cand in cands:
+            want.setdefault(self._landing_key(cand[1], cand[2]), cand)
+        want = {k: c for k, c in want.items() if k not in _LANDING_CACHE}
+        setups = {k: self._probe_setup(c[1], c[2]) for k, c in want.items()}
+        live = [(k, got) for k, got in setups.items() if got is not None]
+        batch.advance([got[0] for _k, got in live], [got[1] for _k, got in live])
+        verdicts = {k: False for k in want}
+        verdicts.update({k: self._alive(got[0]) for k, got in live})
+        for key, verdict in verdicts.items():
+            projector.memo(_LANDING_CACHE, key, _LANDING_CACHE_MAX, lambda v=verdict: v)
+
+    def _probe_ahead(self, cands):
+        """``cands`` in order, each yielded after its landing is cached: probed in windows
+        that double up to the parallel width, so a consumer that stops where the serial
+        loop would has probed under twice what it used."""
+        ahead, size = 0, 1
+        for i, cand in enumerate(cands):
+            if i == ahead:
+                self._probe_landings(cands[i : i + size])
+                ahead, size = i + size, min(2 * size, batch.width())
+            yield cand
 
     def _fuel_map(self, reach=10):
         """:meth:`_fuel_near` for every tile at once: each absorbable object stamps its
@@ -366,13 +402,16 @@ class PhasePlayer(BasePlayer):
 
     def _any_climb(self, views):
         """Whether any affordable climb lands, probing only until one does."""
-        return any(map(self._lands, self._climb_candidates(views, True)))
+        return any(
+            map(self._lands, self._probe_ahead(self._climb_candidates(views, True)))
+        )
 
     def _leaders(self, cands, probe):
         """Every top-scoring candidate, in band order; with ``probe`` the top score is
         taken over landable ones only, probed in descending score until it drops."""
+        ordered = sorted(cands, key=lambda c: c[0], reverse=True)
         tied = []
-        for cand in sorted(cands, key=lambda c: c[0], reverse=True):
+        for cand in self._probe_ahead(ordered) if probe else ordered:
             if tied and cand[0] < tied[0][0]:
                 break
             if not probe or self._lands(cand):

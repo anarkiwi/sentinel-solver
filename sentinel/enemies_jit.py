@@ -11,7 +11,7 @@ from sentinel import jitcache
 
 jitcache.install()  # must precede numba: the cache key carries the cost constants
 
-from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
+from numba import njit, prange  # noqa: E402  pylint: disable=wrong-import-position
 
 from sentinel import badline, memmap as mm, passcost, writeweight  # noqa: E402
 from sentinel.badline_jit import (  # noqa: E402
@@ -2184,6 +2184,52 @@ def _advance(
         step,
         0,
     )
+
+
+@njit(cache=True, parallel=True)
+def _advance_many(mems, n_frames, plotting, carry):
+    """:func:`_advance` over the rows of ``mems`` (one 64 KB image each, advanced in
+    place) from the resume points in ``carry`` (the 12 clock fields per row): the
+    updated ``carry``, the frames left per row, and per row the replot request
+    ``(target, left column, columns, span)``."""
+    n = mems.shape[0]
+    out = np.empty_like(carry)
+    rest = np.empty(n, dtype=np.int64)
+    replot = np.empty((n, 4), dtype=np.int64)
+    for b in prange(n):  # pylint: disable=not-an-iterable
+        zp = np.zeros(ZP_N, dtype=np.int64)
+        c = carry[b]
+        r = _advance(
+            mems[b],
+            zp,
+            n_frames[b],
+            plotting,
+            c[0],
+            c[1],
+            c[2],
+            c[3],
+            c[4],
+            c[5],
+            c[6],
+            c[7],
+            c[8],
+            c[9],
+            c[10],
+            c[11],
+        )
+        for k in range(12):
+            out[b, k] = r[k]
+        rest[b] = r[12]
+        replot[b, 0] = zp[ZP_REPLOT] - 1
+        replot[b, 1] = zp[ZP_REPLOT_LEFT]
+        replot[b, 2] = zp[ZP_REPLOT_COLS]
+        replot[b, 3] = zp[ZP_REPLOT_SPAN]
+    return out, rest, replot
+
+
+def advance_many(mems, n_frames, plotting, carry):
+    """:func:`_advance_many` on a ``(B, 65536)`` uint8 stack (rewritten in place)."""
+    return _advance_many(mems, n_frames, bool(plotting), carry)
 
 
 def advance_frames(

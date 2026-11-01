@@ -5,7 +5,7 @@ import inspect
 
 import pytest
 
-from sentinel import phase_player
+from sentinel import batch, phase_player
 from sentinel.game import Game
 from sentinel.phase_player import CLOCK_FIELDS, LOS_TRACKERS, PhasePlayer
 from sentinel.playerbase import _Views
@@ -70,27 +70,42 @@ def test_the_positions_exercise_the_lazy_walk():
 
 
 def test_a_lazy_ask_probes_no_more_than_needed(monkeypatch):
-    """Existence stops at the first landable candidate in band order, and a re-ask
-    on the same state, or on a fork of it, runs nothing."""
+    """Existence stops at the first landable candidate in band order, probing ahead at
+    most twice what the serial walk would, and a re-ask on the same state, or on a fork
+    of it, runs nothing."""
+    monkeypatch.setattr(batch, "width", lambda: 64)
     player = _position(335, 2)
     views = _Views(player.st)
     cands = player._climb_candidates(views, True)
     first = next(i for i, c in enumerate(cands) if player._probe_landing(c[1], c[2]))
     asked = []
-    probe = PhasePlayer._probe_landing
+    setup = PhasePlayer._probe_setup
 
     def counted(self, tile, k):
         asked.append(tile)
-        return probe(self, tile, k)
+        return setup(self, tile, k)
 
-    monkeypatch.setattr(PhasePlayer, "_probe_landing", counted)
+    monkeypatch.setattr(PhasePlayer, "_probe_setup", counted)
     phase_player._LANDING_CACHE.clear()
     assert player._any_climb(views)
-    assert asked == [c[1] for c in cands[: first + 1]]
+    walked = [c[1] for c in cands[: first + 1]]
+    assert asked[: len(walked)] == walked
+    assert len(asked) <= 2 * first + 1
     asked.clear()
     assert player._any_climb(views)
     assert player._fork()._landing_holds(cands[first][1], cands[first][2])
     assert not asked
+
+
+@pytest.mark.parametrize("where", MID_GAME)
+def test_batched_probes_fill_the_cache_with_the_serial_verdicts(where):
+    player = _position(*where)
+    cands = player._climb_candidates(_Views(player.st), True)
+    want = [player._probe_landing(c[1], c[2]) for c in cands]
+    phase_player._LANDING_CACHE.clear()
+    player._probe_landings(cands)
+    got = [player._landing_key(c[1], c[2]) for c in cands]
+    assert [phase_player._LANDING_CACHE[k] for k in got] == want
 
 
 @pytest.mark.parametrize("where", ((335, 2), (42, 5)))

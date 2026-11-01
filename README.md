@@ -20,7 +20,7 @@ actions, final energy 5:
 ```bash
 pip install -r requirements.txt
 pytest -n auto
-# optional CUDA backend (SENTINEL_BACKEND=cpu|cuda|auto): see docs/architecture.md
+# optional CUDA backend (SENTINEL_BACKEND=cpu|cuda|auto): see docs/architecture.md (also: batched multi-state queries, `sentinel/batch.py`)
 pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 
 python -m sentinel.phase_player 335     # offline, prints the action trace

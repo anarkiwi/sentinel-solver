@@ -36,6 +36,8 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
+import numpy as np
+
 from sentinel import (
     badline,
     memmap as mm,
@@ -47,6 +49,7 @@ from sentinel import (
     writeweight,
 )
 from sentinel.prng import Prng
+from sentinel.state import State
 from sentinel.terrain import tile_byte, set_tile_byte
 
 try:
@@ -1539,6 +1542,86 @@ def _jit_usable(state):
     return _HAVE_JIT and not isinstance(state.mem, bytes)
 
 
+CLOCK = (
+    "cycle_residual",
+    "pass_phase",
+    "body_stage",
+    "body_index",
+    "body_partial",
+    "body_paid",
+    "camera_shift",
+    "camera_clear",
+    "steal_residue",
+    "clock_overhang",
+    "entry_b",
+    "carry_step",
+)
+
+
+def _price_replot(state, target, left, columns, span):
+    """Book the $1FFC strip replot the jit run stopped at: its frames come off the
+    residual as debt, with the camera shift held across the stall."""
+    frames = projector.strip_replot_frames(state, target, left, columns, span)
+    debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
+    state.camera_shift = left  # $1FC2's shift, for the frames the replot stalls
+    state.camera_clear = _clear_cycles(span) - debt
+    projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
+    projector.restore_camera(state)
+    state.cycle_residual -= debt
+    state.clock_overhang += debt  # what badline.stall books on the clock
+    if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
+        projector.hold_camera(state, left)
+
+
+def advance_rows(mems, clock, n_frames, plotting=False):
+    """Advance row ``i`` of a ``(B, 65536)`` uint8 image stack, with the ``(B, 12)`` int64
+    :data:`CLOCK` resume fields in ``clock``, by ``n_frames[i]`` frames, in place: each row
+    byte-identical to :func:`advance_frames` of that state.
+
+    Rounds of the jit frame loop run one row per thread; a row it stopped at a strip replot
+    is priced here on a temporary :class:`State` (that is Python) and re-enters the next
+    round."""
+    left = {i: int(f) for i, f in enumerate(n_frames) if f > 0}
+    while left:
+        live = np.fromiter(left, dtype=np.int64)
+        sub, carry = mems[live], clock[live]
+        carry, rest, replot = enemies_jit.advance_many(
+            sub, np.array([left[i] for i in live], dtype=np.int64), plotting, carry
+        )
+        mems[live], clock[live] = sub, carry
+        for row, i in enumerate(live.tolist()):
+            target, at, columns, span = replot[row].tolist()
+            if target >= 0:
+                state = State(bytearray(mems[i].tobytes()), *clock[i].tolist())
+                _price_replot(state, target, at, columns, span)
+                mems[i] = np.frombuffer(state.mem, dtype=np.uint8)
+                clock[i] = [getattr(state, f) for f in CLOCK]
+            if target < 0 or rest[row] <= 0:
+                del left[i]
+            else:
+                left[i] = int(rest[row])
+
+
+def advance_frames_many(states, n_frames, plotting=False):
+    """:func:`advance_frames` of every ``states[i]`` by ``n_frames[i]`` (or one count for
+    all), the independent runs in parallel (:func:`advance_rows`)."""
+    frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), (len(states),))
+    live = [i for i, f in enumerate(frames) if f > 0]
+    if len(live) < 2 or not all(_jit_usable(states[i]) for i in live):
+        for i in live:
+            advance_frames(states[i], int(frames[i]), plotting=plotting)
+        return
+    mems = np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in live])
+    clock = np.array(
+        [[getattr(states[i], f) for f in CLOCK] for i in live], dtype=np.int64
+    )
+    advance_rows(mems, clock, frames[live], plotting)
+    for row, i in enumerate(live):
+        np.frombuffer(states[i].mem, dtype=np.uint8)[:] = mems[row]
+        for f, v in zip(CLOCK, clock[row].tolist()):
+            setattr(states[i], f, v)
+
+
 def advance_frames(state, n_frames, plotting=False):
     """Advance ``n_frames`` video frames.  ``plotting`` marks a scroll/replot span in which
     update_enemies is suppressed (only the cooldown clock advances).
@@ -1585,16 +1668,7 @@ def advance_frames(state, n_frames, plotting=False):
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break
-            frames = projector.strip_replot_frames(state, target, left, columns, span)
-            debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
-            state.camera_shift = left  # $1FC2's shift, for the frames the replot stalls
-            state.camera_clear = _clear_cycles(span) - debt
-            projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
-            projector.restore_camera(state)
-            state.cycle_residual -= debt
-            state.clock_overhang += debt  # what badline.stall books on the clock
-            if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
-                projector.hold_camera(state, left)
+            _price_replot(state, target, left, columns, span)
         return
     advance_frames_python(state, n_frames, plotting=plotting)
 

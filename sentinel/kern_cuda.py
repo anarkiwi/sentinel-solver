@@ -1,15 +1,16 @@
-"""CUDA launch layer: one thread per lattice ray over the CUDA builds of the specs.
+"""CUDA launch layer: one thread per (state, lattice ray) over the CUDA builds of the specs.
 
-Results are order-independent integer reductions -- an atomic count that compacts the
-landing rays (sorted on the host by lattice index) and an atomic OR into a bitmask -- so
-they equal the CPU kernels' regardless of thread scheduling.  The state-independent
-lattice vectors stay resident on the device between calls.
+Each thread writes its own cell of a dense per-ray result (the packed landing tile, -1 for
+a ray that does not end LOS_CLEAR), so results never depend on thread scheduling and need
+no sort: the host compacts them in lattice order.  The state-independent lattice vectors
+stay resident on the device between calls, and B board images march in one launch.
 """
 
-# pylint: disable=no-value-for-parameter,too-many-function-args
+# pylint: disable=no-value-for-parameter,too-many-function-args,comparison-with-callable
 
 import functools
 import hashlib
+import os
 
 import numpy as np
 from numba import cuda
@@ -25,16 +26,17 @@ _MEMO_MAX = 8
 
 
 @cuda.jit(cache=True)
-def _clear_kernel(mem, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs, out):
-    """Compact ``(index, tile)`` of every ray that ends LOS_CLEAR into ``out``; the
-    count is ``out[2, 0]`` (rows: index, packed tile, counter)."""
-    i = cuda.grid(1)
-    if i < ax_lo.shape[0]:
-        r = _march_one(mem, i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs)
-        if r[0] == LOS_CLEAR:
-            slot = cuda.atomic.add(out, (2, 0), 1)
-            out[0, slot] = i
-            out[1, slot] = r[1] * mm.N + r[2]
+def _clear_kernel(
+    mems, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seeds, obss, out
+):
+    """``out[b, i]`` = packed tile of ray ``i`` marched against image ``b``, -1 unless
+    the ray ends LOS_CLEAR."""
+    i, b = cuda.grid(2)
+    if i < ax_lo.shape[0] and b < mems.shape[0]:
+        r = _march_one(
+            mems[b], i, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seeds[b], obss[b]
+        )
+        out[b, i] = r[1] * mm.N + r[2] if r[0] == LOS_CLEAR else -1
 
 
 @cuda.jit(cache=True)
@@ -63,23 +65,51 @@ def _blocks(n):
     return (n + BLOCK - 1) // BLOCK
 
 
-def landing(mem, vecs, params):
-    """``(index, tile)`` of every CLEAR ray of ``vecs`` marched against ``mem`` from
-    ``params`` (seed then observer, as :func:`landtable._march_params`), ascending."""
+def resident_threads():
+    """Threads the device keeps in flight at once (0 under the simulator, which has no
+    occupancy to fill)."""
+    if os.environ.get("NUMBA_ENABLE_CUDASIM") == "1":
+        return 0
+    dev = cuda.get_current_device()
+    return dev.MULTIPROCESSOR_COUNT * dev.MAX_THREADS_PER_MULTIPROCESSOR
+
+
+def landing_dense(mems, vecs, params):
+    """``(B, rays)`` int16 on the device for the ``(B, 65536)`` image stack ``mems`` and
+    ``params`` rows (seed then observer, as :func:`landtable._march_params`): the packed
+    landing tile of every ray of ``vecs`` against each image, -1 where it does not land.
+    One launch; the result stays a device array."""
     n = vecs[0].shape[0]
-    out = cuda.to_device(np.zeros((3, n + 1), dtype=np.int32))
-    kern_args = (
-        cuda.to_device(np.asarray(mem, dtype=np.uint8)),
+    rows = np.asarray(params, dtype=np.int64)
+    dense = cuda.device_array((len(mems), n), dtype=np.int16)
+    _clear_kernel[(_blocks(n), len(mems)), BLOCK](
+        cuda.to_device(np.ascontiguousarray(mems, dtype=np.uint8)),
         *vecs,
-        cuda.to_device(np.asarray(params[:9], dtype=np.int64)),
-        cuda.to_device(np.asarray(params[9:], dtype=np.int64)),
-        out,
+        cuda.to_device(np.ascontiguousarray(rows[:, :9])),
+        cuda.to_device(np.ascontiguousarray(rows[:, 9:])),
+        dense,
     )
-    _clear_kernel[_blocks(n), BLOCK](*kern_args)
-    count = int(out[2, 0:1].copy_to_host()[0])
-    got = out[:2, :count].copy_to_host().astype(np.int64)
-    order = np.argsort(got[0])
-    return got[0][order], got[1][order]
+    return dense
+
+
+def landing_many(mems, vecs, params):
+    """``[(index, tile)]`` per image of ``mems``: every CLEAR ray of ``vecs`` marched
+    against that image from its ``params``, ascending.  Images go in launches of as many
+    as :data:`landtable.RESULT_BYTES` of dense results hold."""
+    step = max(1, landtable.RESULT_BYTES // (2 * vecs[0].shape[0]))
+    out = []
+    for lo in range(0, len(mems), step):
+        part = slice(lo, lo + step)
+        images = np.stack([np.asarray(m, dtype=np.uint8) for m in mems[part]])
+        out += landtable._compact(
+            landing_dense(images, vecs, params[part]).copy_to_host()
+        )
+    return out
+
+
+def landing(mem, vecs, params):
+    """:func:`landing_many` for one image."""
+    return landing_many([mem], vecs, [params])[0]
 
 
 def stop_mask(comps, lo, hi, slope, ex, ey, zseed, max_steps, edge):
@@ -107,29 +137,52 @@ def device_components(key):
     return tuple(cuda.to_device(np.ascontiguousarray(a)) for a in comps)
 
 
-def landing_table(state, slot, eye_z, grids, max_steps):
-    """``(index, tile, first)`` of ``grids``' whole-lattice sweep against ``state``:
-    ascending CLEAR ray indices, their packed tiles, and per tile the lowest index (-1
-    none).  Memoized on the board bytes, which determine the march."""
+def _tile_first(idx, tile):
+    first = np.full(mm.N * mm.N, -1, dtype=np.int64)
+    tiles, at = np.unique(tile, return_index=True)
+    first[tiles] = idx[at]
+    return first
+
+
+def landing_tables(states, slots, eye_z, grids, max_steps):
+    """``(index, tile, first)`` per state: ``grids``' whole-lattice sweep against each
+    ``states[i]`` from ``slots[i]`` -- ascending CLEAR ray indices, their packed tiles,
+    and per tile the lowest index (-1 none).  Memoized on the board bytes, which
+    determine the march; boards repeated within the call march once, the rest in one
+    launch."""
     key = tuple(tuple(g) for g in grids)
-    memo = (
-        hashlib.blake2b(state.mem, digest_size=16).digest(),
-        slot,
-        eye_z,
-        max_steps,
-        key,
-    )
-    got = _MEMO.get(memo)
-    if got is None:
-        idx, tile = landing(
-            np.frombuffer(state.mem, dtype=np.uint8),
-            device_vectors(key),
-            landtable._march_params(state, slot, eye_z, max_steps),
+    memos = [
+        (
+            hashlib.blake2b(st.mem, digest_size=16).digest(),
+            slot,
+            eye_z,
+            max_steps,
+            key,
         )
-        first = np.full(mm.N * mm.N, -1, dtype=np.int64)
-        tiles, at = np.unique(tile, return_index=True)
-        first[tiles] = idx[at]
-        if len(_MEMO) >= _MEMO_MAX:
-            _MEMO.pop(next(iter(_MEMO)))
-        got = _MEMO[memo] = (idx, tile, first)
-    return got
+        for st, slot in zip(states, slots)
+    ]
+    have = {m: _MEMO[m] for m in memos if m in _MEMO}
+    todo = {}
+    for i, memo in enumerate(memos):
+        if memo not in have:
+            todo.setdefault(memo, i)
+    if todo:
+        at = list(todo.values())
+        got = landing_many(
+            [np.frombuffer(states[i].mem, dtype=np.uint8) for i in at],
+            device_vectors(key),
+            [
+                landtable._march_params(states[i], slots[i], eye_z, max_steps)
+                for i in at
+            ],
+        )
+        for memo, (idx, tile) in zip(todo, got):
+            if len(_MEMO) >= _MEMO_MAX:
+                _MEMO.pop(next(iter(_MEMO)))
+            have[memo] = _MEMO[memo] = (idx, tile, _tile_first(idx, tile))
+    return [have[memo] for memo in memos]
+
+
+def landing_table(state, slot, eye_z, grids, max_steps):
+    """:func:`landing_tables` for one state."""
+    return landing_tables([state], [slot], eye_z, grids, max_steps)[0]

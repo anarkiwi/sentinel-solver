@@ -7,7 +7,7 @@ import os
 
 import numpy as np
 
-from sentinel import actioncost, actions, aim, aimcost, enemies, landtable, los
+from sentinel import actioncost, actions, aim, aimcost, batch, enemies, landtable, los
 from sentinel import memmap as mm
 from sentinel import pancost, projector, relative, settlecost, terrain, threat
 
@@ -310,21 +310,22 @@ def _view_at(idx, grids):
     return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
 
 
+def _sweeps(sts, v_primary, aim_from):
+    """:class:`_Landings` of one lattice for each of ``sts`` from the facing ``aim_from``
+    (one per state), each on a pinned copy of its board; the whole-board landings come
+    from one :func:`batch.landings` call."""
+    grids = landtable.lattice(v_primary=v_primary)
+    pairs = batch.landings(sts, grids)
+    return [
+        _Landings(st.clone(), rays, tiles, grids, aim_from)
+        for st, (rays, tiles) in zip(sts, pairs)
+    ]
+
+
 def _sweep(st, v_primary, aim_from):
     """:class:`_Landings` of one lattice from facing ``aim_from``, on a pinned copy of
-    ``st``: only :func:`landtable.landing_rays` is marched, once, for the whole board.
-    """
-    grids = landtable.lattice(v_primary=v_primary)
-    slot = st.player
-    gpu = landtable._gpu()
-    if gpu is not None:
-        lit, key, _first = gpu.landing_table(st, slot, None, grids, landtable.MAX_STEPS)
-        return _Landings(st.clone(), lit, key, grids, aim_from)
-    idx = landtable.landing_rays(st, slot, None, grids, landtable.MAX_STEPS)
-    status, tx, ty = landtable._march(st, slot, None, grids, idx, landtable.MAX_STEPS)
-    hit = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
-    key = tx[hit].astype(np.int64) * mm.N + ty[hit].astype(np.int64)
-    return _Landings(st.clone(), idx[hit], key, grids, aim_from)
+    ``st``: only the landing rays are marched, once, for the whole board."""
+    return _sweeps([st], v_primary, aim_from)[0]
 
 
 def _cheap_views(st, v_primary, aim_from):
