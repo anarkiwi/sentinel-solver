@@ -196,13 +196,13 @@ and commits one action. `urgent` means the player's own tile window is at or bel
 aim, wider window)` over the primary-plane view dict, falling back to the full pitch band,
 then to graded relaxations: `seen_tier` 1 tolerates undrainable partial sight, 2 is
 least-exposed no-other-choice (urgent or frozen only). It prices every candidate off its own
-view, so it reads the whole dict and keeps the sweep; the phase player's generators ask
-`band_ordered` per tile instead
-([open item 1](open_items.md#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up)).
-Landability queries go through `_Views`: a single tile is one targeted march (`_cheap_view`),
-and either lattice falls back to the full pitch band only for down-looks a single-ray
-visibility check first confirms plausible. Each lattice is pinned to the board at its first
-query, so a caller that builds or transfers mid-tick keeps reading one consistent board.
+view, so it reads the whole dict; the phase player's generators ask `band_ordered`, which
+prices only the tiles their filter takes.
+Landability queries go through `_Views`: each lattice is swept once per board and a tile is a
+lookup into that sweep, and either lattice falls back to the full pitch band only for
+down-looks a single-ray visibility check first confirms plausible. Each lattice is pinned to
+the board at its first query, so a caller that builds or transfers mid-tick keeps reading one
+consistent board.
 
 ### Placement invariant
 

@@ -992,13 +992,17 @@ Priced mechanism for mechanism against the executor's key sequence, over the aim
 
 **Which view a tile gets.** A tile is landed by tens of thousands of lattice rays and the
 players use exactly one, so the pick is part of the cost model, not a detail:
-`playerbase._cheapest_ray` returns the **frame-minimal** ray, proved. The price decomposes —
+`playerbase._Landings` returns the **frame-minimal** ray, proved. The price decomposes —
 the pan term depends only on `(h_angle, v_angle)`, the cursor term only on the cursor and
 monotonically in its drive distance — so one representative per `(h, v)` cell (the cursor
-nearest `SIGHTS_CENTRE`) attains the minimum, collapsing ~20k rays to ~10 groups. Groups are
-then priced with the real `aim_frames` in `_aim_bound` order (`aim_frames` with every notch's
-`render_cost` dropped: admissible, since a render is never negative), stopping at the first
-bound that reaches the best price — 4–32 exact evaluations per tile, measured on ls0/42/110/335.
+nearest `SIGHTS_CENTRE`, then the lowest ray) attains the minimum, collapsing ~20k rays to
+~10 groups. The cell prices come from `aim_table`: `pancost.notch_plots` pans along the start
+pitch first, so every pitch of one bearing shares its bearing notches and each pitch path is a
+prefix of the farthest one in its direction; one notch list per (bearing, direction) prices the
+whole column, summed exactly as `aim_frames`'s own `sum` does (`test_aim_table.py` pins it
+bit for bit on every cell). The asked tiles then run one branch-and-bound together in
+`_aim_bound` order (`aim_frames` with every notch's `render_cost` dropped: admissible, since a
+render is never negative); a priced cell prices every tile's representative in it.
 The predecessor was a `1000·bearing + 100·pitch + cursor` proxy whose argmin is not the
 argmin of frames: it left 2/50 tiles suboptimal on ls0 and 6/23 on ls42, by up to 141 f.
 
@@ -1043,27 +1047,19 @@ or blocks).
 branch), at a small cost per arc-narrowed query, so the answer stays sound either way — see
 [open item 10](open_items.md#10-landability-filter-unproven-corners).
 
-**Callers.** `playerbase._Views` is the one entry point the players use. `get`/`band_get`
-answer a **single** tile with one targeted march (`_cheap_view` over `landtable.candidates`,
-narrowed by `crossing_mask`); the whole-lattice sweep `los._landable_batch` is built only when
-a caller reads the entire dict (`views.band()`). Each lattice is pinned to the board at its
-first query (`_Views._pinned`), so a caller that builds or transfers mid-tick keeps reading
-one consistent board. Both paths hand the tile's landing rays to the same `_cheapest_ray`
-(see [aim cost](#aim-cost-playerbase_aim_frames)), so they return the same view for the same
-tile by construction.
+**Callers.** `playerbase._Views` is the one entry point the players use. Each lattice is
+swept whole at its first query (`_sweep`: `landtable.landing_rays`, one march of the
+survivors) and pinned to that board, so a caller that builds or transfers mid-tick keeps
+reading one consistent board; the sweep is memoized on the scene key, so a fork of an
+unchanged board reuses it. Per-tile pricing is lazy: `get`/`band_get` price one tile,
+`band_ordered(pick)` prices the tiles `pick` takes, and `band()`/`primary()` price them all —
+always the same views, since a tile's winner does not depend on which tiles were asked with it.
 
 **Candidate generators.** A generator that wants *which of these tiles land* asks
-`_Views.band_ordered(pick)`, never the whole dict: `pick` is the caller's visibility-free
-filter (terrain, the object table, the purse), and the survivors are answered per tile. The
-answer must be in the sweep's own **order**, because the climb tie-break reads it
-positionally (`docs/players.md`, "The tie that decided ls110"); the sweep inserts by winning
-lattice ray and `_cheap_view` returns that ray, so sorting on it reproduces the order exactly
-(`test_band_ordered_is_the_sweep_order_without_buying_it`). Which side gets scanned is a cost
-decision only, since both return the same views: with a sweep in hand the landable set is
-filtered, and an ask of `BAND_SWEEP_TILES` marchable tiles or more buys a sweep instead —
-measured 3.7-4.4 ms per targeted band march against 0.83-1.08 s per band sweep, so the
-crossover is 205-260 tiles. What remains sweep-bound is
-[open item 1](open_items.md#1-a-per-tile-candidate-generator-only-pays-once-the-eye-is-up).
+`_Views.band_ordered(pick)`: `pick` is the caller's visibility-free filter (terrain, the
+object table, the purse) over the landed tiles. The answer is in the sweep's own **order**
+(winning lattice ray), because the climb tie-break reads it positionally
+(`docs/players.md`, "The tie that decided ls110").
 
 **Lattices.** `los._landable_sweep`'s plane and band (`landtable.MAX_STEPS = 6000`). Over
 targeted queries from real solves (ls0/42/335), arc bisection alone marches a large fraction of
