@@ -102,24 +102,17 @@ dead lever, measured (see [open items, disproved](open_items.md#disproved--do-no
 ### Results
 
 No node budget and no wall-clock cutoff: the planner is deterministic, so a run's outcome
-does not depend on host load.  Action counts move with the enemy clock, not with the policy:
-the two relocation boards join the suite as the two 8-enemy cases it otherwise lacks.
+does not depend on host load.  Action counts move with the enemy clock, not with the policy.
 
-| board | enemies | result | actions | energy left |
-|---|---|---|---|---|
-| ls0 | 1 | won | 29 | 7 |
-| ls42 | 2 | won | 36 | 2 |
-| ls110 | 3 | won | 40 | 2 |
-| ls60 | 7 | won | 45 | 4 |
-| ls298 | 7 | won | 38 | 10 |
-| ls321 | 7 | won | 48 | 2 |
-| ls373 | 7 | won | 34 | 9 |
-| ls335 | 7 | won | 53 | 2 |
-| ls7414 | 8 | won | 81 | 23 |
-| ls8589 | 8 | won | 47 | 1 |
+The nine suite boards' offline results (actions, frames, final energy, verdict, trace digest)
+are committed in `docs/results/offline.json` and the live runs in `docs/results/live.json`;
+the README results table is rendered from the two (`python -m sentinel.tests.trace_suite
+--out docs/results/offline.json --readme`) and is not repeated here. Offline counts are under
+the ROM-derived settle prices (`sentinel/settlecost.py`). The ls42 live entry is a
+`driver.frozen_run` win (`update_enemies $16B5` RTS-stubbed): it verifies frame-cost fidelity,
+not survival under fire. A live row marked with a dagger was recorded against an older model.
 
-ls335 live in VICE: **66 actions, final energy 25**, verified by the ROM's own
-landscape-complete flag `$0CDE` bit 6.
+ls335 live in VICE is verified by the ROM's own landscape-complete flag `$0CDE` bit 6.
 
 Off the suite, relocation puts the eight hardest-128 boards that took **zero** actions into
 play: ls8589 won in 47, ls7414 won in 81, and the other six lose in 5-28 actions instead of

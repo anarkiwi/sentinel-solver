@@ -1,35 +1,58 @@
-"""Play the README suite boards offline and record each full action trace:
-``python -m sentinel.tests.trace_suite [--out path] [--compare path] [boards...]``.
+"""Play the README suite boards offline and record each board's result:
+``python -m sentinel.tests.trace_suite [--out path] [--compare path] [--readme] [boards...]``.
 
-``--compare`` exits non-zero unless every board's trace, frames, energy and verdict equal
-the recorded file, so one baseline gates a change to any kernel or backend.
+A record is the board's landscape, enemy count, action count, frames, final energy, verdict
+and a SHA-256 digest of the full action trace. ``--compare`` exits non-zero unless every
+board's record equals the recorded file (default: the committed ``docs/results/offline.json``;
+any file with the same fields, or with full ``trace`` lists, works), so one baseline gates a
+change to any kernel or backend. ``--out`` rewrites the committed file; ``--readme`` renders
+the README results block from the committed data.
 """
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 
 from tqdm import tqdm
 
-from sentinel import actions
 from sentinel.game import Game
 from sentinel.phase_player import PhasePlayer
+from sentinel.tests import readme_results
 
 SUITE = (0, 42, 60, 110, 298, 321, 335, 373, 1442)
+OFFLINE = readme_results.OFFLINE
+
+
+def digest(trace):
+    """Hex SHA-256 of the canonical JSON of an action trace."""
+    blob = json.dumps(trace, separators=(",", ":")).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def summary(record):
+    """The committed form of a record: the full ``trace`` replaced by its count and digest."""
+    out = {k: v for k, v in record.items() if k != "trace"}
+    if "trace" in record:
+        out["actions"] = len(record["trace"])
+        out["digest"] = digest(record["trace"])
+    return out
 
 
 def play(landscape, max_actions=200):
-    """One board's record: ``trace``, ``frames``, ``energy``, ``won``, ``dead``."""
+    """One board's record: ``landscape``, ``enemies``, ``trace``, ``frames``, ``energy``, ``won``."""
     game = Game.typed(landscape)
+    enemies = len(game.enemy_slots())
     player = PhasePlayer(game, verbose=False)
     won = player.run(max_actions=max_actions)
     return {
+        "landscape": landscape,
+        "enemies": enemies,
         "trace": json.loads(json.dumps(player.trace, default=repr)),
         "frames": player.frames,
         "energy": game.energy,
         "won": bool(won),
-        "dead": bool(actions.player_dead(game.state)),
     }
 
 
@@ -44,8 +67,13 @@ def run(boards):
 
 
 def diff(base, new):
-    """The landscapes whose records differ."""
-    return [k for k in sorted(set(base) | set(new)) if base.get(k) != new.get(k)]
+    """The landscapes whose records differ on any field both sides carry."""
+
+    def same(a, b):
+        a, b = summary(a), summary(b)
+        return all(a[k] == b[k] for k in a.keys() & b.keys())
+
+    return [k for k in sorted(base.keys() & new.keys()) if not same(base[k], new[k])]
 
 
 def main(argv=None):
@@ -53,14 +81,33 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("boards", type=int, nargs="*", default=list(SUITE))
     parser.add_argument("--out", help="write the records here as JSON")
-    parser.add_argument("--compare", help="exit 1 unless these recorded traces match")
+    parser.add_argument(
+        "--compare",
+        nargs="?",
+        const=OFFLINE,
+        help="exit 1 unless these recorded results match (default: the committed file)",
+    )
+    parser.add_argument(
+        "--readme", action="store_true", help="render the README results block"
+    )
     args = parser.parse_args(argv)
+    if args.readme and not (args.out or args.compare):
+        readme_results.rewrite()
+        return 0
     start = time.perf_counter()
     got = run(args.boards)
     print(f"{len(got)} boards in {time.perf_counter() - start:.1f} s")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:
-            json.dump(got, handle, sort_keys=True, indent=1)
+            json.dump(
+                {k: summary(v) for k, v in got.items()},
+                handle,
+                sort_keys=True,
+                indent=1,
+            )
+            handle.write("\n")
+        if args.readme:
+            readme_results.rewrite()
     if args.compare:
         with open(args.compare, encoding="utf-8") as handle:
             base = json.load(handle)
