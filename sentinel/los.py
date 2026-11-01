@@ -1375,25 +1375,26 @@ def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000):
     """The build view for a SINGLE `tile`, or None if no keyboard aim lands the sights on
     it with line of sight.  Returns ``{"h_angle","v_angle","cursor"}``.
 
-    Targeted + cheap-first: the CHEAP primary ($F5) plane is swept first (one batched numba
-    march, ~131k rays) and, on a hit, returned immediately -- most (up/level) climb builds
-    land here.  Only a tile NOT on the $F5 plane falls to the full pitch band (the player
-    pitches the body DOWN to aim at near/below tiles -- the ls335 v=225 (11,18) build, the
-    endgame down-look).  Bit-identical to membership in :func:`landable_views`.
+    The primary ($F5) plane first, then the full pitch band (the body pitched DOWN at
+    near/below tiles), each by :func:`landable_view_targeted`: only the rays that can land
+    on ``tile`` are marched, and the answer is that plane's full-sweep entry.
     """
     if slot is None:
         slot = state.player
     key = (tile[0], tile[1])
-    views, _ = _landable_sweep(
-        state, slot, eye_z, max_steps, want_centres=False, v_primary=True
-    )
-    view = views.get(key)
-    if view is not None:
-        return view
-    views, _ = _landable_sweep(
-        state, slot, eye_z, max_steps, want_centres=False, v_primary=False
-    )
-    return views.get(key)
+    for v_primary in (True, False):
+        if _HAVE_JIT:
+            view = landable_view_targeted(
+                state, key, slot, eye_z, max_steps, v_primary=v_primary
+            )
+        else:  # pragma: no cover - numba absent
+            views, _ = _landable_sweep(
+                state, slot, eye_z, max_steps, want_centres=False, v_primary=v_primary
+            )
+            view = views.get(key)
+        if view is not None:
+            return view
+    return None
 
 
 _HEADING_CACHE = {}

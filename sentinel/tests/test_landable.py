@@ -138,6 +138,28 @@ def test_targeted_view_matches_full_board_sweep(new_state):
             assert los.landable_view_targeted(st, tile) is None, tile
 
 
+@pytest.mark.parametrize("landscape", [0, 335])
+def test_view_is_the_primary_plane_entry_else_the_band_entry(new_state, landscape):
+    """:func:`los.landable_view` is the $F5 plane's full-sweep entry, else the pitch
+    band's, on every tile either plane lands -- including band-only tiles -- and None
+    off both."""
+    st = new_state(landscape)
+
+    def sweep(v_primary):
+        return los._landable_sweep(
+            st, st.player, None, 6000, want_centres=False, v_primary=v_primary
+        )[0]
+
+    primary, band = sweep(True), sweep(False)
+    assert set(band) - set(primary)
+    for tile in set(primary) | set(band):
+        want = primary.get(tile) or band[tile]
+        assert los.landable_view(st, tile, st.player) == want, tile
+    for tile in ((0, 0), (31, 31), (0, 31), (31, 0)):
+        if tile not in primary and tile not in band:
+            assert los.landable_view(st, tile, st.player) is None, tile
+
+
 def test_targeted_view_matches_coarse_lattice_sweep(new_state):
     """On the SUBSAMPLED cursor lattice, the per-tile heading cone agrees with that
     lattice's own full sweep on every tile of the board."""

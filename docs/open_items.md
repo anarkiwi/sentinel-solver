@@ -1634,6 +1634,20 @@ restores ls373 exactly (45 actions, 17403 f) — so the arithmetic is the sole c
 which climb ranks first, and item 13 is why a different first climb can lose a board the
 planner otherwise wins — so that attribution is the blocker here too.
 
+## 15. A tick's views outlive a relocation
+
+**Wrong.** `PhasePlayer._do` fires from the tick's `_Views`, which were swept from the
+body that started the tick. A forced relocation mid-tick (during an aim or a
+`_wait_for_gap`) moves the body, yet the remaining actions of that tick still fire with
+views swept from the old tile. `_fire`'s gate rejects them and re-proposes from the new
+body. Seen in the ls335 tie-settling forks: after the body is moved from `(17,24)` to
+`(21,6)`, five queued absorbs fire with views from `(17,24)`; four find no view from
+`(21,6)` and one fires on a re-proposed view.
+
+**Resolves.** `_Views` records the body it was swept from, and `_do` refuses (the
+caller re-plans next tick) when the live body differs. That changes what the fork does
+after the relocation, so the tie it settles must be re-checked on the suite boards.
+
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
