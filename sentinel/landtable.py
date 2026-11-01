@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 
-from sentinel import los, memmap as mm, terrain
+from sentinel import los, los_jit, memmap as mm, terrain
 from sentinel import kern
 from sentinel.kern import spec
 
@@ -37,6 +37,9 @@ RADIUS = 30  # max in-board tile offset (LOS quits at coord $1F, so 0..30 is the
 COARSE_CX = list(range(48, 112, 2))
 COARSE_CY = list(range(63, 127, 2))
 MAX_STEPS = 6000  # the los sweep's march cap
+RESULT_BYTES = (
+    1 << 28
+)  # device or host bytes one launch may spend on dense per-ray results
 MARCH_CHUNK = 1 << 13  # first early-exit march chunk: ~20us/call fixed cost, <1% here
 LAND_BAND = 0x80  # check_flat_tile $1D1C lands only for surface-z in [0, $80)
 WRAP_D = 0x10000 - LAND_BAND  # z distance at which the 8-bit high-byte compare aliases
@@ -217,20 +220,39 @@ def never_lands(state, tile, slot):
     return b < 0xC0 and (b & 0x0F) != 0
 
 
-def surface_maps(state):
-    """``(lo, hi, slope)`` over the whole board, packed ``x*32 + y`` -- :func:`surface_bounds`
-    for every tile plus the never-lands slope flag, hoisted out of the per-ray walk."""
+@njit(cache=True)
+def _surface_maps_mem(mem):
+    """:func:`surface_maps` over a 64 KB memory image (:func:`surface_bounds` and the
+    never-lands slope flag per tile, the object stack walked in place)."""
     lo = np.zeros(mm.N * mm.N, dtype=np.int32)
     hi = np.zeros(mm.N * mm.N, dtype=np.int32)
     slope = np.zeros(mm.N * mm.N, dtype=np.uint8)
     for x in range(mm.N):
         for y in range(mm.N):
-            a, b = surface_bounds(state, x, y)
-            lo[x * mm.N + y] = a
-            hi[x * mm.N + y] = b
-            byte = terrain.tile_byte(state, x, y)
-            slope[x * mm.N + y] = 1 if byte < 0xC0 and (byte & 0x0F) else 0
+            b = np.int64(mem[mm.TILES_TABLE + (x & 3) * 256 + (x >> 2) * 32 + y])
+            c = x * mm.N + y
+            if b < 0xC0:
+                lo[c] = hi[c] = ((b >> 4) & 0x0F) * 256
+                slope[c] = 1 if b & 0x0F else 0
+                continue
+            lo[c] = 1 << 30
+            slot = b & 0x3F
+            for _ in range(64):
+                z = np.int64(mem[mm.OBJECTS_Z_HEIGHT + slot]) * 256
+                zf = np.int64(mem[mm.OBJECTS_Z_FRACTION + slot])
+                lo[c] = min(lo[c], z + min(0, zf - 0x60))
+                hi[c] = max(hi[c], z + zf + 0x20)
+                flags = np.int64(mem[mm.OBJECTS_FLAGS + slot])
+                if flags < 0x40:
+                    break
+                slot = flags & 0x3F
     return lo, hi, slope
+
+
+def surface_maps(state):
+    """``(lo, hi, slope)`` over the whole board, packed ``x*32 + y`` -- :func:`surface_bounds`
+    for every tile plus the never-lands slope flag, hoisted out of the per-ray walk."""
+    return _surface_maps_mem(np.frombuffer(state.mem, dtype=np.uint8))
 
 
 @spec
@@ -345,6 +367,81 @@ def _gpu():
     from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
     return kern_cuda
+
+
+@njit(cache=True, parallel=True)
+def _landing_states(mems, vecs, comps, params, zseed, max_steps, edge):
+    """Per image of ``mems`` (one thread each) and lattice ray, the packed landing tile
+    of a ray that ends LOS_CLEAR, else -1: the :func:`stop_cells` prefilter then the
+    march, both serial within a state."""
+    ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30 = vecs
+    vx, vy, vz = comps
+    n = vx.shape[0]
+    out = np.full((mems.shape[0], n), -1, dtype=np.int16)
+    for b in prange(mems.shape[0]):  # pylint: disable=not-an-iterable
+        lo, hi, slope = _surface_maps_mem(mems[b])
+        seed, obs = params[b, :9], params[b, 9:]
+        for j in range(n):
+            _first, ncand = _stop_one(
+                vx[j],
+                vy[j],
+                vz[j],
+                lo,
+                hi,
+                slope,
+                obs[0],
+                obs[1],
+                zseed[b],
+                max_steps,
+                edge,
+            )
+            if ncand > 0:
+                r = los_jit._march_one(
+                    mems[b], j, ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30, seed, obs
+                )
+                if r[0] == los_jit.LOS_CLEAR:
+                    out[b, j] = r[1] * mm.N + r[2]
+    return out
+
+
+def landing_pairs_many(states, slots, eye_z, grids, max_steps):
+    """:func:`landing_pairs` of every state, one state per thread: for a batch that fills
+    the threads this beats the ray-parallel loops, which stop scaling well within one
+    state.  Images go in groups of as many as :data:`RESULT_BYTES` of dense results hold.
+    """
+    n = cached_components(grids)[0].shape[0]
+    step = max(1, RESULT_BYTES // (2 * n))
+    out = []
+    for lo in range(0, len(states), step):
+        part = list(range(lo, min(lo + step, len(states))))
+        dense = _landing_states(
+            np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in part]),
+            vectors(grids),
+            cached_components(grids),
+            np.array(
+                [_march_params(states[i], slots[i], eye_z, max_steps) for i in part],
+                dtype=np.int64,
+            ),
+            np.array(
+                [seed_z(states[i], slots[i], eye_z) for i in part], dtype=np.int64
+            ),
+            max_steps,
+            RADIUS,
+        )
+        for row in dense:
+            idx = np.flatnonzero(row >= 0)
+            out.append((idx, row[idx].astype(np.int64)))
+    return out
+
+
+def landing_pairs(state, slot, eye_z, grids, max_steps):
+    """``(rays, tiles)`` of every CLEAR ray of ``grids`` against ``state`` on the CPU:
+    ascending lattice indices and their packed ``x*32+y`` landing tiles -- only
+    :func:`landing_rays` is marched."""
+    idx = landing_rays(state, slot, eye_z, grids, max_steps)
+    status, tx, ty = _march(state, slot, eye_z, grids, idx, max_steps)
+    hit = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
+    return idx[hit], tx[hit].astype(np.int64) * mm.N + ty[hit].astype(np.int64)
 
 
 def landable_view(state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):

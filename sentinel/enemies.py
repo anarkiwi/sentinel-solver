@@ -36,6 +36,8 @@ flags) across the whole meanie lifecycle -- spawn, hunt, forced hyperspace and a
 later drain-death -- as well as the failed-attempt path.
 """
 
+import numpy as np
+
 from sentinel import (
     badline,
     memmap as mm,
@@ -1539,6 +1541,72 @@ def _jit_usable(state):
     return _HAVE_JIT and not isinstance(state.mem, bytes)
 
 
+CLOCK = (
+    "cycle_residual",
+    "pass_phase",
+    "body_stage",
+    "body_index",
+    "body_partial",
+    "body_paid",
+    "camera_shift",
+    "camera_clear",
+    "steal_residue",
+    "clock_overhang",
+    "entry_b",
+    "carry_step",
+)
+
+
+def _price_replot(state, target, left, columns, span):
+    """Book the $1FFC strip replot the jit run stopped at: its frames come off the
+    residual as debt, with the camera shift held across the stall."""
+    frames = projector.strip_replot_frames(state, target, left, columns, span)
+    debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
+    state.camera_shift = left  # $1FC2's shift, for the frames the replot stalls
+    state.camera_clear = _clear_cycles(span) - debt
+    projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
+    projector.restore_camera(state)
+    state.cycle_residual -= debt
+    state.clock_overhang += debt  # what badline.stall books on the clock
+    if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
+        projector.hold_camera(state, left)
+
+
+def advance_frames_many(states, n_frames, plotting=False):
+    """:func:`advance_frames` of every ``states[i]`` by ``n_frames[i]`` (or one count for
+    all), the independent runs in parallel, each state byte-identical to its own call.
+
+    Rounds of the jit frame loop run one state per thread; a state it stopped at a strip
+    replot is priced here (that is Python) and re-enters the next round."""
+    frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), (len(states),))
+    left = {i: int(f) for i, f in enumerate(frames) if f > 0}
+    if len(left) < 2 or not all(_jit_usable(states[i]) for i in left):
+        for i, f in left.items():
+            advance_frames(states[i], f, plotting=plotting)
+        return
+    while left:
+        live = list(left)
+        mems = np.stack([np.frombuffer(states[i].mem, dtype=np.uint8) for i in live])
+        carry = np.array(
+            [[getattr(states[i], f) for f in CLOCK] for i in live], dtype=np.int64
+        )
+        carry, rest, replot = enemies_jit.advance_many(
+            mems, np.array([left[i] for i in live], dtype=np.int64), plotting, carry
+        )
+        for row, i in enumerate(live):
+            state = states[i]
+            np.frombuffer(state.mem, dtype=np.uint8)[:] = mems[row]
+            for f, v in zip(CLOCK, carry[row].tolist()):
+                setattr(state, f, v)
+            target, at, columns, span = replot[row].tolist()
+            if target >= 0:
+                _price_replot(state, target, at, columns, span)
+            if target < 0 or rest[row] <= 0:
+                del left[i]
+            else:
+                left[i] = int(rest[row])
+
+
 def advance_frames(state, n_frames, plotting=False):
     """Advance ``n_frames`` video frames.  ``plotting`` marks a scroll/replot span in which
     update_enemies is suppressed (only the cooldown clock advances).
@@ -1585,16 +1653,7 @@ def advance_frames(state, n_frames, plotting=False):
             )
             if target < 0:  # no $1FFC strip replot to price: the run is complete
                 break
-            frames = projector.strip_replot_frames(state, target, left, columns, span)
-            debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
-            state.camera_shift = left  # $1FC2's shift, for the frames the replot stalls
-            state.camera_clear = _clear_cycles(span) - debt
-            projector.shift_camera(state, left)  # $1FC2, then $2003/$2008
-            projector.restore_camera(state)
-            state.cycle_residual -= debt
-            state.clock_overhang += debt  # what badline.stall books on the clock
-            if state.cycle_residual >= state.camera_clear:  # past the $2211 clear
-                projector.hold_camera(state, left)
+            _price_replot(state, target, left, columns, span)
         return
     advance_frames_python(state, n_frames, plotting=plotting)
 

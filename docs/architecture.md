@@ -1114,8 +1114,8 @@ device between calls.
 **Backend.** `SENTINEL_BACKEND=cpu|cuda|auto` (default `auto`: cuda when numba-cuda can
 compile and launch a kernel). Strategy may differ per backend while results stay identical:
 on cuda the whole lattice is marched (no `stop_cells` prefilter, no doubling-chunk early
-exit) and only the compact `(ray, tile)` list of LOS-clear rays is downloaded, memoized per
-board image; `landable_view`, `landable_set` and `playerbase._sweep` read it. `crossing_mask`,
+exit) and only the compact `(ray, tile)` list of LOS-clear rays is built host-side from a dense
+per-ray download, memoized per board image; `landable_view`, `landable_set` and `playerbase._sweep` read it. `crossing_mask`,
 `candidates`, `march_batch` and `_march` stay on the CPU. The CUDA extra is optional
 (`requirements-gpu.txt`; numba-cuda 0.30 needs numpy below 2.5).
 
@@ -1130,6 +1130,54 @@ of several boards, on a real device or, with `NUMBA_ENABLE_CUDASIM=1`, in the si
 (the `cudasim` CI job, built from the `Dockerfile`). `python -m sentinel.tests.trace_suite
 --out FILE` records the nine suite boards' full action traces and `--compare FILE` gates a
 change on byte-identical traces under either backend.
+
+## Batched queries (`batch.py`)
+
+`batch.py` answers one query kind for a list of board states, each result equal to the
+single-state call's. Identical inputs are computed once and fanned back out (key: the 64 KB
+image plus the twelve enemy-clock resume fields, `batch.state_key`; for landings the image and
+slot).
+
+* `landings(states, grids, slots=None, eye_z=None, max_steps)` -> `[(rays, tiles)]`, the
+  CLEAR lattice rays and their packed tiles per state (`playerbase._sweeps` builds the
+  `_Landings` of each from it).
+* `advance(states, n_frames, plotting=False)` -> in place `enemies.advance_frames` of each
+  state by its own frame count.
+
+**Landings.** On cuda one launch covers a 2-D (state, ray) grid over a stacked `(B, 65536)`
+image array and writes a dense `int16` result per (state, ray); the host compacts it in
+lattice order, so there is no atomic compaction and no sort. On the CPU a state alone scales
+poorly over rays (0.51 s on one thread, 0.077 s on 24 on the band lattice: 28% efficiency), so
+when the batch fills the threads the unit of parallelism becomes the state
+(`landtable.landing_pairs_many`, one thread per state running the `stop_cells` prefilter then
+the march serially): 24 distinct states took 0.95 s against 6.6 s one after another. Below that
+width the ray-parallel per-state path stays.
+
+**Backend rule.** A backend pays when its work items fill the machine: cuda when
+`rays x states` reaches the device's resident threads (`multiprocessors x max threads per
+multiprocessor`, `kern_cuda.resident_threads`); the CPU goes state-parallel when `states`
+reaches `numba.get_num_threads()`. Both are the same statement -- parallel width at least the
+hardware's -- so no constant is tuned. The lattices (262144 to 3.5M rays) fill the RTX 5080's
+129k resident threads from one state.
+
+**Enemy clock.** `enemies.advance_frames_many` runs rounds of the jit frame loop one state per
+thread (`enemies_jit._advance_many`, `prange` over a stacked image array); a state that stopped
+at a $1FFC strip replot is priced in Python and re-enters the next round, so each equals its
+own `advance_frames`. It is not ported to CUDA:
+
+* the parallel width is the number of independent hops in hand (tens), against 129k resident
+  threads, and a GPU lane is far slower than a CPU core on this branch-heavy 6502 model;
+* the strip replot price (`projector.strip_replot_frames`, Python plus the render-cost
+  kernels) is needed hundreds of times over a few dozen actions of play, so a device loop would round-trip to
+  the host at every such stop with its 64 KB image;
+* ~80 `@njit` helpers (the badline clock, relative angles, object visibility, the PRNG)
+  would each need conversion to the spec subset, and `frame_clock`/`zp` allocate per call
+  (fixable with per-thread scratch).
+
+**Callers.** `PhasePlayer._probe_landings` advances the landing probes of a window of
+candidates as one `batch.advance`; `_leaders`/`_any_climb` walk the candidates in the original
+order through `_probe_ahead`, whose windows double from one up to the thread count, so the
+chosen candidate is the one the serial loop picks and at most twice the serial probes run.
 
 ## Render cost (`projector.py`, `pancost.py`, `rendercost_exact.py`)
 

@@ -483,3 +483,15 @@ def test_crossing_mask_serial_equals_parallel():
         args = (vx, vy, vz, dx, dy, -0x300, 0x100, lt.MAX_STEPS)
         par = lt._crossing_par(*args)
         assert par.any() and np.array_equal(par, lt._crossing_ser(*args))
+
+
+@pytest.mark.parametrize("board", (42, 335))
+def test_surface_maps_match_the_per_tile_bounds(board, new_game):
+    st = new_game(board).state
+    lo, hi, slope = lt.surface_maps(st)
+    for x in range(mm.N):
+        for y in range(mm.N):
+            byte = terrain.tile_byte(st, x, y)
+            want = lt.surface_bounds(st, x, y)
+            assert (lo[x * mm.N + y], hi[x * mm.N + y]) == want
+            assert slope[x * mm.N + y] == (byte < 0xC0 and (byte & 0x0F) != 0)

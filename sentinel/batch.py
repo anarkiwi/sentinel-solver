@@ -1,0 +1,95 @@
+"""Batched multi-state queries: each entry point takes a list of board states and returns,
+per state, exactly what the single-state call returns.
+
+Identical states in a batch are computed once and the result fanned back out.  Backend
+selection per query kind follows from the device's occupancy (see docs/architecture.md,
+"Batched queries").
+"""
+
+import hashlib
+
+import numpy as np
+
+try:
+    import numba
+except ImportError:  # pragma: no cover - numba absent
+    numba = None
+
+from sentinel import enemies, kern, landtable
+
+
+def width():
+    """Independent states the CPU runs at once: the numba thread count."""
+    return numba.get_num_threads() if numba is not None else 1
+
+
+def state_key(state):
+    """Digest of everything a state-stepping query reads: the 64 KB image and the enemy
+    clock's resume fields."""
+    dig = hashlib.blake2b(state.mem, digest_size=16)
+    dig.update(repr([int(getattr(state, f)) for f in enemies.CLOCK]).encode())
+    return dig.digest()
+
+
+def first_of(keys):
+    """``(reps, back)``: the position of each distinct key's first occurrence, and per
+    position the index into ``reps`` of its key."""
+    seen = {}
+    back = [seen.setdefault(k, len(seen)) for k in keys]
+    reps = [0] * len(seen)
+    for pos in range(len(keys) - 1, -1, -1):
+        reps[back[pos]] = pos
+    return reps, back
+
+
+def cuda_pays(rays, states):
+    """Whether ``rays`` x ``states`` threads fill the device: below that the launch leaves
+    multiprocessors idle and the CPU's parallel loops, which saturate at one state, win.
+    """
+    if kern.backend() != "cuda":
+        return False
+    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+    return rays * states >= kern_cuda.resident_threads()
+
+
+def landings(states, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEPS):
+    """``[(rays, tiles)]`` per state: :func:`landtable.landing_pairs` -- the ascending
+    lattice indices that land and their packed ``x*32+y`` tiles.  ``slots`` default to
+    each state's player."""
+    slots = [st.player for st in states] if slots is None else list(slots)
+    if cuda_pays(len(landtable.cached_components(grids)[0]), len(states)):
+        from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+        return [
+            got[:2]
+            for got in kern_cuda.landing_tables(states, slots, eye_z, grids, max_steps)
+        ]
+    keys = [(state_key(st), s) for st, s in zip(states, slots)]
+    reps, back = first_of(keys)
+    todo = [states[i] for i in reps]
+    sl = [slots[i] for i in reps]
+    if len(reps) >= width():
+        got = landtable.landing_pairs_many(todo, sl, eye_z, grids, max_steps)
+    else:
+        got = [
+            landtable.landing_pairs(*one, eye_z, grids, max_steps)
+            for one in zip(todo, sl)
+        ]
+    return [got[j] for j in back]
+
+
+def advance(states, n_frames, plotting=False):
+    """:func:`enemies.advance_frames` of each state by ``n_frames`` (one count, or one per
+    state), in place.  States that are identical and asked for the same frames run once.
+    The enemy clock stays on the CPU, one state per thread."""
+    frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), (len(states),))
+    keys = [(state_key(st), int(f)) for st, f in zip(states, frames)]
+    reps, back = first_of(keys)
+    enemies.advance_frames_many([states[i] for i in reps], frames[reps], plotting)
+    for pos, j in enumerate(back):
+        src = states[reps[j]]
+        if pos != reps[j]:
+            states[pos].mem[:] = bytes(src.mem)
+            for f in enemies.CLOCK:
+                setattr(states[pos], f, getattr(src, f))
