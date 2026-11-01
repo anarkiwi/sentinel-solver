@@ -1,6 +1,7 @@
 """Per-call timings of the solver's hot kernels on one board: ``python -m
 sentinel.tests.bench_kernels [landscape]``; ``... sweep [landscape [actions]]`` times the
-landable-view sweep's steps; ``... grain`` derives :data:`landtable.CROSS_GRAIN`."""
+landable-view sweep's steps; ``... grain`` derives :data:`landtable.CROSS_GRAIN`;
+``... probes [landscape [actions]]`` counts the phase player's landing probes."""
 
 import sys
 import time
@@ -128,10 +129,69 @@ def sweep(landscape=335, actions=0):
             )
 
 
+def probes(landscape=335, max_actions=200):
+    """Landing-probe asks, simulated probes, their frames, and all enemy-stepping time
+    over one phase-player solve of ``landscape``."""
+    from sentinel import enemies, phase_player
+
+    tally = {"asks": 0, "probes": 0, "frames": 0, "calls": 0, "secs": 0.0}
+    inside = [False]
+    holds, probe, advance = (
+        phase_player.PhasePlayer._landing_holds,
+        phase_player.PhasePlayer._probe_landing,
+        enemies.advance_frames,
+    )
+
+    def counted_holds(self, tile, k):
+        tally["asks"] += 1
+        return holds(self, tile, k)
+
+    def counted_probe(self, tile, k):
+        tally["probes"] += 1
+        inside[0] = True
+        try:
+            return probe(self, tile, k)
+        finally:
+            inside[0] = False
+
+    def timed_advance(state, n_frames, plotting=False):
+        tally["calls"] += 1
+        if inside[0]:
+            tally["frames"] += int(n_frames)
+        t = time.perf_counter()
+        try:
+            return advance(state, n_frames, plotting)
+        finally:
+            tally["secs"] += time.perf_counter() - t
+
+    phase_player._LANDING_CACHE.clear()
+    phase_player.PhasePlayer._landing_holds = counted_holds
+    phase_player.PhasePlayer._probe_landing = counted_probe
+    enemies.advance_frames = timed_advance
+    try:
+        t = time.perf_counter()
+        player = phase_player.PhasePlayer(Game.typed(landscape), verbose=True)
+        won = player.run(max_actions=max_actions)
+        wall = time.perf_counter() - t
+    finally:
+        phase_player.PhasePlayer._landing_holds = holds
+        phase_player.PhasePlayer._probe_landing = probe
+        enemies.advance_frames = advance
+    print(
+        f"landscape {landscape}: {'WON' if won else 'lost'} in {len(player.trace)} "
+        f"actions; {tally['asks']} asks, {tally['probes']} probes, "
+        f"{tally['frames']} probe frames; advance_frames {tally['calls']} calls "
+        f"{tally['secs']:.2f} s; wall {wall:.2f} s"
+    )
+    return tally
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["grain"]:
         crossing_grain()
     elif sys.argv[1:2] == ["sweep"]:
         sweep(*(int(a) for a in sys.argv[2:]))
+    elif sys.argv[1:2] == ["probes"]:
+        probes(*(int(a) for a in sys.argv[2:]))
     else:
         main(*(int(a) for a in sys.argv[1:]))

@@ -60,6 +60,15 @@ Each is a fact about the ROM, not a tuned quantity.
 * **Never idle under fire** — a cone on the body makes every waiting quantum a drain.
 * **A hop's danger is at the destination**, and the probe must cover the *whole* hop
   including aims (`_span`, each action's real aim-plus-settle), not a fixed duration.
+  The score is known before the probe, so the probe is asked lazily: `_leaders` walks
+  candidates in descending score (band order breaking ties) and stops once the score falls
+  below the first landable one; `_any_climb` stops at the first landable candidate. Each
+  probe is memoized in `_LANDING_CACHE` on a blake2b digest of the state's memory, its
+  enemy-clock resume fields (`CLOCK_FIELDS`), the committed bearing and cursor `_hop_span`
+  prices from, the hop and the player class, so forks and re-asks share one run. The
+  digest skips `LOS_TRACKERS` (`$0C56`, `$0CDD`): pricing's marches rewrite them on the
+  live state, and every march LSRs them (`$1CDF`/`$1CE2`) before reading bit7, which only
+  that march sets, so no verdict depends on what they held.
 * **Never land on zero** — `$1A00` kills on a drain arriving at zero energy.
 * **Do not hop where you cannot eat** — a landing with no fuel under it is a dead end,
   whatever it gains in height.

@@ -97,6 +97,7 @@ def test_a_tie_is_settled_by_the_outcome_not_the_order(monkeypatch):
     player = _player()
     tied = [_tie((1, 1)), _tie((2, 2)), _tie((3, 3))]
     monkeypatch.setattr(player, "_climb_candidates", lambda *_a: tied)
+    monkeypatch.setattr(player, "_landing_holds", lambda _tile, _k: True)
     twins = [_Twin(player.st.clone()) for _ in tied]
     winners = {id(twins[1].st), id(twins[2].st)}
     order = []
@@ -116,6 +117,7 @@ def test_a_rollout_never_settles_a_tie(monkeypatch):
     """A fork plays the fixed ladder: settling inside one would nest without bound."""
     player = PhasePlayer(Game.typed(0), rollout=True)
     monkeypatch.setattr(player, "_climb_candidates", lambda *_a: [_tie((1, 1))] * 2)
+    monkeypatch.setattr(player, "_landing_holds", lambda _tile, _k: True)
 
     def boom():
         raise AssertionError("a rollout forked")
@@ -146,7 +148,7 @@ def test_a_stance_with_a_move_is_not_barren():
     """Relocation is the empty-generator case only; a refused move is a wait."""
     player = _player()
     views = _Views(player.st)
-    assert player._climb_candidates(views, True)
+    assert player._any_climb(views)
     assert not player._barren(views)
     assert not player._relocate(views)
     assert not player.trace

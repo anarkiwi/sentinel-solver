@@ -33,7 +33,7 @@ p = PhasePlayer(Game.typed(int(sys.argv[1])))
 v = _Views(p.st)
 print(json.dumps({
     "landable": len(list(v.band())),
-    "cands": len(p._climb_candidates(v, True)),
+    "cands": sum(map(p._lands, p._climb_candidates(v, True))),
     "start_eye": round(p.st.eye_z(), 3),
 }))
 """
