@@ -1,11 +1,9 @@
 """The phase player's rules, pinned on the cheapest board that exercises them."""
 
-import pytest
-
 from sentinel import actions, enemies, phase_player, playerbase, terrain, memmap as mm
 from sentinel.phase_player import PhasePlayer
 from sentinel.game import Game
-from sentinel.playerbase import BOULDER_H, ROBOT_EYE, _Views
+from sentinel.playerbase import BOULDER_H, _Views
 
 STACK_TILE = (4, 4)  # ls42: bare, and every create on it is granted
 
@@ -164,14 +162,6 @@ def test_barren_reads_one_band_sweep_and_short_circuits():
     assert len(playerbase._VIEW_CACHE) == 1 and True not in views._lat
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="_stance_base returns a FOOT for a bare tile and an already-robot eye for a "
-    "stacked one, and _climb_candidates adds ROBOT_EYE to both, so on any tile that "
-    "already carries a boulder the predicted eye is 0.875 high: open item 14. Making "
-    "_stance_base return the eye a robot built now would have, and dropping ROBOT_EYE "
-    "from its callers, makes this pass -- and loses ls373.",
-)
 def test_the_predicted_climb_eye_is_the_eye_a_robot_built_there_gets():
     """Pinned by construction on ls42: stack `already` boulders, predict what the
     ranker predicts, build it and compare."""
@@ -185,7 +175,7 @@ def test_the_predicted_climb_eye_is_the_eye_a_robot_built_there_gets():
         for k in (0, 1):
             trial = base.clone()
             predicted = PhasePlayer(Game(trial))._stance_base(STACK_TILE)
-            predicted += BOULDER_H * k + ROBOT_EYE  # the _climb_candidates convention
+            predicted += BOULDER_H * k  # the _climb_candidates convention
             for _ in range(k):
                 assert actions.create(trial, mm.T_BOULDER, STACK_TILE) is not None
             slot = actions.create(trial, mm.T_ROBOT, STACK_TILE)

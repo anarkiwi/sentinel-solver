@@ -18,6 +18,7 @@ from sentinel.state import State
 
 WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
+POLICIES = ("_breakout", "_supply", "_harvest", "_mount")  # the ladder, in order
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
 CLOCK_FIELDS = tuple(f for f in State.__slots__ if f != "mem" and f[:4] != "obj_")
@@ -234,15 +235,15 @@ class PhasePlayer(BasePlayer):
         return took if bank else self.st.energy >= want
 
     def _stance_base(self, tile):
-        """Foot height a stack on ``tile`` builds from, or None if not stackable.
+        """The z an object created on ``tile`` now gets, or None if not stackable.
 
-        Bare tile: a foot.  Stacked: already a robot eye, since $1F66 gives every
-        create `z_frac = $E0` -- two conventions in one function, and the callers add
-        `ROBOT_EYE` to both -- open item 14.
+        That z is also the eye of a robot built there: $1F66 gives a create on bare
+        terrain `z_frac = $E0`, and $1F47/$1F52 stack 1 above a platform and 1/2 above
+        a boulder.
         """
         top = self._top(tile)
         if top is None:
-            return terrain.tile_byte(self.st, *tile) >> 4
+            return (terrain.tile_byte(self.st, *tile) >> 4) + ROBOT_EYE
         otype = self.st.obj_type[top]
         if otype in (mm.T_BOULDER, mm.T_PLATFORM):
             return self._base_z(top) + (1.0 if otype == mm.T_PLATFORM else BOULDER_H)
@@ -343,8 +344,8 @@ class PhasePlayer(BasePlayer):
             base = self._stance_base(tile)
             if base is None:
                 return False
-            k = max(0, math.ceil((my_eye + EYE_EPS - ROBOT_EYE - base) / BOULDER_H))
-            gain = base + BOULDER_H * k + ROBOT_EYE - my_eye
+            k = max(0, math.ceil((my_eye + EYE_EPS - base) / BOULDER_H))
+            gain = base + BOULDER_H * k - my_eye
             if gain <= 0 or k > 3:
                 return False
             cost = 2 * k + mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
@@ -415,8 +416,9 @@ class PhasePlayer(BasePlayer):
         failed is otherwise dead weight: ``_stance_base`` will not stack on a robot, so
         nothing else can ever use that tile again.
 
-        The candidate's eye is over-stated by a whole `ROBOT_EYE` -- a robot's stored z
-        IS its eye -- so this can transfer DOWNWARD (open item 14).
+        A robot's stored z IS the eye a body in it has ($1F66 creates with `z_frac =
+        $E0`), and only a strictly higher one is taken: eye height is then a potential
+        every mount raises, so no sequence of mounts can return to a body it left.
         """
         st = self.st
         best = None
@@ -426,7 +428,7 @@ class PhasePlayer(BasePlayer):
             top = terrain.top_object(st, *st.tile_of(slot))
             if top != slot:
                 continue
-            eye = st.eye_z(slot) + ROBOT_EYE
+            eye = st.eye_z(slot)
             if eye <= st.eye_z() + EYE_EPS:
                 continue
             if not self._mount_holds(slot):
@@ -599,10 +601,10 @@ class PhasePlayer(BasePlayer):
         if self._strike(views):  # phase 2: convert whenever a kill is on
             return
         if self.rollout:  # inside a fork: fixed order, or the nesting explodes
-            for policy in (self._breakout, self._supply, self._harvest, self._mount):
-                if policy(views):
+            for name in POLICIES:
+                if getattr(self, name)(views):
                     return
-        elif self._arbitrate(["_breakout", "_supply", "_harvest", "_mount"]):
+        elif self._arbitrate(POLICIES):
             return
         if self._under_fire():  # cornered: anything is better than standing here
             for tile in list(views.primary())[:24]:

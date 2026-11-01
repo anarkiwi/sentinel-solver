@@ -1594,46 +1594,6 @@ to prevent (4 options × N ticks squared per decision), and which scoring instea
 disproved below. Until one exists `ARBITRATE_ACTIONS` bounds the damage and no probe change
 can be credited with the eight-board result.
 
-## 14. The stance-base convention double-counts a robot's eye
-
-**Wrong.** `actions.create` gives an object on bare terrain `z_frac = $E0` (`$1F66`), so a
-stored z **already** carries a robot's eye fraction. `phase_player._stance_base` returns a
-*foot* for a bare tile but `_base_z(top) + BOULDER_H` — already a robot eye — for a stacked
-one, and `_climb_candidates` adds `ROBOT_EYE` to both. So on any tile already carrying a
-boulder or platform the predicted eye is a whole eye high: `gain` is overstated, `k` is
-under-computed, and a climb that actually *descends* can rank first. `_mount` has the same
-bug on a robot's own z, so it can transfer downward — the overstatement, 0.875, exceeds
-`EYE_EPS` (0.1) by enough to select a body up to 0.775 *below* the current eye.
-`playerbase._robot_eye_after_boulder` gets the convention right, so two functions in tree
-disagree.
-
-**Measured.** Built and compared on ls42, tile `(4,4)`, terrain height 6: what the ranker
-predicts against the actual eye of a robot built there
-(`test_the_predicted_climb_eye_is_the_eye_a_robot_built_there_gets`, a strict xfail).
-
-| boulders already on tile | k | predicted | actual | error |
-|---|---|---|---|---|
-| 0 | 0 | 6.875 | 6.875 | 0 |
-| 0 | 1 | 7.375 | 7.375 | 0 |
-| 1 | 0 | 8.25 | 7.375 | **+0.875** |
-| 1 | 1 | 8.75 | 7.875 | **+0.875** |
-| 2 | 0 | 8.75 | 7.875 | **+0.875** |
-| 2 | 1 | 9.25 | 8.375 | **+0.875** |
-
-**Measured — why it is not simply fixed.** One convention (`_stance_base` returns the eye a
-robot built there would have now; `_climb_candidates` drops `ROBOT_EYE`; `_mount` reads the
-robot's own eye) **loses ls373** — 45-action win → dead in 17, E=0 — and that is the only
-suite board it loses: ls0 16, ls42 35, ls60 44, ls110 51, ls298 32, ls321 35, ls335 55 all
-still win. Off the suite it is an improvement: of the eight formerly paralysed boards
-(item 12) it takes ls9785 from lost in 28 to **won in 95** and ls7414 from 59 to 54 actions.
-Reverting the geometry alone, with the relocation, harvest and fork fixes left in place,
-restores ls373 exactly (45 actions, 17403 f) — so the arithmetic is the sole cause.
-
-**Resolves.** One convention across `_stance_base`, `_climb_candidates`, `_mount` and
-`_robot_eye_after_boulder`, with ls373 *diagnosed* rather than traded away. The fix changes
-which climb ranks first, and item 13 is why a different first climb can lose a board the
-planner otherwise wins — so that attribution is the blocker here too.
-
 ## 15. A tick's views outlive a relocation
 
 **Wrong.** `PhasePlayer._do` fires from the tick's `_Views`, which were swept from the
@@ -1651,6 +1611,14 @@ after the relocation, so the tie it settles must be re-checked on the suite boar
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the measurement that killed it.
+
+- **One stance-eye convention loses ls373.** `_stance_base` now returns the z the next create
+  on a tile gets (`$1F66`/`$1F47`/`$1F52`), which is the eye a robot built there has, and
+  `_climb_candidates` and `_mount` read eyes in that one convention. ls373 wins in 33, and
+  ls0 29, ls335 49, ls9716 49 win; ls9760 and ls9677, which shuttled between their two
+  opening robots until they lost, win in 89 and 66. `_mount`'s robot read as a foot made the
+  body left behind look higher, so the pair were each other's mount; the ladder's own
+  stacked-tile overstatement ranked a descent onto that body's boulder as a climb.
 
 - **ls373's lost win was a safety-probe margin the aim over-charge was supplying.** The one
   probe that decides the board accepts a landing that is genuinely survivable, six probe
