@@ -6,18 +6,27 @@ is byte-exact, so a gap is found by running the world forward and looking.
 """
 
 import argparse
+import hashlib
 import math
 
 import numpy as np
 
-from sentinel import actions, enemies, memmap as mm, terrain
+from sentinel import actions, enemies, memmap as mm, projector, terrain
 from sentinel.game import Game
 from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _Views
+from sentinel.state import State
 
 WAIT_QUANTUM = 60  # frames advanced per probe while waiting for a gap
 WAIT_HORIZON = 20000  # frames to look ahead for one
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
+CLOCK_FIELDS = tuple(f for f in State.__slots__ if f != "mem" and f[:4] != "obj_")
+LOS_TRACKERS = (
+    mm.TARGETED_OBJECT_IN_LOS,
+    mm.TREE_IN_LOS,
+)  # `$1CDF`/`$1CE2` LSR each before any march reads bit7, and nothing reads the lower bits but a shift: no outcome depends on what a march finds in them
+_LANDING_CACHE = {}
+_LANDING_CACHE_MAX = 1 << 16
 ARBITRATE_ACTIONS = 2  # decision ticks each arbitrated option plays out on its fork: a BOUND on how much of the fixed ladder's own error the score absorbs (open item 13), not a derived depth -- deeper scores worse, on and off the suite
 
 
@@ -239,13 +248,49 @@ class PhasePlayer(BasePlayer):
             return self._base_z(top) + (1.0 if otype == mm.T_PLATFORM else BOULDER_H)
         return None
 
+    def _landing_key(self, tile, k):
+        """Digest of everything :meth:`_landing_holds` reads: the state's memory bar
+        ``LOS_TRACKERS`` (which pricing's own marches rewrite on the live state), the
+        enemy-clock resume fields, the aim's committed bearing and cursor, the class
+        whose pricing runs, and the hop."""
+        st = self.st
+        bearing = self.last_bearing
+        mem = memoryview(st.mem)
+        dig = hashlib.blake2b(digest_size=16)
+        lo = 0
+        for addr in sorted(LOS_TRACKERS):
+            dig.update(mem[lo:addr])
+            lo = addr + 1
+        dig.update(mem[lo:])
+        dig.update(
+            repr(
+                (
+                    tuple(getattr(st, f) for f in CLOCK_FIELDS),
+                    None if bearing is None else tuple(map(int, bearing)),
+                    tuple(map(int, self.cursor)),
+                    tuple(map(int, tile)),
+                    int(k),
+                )
+            ).encode()
+        )
+        return type(self), dig.digest()
+
     def _landing_holds(self, tile, k):
         """Would a body that lands on ``tile`` still be alive long enough to act?
 
         A gap at the tile we are LEAVING says nothing about the one we arrive on, and
         hopping into a live cone at low energy is how this player dies.  Built on a
         clone and stepped with the byte-exact enemies, so it is observed, not forecast.
+        A pure function of :meth:`_landing_key`, so forks and re-asks share one run.
         """
+        return projector.memo(
+            _LANDING_CACHE,
+            self._landing_key(tile, k),
+            _LANDING_CACHE_MAX,
+            lambda: self._probe_landing(tile, k),
+        )
+
+    def _probe_landing(self, tile, k):
         probe = self.st.clone()
         for _ in range(k):
             if actions.create(probe, mm.T_BOULDER, tile) is None:
@@ -281,7 +326,8 @@ class PhasePlayer(BasePlayer):
         return int(self._fuel_map(reach)[tile[0], tile[1]])
 
     def _climb_candidates(self, views, affordable):
-        """[(score, tile, k, cost, gain)] for every climb the ROM's own gates allow.
+        """[(score, tile, k, cost, gain)] in band order for every climb the ROM's own
+        gates allow, the landing not yet probed.
 
         Rank is height per energy -- a finite purse refilled only by absorbing -- and
         ``affordable`` restricts to what is payable now, which is how the caller tells
@@ -308,24 +354,35 @@ class PhasePlayer(BasePlayer):
                     return False  # $1A00: a drain arriving at zero energy KILLS
                 if st.energy - cost < mm.ENERGY_IN_OBJECTS[mm.T_ROBOT] and not fuel:
                     return False  # arriving broke with nothing to absorb is a dead end
-            keep[tile] = (k, cost, gain, fuel)
+            keep[tile] = ((gain / cost, fuel), tile, k, cost, gain)
             return True
 
-        out = []
-        for tile, _view in views.band_ordered(stance):
-            k, cost, gain, fuel = keep[tile]
-            if affordable and not self._landing_holds(tile, k):
-                continue  # the destination's cone, not ours, decides this
-            out.append(((gain / cost, fuel), tile, k, cost, gain))
-        return out
+        return [keep[tile] for tile, _view in views.band_ordered(stance)]
+
+    def _lands(self, cand):
+        """The destination's cone, not ours, decides a hop."""
+        return self._landing_holds(cand[1], cand[2])
+
+    def _any_climb(self, views):
+        """Whether any affordable climb lands, probing only until one does."""
+        return any(map(self._lands, self._climb_candidates(views, True)))
+
+    def _leaders(self, cands, probe):
+        """Every top-scoring candidate, in band order; with ``probe`` the top score is
+        taken over landable ones only, probed in descending score until it drops."""
+        tied = []
+        for cand in sorted(cands, key=lambda c: c[0], reverse=True):
+            if tied and cand[0] < tied[0][0]:
+                break
+            if not probe or self._lands(cand):
+                tied.append(cand)
+        return tied
 
     def _best_climb(self, views, affordable):
         """(tile, k, cost, gain) for the biggest eye gain on offer, or None."""
-        cands = self._climb_candidates(views, affordable)
-        if not cands:
+        tied = self._leaders(self._climb_candidates(views, affordable), affordable)
+        if not tied:
             return None
-        top = max(c[0] for c in cands)
-        tied = [c for c in cands if c[0] == top]
         if len(tied) > 1 and affordable and not self.rollout:
             return self._settle_tie(tied)
         return tied[0][1:]
@@ -504,7 +561,7 @@ class PhasePlayer(BasePlayer):
         for _value, tile in self._reclaim_targets(st, True):
             if views.band_get(tuple(tile)) is not None:
                 return False
-        if self._climb_candidates(views, True):
+        if self._any_climb(views):
             return False
         for slot, tile in self._robot_bodies():
             if st.eye_z(slot) > st.eye_z() and views.band_get(tuple(tile)) is not None:

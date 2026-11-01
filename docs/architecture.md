@@ -1620,7 +1620,7 @@ to the player makes replay mutate the checkpoint.
 | tier | question |
 |---|---|
 | 0 filter tally | which gate kills each `(tile, k)` here? |
-| 1 probe | does the candidate generator (`_climb_candidates`/`_mount`) yield anything here? |
+| 1 probe | does the candidate generator (`_any_climb`/`_mount`) yield anything here? |
 | 2 resume | does the run still die from this tick on? |
 | 3 board | does the whole board flip to a win? |
 | 4 matrix | did any other board regress? (`human_regress`) |

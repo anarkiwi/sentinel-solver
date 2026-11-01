@@ -1675,7 +1675,8 @@ Each is a hypothesis and the measurement that killed it.
 - **Asking only the best-scoring climb group.** `_best_climb` reads one score group, so the
   generator could stop at the leading landable one; the tallest tiles are the least landable,
   so it walks 46-98 of the 66-99 groups and 596-930 of the tiles anyway (ls42/110/335/373/9717
-  entry states).
+  entry states). This is the band sweep's
+  walk; the landing probe, asked per candidate after the sweep, is lazy (`_leaders`).
 - **A `_settle_tie` fork re-sweeps the board it forked from.** `_VIEW_CACHE` keys on
   `projector.scene_key`, so a clone of an unchanged board hits the memo: 0 of 45 sweeps over an
   ls110 solve are at a tie's entry key.
