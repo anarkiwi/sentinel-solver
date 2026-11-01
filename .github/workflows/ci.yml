@@ -26,3 +26,18 @@ jobs:
       - run: pylint --rcfile=.pylintrc sentinel driver conftest.py
       - run: python -m sentinel.tests.csdb
       - run: pytest -n auto
+
+  cudasim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: test
+          load: true
+          tags: sentinel-cudasim
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm sentinel-cudasim pytest -n auto -m gpu sentinel/tests

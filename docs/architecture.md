@@ -1088,6 +1088,49 @@ states alone do not exercise the object-stack surface bracket, so
 `test_landable_view_matches_sweep_every_tile_midgame` re-checks every tile of a board the
 player has already built and transferred on.
 
+## Kernel specs and backends (`kern.py`, `kern_cuda.py`)
+
+The scalar integer kernels are the specification of the model's bit-exact arithmetic: the
+ray march in `los_jit` (`march`, `_march_one` and their helpers) and the landability track
+walk in `landtable` (`_cell_span`, `_crosses`, `_stop_one`). Each is written once, as a
+plain Python function marked `@kern.spec`, and compiled for two targets from that one
+source.
+
+* **CPU.** `spec` compiles in place with `numba.njit(cache=True)` (`inline=True` keeps
+  `inline="always"`), so a spec is an ordinary dispatcher and `py_func`, line numbers and
+  coverage are unchanged.
+* **CUDA.** `kern.build(fn, "cuda")` recreates each spec of the module from its own code
+  object (`types.FunctionType`) over a globals dict in which every spec name is bound to its
+  CUDA device function, then wraps it in `numba.cuda.jit(device=True)`. Callees therefore
+  resolve to the same target's builds; nothing is re-typed or re-written.
+
+Only the launch layer differs per target: the `prange` loops of the CPU callers
+(`stop_cells`, `march_batch`) against the one-thread-per-ray kernels of `kern_cuda`.
+Results are order-independent integer reductions (an atomic count compacting the landing
+rays, sorted on the host by lattice index; an atomic OR into a bitmask), so they never
+depend on thread scheduling. The state-independent lattice vectors stay resident on the
+device between calls.
+
+**Backend.** `SENTINEL_BACKEND=cpu|cuda|auto` (default `auto`: cuda when numba-cuda can
+compile and launch a kernel). Strategy may differ per backend while results stay identical:
+on cuda the whole lattice is marched (no `stop_cells` prefilter, no doubling-chunk early
+exit) and only the compact `(ray, tile)` list of LOS-clear rays is downloaded, memoized per
+board image; `landable_view`, `landable_set` and `playerbase._sweep` read it. `crossing_mask`,
+`candidates`, `march_batch` and `_march` stay on the CPU. The CUDA extra is optional
+(`requirements-gpu.txt`; numba-cuda 0.30 needs numpy below 2.5).
+
+**The spec subset.** `tests/test_kern.py` lints every `@spec` function's AST: scalar integer
+arithmetic with explicit masking, no allocation, no exceptions, no recursion, no `prange`,
+tables only as module-level arrays, tuple returns, floats only in `_cell_span` (exact:
+see its docstring), no `fastmath`. Two differences between the targets are designed out:
+`math.ceil`/`math.floor` return floats on CUDA, so `_cell_span` wraps them in `int`; the
+CUDA simulator keeps numpy scalar widths, so int16/int32 inputs are widened with `np.int64`
+at the first use. `test_kern.py` also asserts CPU/CUDA bit identity on random lattice slices
+of several boards, on a real device or, with `NUMBA_ENABLE_CUDASIM=1`, in the simulator
+(the `cudasim` CI job, built from the `Dockerfile`). `python -m sentinel.tests.trace_suite
+--out FILE` records the nine suite boards' full action traces and `--compare FILE` gates a
+change on byte-identical traces under either backend.
+
 ## Render cost (`projector.py`, `pancost.py`, `rendercost_exact.py`)
 
 The game is compute-bound, so drawing the height field *is* the world clock: what a view costs

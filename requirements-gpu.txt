@@ -1,0 +1,3 @@
+# Optional CUDA backend. numba-cuda 0.30 registers np.row_stack, removed in numpy 2.5.
+numpy>=2.4.6,<2.5
+numba-cuda[cu12]==0.30.4

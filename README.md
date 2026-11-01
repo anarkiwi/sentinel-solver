@@ -20,6 +20,8 @@ actions, final energy 5:
 ```bash
 pip install -r requirements.txt
 pytest -n auto
+# optional CUDA backend (SENTINEL_BACKEND=cpu|cuda|auto): see docs/architecture.md
+pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 
 python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
