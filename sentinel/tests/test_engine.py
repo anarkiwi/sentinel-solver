@@ -259,7 +259,7 @@ def test_device_pool_matches_host_pool(new_game):
     tile = _free_tile(st)
     packed = tile[0] * 32 + tile[1]
     seqs = [
-        [(rows_jit.CREATE, BOULDER, packed)],
+        [(rows_jit.FACE, 0x44, 0xF1), (rows_jit.CREATE, BOULDER, packed)],
         [(rows_jit.CREATE, ROBOT, packed), (rows_jit.TRANSFER, rows_jit.LAST, 0)],
         [(rows_jit.ABSORB, 0, 0)],
     ]
@@ -272,11 +272,14 @@ def test_device_pool_matches_host_pool(new_game):
         kids, ok = pool.expand(np.zeros(3, dtype=int), engine.pad_ops(seqs))
         pool.advance(kids, frames)
         out.append((pool.keys(kids), ok, pool.evaluate(kids), pool.state(kids[1])))
+        out[-1] += (pool.clocks(kids), pool.mutable(kids))
     assert np.array_equal(out[0][0], out[1][0])
     assert np.array_equal(out[0][1], out[1][1])
     for field in rows_jit.FIELDS:
         assert np.array_equal(out[0][2][field], out[1][2][field])
     assert _same(out[0][3], out[1][3])
+    assert np.array_equal(out[0][4], out[1][4]) and out[0][4].any()
+    assert np.array_equal(out[0][5], out[1][5])
     assert len(set(out[1][0].tolist())) == 3
     dev = pools[1]
     dev.fork_into([0], [1])
@@ -295,3 +298,28 @@ def test_device_advance_prices_replots(monkeypatch):
         enemies.advance_frames(st, n)
     pool.advance(np.arange(3), [n for _, n in found])
     assert all(_same(pool.state(i), w) for i, w in enumerate(want))
+
+
+def test_default_device_wants_cuda_and_a_batch(monkeypatch):
+    monkeypatch.setattr(engine.kern, "backend", lambda: "cuda")
+    assert engine.default_device(2) and not engine.default_device(1)
+    monkeypatch.setattr(engine.kern, "backend", lambda: "cpu")
+    assert not engine.default_device(10**6)
+
+
+def test_states_materialise_rows_with_their_clocks(new_game):
+    base = new_game(42).state
+    other = base.clone()
+    enemies.advance_frames(other, 90)
+    pool = engine.Pool.from_states([base, other])
+    got = pool.states([1, 0])
+    assert _same(got[0], other) and _same(got[1], base)
+    assert pool.clocks([1])[0].tolist() == [getattr(other, f) for f in enemies.CLOCK]
+    assert pool.mutable([0]).shape == (1, pool.addrs.size)
+
+
+def test_advance_of_nothing_is_a_no_op(new_game):
+    pool = engine.Pool.from_states([new_game(42).state])
+    before = pool.mut.copy()
+    pool.advance([], 100)
+    assert np.array_equal(pool.mut, before)

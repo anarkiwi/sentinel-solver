@@ -11,12 +11,12 @@ stay resident on the device between calls, and B board images march in one launc
 import functools
 import hashlib
 import os
-import types
 
 import numpy as np
 from numba import cuda
 
 from sentinel import (
+    badline_jit,
     enemies_jit,
     kern,
     landtable,
@@ -30,6 +30,10 @@ BLOCK = 128
 LOS_CLEAR = los_jit.LOS_CLEAR
 _march_one = kern.build(los_jit._march_one, "cuda")
 _stop_one = kern.build(landtable._stop_one, "cuda")
+_advance_one = kern.build(enemies_jit._advance, "cuda")
+_apply_ops = kern.build(rows_jit.apply_ops, "cuda")
+_fields = kern.build(rows_jit.fields, "cuda")
+_row_hash = kern.build(rows_jit.row_hash, "cuda")
 _MEMO = {}
 _MEMO_MAX = 8
 
@@ -234,109 +238,171 @@ def grid2(width, rows):
     return (_blocks(width), rows), BLOCK
 
 
-def advance_rows(imgs, clock, n_frames, plotting, price):
-    """Advance row ``i`` of the device stack ``imgs`` by ``n_frames[i]`` frames in place,
-    from and into the host ``(B, 12)`` ``clock``.  Rounds of :func:`_advance_kernel` run the
-    live rows; a row stopped at a strip replot is handed to ``price(image bytes, clock row,
-    request)``, which returns its image and clock row, and re-enters the next round."""
+@functools.cache
+def device_maps():
+    """The badline run maps of :data:`badline_jit.MAPS` resident on the device: the clock
+    kernel's table argument."""
+    return tuple(cuda.to_device(a) for a in badline_jit.MAPS)
+
+
+@cuda.jit(cache=True)
+def _advance_kernel(imgs, pos, clock, rows, zps, left, plotting, out, maps):
+    """One thread per live row ``b``: :func:`enemies_jit._advance` over ``imgs[pos[b]]`` from
+    and into the clock fields ``clock[rows[b]]``.  ``out[b]`` takes the frames left, then
+    the strip replot request, if any (target or -1, left column, columns, span)."""
+    b = cuda.grid(1)
+    if b < rows.shape[0]:
+        zp = zps[b]
+        for k in range(zp.shape[0]):
+            zp[k] = 0
+        c = clock[rows[b]]
+        r = _advance_one(
+            imgs[pos[b]],
+            zp,
+            left[b],
+            plotting,
+            c[0],
+            c[1],
+            c[2],
+            c[3],
+            c[4],
+            c[5],
+            c[6],
+            c[7],
+            c[8],
+            c[9],
+            c[10],
+            c[11],
+            maps,
+        )
+        for k in range(12):
+            c[k] = r[k]
+        out[b, 0] = r[12]
+        out[b, 1] = zp[enemies_jit.ZP_REPLOT] - 1
+        out[b, 2] = zp[enemies_jit.ZP_REPLOT_LEFT]
+        out[b, 3] = zp[enemies_jit.ZP_REPLOT_COLS]
+        out[b, 4] = zp[enemies_jit.ZP_REPLOT_SPAN]
+
+
+@cuda.jit(cache=True)
+def _ops_kernel(imgs, ops, ok):
+    b = cuda.grid(1)
+    if b < imgs.shape[0]:
+        ok[b] = _apply_ops(imgs[b], ops[b])
+
+
+@cuda.jit(cache=True)
+def _fields_kernel(imgs, out):
+    b = cuda.grid(1)
+    if b < imgs.shape[0]:
+        _fields(imgs[b], out[b])
+
+
+@cuda.jit(cache=True)
+def _hash_kernel(mut, clock, idx, out, keep):
+    b = cuda.grid(1)
+    if b < idx.shape[0]:
+        out[b] = _row_hash(mut[idx[b]], clock[idx[b]], keep)
+
+
+@cuda.jit(cache=True)
+def _copy_clock_kernel(clock, src, dst):
+    """Clock row ``dst[b]`` <- row ``src[b]``."""
+    j, b = cuda.grid(2)
+    if b < src.shape[0] and j < clock.shape[1]:
+        clock[dst[b], j] = clock[src[b], j]
+
+
+@cuda.jit(cache=True)
+def _put_clock_kernel(clock, rows, vals):
+    """Clock row ``rows[b]`` <- ``vals[b]``."""
+    j, b = cuda.grid(2)
+    if b < rows.shape[0] and j < clock.shape[1]:
+        clock[rows[b], j] = vals[b, j]
+
+
+@cuda.jit(cache=True)
+def _get_clock_kernel(clock, rows, out):
+    """``out[b]`` <- clock row ``rows[b]``."""
+    j, b = cuda.grid(2)
+    if b < rows.shape[0] and j < clock.shape[1]:
+        out[b, j] = clock[rows[b], j]
+
+
+@cuda.jit(cache=True)
+def _gather_kernel(mut, idx, out):
+    """``out[b]`` <- the mutable bytes of row ``idx[b]``."""
+    j, b = cuda.grid(2)
+    if b < idx.shape[0] and j < mut.shape[1]:
+        out[b, j] = mut[idx[b], j]
+
+
+def gather_rows(mut, idx):
+    """The host ``(len(idx), M)`` copy of device rows ``idx`` of ``mut``."""
+    out = cuda.device_array((len(idx), mut.shape[1]), dtype=np.uint8)
+    grid, block = grid2(mut.shape[1], len(idx))
+    _gather_kernel[grid, block](mut, cuda.to_device(idx), out)
+    return out.copy_to_host()
+
+
+def copy_clock(clock, src, dst):
+    """Device clock rows ``dst`` <- rows ``src`` (host index arrays)."""
+    grid, block = grid2(clock.shape[1], len(src))
+    _copy_clock_kernel[grid, block](clock, cuda.to_device(src), cuda.to_device(dst))
+
+
+def put_clock(clock, rows, vals):
+    """Device clock rows ``rows`` <- the host ``(len(rows), 12)`` ``vals``."""
+    grid, block = grid2(clock.shape[1], len(rows))
+    _put_clock_kernel[grid, block](
+        clock, cuda.to_device(rows), cuda.to_device(np.ascontiguousarray(vals))
+    )
+
+
+def get_clock(clock, rows):
+    """The host ``(len(rows), 12)`` copy of device clock rows ``rows``."""
+    out = cuda.device_array((len(rows), clock.shape[1]), dtype=np.int64)
+    grid, block = grid2(clock.shape[1], len(rows))
+    _get_clock_kernel[grid, block](clock, cuda.to_device(rows), out)
+    return out.copy_to_host()
+
+
+def advance_rows(imgs, clock, rows, n_frames, plotting, price):
+    """Advance row ``i`` of the device stack ``imgs`` by ``n_frames[i]`` frames in place, from
+    and into the device ``clock`` row ``rows[i]``.  Rounds of :func:`_advance_kernel` run the
+    live rows and read back one small status row each; a row stopped at a strip replot is
+    handed to ``price(image bytes, clock row, request)``, which returns its image and clock
+    row, and re-enters the next round."""
     left = np.array(n_frames, dtype=np.int64)
+    maps = device_maps()
     while True:
         live = np.flatnonzero(left > 0)
         if not live.size:
             return
-        carry = cuda.to_device(np.ascontiguousarray(clock[live]))
-        rest = cuda.device_array(live.size, dtype=np.int64)
-        replot = cuda.device_array((live.size, 4), dtype=np.int64)
-        row_kernels().advance[_blocks(live.size), BLOCK](
+        out = cuda.device_array((live.size, 5), dtype=np.int64)
+        _advance_kernel[_blocks(live.size), BLOCK](
             imgs,
             cuda.to_device(live),
+            clock,
+            cuda.to_device(rows[live]),
             cuda.device_array((live.size, enemies_jit.ZP_N), dtype=np.int64),
             cuda.to_device(left[live]),
             bool(plotting),
-            carry,
-            rest,
-            replot,
+            out,
+            maps,
         )
-        clock[live] = carry.copy_to_host()
-        rest, replot = rest.copy_to_host(), replot.copy_to_host()
-        for k in np.flatnonzero(replot[:, 0] >= 0):
-            row = live[k]
-            img, clock[row] = price(
-                imgs[row].copy_to_host().tobytes(), clock[row], replot[k]
+        out = out.copy_to_host()
+        stopped = out[:, 1] >= 0
+        for k in np.flatnonzero(stopped):
+            at = live[k]
+            img, row = price(
+                imgs[at].copy_to_host().tobytes(),
+                clock[rows[at]].copy_to_host(),
+                out[k, 1:],
             )
-            imgs[row].copy_to_device(img)
-        left[live] = np.where(replot[:, 0] >= 0, np.maximum(rest, 0), 0)
-
-
-@functools.cache
-def row_kernels():
-    """The device kernels over the clock and row specs, built on first use: their tables are
-    device arrays, which numba cannot cache, so they compile once per process and only when
-    a device pool asks for them."""
-    advance_one = kern.build(enemies_jit._advance, "cuda")
-    apply_ops = kern.build(rows_jit.apply_ops, "cuda")
-    fields = kern.build(rows_jit.fields, "cuda")
-    row_hash = kern.build(rows_jit.row_hash, "cuda")
-
-    @cuda.jit
-    def advance_kernel(mems, rows, zps, n_frames, plotting, carry, rest, replot):
-        """One thread per live row ``b``: :func:`enemies_jit._advance` over ``mems[rows[b]]``
-        from the clock fields ``carry[b]`` (updated in place), the frames left in ``rest[b]`` and
-        the strip replot request, if any, in ``replot[b]`` (target, left column, columns,
-        span)."""
-        b = cuda.grid(1)
-        if b < rows.shape[0]:
-            zp = zps[b]
-            for k in range(zp.shape[0]):
-                zp[k] = 0
-            c = carry[b]
-            r = advance_one(
-                mems[rows[b]],
-                zp,
-                n_frames[b],
-                plotting,
-                c[0],
-                c[1],
-                c[2],
-                c[3],
-                c[4],
-                c[5],
-                c[6],
-                c[7],
-                c[8],
-                c[9],
-                c[10],
-                c[11],
-            )
-            for k in range(12):
-                c[k] = r[k]
-            rest[b] = r[12]
-            replot[b, 0] = zp[enemies_jit.ZP_REPLOT] - 1
-            replot[b, 1] = zp[enemies_jit.ZP_REPLOT_LEFT]
-            replot[b, 2] = zp[enemies_jit.ZP_REPLOT_COLS]
-            replot[b, 3] = zp[enemies_jit.ZP_REPLOT_SPAN]
-
-    @cuda.jit
-    def ops_kernel(imgs, ops, ok):
-        b = cuda.grid(1)
-        if b < imgs.shape[0]:
-            ok[b] = apply_ops(imgs[b], ops[b])
-
-    @cuda.jit
-    def fields_kernel(imgs, out):
-        b = cuda.grid(1)
-        if b < imgs.shape[0]:
-            fields(imgs[b], out[b])
-
-    @cuda.jit
-    def hash_kernel(mut, clock, idx, out, keep):
-        b = cuda.grid(1)
-        if b < idx.shape[0]:
-            out[b] = row_hash(mut[idx[b]], clock[b], keep)
-
-    return types.SimpleNamespace(
-        advance=advance_kernel, ops=ops_kernel, fields=fields_kernel, hash=hash_kernel
-    )
+            imgs[at].copy_to_device(img)
+            clock[rows[at]].copy_to_device(row)
+        left[live] = np.where(stopped, np.maximum(out[:, 0], 0), 0)
 
 
 @functools.cache

@@ -13,12 +13,16 @@ jitcache.install()  # must precede numba: the cache key carries the cost constan
 from sentinel import badline, passcost, writeruns  # noqa: E402
 from sentinel.kern import spec  # noqa: E402
 
-DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
-_EVENT_POS = badline.EVENT_POS
-_EVENT_SHORT_IRQ = badline.EVENT_SHORT_IRQ
-_START = writeruns.START
-_LENGTH_AT = writeruns.LENGTH_AT
-_RUN = writeruns.RUN
+_FIRST_EVENT = int(badline.EVENT_POS[0])
+MAPS = (
+    writeruns.RUN,
+    writeruns.START,
+    writeruns.LENGTH_AT,
+    writeruns.OWED,
+    badline.EVENT_POS,
+    badline.EVENT_SHORT_IRQ,
+)  # the clock's tables are kernel arguments on both targets, never frozen constants
+M_RUN, M_START, M_LENGTH, M_OWED, M_POS, M_IRQ = range(6)
 _STEAL = passcost.BADLINE_STEAL
 _SHORT_IRQ = passcost.SHORT_IRQ
 _N_EVENTS = badline.N_EVENTS
@@ -28,7 +32,6 @@ _PAL_FRAME_CYCLES = passcost.PAL_FRAME_CYCLES
 _NO_EVENT = badline.NO_EVENT
 _FIELDS = badline.CLOCK_FIELDS
 _WEIGHT_SHIFT = badline.WEIGHT_SHIFT
-_OWED = writeruns.OWED
 
 
 @spec
@@ -37,66 +40,66 @@ def frame_clock(clk, armed):
     events re-armed; ``armed`` False places none."""
     for k in range(_FIELDS):
         clk[k] = 0
-    clk[1] = _EVENT_POS[0] if armed else _NO_EVENT
+    clk[1] = _FIRST_EVENT if armed else _NO_EVENT
     clk[2] = 0 if armed else _N_EVENTS
 
 
 @spec(inline=True)
-def owed_at(anchor, offset):
+def owed_at(maps, anchor, offset):
     """Cycles the instruction ``offset`` into the run at ``anchor`` has still to run."""
-    start = _START[anchor]
-    if start < 0 or offset < 0 or offset >= _LENGTH_AT[anchor]:
+    start = maps[M_START][anchor]
+    if start < 0 or offset < 0 or offset >= maps[M_LENGTH][anchor]:
         return np.int64(0)
-    return np.int64(_OWED[start + offset])
+    return np.int64(maps[M_OWED][start + offset])
 
 
 @spec(inline=True)
-def run_at(anchor, offset):
+def run_at(maps, anchor, offset):
     """Consecutive write cycles ``offset`` cycles into the run counted from ``anchor``."""
-    start = _START[anchor]
-    if start < 0 or offset >= _LENGTH_AT[anchor]:
+    start = maps[M_START][anchor]
+    if start < 0 or offset >= maps[M_LENGTH][anchor]:
         return 0
-    return _RUN[start + offset]
+    return maps[M_RUN][start + offset]
 
 
 @spec
-def _place(clk, anchor, cycles):
+def _place(clk, maps, anchor, cycles):
     """The slow half of :func:`charge`: the events this term's cycles reach."""
     pos = clk[0]
     index = clk[2]
     refund = 0
     start = pos
     end = pos + cycles
-    while _EVENT_POS[index] < end:
-        split = _EVENT_SHORT_IRQ[index]
+    while maps[M_POS][index] < end:
+        split = maps[M_IRQ][index]
         if split:
             pos += split
             end += split
         else:
-            spend = _STEAL - run_at(anchor, _EVENT_POS[index] - pos)
+            spend = _STEAL - run_at(maps, anchor, maps[M_POS][index] - pos)
             refund += _STEAL - spend
             pos += spend
             end += spend
         index += 1
     if start < _PAL_FRAME_CYCLES <= end:  # the raster crosses this term
-        clk[5] = owed_at(anchor, _PAL_FRAME_CYCLES - pos)
+        clk[5] = owed_at(maps, anchor, _PAL_FRAME_CYCLES - pos)
     clk[0] = end
-    clk[1] = _EVENT_POS[index]
+    clk[1] = maps[M_POS][index]
     clk[2] = index
     clk[3] += refund
     return cycles - refund
 
 
 @spec(inline=True)
-def charge(clk, anchor, cycles):
+def charge(clk, maps, anchor, cycles):
     """Spend ``cycles`` of the run at ``anchor``, less what its writes refund."""
     end = clk[0] + cycles
     if end <= clk[1]:
         if clk[0] < _PAL_FRAME_CYCLES <= end:  # the raster crosses this term
-            clk[5] = owed_at(anchor, _PAL_FRAME_CYCLES - clk[0])
+            clk[5] = owed_at(maps, anchor, _PAL_FRAME_CYCLES - clk[0])
         clk[0] = end
         return cycles
-    return _place(clk, anchor, cycles)
+    return _place(clk, maps, anchor, cycles)
 
 
 @spec(inline=True)
@@ -106,19 +109,19 @@ def overhang(clk):
 
 
 @spec
-def spend(clk, anchor, budget):
+def spend(clk, maps, anchor, budget):
     """Run the clock over every cycle ``budget`` buys of the run at ``anchor``."""
     pos = clk[0]
     index = clk[2]
     refund = 0
     end = pos + budget
-    while _EVENT_POS[index] < end:
-        split = _EVENT_SHORT_IRQ[index]
+    while maps[M_POS][index] < end:
+        split = maps[M_IRQ][index]
         if split:
             pos += split
             end += split
         else:
-            back = run_at(anchor, _EVENT_POS[index] - pos)
+            back = run_at(maps, anchor, maps[M_POS][index] - pos)
             refund += back
             pos += _STEAL - back
             end += _STEAL
@@ -127,37 +130,37 @@ def spend(clk, anchor, budget):
         clk[5] = 0
         clk[6] = 0
     clk[0] = end
-    clk[1] = _EVENT_POS[index]
+    clk[1] = maps[M_POS][index]
     clk[2] = index
     clk[3] += refund
 
 
 @spec
-def stall(clk, cycles):
+def stall(clk, maps, cycles):
     """The whole video frames a strip replot stalls the play loop for."""
     index = clk[2]
     end = clk[0]
     while index < _N_EVENTS:
-        split = _EVENT_SHORT_IRQ[index]
+        split = maps[M_IRQ][index]
         end += split if split else _STEAL
         index += 1
     if clk[0] < _PAL_FRAME_CYCLES:  # the stall carries no map: nothing is owed at it
         clk[5] = 0
         clk[6] = 0
     clk[0] = end
-    clk[1] = _EVENT_POS[index]
+    clk[1] = maps[M_POS][index]
     clk[2] = index
     clk[7] += cycles
 
 
 @spec
-def _place_run(clk, cycles, step):
+def _place_run(clk, maps, cycles, step):
     """The slow half of :func:`_charge_step`: the events this term's cycles reach."""
     index = clk[2]
     refund = 0
     end = clk[0] + cycles
-    while _EVENT_POS[index] < end:
-        split = _EVENT_SHORT_IRQ[index]
+    while maps[M_POS][index] < end:
+        split = maps[M_IRQ][index]
         if split:
             end += split
         else:
@@ -171,14 +174,14 @@ def _place_run(clk, cycles, step):
         clk[5] = 0
         clk[6] = step
     clk[0] = end
-    clk[1] = _EVENT_POS[index]
+    clk[1] = maps[M_POS][index]
     clk[2] = index
     clk[3] += refund
     return cycles - refund
 
 
 @spec(inline=True)
-def _charge_step(clk, cycles, step):
+def _charge_step(clk, maps, cycles, step):
     """Spend ``cycles`` whose every window refunds the fixed-point ``step``."""
     end = clk[0] + cycles
     if end <= clk[1]:
@@ -187,16 +190,16 @@ def _charge_step(clk, cycles, step):
             clk[6] = step
         clk[0] = end
         return cycles
-    return _place_run(clk, cycles, step)
+    return _place_run(clk, maps, cycles, step)
 
 
 @spec(inline=True)
-def charge_run(clk, cycles, weight):
+def charge_run(clk, maps, cycles, weight):
     """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
-    return _charge_step(clk, cycles, (weight << _WEIGHT_SHIFT) // cycles)
+    return _charge_step(clk, maps, cycles, (weight << _WEIGHT_SHIFT) // cycles)
 
 
 @spec(inline=True)
-def carry(clk, cycles, step):
+def carry(clk, maps, cycles, step):
     """Advance over ``cycles`` a previous frame's budget paid; return their refund."""
-    return cycles - _charge_step(clk, cycles, step)
+    return cycles - _charge_step(clk, maps, cycles, step)

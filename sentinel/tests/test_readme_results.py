@@ -10,13 +10,33 @@ from sentinel.tests import trace_suite
 REGEN = rr.COMMAND
 OFFLINE = rr.load(rr.OFFLINE)
 LIVE = rr.load(rr.LIVE)
+BEAM = rr.load(rr.BEAM)
 REC = {"landscape": 7, "enemies": 3, "actions": 5, "frames": 9, "energy": 2}
 
 
 def test_readme_block_matches_data():
     with open(rr.README, encoding="utf-8") as handle:
         text = handle.read()
-    assert rr.splice(text, rr.block(OFFLINE, LIVE)) == text, f"run: {REGEN}"
+    assert rr.splice(text, rr.block(OFFLINE, LIVE, BEAM)) == text, f"run: {REGEN}"
+
+
+def test_beam_data_covers_the_suite():
+    assert sorted(BEAM, key=int) == [str(b) for b in trace_suite.SUITE]
+    for key, rec in BEAM.items():
+        assert rec["landscape"] == int(key) and isinstance(rec["won"], bool)
+        assert len(rec["digest"]) == 64 and rec["enemies"] == OFFLINE[key]["enemies"]
+
+
+def test_render_adds_the_beam_columns():
+    off = {"7": {**REC, "won": True, "digest": "ab"}}
+    beam = {"7": {**REC, "actions": 4, "energy": 6, "won": False, "digest": "cd"}}
+    out = rr.render(off, [], beam)
+    assert "| beam actions | beam energy | live |" in out
+    assert "| 7 | 3 | 5 | 2 | 4 (not won) | 6 | — |" in out
+    assert f"`{rr.BEAM_COMMAND}`" in out
+    assert "| 8 | 1 | 5 | 2 | — | — | — |" in rr.render(
+        {**off, "8": {**REC, "landscape": 8, "enemies": 1, "won": True}}, [], beam
+    )
 
 
 def test_offline_data_covers_the_suite():
@@ -62,7 +82,8 @@ def test_render_unwon_and_no_live():
 def test_splice_and_rewrite(tmp_path, monkeypatch):
     path = tmp_path / "README.md"
     path.write_text(f"head\n{rr.BEGIN}\nold\n{rr.END}\ntail\n")
-    monkeypatch.setattr(rr, "load", lambda p: OFFLINE if p == rr.OFFLINE else LIVE)
+    data = {rr.OFFLINE: OFFLINE, rr.LIVE: LIVE, rr.BEAM: BEAM}
+    monkeypatch.setattr(rr, "load", data.__getitem__)
     rr.rewrite(str(path))
     text = path.read_text()
     assert text.startswith("head\n") and text.endswith(f"{rr.END}\ntail\n")
@@ -75,3 +96,9 @@ def test_splice_and_rewrite(tmp_path, monkeypatch):
 def test_offline_results_are_current(board):
     got = trace_suite.summary(trace_suite.play(board))
     assert got == OFFLINE[str(board)], f"stale offline data; run: {REGEN}"
+
+
+@pytest.mark.parametrize("board", trace_suite.SUITE)
+def test_beam_results_are_current(board):
+    got = trace_suite.summary(trace_suite.play(board, player="beam"))
+    assert got == BEAM[str(board)], f"stale beam data; run: {rr.BEAM_COMMAND}"

@@ -5,7 +5,7 @@ import inspect
 
 import pytest
 
-from sentinel import batch, kern, phase_player
+from sentinel import batch, engine, kern, phase_player
 from sentinel.game import Game
 from sentinel.phase_player import CLOCK_FIELDS, LOS_TRACKERS, PhasePlayer
 from sentinel.playerbase import _Views
@@ -88,6 +88,7 @@ def test_a_lazy_ask_probes_no_more_than_the_backend_walks(monkeypatch, backend):
 
     monkeypatch.setattr(PhasePlayer, "_probe_verdicts", counted)
     monkeypatch.setattr(kern, "backend", lambda: backend)
+    monkeypatch.setattr(engine, "default_device", lambda rows: False)
     phase_player._LANDING_CACHE.clear()
     assert player._any_climb(views)
     walked = [c[1] for c in cands[: first + 1]]

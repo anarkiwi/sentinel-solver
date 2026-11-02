@@ -7,11 +7,10 @@ import numpy as np
 from numba import njit, prange
 
 from sentinel import memmap as mm
-from sentinel.actions_jit import absorb, create, transfer
+from sentinel.actions_jit import absorb, create, face, transfer
 from sentinel.kern import spec
 
-DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
-CREATE, ABSORB, TRANSFER, NOOP = 0, 1, 2, -1
+CREATE, ABSORB, TRANSFER, FACE, NOOP = 0, 1, 2, 3, -1
 LAST = -1
 FIELDS = ("energy", "player", "eye", "alive", "won", "enemies", "x", "y")
 N_FIELDS = len(FIELDS)
@@ -29,8 +28,8 @@ def apply_ops(mem, ops):
     """Run the ``(K, 3)`` ``(op, a, b)`` sequence on ``mem`` and return 1 when every op
     applied, else 0 at the first that did not.  ``CREATE`` builds type ``a`` on the
     packed tile ``b`` (``x * 32 + y``); ``ABSORB`` and ``TRANSFER`` act on slot ``a``, or
-    on the slot the last ``CREATE`` made when ``a`` is ``LAST``; ``NOOP`` rows pad a ragged
-    batch."""
+    on the slot the last ``CREATE`` made when ``a`` is ``LAST``; ``FACE`` turns the player to
+    bearing ``a`` and pitch ``b``; ``NOOP`` rows pad a ragged batch."""
     last = LAST
     for k in range(ops.shape[0]):
         op = ops[k, 0]
@@ -45,6 +44,8 @@ def apply_ops(mem, ops):
         elif op == TRANSFER:
             if slot < 0 or transfer(mem, slot) == 0:
                 return 0
+        elif op == FACE:
+            face(mem, ops[k, 1], ops[k, 2])
     return 1
 
 

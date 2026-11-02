@@ -13,7 +13,7 @@ logic in numpy over the returned fixed-shape arrays:
 * :meth:`Pool.evaluate` ``(rows)`` reads the decision fields (:data:`rows_jit.FIELDS`).
 
 :meth:`Pool.landing` gives the ``(B, 1024)`` first-landing-ray table.  :func:`first` and
-:func:`argbest` are the selection primitives.  Rows live in host arrays, or on the device
+:func:`argbest` are the selection primitives.  Rows and their clocks live in host arrays, or on the device
 when ``device`` is set; the kernels are the same specs either way.
 """
 
@@ -58,8 +58,8 @@ def pad_ops(sequences):
 
 
 class Pool:
-    """Board states by row: mutable bytes ``(P, M)`` uint8, clock ``(P, 12)`` int64 (always
-    on the host: it is twelve integers a row), one shared static image."""
+    """Board states by row: mutable bytes ``(P, M)`` uint8, clock ``(P, 12)`` int64, both
+    on the device for a device pool, one shared static image."""
 
     def __init__(self, static, device=False):
         self.static = np.frombuffer(bytes(static), dtype=np.uint8).copy()
@@ -68,7 +68,6 @@ class Pool:
         self.keep[[amap[a] for a in footprint.LOS_TRACKERS if amap[a] >= 0]] = 0
         self.device = bool(device)
         self.n = 0
-        self.clock = np.zeros((0, len(enemies.CLOCK)), dtype=np.int64)
         if self.device:
             from numba import cuda  # pylint: disable=import-outside-toplevel
 
@@ -77,6 +76,7 @@ class Pool:
             self._addrs_d = cuda.to_device(self.addrs)
             self._keep_d = cuda.to_device(self.keep)
         self.mut = self._empty(0)
+        self.clock = self._empty_clock(0)
 
     @classmethod
     def from_states(cls, states, device=False):
@@ -94,21 +94,52 @@ class Pool:
             return self._cuda.device_array(shape, dtype=np.uint8)
         return np.zeros(shape, dtype=np.uint8)
 
+    def _empty_clock(self, rows):
+        shape = (rows, len(enemies.CLOCK))
+        if self.device:
+            return self._cuda.device_array(shape, dtype=np.int64)
+        return np.zeros(shape, dtype=np.int64)
+
+    def clocks(self, idx):
+        """``(len(idx), 12)`` host int64 :data:`enemies.CLOCK` fields of rows ``idx``."""
+        idx = np.asarray(idx, dtype=np.int64)
+        if not self.device:
+            return self.clock[idx]
+        from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+        return kern_cuda.get_clock(self.clock, idx)
+
+    def _put_clocks(self, idx, vals):
+        """Clock rows ``idx`` <- the host ``(len(idx), 12)`` ``vals``."""
+        if not self.device:
+            self.clock[idx] = vals
+            return
+        from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+        kern_cuda.put_clock(self.clock, idx, vals)
+
+    def _copy_clocks(self, src, dst):
+        if not self.device:
+            self.clock[dst] = self.clock[src]
+            return
+        from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+        kern_cuda.copy_clock(self.clock, src, dst)
+
     def _reserve(self, total):
         """Capacity for ``total`` rows, grown geometrically."""
         cap = len(self.mut)
         if total <= cap:
             return
-        mut = self._empty(max(total, 2 * cap, 16))
-        if self.n:
-            if self.device:
-                mut[: self.n].copy_to_device(self.mut[: self.n])
-            else:
-                mut[: self.n] = self.mut[: self.n]
-        self.mut = mut
-        clock = np.zeros((len(mut), self.clock.shape[1]), dtype=np.int64)
-        clock[: self.n] = self.clock[: self.n]
-        self.clock = clock
+        rows = max(total, 2 * cap, 16)
+        mut, clock = self._empty(rows), self._empty_clock(rows)
+        if self.n and self.device:
+            mut[: self.n].copy_to_device(self.mut[: self.n])
+            clock[: self.n].copy_to_device(self.clock[: self.n])
+        elif self.n:
+            mut[: self.n] = self.mut[: self.n]
+            clock[: self.n] = self.clock[: self.n]
+        self.mut, self.clock = mut, clock
 
     def _chunks(self, idx):
         step = max(1, VIEW_BYTES // IMAGE)
@@ -160,15 +191,40 @@ class Pool:
             self._store(rows, self._cuda.to_device(imgs))
         else:
             self.mut[rows] = imgs[:, self.addrs]
-        self.clock[rows] = [[getattr(st, f) for f in enemies.CLOCK] for st in states]
+        self._put_clocks(
+            rows,
+            np.array(
+                [[getattr(st, f) for f in enemies.CLOCK] for st in states],
+                dtype=np.int64,
+            ),
+        )
         self.n += len(states)
         return rows
 
+    def mutable(self, idx):
+        """``(len(idx), M)`` host uint8: the mutable bytes of rows ``idx``."""
+        idx = np.asarray(idx, dtype=np.int64)
+        if not self.device:
+            return self.mut[idx]
+        from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+        return kern_cuda.gather_rows(self.mut, idx)
+
+    def states(self, idx):
+        """Rows ``idx`` as independent :class:`State` objects: only the mutable bytes cross
+        from the device, laid over the static image on the host."""
+        idx = np.asarray(idx, dtype=np.int64)
+        mut, clock = self.mutable(idx), self.clocks(idx)
+        out = []
+        for row, clk in zip(mut, clock):
+            img = self.static.copy()
+            img[self.addrs] = row
+            out.append(State(bytearray(img.tobytes()), *clk.tolist()))
+        return out
+
     def state(self, i):
         """Row ``i`` as an independent :class:`State`."""
-        img = self.view([i])
-        img = img.copy_to_host() if self.device else img
-        return State(bytearray(img[0].tobytes()), *self.clock[i].tolist())
+        return self.states([i])[0]
 
     def fork(self, idx):
         """Append a copy of each row of ``idx``; the new rows."""
@@ -184,7 +240,7 @@ class Pool:
             )
         else:
             self.mut[new] = self.mut[idx]
-        self.clock[new] = self.clock[idx]
+        self._copy_clocks(idx, new)
         self.n += len(idx)
         return new
 
@@ -198,12 +254,8 @@ class Pool:
             from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
             dev = self._cuda.device_array(len(idx), dtype=np.int64)
-            kern_cuda.row_kernels().hash[kern_cuda._blocks(len(idx)), kern_cuda.BLOCK](
-                self.mut,
-                self._cuda.to_device(np.ascontiguousarray(self.clock[idx])),
-                self._cuda.to_device(idx),
-                dev,
-                self._keep_d,
+            kern_cuda._hash_kernel[kern_cuda._blocks(len(idx)), kern_cuda.BLOCK](
+                self.mut, self.clock, self._cuda.to_device(idx), dev, self._keep_d
             )
             return dev.copy_to_host()
         rows_jit.hash_rows(
@@ -230,9 +282,9 @@ class Pool:
                 )  # pylint: disable=import-outside-toplevel
 
                 res = self._cuda.device_array(len(rows), dtype=np.int64)
-                kern_cuda.row_kernels().ops[
-                    kern_cuda._blocks(len(rows)), kern_cuda.BLOCK
-                ](img, self._cuda.to_device(ops[lo : lo + step]), res)
+                kern_cuda._ops_kernel[kern_cuda._blocks(len(rows)), kern_cuda.BLOCK](
+                    img, self._cuda.to_device(ops[lo : lo + step]), res
+                )
                 part[:] = res.copy_to_host()
             else:
                 rows_jit.apply_rows(img, ops[lo : lo + step], part)
@@ -253,9 +305,9 @@ class Pool:
                 )  # pylint: disable=import-outside-toplevel
 
                 dev = self._cuda.device_array(part.shape, dtype=np.int64)
-                kern_cuda.row_kernels().fields[
-                    kern_cuda._blocks(len(part)), kern_cuda.BLOCK
-                ](img, dev)
+                kern_cuda._fields_kernel[kern_cuda._blocks(len(part)), kern_cuda.BLOCK](
+                    img, dev
+                )
                 part[:] = dev.copy_to_host()
             else:
                 rows_jit.fields_rows(img, part)
@@ -264,31 +316,36 @@ class Pool:
     def advance(self, idx, n_frames, plotting=False):
         """Run the enemy clock of rows ``idx`` for ``n_frames`` (one count, or one per
         row) in place; rows that are identical and asked for the same frames run once.
-        """
+        On a device pool the rows are advanced where they live: only a row stopped at a
+        strip replot crosses to the host, to be priced there."""
         idx = np.asarray(idx, dtype=np.int64)
+        if not idx.size:
+            return
         frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), idx.shape)
-        keys = list(zip(self.keys(idx).tolist(), frames.tolist()))
-        reps, back = batch.first_of(keys)
-        run = idx[reps]
+        pair = np.stack([self.keys(idx), frames], axis=1)
+        _, reps, back = np.unique(pair, axis=0, return_index=True, return_inverse=True)
+        back = back.reshape(-1)
+        run, todo = idx[reps], frames[reps]
         step = max(1, VIEW_BYTES // IMAGE)
         for lo in range(0, len(run), step):
             rows = run[lo : lo + step]
             img = self.view(rows)
-            carry = np.ascontiguousarray(self.clock[rows])
-            todo = frames[reps][lo : lo + step]
             if self.device:
                 from sentinel import (
                     kern_cuda,
                 )  # pylint: disable=import-outside-toplevel
 
-                kern_cuda.advance_rows(img, carry, todo, plotting, _price)
+                kern_cuda.advance_rows(
+                    img, self.clock, rows, todo[lo : lo + step], plotting, _price
+                )
             else:
-                enemies.advance_rows(img, carry, todo, plotting)
+                carry = np.ascontiguousarray(self.clock[rows])
+                enemies.advance_rows(img, carry, todo[lo : lo + step], plotting)
+                self.clock[rows] = carry
             self._store(rows, img)
-            self.clock[rows] = carry
-        dup = np.array([p for p in range(len(idx)) if reps[back[p]] != p], dtype=int)
+        dup = np.flatnonzero(reps[back] != np.arange(len(idx)))
         if dup.size:
-            self.fork_into(idx[[reps[back[p]] for p in dup]], idx[dup])
+            self.fork_into(idx[reps[back[dup]]], idx[dup])
 
     def fork_into(self, src, dst):
         """Overwrite rows ``dst`` with copies of rows ``src``."""
@@ -302,7 +359,7 @@ class Pool:
             )
         else:
             self.mut[dst] = self.mut[src]
-        self.clock[dst] = self.clock[src]
+        self._copy_clocks(src, dst)
 
     def landing(
         self, idx, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEPS
@@ -316,7 +373,7 @@ class Pool:
                 for j, k in enumerate(self.keys(idx).tolist())
             ]
         )
-        views = [self.state(i) for i in idx[reps]]
+        views = self.states(idx[reps])
         slot = [v.player if slots is None else slots[r] for v, r in zip(views, reps)]
         pairs = batch.landings(views, grids, slot, eye_z, max_steps)
         counts = [rays.size for rays, _t in pairs]
@@ -343,6 +400,6 @@ def _price(img, clock, request):
 
 
 def default_device(rows):
-    """Whether a pool expected to hold ``rows`` rows pays to live on the device: the
-    backend is cuda and a thread per row fills the machine."""
-    return batch.cuda_pays(1, rows) and kern.backend() == "cuda"
+    """Whether a pool expected to hold ``rows`` rows lives on the device: the backend is
+    cuda and a round has a batch of more than one row."""
+    return rows > 1 and kern.backend() == "cuda"

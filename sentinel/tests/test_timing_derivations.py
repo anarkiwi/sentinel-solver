@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from driver import kbd_aim
-from sentinel import actioncost, aimcost, badline, enemies, enemies_jit, memmap as mm
+from sentinel import actioncost, aimcost, badline, badline_jit, enemies, enemies_jit
+from sentinel import memmap as mm
 from sentinel import pancost, passcost, playerbase, projector, relative, settlecost
 from sentinel import statecmp
 from sentinel.game import Game
@@ -615,7 +616,9 @@ def test_the_note_tick_cost_and_writes_match_the_roms_own_8ed1():
         jit = State.from_mem(bytes(mem))
         assert (
             enemies_jit._sound_frame(
-                np.frombuffer(jit.mem, dtype=np.uint8), badline.frame_clock(False)
+                np.frombuffer(jit.mem, dtype=np.uint8),
+                badline.frame_clock(False),
+                badline_jit.MAPS,
             )
             == model
         )

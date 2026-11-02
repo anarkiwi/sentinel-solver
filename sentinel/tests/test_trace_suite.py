@@ -17,7 +17,7 @@ REC = {
 def test_record_roundtrip_and_divergence(tmp_path, monkeypatch):
     path = str(tmp_path / "t.json")
     monkeypatch.setattr(
-        trace_suite, "run", lambda boards: {str(b): REC for b in boards}
+        trace_suite, "run", lambda boards, player="phase": {str(b): REC for b in boards}
     )
     assert trace_suite.main(["7", "8", "--out", path]) == 0
     assert trace_suite.main(["7", "8", "--compare", path]) == 0
@@ -33,7 +33,7 @@ def test_record_roundtrip_and_divergence(tmp_path, monkeypatch):
 
 def test_compare_accepts_full_trace_baseline(tmp_path, monkeypatch):
     path = str(tmp_path / "full.json")
-    monkeypatch.setattr(trace_suite, "run", lambda boards: {"7": REC})
+    monkeypatch.setattr(trace_suite, "run", lambda boards, player="phase": {"7": REC})
     json.dump({"7": {**REC, "dead": False}}, open(path, "w", encoding="utf-8"))
     assert trace_suite.main(["7", "--compare", path]) == 0
     json.dump({"7": {**REC, "energy": 4}}, open(path, "w", encoding="utf-8"))
@@ -44,7 +44,7 @@ def test_readme_flag_rewrites_the_block(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(trace_suite.readme_results, "rewrite", lambda: calls.append(1))
     assert trace_suite.main(["--readme"]) == 0
-    monkeypatch.setattr(trace_suite, "run", lambda boards: {"7": REC})
+    monkeypatch.setattr(trace_suite, "run", lambda boards, player="phase": {"7": REC})
     out = str(tmp_path / "o.json")
     assert trace_suite.main(["7", "--out", out, "--readme"]) == 0
     assert calls == [1, 1]
@@ -83,3 +83,29 @@ def test_play_serialises_the_trace(monkeypatch):
         "energy": 4,
         "won": True,
     }
+
+
+def test_the_player_picks_its_own_results_file(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        trace_suite,
+        "run",
+        lambda boards, player="phase": seen.append(player) or {"7": REC},
+    )
+    beam, phase = str(tmp_path / "beam.json"), str(tmp_path / "phase.json")
+    monkeypatch.setattr(trace_suite, "RESULTS", {"beam": beam, "phase": phase})
+    assert trace_suite.main(["7", "--player", "beam", "--out", beam]) == 0
+    assert trace_suite.main(["7", "--out", phase]) == 0
+    assert trace_suite.main(["7", "--player", "beam", "--compare"]) == 0
+    other = json.load(open(phase, encoding="utf-8"))
+    other["7"]["energy"] += 1
+    json.dump(other, open(beam, "w", encoding="utf-8"))
+    assert trace_suite.main(["7", "--player", "beam", "--compare"]) == 1
+    assert trace_suite.main(["7", "--compare"]) == 0
+    assert seen == ["beam", "phase", "beam", "beam", "phase"]
+
+
+def test_make_builds_the_named_player():
+    game = trace_suite.Game.typed(0)
+    assert type(trace_suite.make("beam", game)).__name__ == "BeamPlayer"
+    assert type(trace_suite.make("phase", game)).__name__ == "PhasePlayer"

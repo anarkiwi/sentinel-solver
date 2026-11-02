@@ -1,8 +1,9 @@
 """Render the README results block from the committed result files:
 ``python -m sentinel.tests.readme_results`` (or ``trace_suite --readme``).
 
-``docs/results/offline.json`` maps each suite landscape to its offline record and
-``docs/results/live.json`` lists the live runs; only the text between the
+``docs/results/offline.json`` maps each suite landscape to the phase player's offline record,
+``docs/results/beam.json`` the beam player's, and ``docs/results/live.json`` lists the live
+runs; only the text between the
 ``<!-- results:begin -->`` and ``<!-- results:end -->`` markers in README.md is rewritten.
 """
 
@@ -12,12 +13,17 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 OFFLINE = os.path.join(ROOT, "docs", "results", "offline.json")
+BEAM = os.path.join(ROOT, "docs", "results", "beam.json")
 LIVE = os.path.join(ROOT, "docs", "results", "live.json")
 README = os.path.join(ROOT, "README.md")
 BEGIN = "<!-- results:begin -->"
 END = "<!-- results:end -->"
 COMMAND = (
     "python -m sentinel.tests.trace_suite --out docs/results/offline.json --readme"
+)
+BEAM_COMMAND = (
+    "python -m sentinel.tests.trace_suite --player beam --out docs/results/beam.json "
+    "--readme"
 )
 MODES = {"live": "", "frozen": " (enemies frozen)"}
 
@@ -47,32 +53,43 @@ def live_cell(runs, offline):
     return "<br>".join(cells) or "—"
 
 
-def render(offline, live):
-    """The README block body for the two result documents."""
+def player_cells(rec):
+    """The actions and energy cells of one player's record, or dashes without one."""
+    if rec is None:
+        return ["—", "—"]
+    return [f"{rec['actions']}{'' if rec['won'] else ' (not won)'}", str(rec["energy"])]
+
+
+def render(offline, live, beam=None):
+    """The README block body for the result documents; ``beam`` adds the beam player's
+    columns."""
+    head = ["landscape", "enemies", "offline actions", "offline energy"]
+    if beam is not None:
+        head += ["beam actions", "beam energy"]
     rows = [
-        "| landscape | enemies | offline actions | offline energy | live |",
-        "|---|---|---|---|---|",
+        "| " + " | ".join(head + ["live"]) + " |",
+        "|" + "---|" * (len(head) + 1),
     ]
     for key in sorted(offline, key=int):
         rec = offline[key]
         runs = [r for r in live if r["landscape"] == rec["landscape"]]
-        won = "" if rec["won"] else " (not won)"
-        rows.append(
-            f"| {key} | {rec['enemies']} | {rec['actions']}{won} | {rec['energy']} "
-            f"| {live_cell(runs, offline)} |"
-        )
+        cells = [key, str(rec["enemies"])] + player_cells(rec)
+        if beam is not None:
+            cells += player_cells(beam.get(key))
+        rows.append("| " + " | ".join(cells + [live_cell(runs, offline)]) + " |")
     text = "\n".join(rows) + "\n"
     if any(stale(r, offline) for r in live):
         text += (
             "\n† Live run recorded against an older model: its trace digest is unrecorded "
             "or differs from the current offline trace for that board.\n"
         )
-    return text + f"\nRegenerate with `{COMMAND}`.\n"
+    regen = f"`{COMMAND}`" + (f" and `{BEAM_COMMAND}`" if beam is not None else "")
+    return text + f"\nRegenerate with {regen}.\n"
 
 
-def block(offline, live):
+def block(offline, live, beam=None):
     """README text from marker to marker, markers included."""
-    return f"{BEGIN}\n{render(offline, live)}{END}"
+    return f"{BEGIN}\n{render(offline, live, beam)}{END}"
 
 
 def splice(readme, new):
@@ -86,7 +103,8 @@ def rewrite(path=README):
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(splice(text, block(load(OFFLINE), load(LIVE))))
+        beam = load(BEAM) if os.path.exists(BEAM) else None
+        handle.write(splice(text, block(load(OFFLINE), load(LIVE), beam)))
 
 
 if __name__ == "__main__":

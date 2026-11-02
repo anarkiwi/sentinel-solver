@@ -444,6 +444,14 @@ class _Views:
             return self._views(v_primary).get(tuple(tile))
         return self._landings(v_primary).view(tile)
 
+    def landed(self):
+        """``(N, N)`` bool: the tiles some keyboard view lands on, primary plane or band --
+        the set :meth:`get` answers for."""
+        mask = np.zeros(mm.N * mm.N, dtype=bool)
+        for primary in (True, False):
+            mask[self._landings(primary).tiles] = True
+        return mask.reshape(mm.N, mm.N)
+
     def band_ordered(self, pick):
         """``[(tile, view)]`` in the band sweep's own (winning-ray) order for every tile
         ``pick`` takes -- what a positional reader of :meth:`band` sees."""
