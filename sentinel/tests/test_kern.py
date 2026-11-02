@@ -12,7 +12,7 @@ import pytest
 
 from sentinel import kern, landtable, los, los_jit
 
-FLOAT_OK = {"_cell_span"}
+FLOAT_OK = {"_cell_span", "_cell_last"}
 CASTS = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 BUILTINS = {"min", "max", "int", "range", "abs"}
 BANNED = (
@@ -93,6 +93,7 @@ def test_specs_registered():
     assert {"march", "_march_one", "_cell_span", "_crosses", "_stop_one"} <= names
     assert kern.specs("sentinel.landtable").keys() == {
         "_cell_span",
+        "_cell_last",
         "_crosses",
         "_stop_one",
     }
@@ -189,18 +190,22 @@ def test_cuda_march_matches_cpu(board, new_game):
 
 
 @gpu
+@pytest.mark.parametrize("towers", (0, 3))
 @pytest.mark.parametrize("board", BOARDS)
-def test_cuda_stop_matches_cpu(board, new_game):
+def test_cuda_stop_matches_cpu(board, towers, new_game):
     from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+    from sentinel.tests.test_landing_shortcuts import _tower
 
     st = new_game(board).state
+    if towers:
+        _tower(st, towers)
     slot = st.player
     grids = landtable.lattice()
     idx = _rays(st, slot, grids, np.random.default_rng(board + 1))
     comps = tuple(
         np.ascontiguousarray(c[idx]) for c in landtable.cached_components(grids)
     )
-    lo, hi, slope = landtable.surface_maps(st)
+    lo, hi, flags = landtable.surface_maps(st)
     args = (
         int(st.obj_x[slot]),
         int(st.obj_y[slot]),
@@ -208,8 +213,8 @@ def test_cuda_stop_matches_cpu(board, new_game):
         landtable.MAX_STEPS,
         landtable.RADIUS,
     )
-    _first, ncand = landtable.stop_cells(*comps, lo, hi, slope, *args)
-    mask = kern_cuda.stop_mask(comps, lo, hi, slope, *args)
+    _first, ncand = landtable.stop_cells(*comps, lo, hi, flags, *args)
+    mask = kern_cuda.stop_mask(comps, lo, hi, flags, *args)
     assert (ncand > 0).any() and not (ncand > 0).all()
     assert np.array_equal(mask, ncand > 0)
 

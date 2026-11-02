@@ -53,17 +53,31 @@ def cuda_pays(rays, states):
     return rays * states >= kern_cuda.resident_threads()
 
 
-def landings(states, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEPS):
+def landings(
+    states,
+    grids,
+    slots=None,
+    eye_z=None,
+    max_steps=landtable.MAX_STEPS,
+    keep="all",
+    drive=None,
+):
     """``[(rays, tiles)]`` per state: :func:`landtable.landing_pairs` -- the ascending
     lattice indices that land and their packed ``x*32+y`` tiles.  ``slots`` default to
-    each state's player."""
+    each state's player.
+
+    ``keep`` names the rays the caller reads: ``"all"``, ``"first"`` (the lowest ray per
+    tile) or ``"cell"`` (the least ``(drive, ray)`` per tile and cell, ``drive`` as
+    :func:`landtable.claim_plan`).  Every such ray is returned, plus possibly others."""
     slots = [st.player for st in states] if slots is None else list(slots)
     if fleet.in_task():
-        return fleet.call("landing", (states, grids, slots, eye_z, max_steps))
-    return _landings(states, grids, slots, eye_z, max_steps)
+        return fleet.call(
+            "landing", (states, grids, slots, eye_z, max_steps, keep, drive)
+        )
+    return _landings(states, grids, slots, eye_z, max_steps, keep, drive)
 
 
-def _landings(states, grids, slots, eye_z, max_steps):
+def _landings(states, grids, slots, eye_z, max_steps, keep="all", drive=None):
     """:func:`landings` of explicit ``slots``, on this thread."""
     if cuda_pays(len(landtable.cached_components(grids)[0]), len(states)):
         from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
@@ -77,10 +91,12 @@ def _landings(states, grids, slots, eye_z, max_steps):
     todo = [states[i] for i in reps]
     sl = [slots[i] for i in reps]
     if len(reps) >= width():
-        got = landtable.landing_pairs_many(todo, sl, eye_z, grids, max_steps)
+        got = landtable.landing_pairs_many(
+            todo, sl, eye_z, grids, max_steps, keep, drive
+        )
     else:
         got = [
-            landtable.landing_pairs(*one, eye_z, grids, max_steps)
+            landtable.landing_pairs(*one, eye_z, grids, max_steps, keep, drive)
             for one in zip(todo, sl)
         ]
     return [got[j] for j in back]
@@ -89,13 +105,20 @@ def _landings(states, grids, slots, eye_z, max_steps):
 def _landings_fleet(asks):
     """The fleet's ``landing`` handler: tasks asking of the same lattice share a launch."""
     groups = {}
-    for i, (_, grids, _, eye_z, max_steps) in enumerate(asks):
-        groups.setdefault((tuple(map(tuple, grids)), eye_z, max_steps), []).append(i)
+    for i, (_, grids, _, eye_z, max_steps, keep, drive) in enumerate(asks):
+        shared = None if drive is None else bytes(drive)
+        groups.setdefault(
+            (tuple(map(tuple, grids)), eye_z, max_steps, keep, shared), []
+        ).append(i)
     out = [None] * len(asks)
-    for (_, eye_z, max_steps), at in groups.items():
+    for (_, eye_z, max_steps, keep, _drive), at in groups.items():
         states = [st for i in at for st in asks[i][0]]
         slots = [s for i in at for s in asks[i][2]]
-        got = iter(_landings(states, asks[at[0]][1], slots, eye_z, max_steps))
+        got = iter(
+            _landings(
+                states, asks[at[0]][1], slots, eye_z, max_steps, keep, asks[at[0]][6]
+            )
+        )
         for i in at:
             out[i] = [next(got) for _ in asks[i][0]]
     return out

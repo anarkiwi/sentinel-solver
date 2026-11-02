@@ -1079,6 +1079,18 @@ may only stop where the ray **provably** stops (`zmin <= surface_lo`); an undeci
 (object stack with `lo < hi`, or alias risk) makes the ray multi-candidate and always marched
 (`test_stop_cell_partition_holds_every_landing`).
 
+**Climbing rays.** The ROM rejects a look-up (`vz >= 0`, `s30` bit 7 clear) at every flat or
+object tile unless `$0C6E | $0C67` has bit 7 set; the sweeps keep `$0C6E` bit 7 clear, a
+sloping tile never ends CLEAR, and `$0C67` is local to one object-stack walk (0, or `$80` when
+that walk reaches a boulder), so it never carries across tiles. A climbing ray therefore lands
+only on a tile whose stack holds a boulder, and on nothing on a board without one:
+`surface_maps` flags both (`HAS_BOULDER`, `BOARD_BOULDER`) and `_stop_one` restricts to them.
+
+**Claim order.** The consumers keep the least ray per tile (`engine.landing`, `keep="first"`)
+or the least `(drive, ray)` per tile and cursor cell (`playerbase._Landings`, `keep="cell"`).
+`claim_plan` orders the sweep that way; a ray whose only candidate tile its group has already
+landed on is never marched (`test_keep_holds_every_group_minimum`).
+
 **Validation.** `test_landtable.py` pins the property everything rests on — over several
 boards, a stacked/raised-eye stance and an `eye_z` override, every ray the full sweep lands on
 a tile is in that tile's candidate set, on all three lattices including below-eye, object and

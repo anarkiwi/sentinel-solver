@@ -375,7 +375,7 @@ class Pool:
         )
         views = self.states(idx[reps])
         slot = [v.player if slots is None else slots[r] for v, r in zip(views, reps)]
-        pairs = batch.landings(views, grids, slot, eye_z, max_steps)
+        pairs = batch.landings(views, grids, slot, eye_z, max_steps, keep="first")
         counts = [rays.size for rays, _t in pairs]
         table = batch.first_ray(
             np.repeat(np.arange(len(pairs)), counts),

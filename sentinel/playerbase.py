@@ -377,7 +377,7 @@ def _sweeps(sts, v_primary, aim_from):
     (one per state), each on a pinned copy of its board; the whole-board landings come
     from one :func:`batch.landings` call."""
     grids = landtable.lattice(v_primary=v_primary)
-    pairs = batch.landings(sts, grids)
+    pairs = batch.landings(sts, grids, keep="cell", drive=_cursor_drive(grids))
     return [
         _Landings(st.clone(), rays, tiles, grids, aim_from)
         for st, (rays, tiles) in zip(sts, pairs)
