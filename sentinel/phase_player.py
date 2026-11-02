@@ -16,6 +16,7 @@ from sentinel import (
     batch,
     engine,
     enemies,
+    footprint,
     kern,
     memmap as mm,
     projector,
@@ -32,10 +33,7 @@ POLICIES = ("_breakout", "_supply", "_harvest", "_mount")  # the ladder, in orde
 HOP_VERBS = ("boulder", "robot", "transfer")  # the verbs one climb is made of
 ROLLOUT_ACTIONS = 200  # decision ticks a tie-breaking rollout plays before conceding
 CLOCK_FIELDS = tuple(f for f in State.__slots__ if f != "mem" and f[:4] != "obj_")
-LOS_TRACKERS = (
-    mm.TARGETED_OBJECT_IN_LOS,
-    mm.TREE_IN_LOS,
-)  # `$1CDF`/`$1CE2` LSR each before any march reads bit7, and nothing reads the lower bits but a shift: no outcome depends on what a march finds in them
+LOS_TRACKERS = footprint.LOS_TRACKERS
 _LANDING_CACHE = {}
 _LANDING_CACHE_MAX = 1 << 16
 ARBITRATE_ACTIONS = 2  # decision ticks each arbitrated option plays out on its fork: a BOUND on how much of the fixed ladder's own error the score absorbs (open item 13), not a derived depth -- deeper scores worse, on and off the suite
@@ -322,6 +320,13 @@ class PhasePlayer(BasePlayer):
         kids, built = pool.expand(
             np.zeros(len(cands), dtype=np.int64),
             engine.pad_ops([self._hop_ops(c[1], c[2]) for c in cands]),
+        )
+        projector.prefetch(
+            [
+                lambda c=c: self._hop_span(c[1], c[2])
+                for c, took in zip(cands, built)
+                if took
+            ]
         )
         spans = np.array(
             [

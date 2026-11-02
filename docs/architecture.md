@@ -1251,6 +1251,77 @@ walks the candidates in the original order, one at a time on the CPU (the serial
 speculative probes) and a thread-count window per launch on the cuda backend, so the chosen
 candidate is the one the serial loop picks.
 
+## Pricing kernels and prefetch (`pricing_jit.py`, `exposure_jit.py`)
+
+**One job, one spec.** `pricing_jit.render_cycles` is the whole of one `plot_world` pass in
+integer cycles: `projector_jit.scan_scene` (the $27D7/$26DE visibility walk and $2A24 plot range),
+then `objectcost.pass_cycles` (terrain fill through `rendercost.tile_cycles`, plus the $21AE
+object stacks), returning `exam + walk + fill`. The projection, fill and object code are specs
+over caller-owned scratch (`occlusion_into`, `scan_scene`, `rendercost.fill_pass`,
+`objectcost.stack_cycles` take the arrays they used to allocate; `project_scene`,
+`occlusion_table` and `fill_cycles` remain as allocating wrappers). The unscaled corner extent
+replaces the one float division of `project_scene`, which the host now applies. A job is one
+int64 row of `J_N` columns (the `projector_jit` setup vector, the $0C48 hint, the buffer window
+and raster rows from `rendercost.buffers`, observer, player, view). The object model tables
+(`objmodel.tables()`, read from the game image) are runtime arguments, not module constants.
+
+**Bit-identity.** The host divides the integer total by `FRAME_CYCLES` in float, the same
+expression `render_cost` evaluated before (`BASE_CYCLES` is required to be integral;
+fractional or the exact backend or a missing game image leave the request to the scalar path).
+All of it is integer and independent per job, so a batch equals the scalar calls bit for bit.
+
+**Launches.** `pricing_jit.render_many` runs one job per `prange` iteration over per-slot
+scratch (a few slots per thread); `render_serial` is the same loop on the calling thread for a
+lone job. `kern_cuda.render_cycles_many` runs the same spec on the device, one thread per job.
+A single thread runs a job far slower than a CPU core, so the device only wins on very large
+batches: `python -m sentinel.tests.bench_kernels pricing` prints both per batch size, and
+`projector.DEVICE_PRICING_JOBS` (4096) is the crossover. Pricing batches in play are tens to
+hundreds of jobs, so both backends price on the CPU threads; the device path is exercised by
+`test_pricing.py` (device and simulator) for bit identity with the CPU build.
+
+**Prefetch.** The scalar entry points stay the semantics; batching only fills their memos.
+`projector.prime_costs(state, requests)` prices a list of `render_cost` argument tuples in one
+launch (`pancost.prime_notches` builds the list for the notch plots of an `aim_table`).
+`projector.prefetch(calls)` batches costs whose requests are only known by running the
+caller: each round runs the callables, a `render_cost` that misses its memo records the request
+(with a snapshot of the scene bytes, so the pricing sees the board as it was) and raises
+`Deferred`; the round's misses are priced together and the callables that stopped run again,
+until none stops. `Deferred` is a `BaseException` so no `except Exception` on the way up can
+swallow it, nothing computed from an unpriced cost is ever memoized (an exception skips every
+memo insert), and the final pass over the callables is all hits. `PhasePlayer._probe_verdicts`
+prefetches the hop spans of its window this way.
+
+**Other memos and reductions.** `settlecost._prologue_cycles` memoizes `occlusion_cycles` on
+the same key as `_OCCLUSION_CACHE` (scene digest, observer, observer x/y).
+`playerbase._group_min` replaces the sort in `_Landings.__init__`: the least `(drive, ray)` key
+of every `(tile, cell)` is a min over a dense table cleared after use, ascending by slot, the
+same keys the sorted run's first elements gave.
+
+**Exposure.** `exposure_jit.exposures(mem, zp, slot, out)` is `BasePlayer._exposures` as a spec
+over `enemies_jit._can_see_object` and `_relative_angles`: the enemies in slot order that have
+any sight of a robot body in `slot`, with their $8401 `angle_hi` and full-sight flag. It writes
+the LOS tracker bytes as the ROM scan does; `test_exposure_jit.py` pins results and every byte
+of memory to the Python scan over several boards and frames.
+
+**Row keys.** `Pool.keys` masks `footprint.LOS_TRACKERS` ($0C56, $0CDD) out of the digest. Each
+is shifted right before any march reads bit 7, and the only other uses are shifts that move
+history bits through, so no outcome depends on their other bits (`test_engine.py` runs rows that
+differ only there and finds every other byte and the clock equal). $0014 and $0C58 are
+rewritten before any read, but $0C76 feeds `tree_head` from its old bit 7 on the one-probe
+path, so only the first two are masked and the other three stay in the key.
+
+**Swallowed exceptions.** `_arbitrate` and `_settle_tie` catch `Exception` around a fork's play.
+Over the nine suite boards on the CPU backend neither handler ever fires (0 caught), so a
+batched strategy has no failure to map to a refused row; `Deferred` is outside `Exception` and
+passes through them.
+
+**Not done.** The strategy is still the sequential reference in `phase_player.py`: the array
+rewrite of `_climb_candidates`/`_leaders`/`_strike`/`_refuel`, the lockstep node scheduler for
+`_arbitrate`/`_settle_tie` forks, the in-kernel `wait_gap`, and the cacheable device clock
+(badline run maps as kernel arguments) are not implemented. `python -m sentinel.tests.profile_suite` shows where the time
+remains: per-tick Python orchestration, the enemy clock's serial advance and the landing
+sweeps.
+
 ## Render cost (`projector.py`, `pancost.py`, `rendercost_exact.py`)
 
 The game is compute-bound, so drawing the height field *is* the world clock: what a view costs

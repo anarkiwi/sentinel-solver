@@ -1,7 +1,7 @@
-"""The static write footprint of the modelled routines: every address of the 64 KB image
+"""The static write footprint of the modelled routines: every address of the full image
 that the spec kernels and actions can ever write, so a pool row stores only those bytes.
 
-The footprint is read off the sources, not observed.  Each store into the image -- a
+The footprint is derived from the sources alone.  Each store into the image -- a
 ``mem[...] =``, a ``_wr`` or tile write, an object-array or player-scalar assignment --
 contributes the interval its address expression can take: constants and module integers
 are exact, ``+ - * & | << >>`` combine intervals, and anything else (a slot, a tile
@@ -169,6 +169,10 @@ def mask():
         for lo, hi in _writes(tree, vars(module)):
             out[lo : hi + 1] = True
     return out
+
+
+# $1CDF/$1CE2 LSR these two before any march reads bit7, and nothing reads their lower bits but a shift: no outcome depends on what a march leaves in them.
+LOS_TRACKERS = (mm.TARGETED_OBJECT_IN_LOS, mm.TREE_IN_LOS)
 
 
 @functools.cache

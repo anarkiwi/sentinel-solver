@@ -56,6 +56,9 @@ def _frames(cycles):
     return cycles / SETTLE_FG
 
 
+_OCCLUSION_CYCLES = {}
+
+
 def _prologue_cycles(state, obs):
     """$35BA-$35C0's $245B + $3700 from ``obs``: run on the ROM by the exact backend,
     else the occlusion model plus the table band."""
@@ -64,7 +67,21 @@ def _prologue_cycles(state, obs):
     exact = rendercost_exact.backend()
     if exact is not None:
         return sum(exact.prologue_cycles(exact.viewer(state, obs)))
-    return occlusioncost.occlusion_cycles(state, obs) + TAB_3700
+    key = (
+        projector.scene_key(state),
+        obs,
+        int(state.obj_x[obs]),
+        int(state.obj_y[obs]),
+    )
+    return (
+        projector.memo(
+            _OCCLUSION_CYCLES,
+            key,
+            projector._CACHE_MAX,
+            lambda: occlusioncost.occlusion_cycles(state, obs),
+        )
+        + TAB_3700
+    )
 
 
 def viewpoint_settle_frames(state, observer=None, view=None, tune=0x19, eye_view=None):

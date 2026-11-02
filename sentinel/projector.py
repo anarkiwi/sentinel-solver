@@ -10,15 +10,16 @@ import os
 
 import numpy as np
 
-from sentinel import passcost, relative, rendercost, terrain, memmap as mm
+from sentinel import kern, passcost, relative, rendercost, terrain, memmap as mm
+from sentinel.state import State
 from sentinel.writeweight import cycles as _plain  # the $8401 chain rides packed
 
 try:
-    from sentinel import projector_jit
+    from sentinel import pricing_jit, projector_jit
 
     _HAVE_JIT = True
 except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
-    projector_jit = None
+    pricing_jit = projector_jit = None
     _HAVE_JIT = False
 
 # initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80, $0028), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).  $29B4 zeroes $0028 in every mode; only $29C7's odd strip sets it.
@@ -719,9 +720,8 @@ def _project_scene_py(state, setup, observer, schedule=None):
     return tiles, n_examine, exam_cycles, fill[:nfill], walk_cycles
 
 
-def _project_scene_jit(state, setup, observer):
-    """:func:`_project_scene_py` via :func:`sentinel.projector_jit.project_scene`; the
-    env-tunable geometry constants are passed in so they stay monkeypatchable."""
+def _setup_vector(state, setup, observer):
+    """``setup`` as the int64 vector :mod:`projector_jit` reads."""
     su = np.zeros(projector_jit.S_N, dtype=np.int64)
     su[projector_jit.S_QUAD] = setup["quadrant"]
     su[projector_jit.S_C3] = setup["c3"]
@@ -735,6 +735,13 @@ def _project_scene_jit(state, setup, observer):
     su[projector_jit.S_RIGHT] = setup["buf_right"]
     su[projector_jit.S_TABLE] = 1 if setup["table_examine"] else 0
     su[projector_jit.S_FRAC] = setup["buf_frac"]
+    return su
+
+
+def _project_scene_jit(state, setup, observer):
+    """:func:`_project_scene_py` via :func:`sentinel.projector_jit.project_scene`; the
+    env-tunable geometry constants are passed in so they stay monkeypatchable."""
+    su = _setup_vector(state, setup, observer)
     out, spans, n, n_examine, exam_cycles, fill, walk = projector_jit.project_scene(
         np.frombuffer(state.mem, dtype=np.uint8),
         su,
@@ -806,6 +813,7 @@ def _object_backend():
                         objectcost.scratch_zp(),
                         objectcost.workspace(),
                         rendercost.tile_workspace(),
+                        objectcost.scratch_slots(),
                     )
                 )
         except ImportError:  # pragma: no cover - numba absent
@@ -830,7 +838,7 @@ def fill_frames(state, setup, fill, mode, observer, columns=None, rows=None):
     backend = _object_backend()
     if backend is None:
         return rendercost.fill_cycles(fill, *args), False
-    objectcost, model, zp, obj_work, tile_work = backend
+    objectcost, model, zp, obj_work, tile_work, slots = backend
     left, right = rendercost.edge_tables()
     return (
         objectcost.pass_cycles(
@@ -847,6 +855,7 @@ def fill_frames(state, setup, fill, mode, observer, columns=None, rows=None):
             obj_work,
             left,
             right,
+            slots,
         ),
         True,
     )
@@ -923,6 +932,10 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
         if exact is not None:
             return exact
     obs = state.player if observer is None else observer
+    if _DEFERRING:
+        key = (scene_key(state), obs, h, v, mode, window, rows, ref_lo)
+        if key not in _COST_CACHE:
+            _DEFERRING[-1].add(state, key, (h, v, obs, mode, window, rows, ref_lo))
 
     def make():
         setup = _setup(state, h, v, obs, mode, window, ref_lo)
@@ -938,6 +951,152 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
 
     key = (scene_key(state), obs, h, v, mode, window, rows, ref_lo)
     return memo(_COST_CACHE, key, _CACHE_MAX, make)
+
+
+_PRICING_SCRATCH = []
+DEVICE_PRICING_JOBS = int(
+    os.environ.get("DEVICE_PRICING_JOBS", "4096")
+)  # jobs from which one device launch beats the CPU threads
+
+
+def _exact_selected():
+    from sentinel import rendercost_exact
+
+    return rendercost_exact.backend() is not None
+
+
+def _cost_job(state, h, v, obs, mode, window, rows, ref_lo):
+    """The :mod:`pricing_jit` job row of one :func:`render_cost` request."""
+    setup = _setup(state, h, v, obs, mode, window, ref_lo)
+    columns = None if window is None else _window_columns(window)
+    bufs, sect = rendercost.buffers(mode, columns)
+    top, bot = rows if rows else (rendercost.SCREEN_TOP, rendercost.SCREEN_BOTTOM)
+    job = np.zeros(pricing_jit.J_N, dtype=np.int64)
+    job[: projector_jit.S_N] = _setup_vector(state, setup, obs)
+    job[pricing_jit.J_HINT : pricing_jit.J_BUFS] = (
+        setup["row_hint"],
+        sect,
+        top,
+        bot,
+        obs,
+        state.player,
+        setup["h_angle"],
+        setup["v_angle"],
+        0,
+    )
+    job[pricing_jit.J_BUFS :] = bufs.ravel()
+    return job
+
+
+def _render_cycles_many(state, wants, model):
+    """Integer cycles of each ``(h, v, observer, mode, window, rows, ref_lo)`` of ``wants``
+    over ``state``'s board, in one parallel launch."""
+    jobs = np.stack([_cost_job(state, *want) for want in wants])
+    observers = sorted({want[2] for want in wants})
+    tables = np.stack([_occlusion_memo(state, obs)[1] for obs in observers])
+    jobs[:, pricing_jit.J_VIS] = [observers.index(want[2]) for want in wants]
+    mem = np.frombuffer(state.mem, dtype=np.uint8)
+    if len(jobs) >= DEVICE_PRICING_JOBS and kern.backend() == "cuda":
+        from sentinel import kern_cuda
+
+        return kern_cuda.render_cycles_many(mem, jobs, tables, model).tolist()
+    if not _PRICING_SCRATCH:
+        _PRICING_SCRATCH.append(pricing_jit.scratch(pricing_jit.slot_count(1 << 20)))
+    out = np.zeros(len(jobs), dtype=np.int64)
+    launch = pricing_jit.render_many if len(jobs) > 1 else pricing_jit.render_serial
+    launch(mem, jobs, tables, model, _PRICING_SCRATCH[0], out)
+    return out.tolist()
+
+
+class Deferred(BaseException):
+    """Raised by :func:`render_cost` inside :func:`prefetch` for a cost not yet priced; a
+    BaseException so no ``except Exception`` on the way up can swallow it."""
+
+
+class _Wanted:
+    """The costs one :func:`prefetch` round found missing, by scene."""
+
+    def __init__(self):
+        self.scenes = {}
+
+    def add(self, state, key, want):
+        scene = self.scenes.get(key[0])
+        if scene is None:
+            scene = self.scenes[key[0]] = (bytes(state.mem), {})
+        scene[1].setdefault(key, want)
+        raise Deferred
+
+    def price(self):
+        """Price everything wanted, each scene's requests in one launch."""
+        for image, wants in self.scenes.values():
+            state = State(bytearray(image))
+            model = _object_backend()[1]
+            cycles = _render_cycles_many(state, list(wants.values()), model)
+            for key, cyc in zip(wants, cycles):
+                memo(_COST_CACHE, key, _CACHE_MAX, lambda c=cyc: _cost_of(c))
+
+
+def _cost_of(cycles):
+    return (BASE_CYCLES + cycles) / FRAME_CYCLES
+
+
+_DEFERRING = []
+
+
+def prefetch(calls):
+    """Run every zero-argument callable of ``calls`` for its side effect on the cost
+    memos, pricing the :func:`render_cost` calls they miss in batches: each round runs the
+    callables that stopped at a missing cost, prices everything missing at once, and
+    repeats until none stops.  The callables must be pure over the memos.  A scalar path
+    (the exact backend, no object model) prices as it goes and nothing defers."""
+    if (
+        _object_backend() is None
+        or BASE_CYCLES != int(BASE_CYCLES)
+        or _exact_selected()
+    ):
+        return
+    pending = list(calls)
+    while pending:
+        wanted, stopped = _Wanted(), []
+        _DEFERRING.append(wanted)
+        try:
+            for call in pending:
+                try:
+                    call()
+                except Deferred:
+                    stopped.append(call)
+        finally:
+            _DEFERRING.pop()
+        wanted.price()
+        pending = stopped
+
+
+def prime_costs(state, requests):
+    """Fill the :func:`render_cost` memo for ``requests`` -- ``(view, observer, mode,
+    window, rows)`` tuples of its arguments -- with one batched pricing launch, so the
+    scalar calls that follow all hit.  Requests the scalar path answers differently (the
+    exact backend, no object model, a fractional base) are left to it."""
+    backend = _object_backend()
+    if backend is None or BASE_CYCLES != int(BASE_CYCLES) or _exact_selected():
+        return
+    skey = scene_key(state)
+    todo = {}
+    for view, observer, mode, window, rows in requests:
+        if not view or view.get("h_angle") is None:
+            continue
+        h = view["h_angle"] & 0xFF
+        v = (view.get("v_angle") or 0) & 0xFF
+        ref_lo = (view.get("ref_lo") or 0) & 0xFF
+        obs = state.player if observer is None else observer
+        key = (skey, obs, h, v, mode, window, rows, ref_lo)
+        if key not in _COST_CACHE:
+            todo.setdefault(key, (h, v, obs, mode, window, rows, ref_lo))
+    if not todo:
+        return
+    for key, cyc in zip(
+        todo, _render_cycles_many(state, list(todo.values()), backend[1])
+    ):
+        memo(_COST_CACHE, key, _CACHE_MAX, lambda c=cyc: _cost_of(c))
 
 
 def _window_columns(window):

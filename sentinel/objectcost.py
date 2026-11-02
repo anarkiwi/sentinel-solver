@@ -6,9 +6,10 @@ the model geometry, so it runs only where :mod:`sentinel.objmodel` finds the gam
 """
 
 import numpy as np
-from numba import njit
 
 from sentinel import memmap as mm, passcost, rendercost
+from sentinel.kern import spec
+from sentinel.rendercost import T_BYTE, _plot_polygon, tile_cycles
 from sentinel.enemies_jit import (
     ZP_HI,
     _calc_angle,
@@ -19,6 +20,7 @@ from sentinel.enemies_jit import (
 )
 from sentinel.los_jit import _bits, _vmul8
 
+DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
 _OFLAGS = mm.OBJECTS_FLAGS
 _OTYPE = mm.OBJECTS_TYPE
 _OHANG = mm.OBJECTS_H_ANGLE
@@ -32,7 +34,7 @@ _MUL8_BIT = passcost.MUL8_BIT
 _PREP_OBJECT = passcost.PREP_HEAD + 5  # $2D72 BMI nt 2 + $2D74 BVS process_polygon 3
 
 
-@njit(cache=True)
+@spec
 def _sin_cos(sine, angle, frac):
     """calculate_sine_and_cosine $0F70: |sin| and |cos| of the 9-bit (angle.frac) out of
     the $AC80 quarter-turn table.  Returns (sin, cos, sign byte $0067, cycles)."""
@@ -63,7 +65,7 @@ def _sin_cos(sine, angle, frac):
     return tx, ty, signs, cyc + passcost.SC8_SAME
 
 
-@njit(cache=True)
+@spec
 def _transform(
     zp,
     vangle,
@@ -153,7 +155,7 @@ def _transform(
     return cyc
 
 
-@njit(cache=True)
+@spec
 def _passes(concave, rot_hi, c5b, c5c):
     """$854D: how many passes a concave object needs, and the cycles the test costs."""
     cyc = passcost.OBJ_SHAPE
@@ -179,7 +181,7 @@ def _passes(concave, rot_hi, c5b, c5c):
     return 1, cyc + passcost.OBJ_ONE_PASS
 
 
-@njit(cache=True)
+@spec
 def object_cycles(
     mem,
     zp,
@@ -263,7 +265,7 @@ def object_cycles(
             for k in range(nv + 1):
                 vlist[k] = plist[poly, k]
             cyc += passcost.OBJ_POLY_SETUP
-            c, sect = rendercost._plot_polygon(
+            c, sect = _plot_polygon(
                 vxy,
                 vlist,
                 nv,
@@ -288,7 +290,7 @@ def object_cycles(
     return cyc + passcost.OBJ_TAIL, sect
 
 
-@njit(cache=True)
+@spec
 def stack_cycles(
     mem,
     zp,
@@ -305,12 +307,12 @@ def stack_cycles(
     left,
     right,
     work,
+    slots,
 ):
     """plot_stack_of_objects $21AE: the tile's whole object stack, bottom-up for the
-    levels at or below the eye and then top-down for the rest."""
+    levels at or below the eye and then top-down for the rest; ``slots`` is scratch."""
     cyc = passcost.STACK_HEAD
     top_slot = tile_byte & 0x3F
-    slots = np.zeros(_NUM_SLOTS, dtype=np.int64)
     n = 0
     slot = top_slot
     for _ in range(_NUM_SLOTS):  # $21B5 the height walk, top slot downwards
@@ -384,7 +386,7 @@ def stack_cycles(
     return cyc + passcost.STACK_RTS, sect
 
 
-@njit(cache=True)
+@spec
 def pass_cycles(
     mem,
     zp,
@@ -405,6 +407,7 @@ def pass_cycles(
     obj_work,
     left,
     right,
+    slots,
 ):
     """One plot_world pass with the object stacks emulated as well as the terrain.
 
@@ -414,11 +417,11 @@ def pass_cycles(
     cyc = 0
     sect = sect0
     for i in range(ntiles):
-        c, sect = rendercost.tile_cycles(
+        c, sect = tile_cycles(
             tiles, i, s4b, s66, sect, bufs, top, bot, left, right, tile_work
         )
         cyc += c
-        tb = tiles[i, rendercost.T_BYTE]
+        tb = tiles[i, T_BYTE]
         if tb >= 0xC0:  # $2A32 JMP plot_stack_of_objects
             c, sect = stack_cycles(
                 mem,
@@ -436,6 +439,7 @@ def pass_cycles(
                 left,
                 right,
                 obj_work,
+                slots,
             )
             cyc += c
     return cyc
@@ -477,6 +481,11 @@ def workspace():
         np.zeros(rendercost.R_N, dtype=np.int64),
         np.zeros(rendercost.F_N, dtype=np.int64),
     )
+
+
+def scratch_slots():
+    """The object stack walk's slot list."""
+    return np.zeros(_NUM_SLOTS, dtype=np.int64)
 
 
 def scratch_zp():

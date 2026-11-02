@@ -182,6 +182,38 @@ def test_fork_is_independent_and_keys_identify_rows(new_game):
     assert pool.keys([0, 2])[0] != pool.keys([0, 2])[1]
 
 
+def test_trackers_do_not_distinguish_rows_but_other_bytes_do(new_game):
+    st = new_game(42).state
+    pool = engine.Pool.from_states([st])
+    kid = pool.fork([0, 0, 0])
+    _addrs, amap = footprint.region()
+    for tracker in footprint.LOS_TRACKERS:
+        assert amap[tracker] >= 0
+        pool.mut[kid[0], amap[tracker]] ^= 0xFF
+    assert amap[mm.TARGETED_OBJECT_SLOT] >= 0
+    pool.mut[kid[1], amap[mm.TARGETED_OBJECT_SLOT]] ^= 0xFF
+    keys = pool.keys([0, *kid.tolist()]).tolist()
+    assert keys[0] == keys[1] != keys[2]
+    assert keys[3] == keys[0]
+
+
+def test_unkept_tracker_bits_never_reach_a_row_field_or_the_clock(new_game):
+    """Rows that differ only in the tracker bytes agree on every other byte, and on the
+    clock, after the enemies have run: the property the key's mask relies on."""
+    st = new_game(335).state
+    st.mem[mm.PLAYER_NOT_ACTED] = 0
+    pool = engine.Pool.from_states([st])
+    kid = pool.fork([0])
+    _addrs, amap = footprint.region()
+    for tracker in footprint.LOS_TRACKERS:
+        pool.mut[kid[0], amap[tracker]] = 0x5A
+    pool.advance([0, kid[0]], 2000)
+    keep = pool.keep.astype(bool)
+    assert np.array_equal(pool.mut[0][keep], pool.mut[kid[0]][keep])
+    assert np.array_equal(pool.clock[0], pool.clock[kid[0]])
+    assert pool.keys([0])[0] == pool.keys([kid[0]])[0]
+
+
 def test_pool_grows_and_rejects_a_foreign_image(new_game):
     st = new_game(42).state
     pool = engine.Pool.from_states([st])

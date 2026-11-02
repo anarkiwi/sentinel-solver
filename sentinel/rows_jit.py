@@ -27,7 +27,7 @@ _FLAGS = mm.PLAYER_HAS_HYPERSPACED
 @spec
 def apply_ops(mem, ops):
     """Run the ``(K, 3)`` ``(op, a, b)`` sequence on ``mem`` and return 1 when every op
-    took effect, else 0 at the first that did not.  ``CREATE`` builds type ``a`` on the
+    applied, else 0 at the first that did not.  ``CREATE`` builds type ``a`` on the
     packed tile ``b`` (``x * 32 + y``); ``ABSORB`` and ``TRANSFER`` act on slot ``a``, or
     on the slot the last ``CREATE`` made when ``a`` is ``LAST``; ``NOOP`` rows pad a ragged
     batch."""
@@ -75,13 +75,13 @@ def fields(mem, out):
 
 
 @spec
-def row_hash(mut, clock):
+def row_hash(mut, clock, keep):
     """A 64-bit digest of a row: two FNV-style 32-bit lanes over the mutable bytes and the
-    clock fields."""
+    clock fields; a byte whose ``keep`` is 0 hashes as zero."""
     h1 = _BASIS
     h2 = _SALT
     for j in range(mut.shape[0]):
-        b = np.int64(mut[j])
+        b = np.int64(mut[j]) * keep[j]
         h1 = ((h1 ^ b) * _FNV) & _M32
         h2 = ((h2 + b + 1) * _MIX) & _M32
     for j in range(clock.shape[0]):
@@ -108,7 +108,7 @@ def fields_rows(imgs, out):
 
 
 @njit(cache=True, parallel=True)
-def hash_rows(mut, clock, out):
+def hash_rows(mut, clock, out, keep):
     """:func:`row_hash` of every row."""
     for b in prange(mut.shape[0]):  # pylint: disable=not-an-iterable
-        out[b] = row_hash(mut[b], clock[b])
+        out[b] = row_hash(mut[b], clock[b], keep)

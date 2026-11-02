@@ -6,10 +6,19 @@ import math
 import os
 
 import numpy as np
+from numba import njit
 
 from sentinel import actioncost, actions, aim, aimcost, batch, enemies, landtable, los
 from sentinel import memmap as mm
-from sentinel import pancost, projector, relative, settlecost, terrain, threat
+from sentinel import (
+    exposure_jit,
+    pancost,
+    projector,
+    relative,
+    settlecost,
+    terrain,
+    threat,
+)
 
 H_SCROLL = 16  # $10EE: 16-step horizontal scroll per +-8 bearing notch
 V_SCROLL = 8  # $1135: 8-step vertical scroll per +-4 pitch notch
@@ -37,7 +46,7 @@ BOARD_TILES = [(x, y) for x in range(EDGE + 1) for y in range(EDGE + 1)]
 ROBOT_EYE = 0.875  # a robot's eye above its foot tile ($E0 fraction)
 BOULDER_H = 0.5  # a boulder raises a stack half a unit
 HOP_COST = 5  # boulder (2) + robot (3)
-HOP_FRAMES = 700  # gaze window a full hop (2 creates + transfer + aims) needs; live ls42 hops measured 745 and 879 f whole-step (out/live_ls42_uturnfix.json p2-p4, p6-p8), so this is -6%/-20%, NOT the 2-3x under-charge an offline replay suggested
+HOP_FRAMES = 700  # gaze window a full hop (2 creates + transfer + aims) needs
 SAFE_FRAMES = 250  # window below which the current tile is "urgent"
 WAIT_FRAMES = 60  # idle advance when no action is available
 EYE_EPS = 0.1  # minimum eye-height progress for a climb move
@@ -148,6 +157,7 @@ def aim_table(st, cells, grids, aim_from, observer):
     turn = np.zeros(vi.size)
     skey = projector.scene_key(st)
     uturn = None
+    plans = []
     for h in np.unique(hi):
         h1 = int(hgrid[h])
         nu, ns = aimcost.h_press_count(h0, h1)
@@ -158,16 +168,21 @@ def aim_table(st, cells, grids, aim_from, observer):
             turn[col] = uturn
         for d in (True, False):
             sel = np.flatnonzero(col & (up == d))
-            if not sel.size:
-                continue
-            far = sel[np.argmax(vs[sel])]
-            notches = [
-                pancost.notch_frames(st, dn, ph, pv, observer, skey)
-                + SCROLL[0 if dn < pancost.V_UP else 1]
-                for dn, ph, pv in pancost.notch_plots(h0, v0, h1, int(v1[far]))
-            ]
-            sums = np.array([sum(notches[:k]) for k in range(len(notches) + 1)], float)
-            pan[sel] = sums[ns + vs[sel]]
+            if sel.size:
+                far = sel[np.argmax(vs[sel])]
+                plots = pancost.notch_plots(h0, v0, h1, int(v1[far]))
+                plans.append((sel, plots, ns))
+    pancost.prime_notches(
+        st, [p for _sel, plots, _ns in plans for p in plots], observer
+    )
+    for sel, plots, ns in plans:
+        notches = [
+            pancost.notch_frames(st, dn, ph, pv, observer, skey)
+            + SCROLL[0 if dn < pancost.V_UP else 1]
+            for dn, ph, pv in plots
+        ]
+        sums = np.array([sum(notches[:k]) for k in range(len(notches) + 1)], float)
+        pan[sel] = sums[ns + vs[sel]]
     return _sum_step(*_sum_step(np.full(vi.size, TOGGLE_FRAMES), 0.0, turn), pan)
 
 
@@ -205,6 +220,41 @@ def _first_per(group, order):
     return order[_starts(group[order])]
 
 
+_EMPTY = np.iinfo(np.int64).max
+_GROUP_TABLES = {}
+
+
+def _group_min(rays, tiles, drive_of, ncell, rb, db):
+    """Per (tile, cell) of the landing ``rays`` the least ``(drive, ray)`` key, packed as
+    ``((tile * ncell + cell) << db | drive) << rb | ray`` and ascending: the first of each
+    group of the sorted keys, found by a min over a dense table that is cleared after.
+    """
+    table = _GROUP_TABLES.get(ncell)
+    if table is None:
+        table = _GROUP_TABLES[ncell] = np.full(mm.N * mm.N * ncell, _EMPTY)
+    return _group_min_jit(rays, tiles, drive_of, ncell, rb, db, table)
+
+
+@njit(cache=True)
+def _group_min_jit(rays, tiles, drive_of, ncell, rb, db, table):
+    """:func:`_group_min` over the cleared dense ``table``."""
+    slots = np.empty(min(rays.size, table.size), dtype=np.int64)
+    n = 0
+    for i in range(rays.size):
+        ray = np.int64(rays[i])
+        slot = np.int64(tiles[i]) * ncell + ray // drive_of.size
+        key = (((slot << db) | drive_of[ray % drive_of.size]) << rb) | ray
+        if table[slot] == _EMPTY:
+            slots[n] = slot
+            n += 1
+        if key < table[slot]:
+            table[slot] = key
+    slots = np.sort(slots[:n])
+    keys = table[slots]
+    table[slots] = _EMPTY
+    return keys
+
+
 class _Landings:
     """Per tile, the frame-cheapest of its landing ``rays`` (lowest ray on ties), priced
     on first ask; ``tiles`` are packed ``x * N + y`` keys, ``st`` the board aims price on.
@@ -220,12 +270,7 @@ class _Landings:
         ncell = len(grids[0]) * len(grids[1])
         rb = (ncell * drive_of.size - 1).bit_length()
         db = int(drive_of.max()).bit_length()
-        cell, off = np.divmod(rays, drive_of.size)
-        key = np.sort(
-            (((tiles * ncell + cell) << db | drive_of[off]) << rb)
-            | rays.astype(np.int64)
-        )
-        key = key[_starts(key >> (rb + db))]
+        key = _group_min(rays, tiles, drive_of, ncell, rb, db)
         self.ray = key & ((1 << rb) - 1)
         tile, self.cell = np.divmod(key >> (rb + db), ncell)
         cur = (key >> rb) & ((1 << db) - 1)
@@ -551,13 +596,9 @@ class BasePlayer:
 
     @staticmethod
     def _exposures(st, slot):
-        out = []
-        for e in enemies.enemy_slots(st):
-            see = relative.can_see_object(st, e, slot, mm.T_ROBOT, threat.FOV_FULL)
-            if see["exposure"]:
-                ah = relative.relative_angles(st, e, slot)["angle_hi"]
-                out.append((e, ah, bool(see["full"])))
-        return out
+        """``[(enemy, angle_hi, full)]`` of the enemies with any sight of ``slot``."""
+        rows = exposure_jit.exposures_of(np.frombuffer(st.mem, dtype=np.uint8), slot)
+        return [(int(e), int(ah), bool(full)) for e, ah, full in rows.tolist()]
 
     def _tile_sees_target(self, tile, target):
         """Whether a robot standing on `tile` would see `target`'s tile (a
@@ -794,7 +835,7 @@ class BasePlayer:
     def _step_aim_frames(self, verb, view):
         """Aim frames the executor spends before `verb` fires.  A transfer over a REUSED
         committed bearing sends no aim keys ($21 fires on the object under the cursor the
-        preceding same-tile create/absorb parked there), so its aim is 0 (measured: every
+        preceding same-tile create/absorb parked there), so its aim is 0 (as in every
         recorded transfer); on a MISMATCHED bearing the executor drives the full view
         (``live_player._drive_transfer_aim``), the same aim every other verb pays."""
         if verb == "transfer" and self.last_bearing == (

@@ -8,14 +8,18 @@ vertical buffer, `$2EE4`/`$3002`/`$30BD` rasterise the edges into `$AD00`/`$AE00
 import numpy as np
 
 from sentinel import passcost
+from sentinel.kern import spec
 
-try:  # one source, compiled when numba is present; ``f.py_func`` is the same code
+try:  # ``njit`` only for the allocating wrappers; the kernels are specs
     from numba import njit
 except ImportError:  # pragma: no cover - numba absent
 
     def njit(*_args, **_kwargs):
         """No-op stand-in for numba's decorator."""
         return lambda fn: fn
+
+
+DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
 
 
 # $2D15 triangle_corner_tile_delta_table as the corner it picks, indexed [triangle two][$0045]; a tile's corners are 0 = (col,row), 1 = (col,row+1), 2 = (col+1,row+1), 3 = (col+1,row).
@@ -83,7 +87,7 @@ T_BYTE, T_PARITY, T_CORNER = 0, 1, 2  # tiles[] columns: 4 corners x (xlo,xhi,yl
 TILE_COLS = T_CORNER + 16
 
 
-@njit(cache=True)
+@spec
 def _edge(
     left,
     right,
@@ -287,7 +291,7 @@ def _edge(
     return cyc
 
 
-@njit(cache=True)
+@spec
 def _wide_area(area_v, area_h):
     """set_wide_line_store_ops_and_edge $31A4: what this area stores, and its cycles.
 
@@ -302,7 +306,7 @@ def _wide_area(area_v, area_h):
     return 2, passcost.WIDE_AREA_CALL + passcost.WIDE_AREA_RIGHT
 
 
-@njit(cache=True)
+@spec
 def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
     """process_wide_line $30BD: the DDA for a line that leaves the inner area, whose
     store is self-modified per area to skip the row, plot the line, or plot the edge."""
@@ -418,7 +422,7 @@ def _wide_edge(left, right, tab, y0hi, y0lo, x0, x1, xh0, xh1, dlo, rows):
     return cyc
 
 
-@njit(cache=True)
+@spec
 def _section_line(vxy, left, right, sxb, sxh, vx, vy, dlo, dhi, tab, rows, top, bot):
     """process_line $3002: halve the line until both deltas fit a byte, then rasterise
     each section in turn."""
@@ -515,7 +519,7 @@ def _section_line(vxy, left, right, sxb, sxh, vx, vy, dlo, dhi, tab, rows, top, 
     )
 
 
-@njit(cache=True)
+@spec
 def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
     """span_fill $22AA: walk the polygon's rows $0006 down to $0004, plotting each row's
     two edge bytes and every whole byte between them. ``flags`` carries $002C/$002D."""
@@ -586,7 +590,7 @@ def _span_fill(left, right, p04, p06, b35, b61, flags, suppress):
     return cyc
 
 
-@njit(cache=True)
+@spec
 def _plot_polygon(
     vxy,
     vlist,
@@ -791,7 +795,7 @@ def _plot_polygon(
     return cyc, sect
 
 
-@njit(cache=True)
+@spec
 def tile_cycles(tiles, i, s4b, s66, sect, bufs, top, bot, left, right, work):
     """plot_tile $2A24 for one tile of the plot range: its polygons, in render order.
 
@@ -901,24 +905,17 @@ def tile_workspace():
     )
 
 
-@njit(cache=True)
-def fill_cycles(tiles, ntiles, s4b, s66, sect0, bufs, top, bot):
+@spec
+def fill_pass(tiles, ntiles, s4b, s66, sect0, bufs, top, bot, left, right, work):
     """Cycles plot_world spends between $2A24 and $22AA over ``tiles`` in render order.
 
     ``tiles[i]`` is (tile byte, tile parity, four corners of xlo/xhi/ylo/yhi); ``bufs[s]``
     is buffer ``s``'s ($0011, $0035, $0061); ``sect0`` is $0010 on entry, and a section
     below 2 is the wide play buffer, which plots each polygon in two passes.
     """
-    left = np.zeros(256, dtype=np.int64)  # polygon_left_edge_table $AD00
-    right = np.zeros(256, dtype=np.int64)  # polygon_right_edge_table $AE00
-    work = (
-        np.zeros((4, 4), dtype=np.int64),
-        np.zeros(4, dtype=np.int64),
-        np.zeros(4, dtype=np.int64),
-        np.zeros(5, dtype=np.int64),
-        np.zeros(R_N, dtype=np.int64),
-        np.zeros(F_N, dtype=np.int64),
-    )
+    for k in range(256):  # polygon_left/right_edge_table $AD00/$AE00
+        left[k] = 0
+        right[k] = 0
     cyc = 0
     sect = sect0
     for i in range(ntiles):
@@ -927,3 +924,19 @@ def fill_cycles(tiles, ntiles, s4b, s66, sect0, bufs, top, bot):
         )
         cyc += c
     return cyc
+
+
+@njit(cache=True)
+def fill_cycles(tiles, ntiles, s4b, s66, sect0, bufs, top, bot):
+    """:func:`fill_pass` on fresh scratch."""
+    left = np.zeros(256, dtype=np.int64)
+    right = np.zeros(256, dtype=np.int64)
+    work = (
+        np.zeros((4, 4), dtype=np.int64),
+        np.zeros(4, dtype=np.int64),
+        np.zeros(4, dtype=np.int64),
+        np.zeros(5, dtype=np.int64),
+        np.zeros(R_N, dtype=np.int64),
+        np.zeros(F_N, dtype=np.int64),
+    )
+    return fill_pass(tiles, ntiles, s4b, s66, sect0, bufs, top, bot, left, right, work)
