@@ -194,7 +194,7 @@ class Pool:
             from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
             dev = self._cuda.device_array(len(idx), dtype=np.int64)
-            kern_cuda._hash_kernel[kern_cuda._blocks(len(idx)), kern_cuda.BLOCK](
+            kern_cuda.row_kernels().hash[kern_cuda._blocks(len(idx)), kern_cuda.BLOCK](
                 self.mut,
                 self._cuda.to_device(np.ascontiguousarray(self.clock[idx])),
                 self._cuda.to_device(idx),
@@ -223,9 +223,9 @@ class Pool:
                 )  # pylint: disable=import-outside-toplevel
 
                 res = self._cuda.device_array(len(rows), dtype=np.int64)
-                kern_cuda._ops_kernel[kern_cuda._blocks(len(rows)), kern_cuda.BLOCK](
-                    img, self._cuda.to_device(ops[lo : lo + step]), res
-                )
+                kern_cuda.row_kernels().ops[
+                    kern_cuda._blocks(len(rows)), kern_cuda.BLOCK
+                ](img, self._cuda.to_device(ops[lo : lo + step]), res)
                 part[:] = res.copy_to_host()
             else:
                 rows_jit.apply_rows(img, ops[lo : lo + step], part)
@@ -246,9 +246,9 @@ class Pool:
                 )  # pylint: disable=import-outside-toplevel
 
                 dev = self._cuda.device_array(part.shape, dtype=np.int64)
-                kern_cuda._fields_kernel[kern_cuda._blocks(len(part)), kern_cuda.BLOCK](
-                    img, dev
-                )
+                kern_cuda.row_kernels().fields[
+                    kern_cuda._blocks(len(part)), kern_cuda.BLOCK
+                ](img, dev)
                 part[:] = dev.copy_to_host()
             else:
                 rows_jit.fields_rows(img, part)
