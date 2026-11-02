@@ -40,8 +40,8 @@ from sentinel.playerbase import (
     settle_frames,
 )
 
-ABSORB, HOP, MOUNT, WAIT = range(4)
-KINDS = ("absorb", "hop", "mount", "wait")
+ABSORB, HOP, MOUNT, WAIT, RELOCATE = range(5)
+KINDS = ("absorb", "hop", "mount", "wait", "hyperspace")
 MAX_BOULDERS = 3
 OP_LEN = 3 + MAX_BOULDERS
 REACH = 10
@@ -152,9 +152,11 @@ def _top_ranked(mask, keys, branch):
 
 def moves(board, landed, branch):
     """The candidate moves of every board, as int64 columns ``parent``, ``kind``, ``tile``,
-    ``k`` and ``slot``: absorbs, hops, mounts and one wait per board, each class capped at
-    ``branch`` and gated as the phase player gates it, a board's moves together and in
-    that order.  ``landed`` is ``(n, N, N)``: the tiles a keyboard view reaches; ``tile``
+    ``k`` and ``slot``: absorbs, hops, mounts, one wait per board and, where the board is
+    barren, one relocation, each class capped at ``branch`` and gated as the phase player
+    gates it, a board's moves together and in that order.  A board is barren when no
+    absorb, hop or mount reaches it; the relocation also needs the toll in hand and the
+    Sentinel still standing (:meth:`PhasePlayer._relocate`).  ``landed`` is ``(n, N, N)``: the tiles a keyboard view reaches; ``tile``
     is packed x * N + y."""
     me, ar = board.player[:, None], board.rows[:, None]
     energy = board.energy[:, None]
@@ -213,9 +215,11 @@ def moves(board, landed, branch):
     mount_row, mount_at = _top_ranked(ours, (-board.z,), branch)
 
     own = board.rows
-    sizes = [eat_row.size, hop_row.size, mount_row.size, own.size]
-    parent = np.concatenate([eat_row, hop_row, mount_row, own])
-    cls = np.repeat([ABSORB, HOP, MOUNT, WAIT], sizes)
+    barren = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1))
+    away = np.flatnonzero(barren & ~gone & (board.energy >= ROBOT_E))
+    sizes = [eat_row.size, hop_row.size, mount_row.size, own.size, away.size]
+    parent = np.concatenate([eat_row, hop_row, mount_row, own, away])
+    cls = np.repeat([ABSORB, HOP, MOUNT, WAIT, RELOCATE], sizes)
     pack = lambda row, at: board.x[row, at] * mm.N + board.y[row, at]
     tile = np.concatenate(
         [
@@ -223,17 +227,23 @@ def moves(board, landed, branch):
             hop_at,
             pack(mount_row, mount_at),
             pack(own, board.player),
+            pack(away, board.player[away]),
         ]
     )
     k = np.concatenate(
         [
             np.zeros(eat_row.size, dtype=np.int64),
             need.reshape(flat)[hop_row, hop_at],
-            np.zeros(mount_row.size + own.size, dtype=np.int64),
+            np.zeros(mount_row.size + own.size + away.size, dtype=np.int64),
         ]
     )
     slot = np.concatenate(
-        [eat_at, np.full(hop_row.size, -1), mount_at, np.full(own.size, -1)]
+        [
+            eat_at,
+            np.full(hop_row.size, -1),
+            mount_at,
+            np.full(own.size + away.size, -1),
+        ]
     )
     order = np.lexsort([cls, parent])
     return {
@@ -399,8 +409,8 @@ def plan(states, imgs, board, beam, branch):
         same = key[2] == "transfer" and reuse[i]
         span[key] = (0.0 if same else aim[i]) + call()
     frames = np.zeros(len(kind), dtype=np.int64)
-    live = (kind == WAIT) | aimed
-    for i in np.flatnonzero(live):
+    live = (kind == WAIT) | (kind == RELOCATE) | aimed
+    for i in np.flatnonzero(live & (kind != RELOCATE)):
         k = int(mv["k"][i])
         per = {v: span[(int(parent[i]), int(tile[i]), v)] for v in _verbs(kind[i], k)}
         frames[i] = int(round(float(_span_of(kind[i], k, per))))
@@ -468,21 +478,40 @@ class BeamPlayer:
                 progress.set_postfix(rows=len(pool), best=int(record["eye"][0]))
         return self._conclude(pool, beam, history, final)
 
+    def _children(self, pool, rows, kind, ops):
+        """``(children, ok, tile)`` of pool ``rows`` under ``ops``: the engine builds every
+        move but a relocation, whose hyperspace is PRNG-driven and runs on the host state;
+        ``tile`` is the packed player tile of each relocation child, 0 elsewhere."""
+        away = kind == RELOCATE
+        kids = np.zeros(len(rows), dtype=np.int64)
+        built = np.ones(len(rows), dtype=bool)
+        tile = np.zeros(len(rows), dtype=np.int64)
+        if (~away).any():
+            kids[~away], built[~away] = pool.expand(rows[~away], ops[~away])
+        if away.any():
+            states = pool.states(rows[away])
+            for st in states:
+                actions.hyperspace(st)
+            kids[away] = pool.add(states)
+            tile[away] = [x * mm.N + y for x, y in (st.player_xy() for st in states)]
+        return kids, built, tile
+
     def _ply(self, pool, beam, cols):
         """``(next beam, record)`` after one ply, or None when no child survives."""
         parent = cols["parent"]
         ops = build_ops(
             cols["kind"], cols["tile"], cols["k"], cols["slot"], cols["view"][:, :2]
         )
-        kids, built = pool.expand(beam["row"][parent], ops)
+        kids, built, landed = self._children(
+            pool, beam["row"][parent], cols["kind"], ops
+        )
         run = np.flatnonzero(built)
         pool.advance(kids[run], cols["span"][run])
         fields = pool.evaluate(kids[run])
         alive, keys = self.objective(fields)
         move = cols["kind"][run]
-        cursor = np.where(
-            (move == WAIT)[:, None], beam["cursor"][parent[run]], cols["view"][run, 2:]
-        )
+        stay = ((move == WAIT) | (move == RELOCATE))[:, None]
+        cursor = np.where(stay, beam["cursor"][parent[run]], cols["view"][run, 2:])
         bearing = np.where(
             (move == WAIT)[:, None],
             beam["bearing"][parent[run]],
@@ -508,10 +537,11 @@ class BeamPlayer:
             "bearing": bearing[pick],
             "frames": frames[pick],
         }
+        tile = np.where(cols["kind"] == RELOCATE, landed, cols["tile"])
         record = {
             "parent": parent[at],
             "kind": cols["kind"][at],
-            "tile": cols["tile"][at],
+            "tile": tile[at],
             "k": cols["k"][at],
             "frames": frames[pick],
             "energy": fields["energy"][pick],

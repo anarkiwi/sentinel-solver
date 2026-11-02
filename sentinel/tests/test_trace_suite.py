@@ -131,6 +131,38 @@ def test_time_suite_warms_up_times_each_board_and_splits_a_profile(monkeypatch, 
     assert "    5" in out and "planning" in out and "cuda api waits" in out
 
 
+def test_time_suite_grid_runs_each_backend_in_a_child_and_tabulates(
+    monkeypatch, capsys, tmp_path
+):
+    from sentinel.tests import time_suite  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setenv("SENTINEL_BACKEND", "cpu")
+    assert time_suite.parse_grid("phase@cpu,beam:64@cuda") == [
+        ("phase", None, "cpu"),
+        ("beam", 64, "cuda"),
+    ]
+    calls = []
+
+    def play(number, player, width):
+        calls.append((number, player, width))
+        return {"won": number == 5, "trace": [1, 2], "frames": 7}
+
+    monkeypatch.setattr(trace_suite, "play", play)
+    monkeypatch.setattr(time_suite, "warm_device", lambda: None)
+    out = tmp_path / "grid.json"
+    spec = "phase@cpu,beam:64@cpu,beam@cuda"
+    assert time_suite.main(["--grid", spec, "--json-out", str(out), "5", "6"]) == 0
+    got = json.loads(out.read_text())
+    assert list(got) == ["phase@cpu", "beam64@cpu"]
+    assert got["beam64@cpu"]["5"][1:] == [1, 2, 7]
+    assert calls[0] == (0, "phase", None) and (6, "beam", 64) in calls
+    table = time_suite.combined(
+        {k: {int(b): v for b, v in r.items()} for k, r in got.items()}, [5, 6]
+    )
+    assert "phase@cpu" in table and table.splitlines()[-1].startswith("total")
+    assert table.splitlines()[-1].split()[2] == "1"
+
+
 def test_the_beam_width_reaches_the_player():
     game = trace_suite.Game.typed(0)
     assert trace_suite.make("beam", game, 5).width == 5

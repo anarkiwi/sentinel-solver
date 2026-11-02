@@ -6,6 +6,7 @@ import pytest
 
 from sentinel import actions, beam_player as bp, engine, memmap as mm, rows_jit
 from sentinel.game import Game
+from sentinel.phase_player import PhasePlayer
 from sentinel.playerbase import _Views
 from sentinel.tests.test_kern import SIM, gpu
 
@@ -93,6 +94,50 @@ def test_moves_are_gated_like_the_phase_player_and_always_include_a_wait():
     st.obj_flags[actions.SENTINEL_SLOT] = 0x80
     kind = bp.moves(bp.Board.of_states([st]), landed[None], 2)["kind"]
     assert not (kind == bp.ABSORB).any()
+
+
+def _relocations(code, landed=None, mutate=None):
+    st = Game.typed(code).state
+    if mutate:
+        mutate(st)
+    views = _Views(st)
+    landed = views.landed() if landed is None else landed
+    got = bp.moves(bp.Board.of_states([st]), landed[None], 2)
+    return (got["kind"] == bp.RELOCATE).sum(), PhasePlayer(Game.typed(code))
+
+
+@pytest.mark.parametrize("code", [42, 335, 8589, 7414])
+def test_a_relocation_is_offered_exactly_where_the_phase_player_finds_a_barren_stance(
+    code,
+):
+    player = PhasePlayer(Game.typed(code), verbose=False)
+    barren = player._barren(_Views(player.st))  # pylint: disable=protected-access
+    offered, _ = _relocations(code)
+    assert offered == (1 if barren and player.st.energy >= bp.ROBOT_E else 0)
+
+
+def test_a_relocation_needs_the_toll_and_a_standing_sentinel():
+    code = 8589
+    assert _relocations(code)[0] == 1
+
+    def broke(st):
+        st.energy = bp.ROBOT_E - 1
+
+    def finished(st):
+        st.obj_flags[actions.SENTINEL_SLOT] = 0x80
+
+    assert _relocations(code, mutate=broke)[0] == 0
+    assert _relocations(code, mutate=finished)[0] == 0
+
+
+def test_a_board_that_reaches_nothing_is_barren_whatever_it_holds():
+    nothing = np.zeros((mm.N, mm.N), dtype=bool)
+    assert _relocations(42, landed=nothing)[0] == 1
+
+
+def test_a_beam_on_a_board_with_nothing_to_aim_at_relocates_instead_of_crashing():
+    won, player, _game = _play(8589, width=2, depth=2, branch=2)
+    assert not won and player.trace[0][1] == "hyperspace"
 
 
 def test_a_branch_cap_of_zero_leaves_only_the_wait():

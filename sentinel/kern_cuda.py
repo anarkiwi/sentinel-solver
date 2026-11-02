@@ -13,13 +13,11 @@ import functools
 import hashlib
 import os
 import threading
-import time
 
 import numpy as np
 from numba import cuda
 
 from sentinel import (
-    badline_jit,
     enemies_jit,
     kern,
     landtable,
@@ -33,7 +31,6 @@ BLOCK = 128
 LOS_CLEAR = los_jit.LOS_CLEAR
 _march_one = kern.build(los_jit._march_one, "cuda")
 _stop_one = kern.build(landtable._stop_one, "cuda")
-_advance_one = kern.build(enemies_jit._advance, "cuda")
 _apply_ops = kern.build(rows_jit.apply_ops, "cuda")
 _fields = kern.build(rows_jit.fields, "cuda")
 _row_hash = kern.build(rows_jit.row_hash, "cuda")
@@ -267,76 +264,6 @@ def grid2(width, rows):
     return (_blocks(width), rows), BLOCK
 
 
-@functools.cache
-def device_maps():
-    """The badline run maps of :data:`badline_jit.MAPS` resident on the device: the clock
-    kernel's table argument."""
-    return tuple(cuda.to_device(a) for a in badline_jit.MAPS)
-
-
-@cuda.jit(cache=True)
-def _advance_kernel(imgs, pos, clock, rows, zps, left, plotting, out, maps, halt, ack):
-    """One thread per live row ``b``: :func:`enemies_jit._advance` over ``imgs[pos[b]]`` from
-    and into the clock fields ``clock[rows[b]]``, one frame per call so that ``halt[b]``
-    set by the host stops it at a frame boundary.  ``out[b]`` takes the frames left, then
-    the strip replot request, if any (target or -1, left column, columns, span), then the
-    twelve clock fields; ``ack[b]`` is set once they and the image are final."""
-    b = cuda.grid(1)
-    if b < rows.shape[0]:
-        zp = zps[b]
-        for k in range(zp.shape[0]):
-            zp[k] = 0
-        c = clock[rows[b]]
-        r = (
-            c[0],
-            c[1],
-            c[2],
-            c[3],
-            c[4],
-            c[5],
-            c[6],
-            c[7],
-            c[8],
-            c[9],
-            c[10],
-            c[11],
-        )
-        todo = left[b]
-        while todo > 0 and cuda.atomic.add(halt, b, 0) == 0:
-            r = _advance_one(
-                imgs[pos[b]],
-                zp,
-                1,
-                plotting,
-                r[0],
-                r[1],
-                r[2],
-                r[3],
-                r[4],
-                r[5],
-                r[6],
-                r[7],
-                r[8],
-                r[9],
-                r[10],
-                r[11],
-                maps,
-            )[:12]
-            todo -= 1
-            if zp[enemies_jit.ZP_REPLOT] != 0:
-                break
-        for k in range(12):
-            c[k] = r[k]
-            out[b, 5 + k] = r[k]
-        out[b, 0] = todo
-        out[b, 1] = zp[enemies_jit.ZP_REPLOT] - 1
-        out[b, 2] = zp[enemies_jit.ZP_REPLOT_LEFT]
-        out[b, 3] = zp[enemies_jit.ZP_REPLOT_COLS]
-        out[b, 4] = zp[enemies_jit.ZP_REPLOT_SPAN]
-        cuda.threadfence_system()
-        ack[b] = 1
-
-
 @cuda.jit(cache=True)
 def _ops_kernel(imgs, ops, ok):
     b = cuda.grid(1)
@@ -442,107 +369,74 @@ def _patch_kernel(imgs, clock, pos, rows, at, val, fresh):
             clock[rows[b], j] = fresh[b, j]
 
 
-_HALT = np.ones(1, dtype=np.int32)
 _THREADS = threading.local()
-_ACKS = []
+_PINNED = []
 
 
 @functools.cache
 def _cpu_pool():
-    """The host threads that take rows from the device: one per CPU."""
+    """The host threads that run the enemy clock: one per CPU."""
     return concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1)
 
 
-def _acks(n):
-    """A zeroed host-mapped int32 array of at least ``n`` flags the device writes."""
-    if not _ACKS or _ACKS[0].size < n:
-        have = _ACKS[0].size if _ACKS else 0
-        _ACKS[:] = [cuda.mapped_array(max(n, 2 * have), np.int32)]
-    _ACKS[0][:] = 0
-    return _ACKS[0]
+def _pinned(n, width):
+    """A persistent page-locked ``(n, width)`` uint8 host array: the staging rows of the
+    images being advanced, grown geometrically."""
+    if not _PINNED or _PINNED[0].shape[0] < n:
+        have = _PINNED[0].shape[0] if _PINNED else 0
+        _PINNED[:] = [cuda.pinned_array((max(n, 2 * have), width), dtype=np.uint8)]
+    return _PINNED[0]
 
 
-def take_row(b, imgs, clock, pos, rows, out, halt, ack, plotting):
-    """Stop the device thread of live row ``b`` at its next frame boundary and run what it
-    still owes on the host: the same :func:`enemies_jit._advance` over the same state, so
-    the row ends exactly as the device would have left it.  Returns the row's new status
-    (:func:`advance_rows`'s ``out`` layout), or None when the device had finished it."""
+def _run_row(b, imgs, clock, pos, rows, left, host, plotting):
+    """Row ``b`` of the round on a host thread: image and clock fields down, the frames
+    run by :func:`enemies_jit.advance_one`, both back up.  Returns the status row
+    ``(frames left, replot request, clock fields)``."""
     if not hasattr(_THREADS, "stream"):
         _THREADS.stream = cuda.stream()
     stream = _THREADS.stream
-    halt[b : b + 1].copy_to_device(_HALT, stream=stream)
-    while not ack[b]:
-        time.sleep(0)
-    status = out[b : b + 1].copy_to_host(stream=stream)
-    mem = imgs[pos[b]].copy_to_host(stream=stream)
-    carry = clock[rows[b]][:12].copy_to_host(stream=stream)
+    mem = host[b]
+    imgs[pos[b]].copy_to_host(mem, stream=stream)
+    carry = clock[rows[b]].copy_to_host(stream=stream)
     stream.synchronize()
-    status = status[0]
-    if status[1] >= 0 or status[0] <= 0:
-        return None
     new, rest, replot = enemies_jit.advance_one(
-        mem, status[0], plotting, carry, enemies_jit.MAPS
+        mem, left[b], plotting, carry, enemies_jit.MAPS
     )
     imgs[pos[b]].copy_to_device(mem, stream=stream)
-    clock[rows[b]][:12].copy_to_device(new, stream=stream)
+    clock[rows[b]].copy_to_device(new, stream=stream)
     stream.synchronize()
     return np.concatenate(([rest], replot, new))
 
 
 def advance_rows(imgs, clock, rows, n_frames, plotting, reads, price):
     """Advance row ``i`` of the device stack ``imgs`` by ``n_frames[i]`` frames in place, from
-    and into the device ``clock`` row ``rows[i]``.  Rounds run the live rows, each round one
-    upload of its inputs and one download of its status rows: :func:`_advance_kernel` runs
-    every row from the device while the host threads take rows (:func:`take_row`) from the
-    longest down; a row the device finished first is left to it.  Each row's result is the
-    same whoever runs it.
+    and into the device ``clock`` row ``rows[i]``.  Each round copies the live rows down to
+    the pinned staging buffer and runs them on the host threads, longest first, with
+    :func:`enemies_jit.advance_one`; the rows go back up when they stop.
     The rows a round stopped at a strip replot are priced together: ``price(seen, clock,
     request)`` takes the image bytes at the addresses ``reads`` of those rows, their clock
     rows and their requests, and returns the new clock rows and the ``(at, val)`` byte
     patches (``(k, m)`` each), which one launch writes back before the rows re-enter the
     next round."""
     left = np.array(n_frames, dtype=np.int64)
-    maps = device_maps()
     want = stage("replot_reads", np.asarray(reads, dtype=np.int64))
     while True:
         live = np.flatnonzero(left > 0)
         if not live.size:
             return
-        n = live.size
-        inputs = stage("advance_in", np.stack([live, rows[live], left[live]]))
-        out = scratch("advance_out", (n, 17), np.int64)
-        halt = scratch("advance_halt", (n,), np.int32)
-        halt.copy_to_device(np.zeros(n, dtype=np.int32))
-        ack = _acks(n)
-        launch = cuda.stream()
-        _advance_kernel[_blocks(n), BLOCK, launch](
-            imgs,
-            inputs[0],
-            clock,
-            inputs[1],
-            scratch("advance_zp", (n, enemies_jit.ZP_N), np.int64),
-            inputs[2],
-            bool(plotting),
-            out,
-            maps,
-            halt,
-            ack,
-        )
-        owned = rows[live]
-        longest_first = np.argsort(left[live], kind="stable")[::-1].tolist()
-        taken = list(
+        host = _pinned(live.size, imgs.shape[1])
+        owned, todo = rows[live], left[live]
+        longest_first = np.argsort(todo, kind="stable")[::-1].tolist()
+        done = list(
             _cpu_pool().map(
-                lambda b: take_row(
-                    b, imgs, clock, live, owned, out, halt, ack, bool(plotting)
+                lambda b: _run_row(
+                    b, imgs, clock, live, owned, todo, host, bool(plotting)
                 ),
                 longest_first,
             )
         )
-        launch.synchronize()
-        out = out.copy_to_host()
-        for b, status in zip(longest_first, taken):
-            if status is not None:
-                out[b] = status
+        out = np.empty((live.size, 17), dtype=np.int64)
+        out[longest_first] = done
         stopped = out[:, 1] >= 0
         at = live[stopped]
         if at.size:

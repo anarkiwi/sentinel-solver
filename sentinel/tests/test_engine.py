@@ -309,30 +309,7 @@ def test_device_advance_prices_replots(monkeypatch):
 
 
 @gpu
-@pytest.mark.parametrize("who", ["device", "host", "race"])
-def test_device_rows_are_the_same_whoever_runs_them(new_game, monkeypatch, who):
-    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
-
-    kernel = kern_cuda._advance_kernel
-
-    class Halted:
-        def __getitem__(self, cfg):
-            launch = kernel[cfg]
-
-            def run(*args):
-                args[-2].copy_to_device(np.ones(args[-2].size, dtype=np.int32))
-                launch(*args)
-
-            return run
-
-    def idle(b, *args):
-        while not args[-2][b]:
-            pass
-
-    if who == "host":
-        monkeypatch.setattr(kern_cuda, "_advance_kernel", Halted())
-    if who == "device":
-        monkeypatch.setattr(kern_cuda, "take_row", idle)
+def test_device_rows_are_the_same_as_the_host_clock(new_game):
     st = new_game(42).state
     frames = [20, 7, 13, 3] if SIM else [1500, 90, 700, 3, 400]
     want = []

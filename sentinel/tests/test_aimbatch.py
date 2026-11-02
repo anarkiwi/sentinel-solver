@@ -170,3 +170,21 @@ def test_plan_spans_are_the_phase_players(number, actions):
         ]
         span = {v: player._span(v, view, xy) for v in bp._verbs(kind, k)}
         assert cols["span"][i] == int(round(bp._span_of(kind, k, span)))
+
+
+def test_aim_parts_with_no_cells_still_prices_the_uturn():
+    mems = _mems(_board(42, 0), _board(1442, 0))
+    none = np.zeros(0, dtype=np.int64)
+    aim = np.array([0, 0])
+    empty = aimbatch.aim_parts(mems, aim[:0], aim[:0], aim[:0], aim[:0], [], GRIDS)
+    assert [len(part) for part in empty] == [0, 0, 0]
+    row = np.array([0, 1, 1])
+    lat = np.array([0, 0, 1])
+    h0 = v0 = np.zeros(3, dtype=np.int64)
+    cells = [np.arange(4), none, none]
+    pan, turn, uturn = aimbatch.aim_parts(mems, row, lat, h0, v0, cells, GRIDS)
+    assert [len(p) for p in pan] == [4, 0, 0] and [len(t) for t in turn] == [4, 0, 0]
+    ref = aimbatch.aim_parts(mems, row[:1], lat[:1], h0[:1], v0[:1], cells[:1], GRIDS)
+    assert np.array_equal(pan[0], ref[0][0]) and uturn[0] == ref[2][0]
+    every = aimbatch.aim_parts(mems, row, lat, h0, v0, [none] * 3, GRIDS)
+    assert uturn.tolist() == every[2].tolist() and all(len(p) == 0 for p in every[0])

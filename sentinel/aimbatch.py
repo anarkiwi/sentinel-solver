@@ -105,9 +105,11 @@ def aim_parts(mems, row, lat, h0, v0, cells, grids):
     :func:`playerbase.aim_table` prices for ``cells[q]`` of lattice ``grids[lat[q]]`` from
     facing ``(h0[q], v0[q])`` on board image ``mems[row[q]]``, and that board's u-turn
     frames.  ``pan`` and ``turn`` are aligned with ``cells[q]``."""
+    if len(row) == 0:
+        return [], [], np.zeros(0)
     count = np.fromiter(map(len, cells), np.int64, len(row))
     req = np.repeat(np.arange(len(row)), count)
-    cell = np.concatenate(cells).astype(np.int64)
+    cell = np.concatenate([np.zeros(0, np.int64), *cells]).astype(np.int64)
     hgrid, vgrid, nh = _grid_table(grids)
     vi, hi = np.divmod(cell, nh[lat[req]])
     h1, v1 = hgrid[lat[req], hi], vgrid[lat[req], vi]

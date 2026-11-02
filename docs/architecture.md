@@ -1177,8 +1177,7 @@ hardware's -- so no constant is tuned. The lattices (262144 to 3.5M rays) fill t
 (`enemies_jit._advance_many`, `prange` over a stacked image array); a row that stopped at a
 $1FFC strip replot is priced in Python and re-enters the next round, so each equals its own
 `advance_frames`. The whole clock -- `enemies_jit`, `badline_jit` and the helpers it calls in
-`los_jit` -- is `@spec`, and `kern_cuda._advance_kernel` runs `_advance` with one thread per row
-from the same source. The clocks and the zero-page window live in the per-thread `zp` scratch
+`los_jit` -- is `@spec`. The clocks and the zero-page window live in the per-thread `zp` scratch
 (`ZP_CLK`, `ZP_IDLE`).
 
 The badline clock's tables travel as an argument: `badline_jit.MAPS` is the tuple `(RUN, START,
@@ -1186,10 +1185,9 @@ LENGTH_AT, OWED, EVENT_POS, EVENT_SHORT_IRQ)`, passed as `maps` through `charge`
 `run_at`, `_place`, `spend`, `stall`, `charge_run`, `carry` and every `enemies_jit` caller up to
 `_advance`. A table frozen into a device function is copied into every use site (the 240-byte
 event tables alone reached 150 KB of the device's 64 KB constant budget), so no table the clock
-reads is frozen on the device: the run maps are 600 KB, and the kernels (`_advance_kernel`,
-`_ops_kernel`, `_fields_kernel`, `_hash_kernel` and the clock row copies) are module-level
-`cuda.jit(cache=True)` with no per-process compile. `kern_cuda.device_maps()` holds the tuple on
-the device. The pricing kernel's modules (`rendercost`, `objectcost`, `projector_jit`) still bind
+reads is frozen on the device: the run maps are 600 KB, and the kernels (`_ops_kernel`,
+`_fields_kernel`, `_hash_kernel` and the clock row copies) are module-level
+`cuda.jit(cache=True)` with no per-process compile. The pricing kernel's modules (`rendercost`, `objectcost`, `projector_jit`) still bind
 their tables as device arrays and compile once per process.
 
 * The replot price (`projector.strip_replot_frames`, Python plus the render-cost kernels) is
@@ -1197,19 +1195,16 @@ their tables as device arrays and compile once per process.
   and only that row's image crosses the bus. Pricing it on the device means porting scene
   projection, `fill_frames`, the pan and notch pricing and the occlusion tables to specs, which
   is not done.
-* **Work sharing.** Every row costs the same per frame (about twenty idle passes of the 64-slot
-  loop, no LOS march unless an enemy scans), so a round lasts as long as its row with the most
-  frames, and a GPU lane runs that serial integer code about ten times slower than a CPU core. No
-  frame is skippable in closed form: the pass count of a frame depends on the badline events
-  its cycle position meets and the prnd stream advances once per pass. `_advance_kernel` runs
-  every row on the device one frame per `_advance` call, polling `halt[b]`; the host threads
-  (`take_row`, one per CPU) claim rows longest first, set `halt`, wait for the thread's `ack`
-  (written after its image, clock and status are final) and run the rest of the row's frames with
-  `enemies_jit.advance_one`, the same `_advance` over the same state. A row the device finished
-  before the host reached it is left alone, so the two meet where the claims cross, and each row's
-  result is the same whoever ran which frames.
-* A GPU lane is far slower than a CPU core on this branch-heavy model, so the device clock pays
-  when rows are many. `engine.default_device(rows)` is the rule: the backend is cuda and a round
+* **Host clock on a device pool.** Every row costs the same per frame (about twenty idle passes
+  of the 64-slot loop, no LOS march unless an enemy scans), so a round lasts as long as its row
+  with the most frames, and one GPU lane runs that serial integer code about ten times slower
+  than a CPU core. No frame is skippable in closed form: the pass count of a frame depends on the
+  badline events its cycle position meets and the prnd stream advances once per pass. Game
+  states therefore stay in the device `Pool`, and `kern_cuda.advance_rows` copies down only the
+  rows being advanced into a persistent pinned staging buffer, runs them longest first on a
+  `ThreadPoolExecutor` of one thread per CPU with the `nogil` `enemies_jit.advance_one`, and
+  copies them back. Rows stopped at a strip replot are priced together, as on the host pool.
+  `engine.default_device(rows)` is the rule for a device pool: the backend is cuda and a round
   has a batch of more than one row.
 
 ## The search engine (`engine.py`, `footprint.py`, `rows_jit.py`, `actions_jit.py`)
