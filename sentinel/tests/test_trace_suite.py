@@ -109,3 +109,25 @@ def test_make_builds_the_named_player():
     game = trace_suite.Game.typed(0)
     assert type(trace_suite.make("beam", game)).__name__ == "BeamPlayer"
     assert type(trace_suite.make("phase", game)).__name__ == "PhasePlayer"
+
+
+def test_time_suite_warms_up_times_each_board_and_splits_a_profile(monkeypatch, capsys):
+    from sentinel.tests import time_suite  # pylint: disable=import-outside-toplevel
+
+    calls = []
+
+    def play(number, player, width):
+        calls.append((number, player, width))
+        return {"won": True, "trace": [1, 2], "frames": 7}
+
+    monkeypatch.setattr(trace_suite, "play", play)
+    assert time_suite.main(["5", "--width", "3", "--profile", "5"]) == 0
+    assert calls == [(0, "beam", 3), (5, "beam", 3), (5, "beam", 3)]
+    out = capsys.readouterr().out
+    assert "    5" in out and "planning" in out and "cuda api waits" in out
+
+
+def test_the_beam_width_reaches_the_player():
+    game = trace_suite.Game.typed(0)
+    assert trace_suite.make("beam", game, 5).width == 5
+    assert trace_suite.make("beam", game).width == 16
