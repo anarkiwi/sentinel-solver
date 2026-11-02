@@ -590,6 +590,9 @@ _OCCLUSION_CACHE = {}
 _COST_CACHE = {}
 
 
+_SCENE_INDEX = np.concatenate([np.arange(lo, hi) for lo, hi in _SCENE_SPANS])
+
+
 def scene_key(state):
     """Digest of every byte :func:`project_scene` reads: a sound memo key over a
     mutating ``State`` (creates, absorbs and transfers all land in these spans)."""
@@ -971,42 +974,44 @@ def _exact_selected():
     return rendercost_exact.backend() is not None
 
 
-def _cost_jobs(state, wants, scene=0, table0=0):
-    """``(jobs, observers)``: the :mod:`pricing_jit` job rows of the ``(h, v, observer,
-    mode, window, rows, ref_lo)`` requests ``wants`` on ``state``, built column-wise.
+_PLAN_ROWS = {}
 
-    The rows name image ``scene`` of the launch's stack and the occlusion table
-    ``table0 + k`` for the ``k``-th of the sorted ``observers``, whose tables the caller
-    stacks.  A row equals what :func:`_setup`, :func:`_setup_vector` and
-    :func:`fill_frames` give one request."""
-    cols = list(zip(*wants))
-    h, v, obs, ref_lo = (np.array(cols[i], dtype=np.int64) for i in (0, 1, 2, 6))
-    plans = {}
-    plan = np.array([plans.setdefault(k, len(plans)) for k in zip(*cols[3:6])])
-    window = np.zeros((len(plans), 6 + 12), dtype=np.int64)
-    for (mode, win, rows), i in plans.items():
+
+def window_plan(mode, win, rows):
+    """The ``(6 + 12)`` window columns of a request's ``(mode, window, rows)`` plan: the
+    buffer window, section count and raster rows, then the twelve buffer words."""
+    key = (mode, win, rows)
+    got = _PLAN_ROWS.get(key)
+    if got is None:
         bufs, sect = rendercost.buffers(
             mode, None if win is None else _window_columns(win)
         )
         top, bot = rows if rows else (rendercost.SCREEN_TOP, rendercost.SCREEN_BOTTOM)
-        window[i, :6] = (
-            *(win if win is not None else BUF_WINDOW[mode]),
-            sect,
-            top,
-            bot,
-        )
-        window[i, 6:] = bufs.ravel()
-    observers = sorted(set(cols[2]))
-    at = np.searchsorted(observers, obs)
-    ox, oy, zh, zf = (
-        np.array([arr[o] for o in observers], dtype=np.int64)[at]
-        for arr in (state.obj_x, state.obj_y, state.obj_z_height, state.obj_z_frac)
-    )
+        got = np.zeros(6 + 12, dtype=np.int64)
+        got[:6] = (*(win if win is not None else BUF_WINDOW[mode]), sect, top, bot)
+        got[6:] = bufs.ravel()
+        _PLAN_ROWS[key] = got
+    return got
+
+
+def cost_job_columns(mems, row, scene, obs, h, v, ref_lo, window, vis_at):
+    """The :mod:`pricing_jit` job rows of requests given as columns: request ``i`` is the
+    view ``(h[i], v[i])`` from observer ``obs[i]`` with half column ``ref_lo[i]`` and plan
+    ``window[i]`` (a :func:`window_plan` row), on the board image ``mems[row[i]]``; it
+    names image ``scene[i]`` of the launch's stack and occlusion table ``vis_at[i]``.  A
+    row equals what :func:`_setup`, :func:`_setup_vector` and :func:`fill_frames` give
+    the request."""
+
+    def gather(base):
+        return mems[row, base + obs].astype(np.int64)
+
+    ox, oy = gather(mm.OBJECTS_X), gather(mm.OBJECTS_Y)
+    zh, zf = gather(mm.OBJECTS_Z_HEIGHT), gather(mm.OBJECTS_Z_FRACTION)
     view = (h + 0x20) & 0xFF  # $001C ($265A)
     quad = view >> 6
     folded = ((view & 0x3F) - 0x20) & 0xFF  # $0074 ($265E)
     flip_x, flip_y = (0x1E - ox) & 0xFF, (0x1E - oy) & 0xFF
-    jobs = np.zeros((len(wants), pricing_jit.J_N), dtype=np.int64)
+    jobs = np.zeros((len(h), pricing_jit.J_N), dtype=np.int64)
     su = jobs[:, : projector_jit.S_N]
     su[:, projector_jit.S_QUAD] = quad
     su[:, projector_jit.S_C3] = np.choose(quad, (ox, flip_y, flip_x, oy))
@@ -1016,47 +1021,114 @@ def _cost_jobs(state, wants, scene=0, table0=0):
     su[:, projector_jit.S_VANGLE] = v
     su[:, projector_jit.S_OBS_ZH] = zh
     su[:, projector_jit.S_OBS_ZF] = zf
-    su[:, projector_jit.S_LEFT] = window[plan, 0]
-    su[:, projector_jit.S_RIGHT] = window[plan, 1]
-    su[:, projector_jit.S_TABLE] = 1 if state.mem[mm.PLAY_DISPLAY_FLAG] & 0x80 else 0
-    su[:, projector_jit.S_FRAC] = window[plan, 2]
-    hint = state.mem[mm.FURTHEST_ROW_HINT] if _ROW_HINT_ENV is None else _ROW_HINT_ENV
-    jobs[:, pricing_jit.J_HINT] = int(hint) & 0xFF
-    jobs[:, pricing_jit.J_SECT : pricing_jit.J_OBS] = window[plan, 3:6]
+    su[:, projector_jit.S_LEFT] = window[:, 0]
+    su[:, projector_jit.S_RIGHT] = window[:, 1]
+    su[:, projector_jit.S_TABLE] = (mems[row, mm.PLAY_DISPLAY_FLAG] & 0x80) != 0
+    su[:, projector_jit.S_FRAC] = window[:, 2]
+    hint = mems[row, mm.FURTHEST_ROW_HINT] if _ROW_HINT_ENV is None else _ROW_HINT_ENV
+    jobs[:, pricing_jit.J_HINT] = np.asarray(hint, dtype=np.int64) & 0xFF
+    jobs[:, pricing_jit.J_SECT : pricing_jit.J_OBS] = window[:, 3:6]
     jobs[:, pricing_jit.J_OBS] = obs
-    jobs[:, pricing_jit.J_PLAYER] = state.player
+    jobs[:, pricing_jit.J_PLAYER] = mems[row, mm.PLAYER_OBJECT]
     jobs[:, pricing_jit.J_H] = h
     jobs[:, pricing_jit.J_V] = v
-    jobs[:, pricing_jit.J_VIS] = table0 + at
-    jobs[:, pricing_jit.J_BUFS : pricing_jit.J_MEM] = window[plan, 6:]
+    jobs[:, pricing_jit.J_VIS] = vis_at
+    jobs[:, pricing_jit.J_BUFS : pricing_jit.J_MEM] = window[:, 6:]
     jobs[:, pricing_jit.J_MEM] = scene
+    return jobs
+
+
+def _cost_jobs(state, wants, scene=0, table0=0):
+    """``(jobs, observers)``: the :mod:`pricing_jit` job rows of the ``(h, v, observer,
+    mode, window, rows, ref_lo)`` requests ``wants`` on ``state``, built column-wise.
+
+    The rows name image ``scene`` of the launch's stack and the occlusion table ``table0 +
+    k`` for the ``k``-th of the sorted ``observers``, whose tables the caller stacks."""
+    cols = list(zip(*wants))
+    h, v, obs, ref_lo = (np.array(cols[i], dtype=np.int64) for i in (0, 1, 2, 6))
+    plans = {}
+    plan = np.array([plans.setdefault(k, len(plans)) for k in zip(*cols[3:6])])
+    table = np.stack([window_plan(*k) for k in plans])
+    observers = sorted(set(cols[2]))
+    at = np.searchsorted(observers, obs)
+    mems = np.frombuffer(state.mem, dtype=np.uint8)[None]
+    zero = np.zeros(len(wants), dtype=np.int64)
+    jobs = cost_job_columns(
+        mems, zero, zero + scene, obs, h, v, ref_lo, table[plan], table0 + at
+    )
     return jobs, observers
 
 
-def _render_cycles_many(scenes):
-    """Integer cycles of every request of ``scenes`` -- ``(state, wants)`` pairs, each want
-    as in :func:`_cost_jobs` -- in one launch over the stacked board images, the device's
-    when :func:`kern_cuda.pricing_pays` and the CPU threads otherwise."""
+def scene_keys(mems):
+    """:func:`scene_key` of every row of the ``(n, 65536)`` image stack ``mems``."""
+    spans = np.ascontiguousarray(mems[:, _SCENE_INDEX])
+    return [hash(row.tobytes()) for row in spans]
+
+
+_VIS_CACHE = {}
+
+
+def occlusion_stack(mems, rows, obs):
+    """``(tables, at)``: the ``$245B`` occlusion tables of the distinct ``(rows[i],
+    obs[i])`` pairs as one ``(k, 32, 32)`` uint8 stack, and per request the table's index.
+    The raytrace is memoized on the scene digest, the observer and its tile."""
+    pairs, at = np.unique(np.stack([rows, obs], 1), axis=0, return_inverse=True)
+    keys = scene_keys(mems[pairs[:, 0]])
+    tables = []
+    for (row, ob), skey in zip(pairs.tolist(), keys):
+        mem = mems[row]
+        key = (skey, ob, int(mem[mm.OBJECTS_X + ob]), int(mem[mm.OBJECTS_Y + ob]))
+        tables.append(
+            memo(
+                _VIS_CACHE,
+                key,
+                _CACHE_MAX,
+                lambda m=mem, o=ob: projector_jit.occlusion_table(m, o),
+            )
+        )
+    return np.stack(tables), at.reshape(-1)
+
+
+def render_cycles_of(mems, jobs, vis):
+    """Integer cycles of every row of ``jobs`` over the image stack ``mems`` and occlusion
+    tables ``vis``, in one launch: the device's when :func:`kern_cuda.pricing_pays` and the
+    CPU threads otherwise."""
     model = _object_backend()[1]
-    rows, tables = [], []
-    for scene, (state, wants) in enumerate(scenes):
-        jobs, observers = _cost_jobs(state, wants, scene, len(tables))
-        rows.append(jobs)
-        tables += [_occlusion_memo(state, obs)[1] for obs in observers]
-    jobs = np.concatenate(rows)
-    mems = np.stack([np.frombuffer(state.mem, dtype=np.uint8) for state, _ in scenes])
-    vis = np.stack(tables)
     if kern.backend() == "cuda":
         from sentinel import kern_cuda
 
         if kern_cuda.pricing_pays(len(jobs)):
-            return kern_cuda.render_cycles_many(mems, jobs, vis, model).tolist()
+            return kern_cuda.render_cycles_many(mems, jobs, vis, model)
     if not _PRICING_SCRATCH:
         _PRICING_SCRATCH.append(pricing_jit.scratch(pricing_jit.slot_count(1 << 20)))
     out = np.zeros(len(jobs), dtype=np.int64)
     launch = pricing_jit.render_many if len(jobs) > 1 else pricing_jit.render_serial
     launch(mems, jobs, vis, model, _PRICING_SCRATCH[0], out)
-    return out.tolist()
+    return out
+
+
+def price_columns(mems, row, obs, h, v, window):
+    """Cycles of the ``(h, v)`` views from ``obs`` on image ``mems[row]`` under plan
+    ``window`` (a :func:`window_plan` row per request), one launch over the distinct
+    images; ``ref_lo`` is 0."""
+    images, back = np.unique(row, return_inverse=True)
+    back = back.reshape(-1)
+    vis, at = occlusion_stack(mems, row, obs)
+    zero = np.zeros(len(h), dtype=np.int64)
+    jobs = cost_job_columns(mems, row, back, obs, h, v, zero, window, at)
+    return render_cycles_of(mems[images], jobs, vis)
+
+
+def _render_cycles_many(scenes):
+    """Integer cycles of every request of ``scenes`` -- ``(state, wants)`` pairs, each want
+    as in :func:`_cost_jobs` -- in one launch over the stacked board images."""
+    rows, tables = [], []
+    for scene, (state, wants) in enumerate(scenes):
+        jobs, observers = _cost_jobs(state, wants, scene, len(tables))
+        rows.append(jobs)
+        tables += [_occlusion_memo(state, obs)[1] for obs in observers]
+    mems = np.stack([np.frombuffer(state.mem, dtype=np.uint8) for state, _ in scenes])
+    return render_cycles_of(mems, np.concatenate(rows), np.stack(tables)).tolist()
 
 
 class Deferred(BaseException):

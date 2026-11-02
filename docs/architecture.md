@@ -1348,12 +1348,26 @@ winner, so lockstep would only add work). An `Exception` in a task is a `Failure
 old handlers did); the `Deferred` round state of `prefetch` is a `ContextVar`, so it is private
 to each task.
 
+**Device buffers and replot stops.** `kern_cuda.scratch`/`stage` keep named device buffers
+that grow geometrically and are never freed between calls: the clock rounds, the landing
+sweep, the pricing launch and the `Pool` image views reuse them, and the pricing slot cap
+reads the free device memory once. Each `advance_rows` round uploads one `(3, n)` input array
+and downloads one `(n, 17)` status array (frames left, replot request, the twelve clock fields).
+The rows a round stopped at a strip replot are priced together: one gather of the scene bytes
+and scalars the replot reads (`enemies.REPLOT_READS`), `enemies.price_replots` over arrays
+(one pricing launch over every chunk of every stopped row), and one patch launch writing back
+the three bytes the replot changes (`CAMERA_SAVED`, `CAMERA_REF_LO`, the camera's bearing) and
+the clock rows.
+
 **Not done.** Each item below is a design, not an implementation.
 
 * *Fleet `advance` handler.* The device clock is in place (see above); what remains is a fleet
   handler that takes `(pool row, frames)` payloads from tasks whose forks live in a device `Pool`,
   so a lockstep search advances its forks in one launch. The beam player (`docs/players.md`) calls
   `Pool.advance` directly instead.
+* *Array form of the settle terms* (`playerbase.settle_frames`: create/absorb strip replot,
+  dither, fire ray, transfer redraw): the beam player prices them per (row, tile, verb) on the
+  scalar models with batched render costs; its aims are arrays (`aimbatch.py`).
 * *Array rewrite of the phase player's candidate logic* (`_climb_candidates`, `_leaders`,
   `_strike`, `_refuel`, `_breakout`): done for the beam player (`beam_player.moves`), not for the
   phase player.

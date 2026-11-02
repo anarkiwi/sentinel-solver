@@ -5,6 +5,8 @@ $86A5 dither) and the pass tail; a transfer or u-turn starts its tune ($1B84), s
 $0C63 and settles through the $357D redraw with the tune wait overlapped.
 """
 
+import numpy as np
+
 from sentinel import los
 from sentinel import memmap as mm
 from sentinel import passcost, projector, relative, writeweight
@@ -108,26 +110,36 @@ def viewpoint_settle_frames(state, observer=None, view=None, tune=0x19, eye_view
     return BRACKET_FRAMES + max(_frames(fg), TUNE_FRAMES.get(tune, 96.0))
 
 
-def uturn_settle_frames(state, observer=None):
-    """$1B2F: bearing ^ $80, tune #$28, then the $357D redraw with $245B/$3700
-    SKIPPED ($1B2F's ASL leaves $0C51 bit7 set, so $35B5 branches to $35C0);
-    no fire ray ($1B18 dispatches code $23 straight to $1B2F)."""
-    obs = state.player if observer is None else observer
-    flipped = {
-        "h_angle": (int(state.obj_h_angle[obs]) ^ 0x80) & 0xFF,
-        "v_angle": int(state.obj_v_angle[obs]),
-    }
+def uturn_from_cost(cost):
+    """:func:`uturn_settle_frames` from the ``render_cost`` of the flipped view, elementwise
+    over an array of costs."""
     fg = (
         HEAD_BASE
         + REDRAW_HEAD
         + FILL_1090
-        + projector.FRAME_CYCLES * projector.render_cost(state, flipped, obs)
+        + projector.FRAME_CYCLES * cost
         + STATUS_9508
         + STATUS_98B2
         + BUF_WAIT_HEAD
         + EXIT_TAIL
     )
-    return BRACKET_FRAMES + max(_frames(fg), TUNE_FRAMES[0x28])
+    return BRACKET_FRAMES + np.maximum(_frames(fg), TUNE_FRAMES[0x28])
+
+
+def uturn_view(state, observer=None):
+    """The flipped view :func:`uturn_settle_frames` prices: ``(observer, h, v)``."""
+    obs = state.player if observer is None else observer
+    return obs, (int(state.obj_h_angle[obs]) ^ 0x80) & 0xFF, int(state.obj_v_angle[obs])
+
+
+def uturn_settle_frames(state, observer=None):
+    """$1B2F: bearing ^ $80, tune #$28, then the $357D redraw with $245B/$3700
+    SKIPPED ($1B2F's ASL leaves $0C51 bit7 set, so $35B5 branches to $35C0);
+    no fire ray ($1B18 dispatches code $23 straight to $1B2F)."""
+    obs, h, v = uturn_view(state, observer)
+    return float(
+        uturn_from_cost(projector.render_cost(state, {"h_angle": h, "v_angle": v}, obs))
+    )
 
 
 def action_settle_frames(state, slot, view=None, dither_chain=None, plot_state=None):

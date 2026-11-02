@@ -7,7 +7,15 @@ import ast
 import numpy as np
 import pytest
 
-from sentinel import actions, engine, enemies, footprint, memmap as mm, rows_jit
+from sentinel import (
+    actions,
+    engine,
+    enemies,
+    footprint,
+    memmap as mm,
+    objmodel,
+    rows_jit,
+)
 from sentinel.tests.test_batch import _replot_advances, _same
 from sentinel.tests.test_kern import SIM, gpu
 
@@ -323,3 +331,91 @@ def test_advance_of_nothing_is_a_no_op(new_game):
     before = pool.mut.copy()
     pool.advance([], 100)
     assert np.array_equal(pool.mut, before)
+
+
+def test_pool_overlay_read_and_states_agree(new_game):
+    st = new_game(42).state
+    pool = engine.Pool.from_states([st])
+    mut = pool.mutable([0])
+    img = pool.overlay(mut)
+    assert bytes(img[0]) == bytes(st.mem)
+    addrs = np.array([mm.PLAYER_OBJECT, mm.OBJECTS_X, 0x00E0, 0x9AF6])
+    assert pool.read(mut, addrs)[0].tolist() == [st.mem[a] for a in addrs]
+    got = pool.as_states(img, pool.clocks([0]))
+    assert bytes(got[0].mem) == bytes(st.mem)
+    assert [getattr(got[0], f) for f in enemies.CLOCK] == [
+        getattr(st, f) for f in enemies.CLOCK
+    ]
+
+
+@pytest.mark.skipif(not objmodel.available(), reason="needs the object model")
+@pytest.mark.parametrize("residual", [0, 10**7])
+def test_batched_replot_pricing_is_the_scalar_one(new_game, residual):
+    st = new_game(42).state
+    st.cycle_residual = residual
+    requests = [(3, 3, 20, 31), (3, 4, 20, 25), (3, 0, 12, 12), (3, 7, 9, 9)]
+    fresh = [st.clone() for _ in requests]
+    for state, req in zip(fresh, requests):
+        enemies._price_replot(state, *req)
+    mem = np.frombuffer(st.mem, dtype=np.uint8)
+    seen = np.tile(mem[enemies.REPLOT_READS], (len(requests), 1))
+    clock = np.tile([getattr(st, f) for f in enemies.CLOCK], (len(requests), 1))
+    got, at, val = enemies.price_replots(seen, clock, np.array(requests))
+    for i, state in enumerate(fresh):
+        image = mem.copy()
+        image[at[i]] = val[i]
+        assert bytes(image) == bytes(state.mem)
+        assert got[i].tolist() == [getattr(state, f) for f in enemies.CLOCK]
+
+
+@gpu
+def test_staged_buffers_persist_and_grow():
+    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+    small = kern_cuda.stage("probe", np.arange(10))
+    held = kern_cuda._BUFFERS["probe"]
+    assert small.copy_to_host().tolist() == list(range(10))
+    again = kern_cuda.stage("probe", np.arange(4).reshape(2, 2))
+    assert kern_cuda._BUFFERS["probe"] is held
+    assert again.copy_to_host().tolist() == [[0, 1], [2, 3]]
+    big = kern_cuda.stage("probe", np.arange(100))
+    assert kern_cuda._BUFFERS["probe"].size >= 100
+    assert big.copy_to_host().tolist() == list(range(100))
+
+
+@gpu
+def test_peek_and_patch_kernels_touch_only_the_named_bytes():
+    from numba import cuda  # pylint: disable=import-outside-toplevel
+    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+    rng = np.random.default_rng(1)
+    host = rng.integers(0, 256, (3, engine.IMAGE), dtype=np.uint8)
+    imgs, clock = cuda.to_device(host.copy()), cuda.to_device(np.zeros((4, 12), "i8"))
+    pos, addrs = np.array([2, 0]), np.array([5, 100, 9999])
+    seen = kern_cuda.scratch("probe_seen", (2, 3), np.uint8)
+    grid, block = kern_cuda.grid2(3, 2)
+    kern_cuda._peek_kernel[grid, block](
+        imgs,
+        kern_cuda.stage("probe_pos", pos),
+        kern_cuda.stage("probe_at", addrs),
+        seen,
+    )
+    assert np.array_equal(seen.copy_to_host(), host[pos][:, addrs])
+    at, val = np.array([[7, 8, 9], [70, 80, 90]]), np.array([[1, 2, 3], [4, 5, 6]])
+    fresh = np.arange(24, dtype=np.int64).reshape(2, 12)
+    grid, block = kern_cuda.grid2(12, 2)
+    kern_cuda._patch_kernel[grid, block](
+        imgs,
+        clock,
+        kern_cuda.stage("probe_pos", pos),
+        kern_cuda.stage("probe_rows", np.array([3, 1])),
+        kern_cuda.stage("probe_wat", at),
+        kern_cuda.stage("probe_val", val),
+        kern_cuda.stage("probe_clock", fresh),
+    )
+    want = host.copy()
+    for p, a, v in zip(pos, at, val):
+        want[p, a] = v
+    assert np.array_equal(imgs.copy_to_host(), want)
+    assert np.array_equal(clock.copy_to_host()[[3, 1]], fresh)
+    assert not clock.copy_to_host()[[0, 2]].any()
