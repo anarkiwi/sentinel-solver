@@ -347,7 +347,7 @@ def render_kernel():
     render_one = kern.build(pricing_jit.render_cycles, "cuda")
 
     @cuda.jit
-    def render_kernel_(mem, jobs, vis, model, scr, out):
+    def render_kernel_(mems, jobs, vis, model, scr, out):
         t = cuda.grid(1)
         slots = scr[0].shape[0]
         if t < slots:
@@ -369,7 +369,7 @@ def render_kernel():
             )
             for j in range(t, jobs.shape[0], slots):
                 out[j] = render_one(
-                    mem,
+                    mems[jobs[j, pricing_jit.J_MEM]],
                     jobs[j],
                     vis[jobs[j, pricing_jit.J_VIS]],
                     model,
@@ -395,23 +395,55 @@ def render_kernel():
 
 
 _MODEL_DEVICE = {}
+_PRICING = {"scr": (), "out": None}
 
 
-def render_cycles_many(mem, jobs, vis, model):
+def _simulated():
+    return os.environ.get("NUMBA_ENABLE_CUDASIM") == "1"
+
+
+def pricing_pays(jobs):
+    """Whether ``jobs`` pricing jobs give every multiprocessor a full block of one-job
+    threads: below that the launch leaves multiprocessors idle and the CPU threads win.
+    """
+    if _simulated():
+        return False
+    return jobs >= BLOCK * cuda.get_current_device().MULTIPROCESSOR_COUNT
+
+
+def _pricing_buffers(jobs):
+    """``(slots, scratch, out)`` of a launch over ``jobs`` jobs, from the persistent
+    device buffers: grown when a launch needs more slots, never freed between launches.
+    A slot is one thread's scratch, so the slot count is capped by the threads the device
+    keeps resident and by half the device memory."""
+    per_slot = sum(a.nbytes for a in pricing_jit.scratch(1))
+    slots = jobs
+    if not _simulated():
+        held = len(_PRICING["scr"][0]) * per_slot if _PRICING["scr"] else 0
+        free = cuda.current_context().get_memory_info()[0]
+        slots = min(slots, resident_threads(), max(1, (free + held) // 2 // per_slot))
+    slots = max(1, slots)
+    if not _PRICING["scr"] or len(_PRICING["scr"][0]) < slots:
+        _PRICING["scr"] = ()
+        _PRICING["scr"] = tuple(
+            cuda.device_array((slots,) + a.shape[1:], dtype=a.dtype)
+            for a in pricing_jit.scratch(1)
+        )
+    if _PRICING["out"] is None or len(_PRICING["out"]) < jobs:
+        _PRICING["out"] = cuda.device_array(jobs, dtype=np.int64)
+    return slots, tuple(a[:slots] for a in _PRICING["scr"]), _PRICING["out"][:jobs]
+
+
+def render_cycles_many(mems, jobs, vis, model):
     """:func:`pricing_jit.render_many` on the device: ``(n,)`` int64 cycles of each job of
-    ``jobs`` over the image ``mem`` and occlusion tables ``vis``, one thread per job up to
-    the threads the device keeps resident."""
+    ``jobs`` over the image stack ``mems`` and occlusion tables ``vis``, one thread per
+    job up to the slots :func:`_pricing_buffers` grants, with one result download."""
     key = id(model)
     if key not in _MODEL_DEVICE:
         _MODEL_DEVICE[key] = (model, tuple(cuda.to_device(a) for a in model))
-    slots = max(1, min(len(jobs), resident_threads() or len(jobs)))
-    scr = tuple(
-        cuda.device_array((slots,) + a.shape[1:], dtype=a.dtype)
-        for a in pricing_jit.scratch(1)
-    )
-    out = cuda.device_array(len(jobs), dtype=np.int64)
+    slots, scr, out = _pricing_buffers(len(jobs))
     render_kernel()[_blocks(slots), BLOCK](
-        cuda.to_device(np.ascontiguousarray(mem)),
+        cuda.to_device(np.ascontiguousarray(mems)),
         cuda.to_device(jobs),
         cuda.to_device(np.ascontiguousarray(vis)),
         _MODEL_DEVICE[key][1],

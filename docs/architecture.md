@@ -1270,14 +1270,30 @@ expression `render_cost` evaluated before (`BASE_CYCLES` is required to be integ
 fractional or the exact backend or a missing game image leave the request to the scalar path).
 All of it is integer and independent per job, so a batch equals the scalar calls bit for bit.
 
-**Launches.** `pricing_jit.render_many` runs one job per `prange` iteration over per-slot
-scratch (a few slots per thread); `render_serial` is the same loop on the calling thread for a
-lone job. `kern_cuda.render_cycles_many` runs the same spec on the device, one thread per job.
-A single thread runs a job far slower than a CPU core, so the device only wins on very large
-batches: `python -m sentinel.tests.bench_kernels pricing` prints both per batch size, and
-`projector.DEVICE_PRICING_JOBS` (4096) is the crossover. Pricing batches in play are tens to
-hundreds of jobs, so both backends price on the CPU threads; the device path is exercised by
-`test_pricing.py` (device and simulator) for bit identity with the CPU build.
+**Launches.** A launch prices the requests of any number of scenes: a job row names its board
+image (`J_MEM`, an index into the stacked `(S, 65536)` images) and its occlusion table
+(`J_VIS`). `projector._cost_jobs` builds a scene's rows column-wise (`numpy` over the request
+tuples, one `rendercost.buffers` per distinct mode/window/rows) and `projector._render_cycles_many`
+stacks scenes, so `prime_costs`, `prefetch` and the fleet `price` handler (every task's misses,
+merged) are one launch per round. `pricing_jit.render_many` runs one job per `prange` iteration
+over per-slot scratch (a few slots per thread); `render_serial` is the same loop on the calling
+thread for a lone job. `kern_cuda.render_cycles_many` runs the same spec on the device, one thread
+per job, from persistent device buffers (scratch grown on demand and capped by the resident threads
+and half the free device memory; one result download). The device is chosen by
+`kern_cuda.pricing_pays(jobs)`: jobs fill a block of `BLOCK` threads on every multiprocessor.
+`python -m sentinel.tests.bench_kernels pricing` prints both per batch size.
+
+**Why a job is one thread.** A pass is a serial chain: `plot_world` threads `$0010` and the
+never-cleared `$AD00/$AE00` edge tables through every tile and object stack in draw order, and
+the visibility walk carries its column cache and extent between rows, so the tiles of one job
+cannot be priced independently without changing the integer result. Parallelism is across jobs.
+
+**Eager lattice pricing.** On the cuda backend `_Landings.price` prices the tables of every
+cell that has a landing representative in one `aim_table` call (the notch plots of all cells in
+one launch, merged with the other forks' through the fleet) instead of the rounds of the branch
+and bound. The winners are the same: an unpriced representative's bound exceeded the best
+priced frames, so it could neither win nor tie. The CPU backend keeps the bound, which spares it
+the pricing it would otherwise do.
 
 **Prefetch.** The scalar entry points stay the semantics; batching only fills their memos.
 `projector.prime_costs(state, requests)` prices a list of `render_cost` argument tuples in one
@@ -1326,9 +1342,19 @@ winner, so lockstep would only add work). An `Exception` in a task is a `Failure
 old handlers did); the `Deferred` round state of `prefetch` is a `ContextVar`, so it is private
 to each task.
 
-**Not done.** The array rewrite of `_climb_candidates`/`_leaders`/`_strike`/`_refuel`, the
-in-kernel `wait_gap`, the block-per-job device projection, eager band-lattice pricing, the
-vectorized job builder, the cacheable device clock (badline run maps as kernel arguments, a
-batched-fork `default_device`) and persistent device buffers are not implemented. `python -m
-sentinel.tests.profile_suite` shows where the time remains: per-tick Python orchestration, the
-enemy clock's serial advance and the landing sweeps.
+**Not done.** Each item below is a design, not an implementation.
+
+* *Device enemy clock in the fleet.* `enemies_jit._advance` and its callees read the badline run
+  maps (`writeruns.RUN`, `START`, `LENGTH_AT`, `OWED`) as module globals, so the device build
+  binds them as global device arrays, which numba's cache cannot hold (the clock compiles once per
+  process). Threading `(run, start, length, owed)` as arguments through the chain
+  (`charge`, `owed_at`, `run_at`, `_place`, `spend`, `stall` and every `_update_*` caller) makes
+  the kernel cacheable. A fleet `advance` handler then takes `(pool row, frames)` payloads for forks whose rows
+  live in a device `Pool` (indices only, no 64 KB copies), and `engine.default_device` returns true
+  whenever a fleet round batches forks; a fork's `State` is materialized from its row only at the
+  end of its task. Replots stopped at `$1FFC` are priced between rounds by the `price` handler.
+* *Array rewrite of the candidate logic* (`_climb_candidates`, `_leaders`, `_strike`, `_refuel`,
+  `_breakout`): candidates as numpy columns (tile, k, cost, gain), scored by one
+  `Pool.expand/advance/evaluate` and pruned by boolean masks, so a pruning rule is one line.
+* *In-kernel `wait_gap`* and fused landing-sweep launches (one result download per round).
+* `python -m sentinel.tests.profile_suite` shows where the time remains.

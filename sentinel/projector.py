@@ -963,9 +963,6 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
 
 
 _PRICING_SCRATCH = []
-DEVICE_PRICING_JOBS = int(
-    os.environ.get("DEVICE_PRICING_JOBS", "4096")
-)  # jobs from which one device launch beats the CPU threads
 
 
 def _exact_selected():
@@ -974,46 +971,91 @@ def _exact_selected():
     return rendercost_exact.backend() is not None
 
 
-def _cost_job(state, h, v, obs, mode, window, rows, ref_lo):
-    """The :mod:`pricing_jit` job row of one :func:`render_cost` request."""
-    setup = _setup(state, h, v, obs, mode, window, ref_lo)
-    columns = None if window is None else _window_columns(window)
-    bufs, sect = rendercost.buffers(mode, columns)
-    top, bot = rows if rows else (rendercost.SCREEN_TOP, rendercost.SCREEN_BOTTOM)
-    job = np.zeros(pricing_jit.J_N, dtype=np.int64)
-    job[: projector_jit.S_N] = _setup_vector(state, setup, obs)
-    job[pricing_jit.J_HINT : pricing_jit.J_BUFS] = (
-        setup["row_hint"],
-        sect,
-        top,
-        bot,
-        obs,
-        state.player,
-        setup["h_angle"],
-        setup["v_angle"],
-        0,
+def _cost_jobs(state, wants, scene=0, table0=0):
+    """``(jobs, observers)``: the :mod:`pricing_jit` job rows of the ``(h, v, observer,
+    mode, window, rows, ref_lo)`` requests ``wants`` on ``state``, built column-wise.
+
+    The rows name image ``scene`` of the launch's stack and the occlusion table
+    ``table0 + k`` for the ``k``-th of the sorted ``observers``, whose tables the caller
+    stacks.  A row equals what :func:`_setup`, :func:`_setup_vector` and
+    :func:`fill_frames` give one request."""
+    cols = list(zip(*wants))
+    h, v, obs, ref_lo = (np.array(cols[i], dtype=np.int64) for i in (0, 1, 2, 6))
+    plans = {}
+    plan = np.array([plans.setdefault(k, len(plans)) for k in zip(*cols[3:6])])
+    window = np.zeros((len(plans), 6 + 12), dtype=np.int64)
+    for (mode, win, rows), i in plans.items():
+        bufs, sect = rendercost.buffers(
+            mode, None if win is None else _window_columns(win)
+        )
+        top, bot = rows if rows else (rendercost.SCREEN_TOP, rendercost.SCREEN_BOTTOM)
+        window[i, :6] = (
+            *(win if win is not None else BUF_WINDOW[mode]),
+            sect,
+            top,
+            bot,
+        )
+        window[i, 6:] = bufs.ravel()
+    observers = sorted(set(cols[2]))
+    at = np.searchsorted(observers, obs)
+    ox, oy, zh, zf = (
+        np.array([arr[o] for o in observers], dtype=np.int64)[at]
+        for arr in (state.obj_x, state.obj_y, state.obj_z_height, state.obj_z_frac)
     )
-    job[pricing_jit.J_BUFS :] = bufs.ravel()
-    return job
+    view = (h + 0x20) & 0xFF  # $001C ($265A)
+    quad = view >> 6
+    folded = ((view & 0x3F) - 0x20) & 0xFF  # $0074 ($265E)
+    flip_x, flip_y = (0x1E - ox) & 0xFF, (0x1E - oy) & 0xFF
+    jobs = np.zeros((len(wants), pricing_jit.J_N), dtype=np.int64)
+    su = jobs[:, : projector_jit.S_N]
+    su[:, projector_jit.S_QUAD] = quad
+    su[:, projector_jit.S_C3] = np.choose(quad, (ox, flip_y, flip_x, oy))
+    su[:, projector_jit.S_C1D] = np.choose(quad, (oy, ox, flip_y, flip_x))
+    su[:, projector_jit.S_REF_LO] = ref_lo & 0xFF
+    su[:, projector_jit.S_REF_HI] = (folded - 0x0A) & 0xFF
+    su[:, projector_jit.S_VANGLE] = v
+    su[:, projector_jit.S_OBS_ZH] = zh
+    su[:, projector_jit.S_OBS_ZF] = zf
+    su[:, projector_jit.S_LEFT] = window[plan, 0]
+    su[:, projector_jit.S_RIGHT] = window[plan, 1]
+    su[:, projector_jit.S_TABLE] = 1 if state.mem[mm.PLAY_DISPLAY_FLAG] & 0x80 else 0
+    su[:, projector_jit.S_FRAC] = window[plan, 2]
+    hint = state.mem[mm.FURTHEST_ROW_HINT] if _ROW_HINT_ENV is None else _ROW_HINT_ENV
+    jobs[:, pricing_jit.J_HINT] = int(hint) & 0xFF
+    jobs[:, pricing_jit.J_SECT : pricing_jit.J_OBS] = window[plan, 3:6]
+    jobs[:, pricing_jit.J_OBS] = obs
+    jobs[:, pricing_jit.J_PLAYER] = state.player
+    jobs[:, pricing_jit.J_H] = h
+    jobs[:, pricing_jit.J_V] = v
+    jobs[:, pricing_jit.J_VIS] = table0 + at
+    jobs[:, pricing_jit.J_BUFS : pricing_jit.J_MEM] = window[plan, 6:]
+    jobs[:, pricing_jit.J_MEM] = scene
+    return jobs, observers
 
 
-def _render_cycles_many(state, wants, model):
-    """Integer cycles of each ``(h, v, observer, mode, window, rows, ref_lo)`` of ``wants``
-    over ``state``'s board, in one parallel launch."""
-    jobs = np.stack([_cost_job(state, *want) for want in wants])
-    observers = sorted({want[2] for want in wants})
-    tables = np.stack([_occlusion_memo(state, obs)[1] for obs in observers])
-    jobs[:, pricing_jit.J_VIS] = [observers.index(want[2]) for want in wants]
-    mem = np.frombuffer(state.mem, dtype=np.uint8)
-    if len(jobs) >= DEVICE_PRICING_JOBS and kern.backend() == "cuda":
+def _render_cycles_many(scenes):
+    """Integer cycles of every request of ``scenes`` -- ``(state, wants)`` pairs, each want
+    as in :func:`_cost_jobs` -- in one launch over the stacked board images, the device's
+    when :func:`kern_cuda.pricing_pays` and the CPU threads otherwise."""
+    model = _object_backend()[1]
+    rows, tables = [], []
+    for scene, (state, wants) in enumerate(scenes):
+        jobs, observers = _cost_jobs(state, wants, scene, len(tables))
+        rows.append(jobs)
+        tables += [_occlusion_memo(state, obs)[1] for obs in observers]
+    jobs = np.concatenate(rows)
+    mems = np.stack([np.frombuffer(state.mem, dtype=np.uint8) for state, _ in scenes])
+    vis = np.stack(tables)
+    if kern.backend() == "cuda":
         from sentinel import kern_cuda
 
-        return kern_cuda.render_cycles_many(mem, jobs, tables, model).tolist()
+        if kern_cuda.pricing_pays(len(jobs)):
+            return kern_cuda.render_cycles_many(mems, jobs, vis, model).tolist()
     if not _PRICING_SCRATCH:
         _PRICING_SCRATCH.append(pricing_jit.scratch(pricing_jit.slot_count(1 << 20)))
     out = np.zeros(len(jobs), dtype=np.int64)
     launch = pricing_jit.render_many if len(jobs) > 1 else pricing_jit.render_serial
-    launch(mem, jobs, tables, model, _PRICING_SCRATCH[0], out)
+    launch(mems, jobs, vis, model, _PRICING_SCRATCH[0], out)
     return out.tolist()
 
 
@@ -1035,16 +1077,19 @@ class _Wanted:
         scene[1].setdefault(key, want)
 
     def price(self):
-        """Price everything wanted, each scene's requests in one launch."""
+        """Price everything wanted, every scene's requests in one launch."""
+        todo = []
         for image, wants in self.scenes.values():
             wants = {k: w for k, w in wants.items() if k not in _COST_CACHE}
-            if not wants:
-                continue
-            state = State(bytearray(image))
-            model = _object_backend()[1]
-            cycles = _render_cycles_many(state, list(wants.values()), model)
-            for key, cyc in zip(wants, cycles):
-                memo(_COST_CACHE, key, _CACHE_MAX, lambda c=cyc: _cost_of(c))
+            if wants:
+                todo.append((State(bytearray(image)), wants))
+        if not todo:
+            return
+        got = _render_cycles_many([(st, list(wants.values())) for st, wants in todo])
+        cycles = iter(got)
+        for _, wants in todo:
+            for key in wants:
+                memo(_COST_CACHE, key, _CACHE_MAX, lambda c=next(cycles): _cost_of(c))
 
 
 def _price_fleet(wanteds):
@@ -1109,11 +1154,10 @@ def prime_costs(state, requests):
     window, rows)`` tuples of its arguments -- with one batched pricing launch, so the
     scalar calls that follow all hit.  Requests the scalar path answers differently (the
     exact backend, no object model, a fractional base) are left to it."""
-    backend = _object_backend()
-    if backend is None or BASE_CYCLES != int(BASE_CYCLES) or _exact_selected():
+    if not _batchable():
         return
     skey = scene_key(state)
-    todo = {}
+    wanted = _Wanted()
     for view, observer, mode, window, rows in requests:
         if not view or view.get("h_angle") is None:
             continue
@@ -1123,13 +1167,9 @@ def prime_costs(state, requests):
         obs = state.player if observer is None else observer
         key = (skey, obs, h, v, mode, window, rows, ref_lo)
         if key not in _COST_CACHE:
-            todo.setdefault(key, (h, v, obs, mode, window, rows, ref_lo))
-    if not todo:
-        return
-    for key, cyc in zip(
-        todo, _render_cycles_many(state, list(todo.values()), backend[1])
-    ):
-        memo(_COST_CACHE, key, _CACHE_MAX, lambda c=cyc: _cost_of(c))
+            wanted.add(state, key, (h, v, obs, mode, window, rows, ref_lo))
+    if wanted.scenes and fleet.call("price", wanted) is None:
+        wanted.price()
 
 
 def _window_columns(window):

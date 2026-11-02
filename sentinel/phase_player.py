@@ -97,13 +97,29 @@ class PhasePlayer(BasePlayer):
             verb, view, self._settle_eye(verb, tile), tile=tile
         )
 
-    def _hop_span(self, tile, k):
-        """Frames a whole ``k``-boulder hop plus one act on arrival will occupy."""
+    def _hop_spans(self, tile):
+        """``{verb: frames}`` of each action of a hop on ``tile`` and the act on arrival,
+        or None when no view reaches it."""
         view = self._views_now().get(tile, band=True)
         if view is None:
+            return None
+        return {v: self._span(v, view, tile) for v in HOP_VERBS + ("absorb",)}
+
+    def _hop_span(self, tile, k):
+        """Frames a whole ``k``-boulder hop plus one act on arrival will occupy."""
+        per = self._hop_spans(tile)
+        if per is None:
             return math.inf
-        per = {v: self._span(v, view, tile) for v in HOP_VERBS + ("absorb",)}
         return k * per["boulder"] + per["robot"] + per["transfer"] + per["absorb"]
+
+    def _span_calls(self, tile, verbs, view=None):
+        """Zero-argument callables pricing ``verbs`` on ``tile`` (fired from ``view``, by
+        default the band view) for :func:`projector.prefetch`, one per verb so their costs
+        batch."""
+        view = view or self._views_now().get(tile, band=True)
+        if view is None:
+            return []
+        return [lambda v=v: self._span(v, view, tile) for v in verbs]
 
     def _views_now(self):
         return _Views(self.st)
@@ -326,9 +342,10 @@ class PhasePlayer(BasePlayer):
         )
         projector.prefetch(
             [
-                lambda c=c: self._hop_span(c[1], c[2])
+                call
                 for c, took in zip(cands, built)
                 if took
+                for call in self._span_calls(c[1], HOP_VERBS + ("absorb",))
             ]
         )
         spans = np.array(
@@ -572,6 +589,7 @@ class PhasePlayer(BasePlayer):
         cap_view = views.get(tile, band=True)
         if cap_view is None:
             return False
+        projector.prefetch(self._span_calls(tile, ("robot", "transfer"), cap_view))
         cap_span = self._span("robot", cap_view, tile) + self._span(
             "transfer", cap_view, tile
         )

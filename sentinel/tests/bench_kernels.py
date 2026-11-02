@@ -58,28 +58,26 @@ def main(landscape=335):
 
 def pricing(landscape=335, sizes=(1, 16, 64, 256, 1024, 4096)):
     """Seconds per pricing batch of each size on the CPU threads and, with numba-cuda, on
-    the device: the crossover is :data:`projector.DEVICE_PRICING_JOBS`."""
+    the device: the crossover is :func:`kern_cuda.pricing_pays`."""
     st = Game.typed(landscape).state
     rng = np.random.default_rng(0)
     model = projector._object_backend()[1]
     obs = st.player
-    jobs = np.stack(
-        [
-            projector._cost_job(
-                st,
-                int(rng.integers(256)),
-                int(rng.integers(256)),
-                obs,
-                pancost.PAN_MODE[d],
-                None,
-                pancost.PAN_ROWS[d],
-                0,
-            )
-            for d in rng.integers(0, 4, max(sizes))
-        ]
-    )
-    vis = np.stack([projector._occlusion_memo(st, obs)[1]])
-    mem = np.frombuffer(st.mem, dtype=np.uint8)
+    wants = [
+        (
+            int(rng.integers(256)),
+            int(rng.integers(256)),
+            obs,
+            pancost.PAN_MODE[d],
+            None,
+            pancost.PAN_ROWS[d],
+            0,
+        )
+        for d in rng.integers(0, 4, max(sizes))
+    ]
+    jobs, observers = projector._cost_jobs(st, wants)
+    vis = np.stack([projector._occlusion_memo(st, o)[1] for o in observers])
+    mem = np.frombuffer(st.mem, dtype=np.uint8)[None]
     scr = pricing_jit.scratch(pricing_jit.slot_count(max(sizes)))
     for n in sizes:
         out = np.zeros(n, dtype=np.int64)
