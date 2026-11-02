@@ -1,5 +1,5 @@
-"""The player actions of :mod:`sentinel.actions` as scalar kernels over one 64 KB image:
-``create``, ``absorb`` and ``transfer``, byte-identical to the reference and compiled
+"""The player actions of :mod:`sentinel.actions` as scalar kernels over one board image:
+``create``, ``absorb``, ``transfer`` and ``face``, byte-identical to the reference and compiled
 for the CPU and, from the same source, for CUDA (:mod:`sentinel.kern`)."""
 
 import numpy as np
@@ -13,7 +13,6 @@ from sentinel.enemies_jit import (
 )
 from sentinel.kern import spec
 
-DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
 _OFLAGS = mm.OBJECTS_FLAGS
 _OTYPE = mm.OBJECTS_TYPE
 _OX = mm.OBJECTS_X
@@ -89,6 +88,14 @@ def create(mem, otype, x, y):
     if otype == _T_ROBOT:
         mem[_OHANG + slot] = np.uint8(mem[_OHANG + np.int64(mem[_PLAYER])] ^ 0x80)
     return slot
+
+
+@spec
+def face(mem, h, v):
+    """Turn the player's body to bearing ``h`` and pitch ``v``: the facing an aim leaves."""
+    player = np.int64(mem[_PLAYER])
+    mem[_OHANG + player] = np.uint8(h)
+    mem[_OVANGLE + player] = np.uint8(v)
 
 
 @spec

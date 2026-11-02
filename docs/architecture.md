@@ -1166,23 +1166,28 @@ hardware's -- so no constant is tuned. The lattices (262144 to 3.5M rays) fill t
 $1FFC strip replot is priced in Python and re-enters the next round, so each equals its own
 `advance_frames`. The whole clock -- `enemies_jit`, `badline_jit` and the helpers it calls in
 `los_jit` -- is `@spec`, and `kern_cuda._advance_kernel` runs `_advance` with one thread per row
-from the same source. The two allocations that blocked it are gone: `frame_clock` resets a
-caller-owned clock, and the clocks and the zero-page window live in the per-thread `zp`
-scratch (`ZP_CLK`, `ZP_IDLE`). A module that sets `DEVICE_TABLES` (the clock, the actions and
-the row kernels) has every table past 32 bytes bound as a device array shared by all its specs
-(`kern._device_table`): the badline run maps are 600 KB, and a table frozen into each function
-as constant data overruns the device's 64 KB per kernel. A kernel that references a device
-table cannot be written to numba's on-disk cache, so the device clock compiles once per
-process (about 50 s) when first launched; the ray march and landing kernels keep constant
-tables and their cache.
+from the same source. The clocks and the zero-page window live in the per-thread `zp` scratch
+(`ZP_CLK`, `ZP_IDLE`).
+
+The badline clock's tables travel as an argument: `badline_jit.MAPS` is the tuple `(RUN, START,
+LENGTH_AT, OWED, EVENT_POS, EVENT_SHORT_IRQ)`, passed as `maps` through `charge`, `owed_at`,
+`run_at`, `_place`, `spend`, `stall`, `charge_run`, `carry` and every `enemies_jit` caller up to
+`_advance`. A table frozen into a device function is copied into every use site (the 240-byte
+event tables alone reached 150 KB of the device's 64 KB constant budget), so no table the clock
+reads is frozen on the device: the run maps are 600 KB, and the kernels (`_advance_kernel`,
+`_ops_kernel`, `_fields_kernel`, `_hash_kernel` and the clock row copies) are module-level
+`cuda.jit(cache=True)` with no per-process compile. `kern_cuda.device_maps()` holds the tuple on
+the device. The pricing kernel's modules (`rendercost`, `objectcost`, `projector_jit`) still bind
+their tables as device arrays and compile once per process.
 
 * The replot price (`projector.strip_replot_frames`, Python plus the render-cost kernels) is
-  still host work: a device row stopped at a replot is handed to `engine._price` between
-  rounds. Pricing it on the device means porting scene projection, `fill_frames`, the pan and
-  notch pricing and the occlusion tables to specs, which is not done.
+  still host work: a device row stopped at a replot is handed to `engine._price` between rounds,
+  and only that row's image crosses the bus. Pricing it on the device means porting scene
+  projection, `fill_frames`, the pan and notch pricing and the occlusion tables to specs, which
+  is not done.
 * A GPU lane is far slower than a CPU core on this branch-heavy model, so the device clock pays
-  only when the rows fill the machine; the phase player's batches (tens of rows) stay on the
-  CPU build. `engine.default_device(rows)` is the rule (`batch.cuda_pays(1, rows)`).
+  when rows are many. `engine.default_device(rows)` is the rule: the backend is cuda and a round
+  has a batch of more than one row.
 
 ## The search engine (`engine.py`, `footprint.py`, `rows_jit.py`, `actions_jit.py`)
 
@@ -1190,7 +1195,7 @@ tables and their cache.
 specific to the phase player.
 
 **Row layout.** A row is the *mutable region* -- the bytes the modelled routines can write --
-plus the twelve enemy-clock fields (`enemies.CLOCK`, kept on the host: twelve integers). Every
+plus the twelve enemy-clock fields (`enemies.CLOCK`; on the device for a device pool). Every
 row shares one static image (the pool's first state); `Pool.add` rejects a state that differs
 from it outside the region. Row memory is `P x M` bytes with `M` the size of
 `footprint.region()`.
@@ -1218,8 +1223,9 @@ back. On the device the same two steps are `_fill_kernel`/`_overlay_kernel` and
 | `Pool.add(states)` / `from_states` / `state(i)` | host `State` in and out of rows |
 | `Pool.fork(rows)` | row copy (a copy kernel on the device) |
 | `Pool.keys(rows)` | `rows_jit.row_hash`: 64-bit digest of region and clock; equal rows share a key |
-| `Pool.expand(rows, ops)` -> `(children, ok)` | fork each row, apply its `(K, 3)` op sequence (`rows_jit.apply_ops`: `CREATE type tile`, `ABSORB slot`, `TRANSFER slot-or-LAST`, `NOOP`); `ok` marks sequences that took effect; `engine.pad_ops` builds ragged batches |
-| `Pool.advance(rows, frames)` | the enemy clock, identical rows (key and frames) run once and are copied to their twins |
+| `Pool.expand(rows, ops)` -> `(children, ok)` | fork each row, apply its `(K, 3)` op sequence (`rows_jit.apply_ops`: `CREATE type tile`, `ABSORB slot`, `TRANSFER slot-or-LAST`, `FACE bearing pitch`, `NOOP`); `ok` marks sequences that took effect; `engine.pad_ops` builds ragged batches |
+| `Pool.advance(rows, frames)` | the enemy clock, in place on the rows where they live (device rows never cross the bus); identical rows (key and frames) run once and are copied to their twins |
+| `Pool.states(rows)` / `clocks` / `mutable` | host `State`s, clock fields or region bytes of rows: only the region crosses from the device |
 | `Pool.evaluate(rows)` | `{field: (B,)}` of `rows_jit.FIELDS`: energy, player, eye (1/256), alive, won, enemies, x, y |
 | `Pool.landing(rows, grids)` | `(B, 1024)` lowest landing ray per tile |
 | `engine.first(mask)`, `engine.argbest(*keys)` | selection: first true, lexicographic best with earliest-wins ties |
@@ -1344,17 +1350,12 @@ to each task.
 
 **Not done.** Each item below is a design, not an implementation.
 
-* *Device enemy clock in the fleet.* `enemies_jit._advance` and its callees read the badline run
-  maps (`writeruns.RUN`, `START`, `LENGTH_AT`, `OWED`) as module globals, so the device build
-  binds them as global device arrays, which numba's cache cannot hold (the clock compiles once per
-  process). Threading `(run, start, length, owed)` as arguments through the chain
-  (`charge`, `owed_at`, `run_at`, `_place`, `spend`, `stall` and every `_update_*` caller) makes
-  the kernel cacheable. A fleet `advance` handler then takes `(pool row, frames)` payloads for forks whose rows
-  live in a device `Pool` (indices only, no 64 KB copies), and `engine.default_device` returns true
-  whenever a fleet round batches forks; a fork's `State` is materialized from its row only at the
-  end of its task. Replots stopped at `$1FFC` are priced between rounds by the `price` handler.
-* *Array rewrite of the candidate logic* (`_climb_candidates`, `_leaders`, `_strike`, `_refuel`,
-  `_breakout`): candidates as numpy columns (tile, k, cost, gain), scored by one
-  `Pool.expand/advance/evaluate` and pruned by boolean masks, so a pruning rule is one line.
+* *Fleet `advance` handler.* The device clock is in place (see above); what remains is a fleet
+  handler that takes `(pool row, frames)` payloads from tasks whose forks live in a device `Pool`,
+  so a lockstep search advances its forks in one launch. The beam player (`docs/players.md`) calls
+  `Pool.advance` directly instead.
+* *Array rewrite of the phase player's candidate logic* (`_climb_candidates`, `_leaders`,
+  `_strike`, `_refuel`, `_breakout`): done for the beam player (`beam_player.moves`), not for the
+  phase player.
 * *In-kernel `wait_gap`* and fused landing-sweep launches (one result download per round).
 * `python -m sentinel.tests.profile_suite` shows where the time remains.

@@ -29,21 +29,21 @@ python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embedda
 ```
 
 <!-- results:begin -->
-| landscape | enemies | offline actions | offline energy | live |
-|---|---|---|---|---|
-| 0 | 1 | 29 | 9 | — |
-| 42 | 2 | 32 | 2 | **36 actions** (enemies frozen)† |
-| 60 | 7 | 43 | 0 | — |
-| 110 | 3 | 51 | 11 | — |
-| 298 | 7 | 36 | 13 | — |
-| 321 | 7 | 28 | 2 | — |
-| 335 | 7 | 60 | 23 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
-| 373 | 7 | 32 | 2 | — |
-| 1442 | 8 | 45 | 18 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| landscape | enemies | offline actions | offline energy | beam actions | beam energy | live |
+|---|---|---|---|---|---|---|
+| 0 | 1 | 29 | 9 | 11 | 2 | — |
+| 42 | 2 | 32 | 2 | 19 | 2 | **36 actions** (enemies frozen)† |
+| 60 | 7 | 43 | 0 | 21 | 3 | — |
+| 110 | 3 | 51 | 11 | 19 | 0 | — |
+| 298 | 7 | 36 | 13 | 18 | 7 | — |
+| 321 | 7 | 28 | 2 | 18 | 1 | — |
+| 335 | 7 | 60 | 23 | 34 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
+| 373 | 7 | 32 | 2 | 12 (not won) | 1 | — |
+| 1442 | 8 | 45 | 18 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
 
 † Live run recorded against an older model: its trace digest is unrecorded or differs from the current offline trace for that board.
 
-Regenerate with `python -m sentinel.tests.trace_suite --out docs/results/offline.json --readme`.
+Regenerate with `python -m sentinel.tests.trace_suite --out docs/results/offline.json --readme` and `python -m sentinel.tests.trace_suite --player beam --out docs/results/beam.json --readme`.
 <!-- results:end -->
 
 Results are generated from [docs/results/](docs/results/) (offline records with a trace

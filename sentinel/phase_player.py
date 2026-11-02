@@ -335,7 +335,9 @@ class PhasePlayer(BasePlayer):
         The hops are independent rows of one pool: built by one expand, run by one
         advance, read by one evaluate.  A hop that cannot be built, or has no span, does not
         land."""
-        pool = engine.Pool.from_states([self.st])
+        pool = engine.Pool.from_states(
+            [self.st], device=engine.default_device(len(cands))
+        )
         kids, built = pool.expand(
             np.zeros(len(cands), dtype=np.int64),
             engine.pad_ops([self._hop_ops(c[1], c[2]) for c in cands]),

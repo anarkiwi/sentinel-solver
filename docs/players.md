@@ -1,15 +1,17 @@
 # The players
 
-Two players share `BasePlayer` (`sentinel/playerbase.py`): the **phase player**
-(`sentinel/phase_player.py`), the default, which wins all eight measured boards, and the
-**reactive greedy player** (`sentinel/player.py`), which wins landscape 0 and is what the
-live-determinism gate drives. Neither reads the PRNG. Every tile-targeted action resolves
+Three players share the world model: the **phase player** (`sentinel/phase_player.py`), the
+default, which wins all eight measured boards, the **beam player** (`sentinel/beam_player.py`),
+a wide search on the GPU substrate, and the **reactive greedy player** (`sentinel/player.py`),
+which wins landscape 0 and is what the live-determinism gate drives. The phase and greedy
+players share `BasePlayer` (`sentinel/playerbase.py`). Neither reads the PRNG. Every tile-targeted action resolves
 through the ROM aim oracle (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path), and each
 tick advances the world by that action's real duration, so enemies rotate, target and drain
 while the player aims — there are no free moves.
 
 ```bash
 python -m sentinel.phase_player 335     # offline
+python -m sentinel.beam_player 335 --width 16 --depth 60 --branch 3
 python -m sentinel.player 0 --audit     # offline, + strict post-settle invariant accounting
 python -m driver.play_player 335        # live in VICE (--player greedy for the reactive one)
 ```
@@ -159,6 +161,45 @@ horizon, the only thing consulted is whether the game was won. It is affordable 
 ties are rare (two of fifteen ticks on ls110) and a rollout plays a whole board; a tie costs
 one rollout per candidate until one wins, and the full nine at the ls110 opening, where none
 does.
+
+## The beam player
+
+A beam search over macro-actions on `engine.Pool` (`sentinel/beam_player.py`), built to put
+hundreds of independent rows in flight per ply. One ply:
+
+1. **Candidates** (numpy over each row's slot and tile arrays, `Board` and `moves`): *absorb*
+   an object that tops a reachable tile and is spent or a tree (enemies first; the Sentinel only
+   when it is the last enemy and its energy is banked; none once it is gone), *hop* onto
+   stackable ground (`k` boulders, a robot, a transfer; the phase player's affordability and
+   fuel gates), *mount* a robot already owned that stands higher, and *wait* one quantum. Each
+   class contributes at most `branch` moves, ranked by the phase player's own order (height per
+   energy then fuel for hops; enemy then energy value for absorbs; eye for mounts), ties to the
+   lower index.
+2. **Pricing.** Each row runs `plan` as a fleet task: its landing sweeps and the phase player's
+   aim and settle spans (`PhasePlayer._span`) are batched across the beam by the `landing` and
+   `price` handlers. A move's span is its verbs' spans summed (a hop: its boulders, the robot
+   and the transfer).
+3. **Expand, advance, evaluate.** `build_ops` lays the moves out as one `(n, 6, 3)` op tensor
+   (`FACE` the aim, then the verbs); one `Pool.expand`, one `Pool.advance` over the spans and
+   one `Pool.evaluate` run every child. The pool is on the device whenever the backend is cuda
+   and a round has a batch (`engine.default_device`), so children advance where they live.
+4. **Select** (`keep_best`): drop rows whose digest, aim cursor and committed bearing equal a
+   better row's, then keep the best `width` under the objective, ties to fewer frames then the
+   lower position, so the cpu and cuda backends pick the same rows.
+
+The objective is one function, `objective(fields) -> (alive mask, keys)` over the arrays
+`Pool.evaluate` returns; the keys are compared lexicographically, larger better. The default,
+`lexicographic`, is the phase player's score on facts: alive, then won, fewer enemies, higher
+eye, more energy. A row standing on the platform with the Sentinel gone and the toll in hand
+ends the search and plays the hyperspace on the host (its landing is PRNG-driven, so it is
+never searched).
+
+`width`, `depth` and `branch` are parameters of `BeamPlayer` and flags of the module.
+Not searched: relocation by hyperspace, and the sequencing of a hop's own verbs against the
+enemy clock (a hop is one macro priced as its verbs' sum and advanced after its ops apply, the
+phase player's own landing probe). `python -m sentinel.tests.trace_suite --player beam --out
+docs/results/beam.json --readme` records the suite; the README table shows the beam columns
+beside the phase player's.
 
 ## The reactive greedy player
 
