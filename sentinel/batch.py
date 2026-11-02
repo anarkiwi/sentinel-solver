@@ -15,7 +15,7 @@ try:
 except ImportError:  # pragma: no cover - numba absent
     numba = None
 
-from sentinel import enemies, kern, landtable, memmap as mm
+from sentinel import enemies, fleet, kern, landtable, memmap as mm
 
 
 def width():
@@ -24,8 +24,8 @@ def width():
 
 
 def state_key(state):
-    """Digest of everything a state-stepping query reads: the 64 KB image and the enemy
-    clock's resume fields."""
+    """Digest of everything a state-stepping query reads: the memory image and the
+    enemy clock's resume fields."""
     dig = hashlib.blake2b(state.mem, digest_size=16)
     dig.update(repr([int(getattr(state, f)) for f in enemies.CLOCK]).encode())
     return dig.digest()
@@ -58,6 +58,13 @@ def landings(states, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEP
     lattice indices that land and their packed ``x*32+y`` tiles.  ``slots`` default to
     each state's player."""
     slots = [st.player for st in states] if slots is None else list(slots)
+    if fleet.in_task():
+        return fleet.call("landing", (states, grids, slots, eye_z, max_steps))
+    return _landings(states, grids, slots, eye_z, max_steps)
+
+
+def _landings(states, grids, slots, eye_z, max_steps):
+    """:func:`landings` of explicit ``slots``, on this thread."""
     if cuda_pays(len(landtable.cached_components(grids)[0]), len(states)):
         from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
@@ -77,6 +84,24 @@ def landings(states, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEP
             for one in zip(todo, sl)
         ]
     return [got[j] for j in back]
+
+
+def _landings_fleet(asks):
+    """The fleet's ``landing`` handler: tasks asking of the same lattice share a launch."""
+    groups = {}
+    for i, (_, grids, _, eye_z, max_steps) in enumerate(asks):
+        groups.setdefault((tuple(map(tuple, grids)), eye_z, max_steps), []).append(i)
+    out = [None] * len(asks)
+    for (_, eye_z, max_steps), at in groups.items():
+        states = [st for i in at for st in asks[i][0]]
+        slots = [s for i in at for s in asks[i][2]]
+        got = iter(_landings(states, asks[at[0]][1], slots, eye_z, max_steps))
+        for i in at:
+            out[i] = [next(got) for _ in asks[i][0]]
+    return out
+
+
+fleet.register("landing", _landings_fleet)
 
 
 def advance(states, n_frames, plotting=False):

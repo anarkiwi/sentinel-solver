@@ -6,11 +6,12 @@ trig cores; the projected corners feed :func:`render_cost`.
 """
 
 import collections
+import contextvars
 import os
 
 import numpy as np
 
-from sentinel import kern, passcost, relative, rendercost, terrain, memmap as mm
+from sentinel import fleet, kern, passcost, relative, rendercost, terrain, memmap as mm
 from sentinel.state import State
 from sentinel.writeweight import cycles as _plain  # the $8401 chain rides packed
 
@@ -932,10 +933,18 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
         if exact is not None:
             return exact
     obs = state.player if observer is None else observer
-    if _DEFERRING:
+    deferring = _DEFERRING.get()
+    if deferring is not None or fleet.in_task():
         key = (scene_key(state), obs, h, v, mode, window, rows, ref_lo)
         if key not in _COST_CACHE:
-            _DEFERRING[-1].add(state, key, (h, v, obs, mode, window, rows, ref_lo))
+            want = (h, v, obs, mode, window, rows, ref_lo)
+            if deferring is not None:
+                deferring.add(state, key, want)
+                raise Deferred
+            if _batchable():
+                one = _Wanted()
+                one.add(state, key, want)
+                fleet.call("price", one)
 
     def make():
         setup = _setup(state, h, v, obs, mode, window, ref_lo)
@@ -1024,11 +1033,13 @@ class _Wanted:
         if scene is None:
             scene = self.scenes[key[0]] = (bytes(state.mem), {})
         scene[1].setdefault(key, want)
-        raise Deferred
 
     def price(self):
         """Price everything wanted, each scene's requests in one launch."""
         for image, wants in self.scenes.values():
+            wants = {k: w for k, w in wants.items() if k not in _COST_CACHE}
+            if not wants:
+                continue
             state = State(bytearray(image))
             model = _object_backend()[1]
             cycles = _render_cycles_many(state, list(wants.values()), model)
@@ -1036,11 +1047,26 @@ class _Wanted:
                 memo(_COST_CACHE, key, _CACHE_MAX, lambda c=cyc: _cost_of(c))
 
 
+def _price_fleet(wanteds):
+    """The fleet's ``price`` handler: every task's missing costs, merged by scene."""
+    merged = _Wanted()
+    for wanted in wanteds:
+        for skey, (image, wants) in wanted.scenes.items():
+            scene = merged.scenes.setdefault(skey, (image, {}))
+            for key, want in wants.items():
+                scene[1].setdefault(key, want)
+    merged.price()
+    return [True] * len(wanteds)
+
+
+fleet.register("price", _price_fleet)
+
+
 def _cost_of(cycles):
     return (BASE_CYCLES + cycles) / FRAME_CYCLES
 
 
-_DEFERRING = []
+_DEFERRING = contextvars.ContextVar("deferring", default=None)
 
 
 def prefetch(calls):
@@ -1049,16 +1075,12 @@ def prefetch(calls):
     callables that stopped at a missing cost, prices everything missing at once, and
     repeats until none stops.  The callables must be pure over the memos.  A scalar path
     (the exact backend, no object model) prices as it goes and nothing defers."""
-    if (
-        _object_backend() is None
-        or BASE_CYCLES != int(BASE_CYCLES)
-        or _exact_selected()
-    ):
+    if not _batchable():
         return
     pending = list(calls)
     while pending:
         wanted, stopped = _Wanted(), []
-        _DEFERRING.append(wanted)
+        mark = _DEFERRING.set(wanted)
         try:
             for call in pending:
                 try:
@@ -1066,9 +1088,20 @@ def prefetch(calls):
                 except Deferred:
                     stopped.append(call)
         finally:
-            _DEFERRING.pop()
-        wanted.price()
+            _DEFERRING.reset(mark)
+        if fleet.call("price", wanted) is None:
+            wanted.price()
         pending = stopped
+
+
+def _batchable():
+    """Whether render costs can be priced in batches: the scalar path answers the exact
+    backend, a missing object model and a fractional base itself."""
+    return (
+        _object_backend() is not None
+        and BASE_CYCLES == int(BASE_CYCLES)
+        and not _exact_selected()
+    )
 
 
 def prime_costs(state, requests):
