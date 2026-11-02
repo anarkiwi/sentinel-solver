@@ -1,4 +1,4 @@
-"""The whole-board landable-view sweep against the per-tile path it replaced.
+"""The whole-board landable-view sweep against the per-tile reference path.
 
 ``_ref_cheapest_ray``/``_ref_cheap_view`` are that path in miniature: one targeted march
 per tile and a branch-and-bound over :func:`playerbase.aim_frames`.  Every tile must get
@@ -88,6 +88,21 @@ def test_sweep_matches_the_per_tile_path_on_every_tile(number, actions, v_primar
         if view is not None:
             want[tile] = ray
     assert list(got) == sorted(want, key=want.get)
+
+
+@pytest.mark.parametrize("v_primary", [True, False])
+@pytest.mark.parametrize("number,actions", [(335, 0), (42, 6)])
+def test_eager_lattice_pricing_picks_the_branch_and_bound_winners(
+    number, actions, v_primary
+):
+    st = _board(number, actions)
+    me = st.player
+    aim_from = (st.obj_h_angle[me], st.obj_v_angle[me])
+    lazy = playerbase._sweep(st, v_primary, aim_from)
+    eager = playerbase._sweep(st, v_primary, aim_from)
+    eager._price_cells(eager.cell)
+    assert eager.known[eager.cell].all()
+    assert list(eager.views().items()) == list(lazy.views().items())
 
 
 @pytest.mark.parametrize("v_primary", [True, False])

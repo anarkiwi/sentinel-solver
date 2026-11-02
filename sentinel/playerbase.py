@@ -8,7 +8,17 @@ import os
 import numpy as np
 from numba import njit
 
-from sentinel import actioncost, actions, aim, aimcost, batch, enemies, landtable, los
+from sentinel import (
+    actioncost,
+    actions,
+    aim,
+    aimcost,
+    batch,
+    enemies,
+    kern,
+    landtable,
+    los,
+)
 from sentinel import memmap as mm
 from sentinel import (
     exposure_jit,
@@ -289,6 +299,15 @@ class _Landings:
         self.frames = np.full(self.ray.size, np.inf)
         self.won = np.full(self.tiles.size, -1, dtype=np.int64)
 
+    def _price_cells(self, cells):
+        """Fill the table of the ``cells`` not yet priced."""
+        new = np.unique(cells[~self.known[cells]])
+        if new.size:
+            self.table[:, new] = aim_table(
+                self.st, new, self.grids, self.aim_from, self.st.player
+            )
+            self.known[new] = True
+
     def _fill(self, sel):
         """Frames of the ``sel`` reps whose cells are priced; ``sel`` returned unpriced."""
         hit = sel[self.known[self.cell[sel]] & np.isinf(self.frames[sel])]
@@ -303,6 +322,8 @@ class _Landings:
         if not want.any():
             return self.won[tids]
         order = self.by_bound[want[self.tid[self.by_bound]]]
+        if kern.backend() == "cuda":  # the whole lattice in one launch beats its rounds
+            self._price_cells(self.cell)
         tid, bound, frames = self.tid, self.bound, self.frames
         best = np.full(self.tiles.size, np.inf)
         self._fill(order)
@@ -311,11 +332,7 @@ class _Landings:
             live = order[np.isinf(frames[order]) & (bound[order] <= best[tid[order]])]
             if not live.size:
                 break
-            new = np.unique(self.cell[_first_per(tid, live)])
-            self.table[:, new] = aim_table(
-                self.st, new, self.grids, self.aim_from, self.st.player
-            )
-            self.known[new] = True
+            self._price_cells(self.cell[_first_per(tid, live)])
             hit = self._fill(order)
             np.minimum.at(best, tid[hit], frames[hit])
         won = _first_per(

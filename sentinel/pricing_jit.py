@@ -1,6 +1,7 @@
 """One plot_world pass priced in integer cycles: visibility walk, terrain fill, objects.
 
-A job is an int64 row of ``J_N`` columns (setup vector, buffer window, raster rows, view).
+A job is an int64 row of ``J_N`` columns (setup vector, buffer window, raster rows, view,
+and the index of its board image in the launch's image stack).
 """
 
 import numba
@@ -24,7 +25,8 @@ J_H = S_N + 6
 J_V = S_N + 7
 J_VIS = S_N + 8
 J_BUFS = S_N + 9
-J_N = J_BUFS + 12
+J_MEM = J_BUFS + 12
+J_N = J_MEM + 1
 WORK_VERTICES = objmodel.MAX_VERTICES + 2
 
 
@@ -140,9 +142,10 @@ def scratch(slots):
 
 
 @njit(cache=True, parallel=True)
-def render_many(mem, jobs, vis, model, scr, out):
-    """``out[j]`` <- :func:`render_cycles` of ``jobs[j]`` over its table
-    ``vis[jobs[j, J_VIS]]``, one slot of ``scr`` per ``prange`` iteration."""
+def render_many(mems, jobs, vis, model, scr, out):
+    """``out[j]`` <- :func:`render_cycles` of ``jobs[j]`` over its image
+    ``mems[jobs[j, J_MEM]]`` and table ``vis[jobs[j, J_VIS]]``, one slot of ``scr`` per
+    ``prange`` iteration."""
     slots = scr[0].shape[0]
     for t in prange(slots):  # pylint: disable=not-an-iterable
         tile_work = (
@@ -163,7 +166,7 @@ def render_many(mem, jobs, vis, model, scr, out):
         )
         for j in range(t, jobs.shape[0], slots):
             out[j] = render_cycles(
-                mem,
+                mems[jobs[j, J_MEM]],
                 jobs[j],
                 vis[jobs[j, J_VIS]],
                 model,
@@ -187,14 +190,14 @@ def render_many(mem, jobs, vis, model, scr, out):
 
 
 @njit(cache=True)
-def render_serial(mem, jobs, vis, model, scr, out):
+def render_serial(mems, jobs, vis, model, scr, out):
     """:func:`render_many` on the calling thread and the first slot of ``scr``: the
     launch a lone job should not pay for."""
     tile_work = (scr[14][0], scr[15][0], scr[16][0], scr[17][0], scr[18][0], scr[19][0])
     obj_work = (scr[20][0], scr[21][0], scr[22][0], scr[23][0], scr[24][0], scr[25][0])
     for j in range(jobs.shape[0]):
         out[j] = render_cycles(
-            mem,
+            mems[jobs[j, J_MEM]],
             jobs[j],
             vis[jobs[j, J_VIS]],
             model,
