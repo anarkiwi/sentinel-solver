@@ -1142,13 +1142,13 @@ def march_batch(
 # Python.  Bit-for-bit identical to the pure-Python path (locked by
 # tests/test_landable.py::test_lattice_vectors_match_python).
 # ============================================================================
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _vmul8(a, b):
     p = (a & 0xFF) * (b & 0xFF)
     return (p >> 8) & 0xFF, p & 0xFF
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _vinvert16(high, frac):
     val = ((high & 0xFF) << 8) | (frac & 0xFF)
     neg = (-val) & 0xFFFF
@@ -1166,7 +1166,7 @@ def _bits(v):
     return n
 
 
-@njit(cache=True)
+@spec
 def _vmul_dbl_by_byte(low74, high75, byte76):
     cyc = np.int64(_MUL_DBL_BYTE) + np.int64(_MUL8_BIT) * (_bits(low74) + _bits(byte76))
     r1h, _r1l = _vmul8(low74, high75)
@@ -1180,7 +1180,7 @@ def _vmul_dbl_by_byte(low74, high75, byte76):
     return res74, res75, cyc
 
 
-@njit(cache=True)
+@spec
 def _vmul_dbl_A_by_pi(A, frac74):
     frac = frac74 & 0xFF
     a = A & 0xFF
@@ -1204,7 +1204,7 @@ def _vmul_dbl_A_by_pi(A, frac74):
     return r74, r75, cyc
 
 
-@njit(cache=True)
+@spec
 def _vsin_cos(angle, frac74):
     cyc = np.int64(_SIN_COS)
     angle &= 0xFF
@@ -1304,7 +1304,7 @@ def _vsin_cos(angle, frac74):
     return sin_lo & 0xFF, cos_lo & 0xFF, sin_hi & 0xFF, cos_hi & 0xFF, cyc
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _vproc_sc(low, high):
     t74 = low & 0xFF
     A = high & 0xFF
@@ -1324,7 +1324,7 @@ def _vproc_sc(low, high):
     return A & 0xFF, t74 & 0xFF, cyc
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _vmul_dbl_dbl(x_lo, x_hi, y_lo, y_hi):
     s67 = 0
     s6a = y_lo & 0xFF
@@ -1371,7 +1371,7 @@ def _vmul_dbl_dbl(x_lo, x_hi, y_lo, y_hi):
     return A & 0xFF, frac & 0xFF, cyc
 
 
-@njit(cache=True)
+@spec
 def _prep_vec(h_angle, v_angle, cur_x, cur_y):
     """Numba twin of prepare_vector_from_player_sights $1C10 + prepare_vector_from_
     angle $1C54.  Returns (vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30)."""

@@ -20,6 +20,8 @@ KERNEL_SOURCES = (
     "landtable.py",
     "kern.py",
     "kern_cuda.py",
+    "actions_jit.py",
+    "rows_jit.py",
     "badline_jit.py",  # inlined into enemies_jit, so its own stamp is not consulted
 )
 

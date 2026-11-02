@@ -11,7 +11,17 @@ import math
 
 import numpy as np
 
-from sentinel import actions, batch, enemies, memmap as mm, projector, terrain
+from sentinel import (
+    actions,
+    batch,
+    engine,
+    enemies,
+    kern,
+    memmap as mm,
+    projector,
+    rows_jit,
+    terrain,
+)
 from sentinel.game import Game
 from sentinel.playerbase import BOULDER_H, EYE_EPS, ROBOT_EYE, BasePlayer, _Views
 from sentinel.state import State
@@ -291,54 +301,62 @@ class PhasePlayer(BasePlayer):
             lambda: self._probe_landing(tile, k),
         )
 
-    def _probe_setup(self, tile, k):
-        """``(probe, span)``: a clone with the ``k``-boulder hop built and transferred
-        to, and the frames to run it; None when the hop cannot be made."""
-        probe = self.st.clone()
-        for _ in range(k):
-            if actions.create(probe, mm.T_BOULDER, tile) is None:
-                return None
-        slot = actions.create(probe, mm.T_ROBOT, tile)
-        if slot is None or not actions.transfer(probe, slot):
-            return None
-        span = self._hop_span(tile, k)  # the whole hop plus one act, not a fragment
-        return None if span == math.inf else (probe, int(span))
-
     @staticmethod
-    def _alive(probe):
-        return probe.energy > 0 and not actions.player_dead(probe)
+    def _hop_ops(tile, k):
+        """The engine ops of the ``k``-boulder hop on ``tile``: the stack, the robot that
+        caps it, and the transfer into that robot."""
+        packed = tile[0] * 32 + tile[1]
+        return [(rows_jit.CREATE, mm.T_BOULDER, packed)] * k + [
+            (rows_jit.CREATE, mm.T_ROBOT, packed),
+            (rows_jit.TRANSFER, rows_jit.LAST, 0),
+        ]
+
+    def _probe_verdicts(self, cands):
+        """Per ``(score, tile, k, ...)`` of ``cands``: whether a body landing there by the
+        ``k``-boulder hop is still alive once the hop and one act on arrival are over.
+
+        The hops are independent rows of one pool: built by one expand, run by one
+        advance, read by one evaluate.  A hop that cannot be built, or has no span, does not
+        land."""
+        pool = engine.Pool.from_states([self.st])
+        kids, built = pool.expand(
+            np.zeros(len(cands), dtype=np.int64),
+            engine.pad_ops([self._hop_ops(c[1], c[2]) for c in cands]),
+        )
+        spans = np.array(
+            [
+                self._hop_span(c[1], c[2]) if took else math.inf
+                for c, took in zip(cands, built)
+            ]
+        )
+        run = np.flatnonzero(np.isfinite(spans))
+        pool.advance(kids[run], spans[run].astype(np.int64))
+        verdicts = np.zeros(len(cands), dtype=bool)
+        verdicts[run] = pool.evaluate(kids[run])["alive"] == 1
+        return verdicts.tolist()
 
     def _probe_landing(self, tile, k):
-        got = self._probe_setup(tile, k)
-        if got is None:
-            return False
-        enemies.advance_frames(got[0], got[1])
-        return self._alive(got[0])
+        return self._probe_verdicts([(0, tile, k)])[0]
 
     def _probe_landings(self, cands):
-        """Warm the landing cache for every uncached ``cands`` entry at once: the hops
-        are independent, so their enemy clocks advance as one batch."""
+        """Warm the landing cache for every uncached ``cands`` entry at once."""
         want = {}
         for cand in cands:
             want.setdefault(self._landing_key(cand[1], cand[2]), cand)
         want = {k: c for k, c in want.items() if k not in _LANDING_CACHE}
-        setups = {k: self._probe_setup(c[1], c[2]) for k, c in want.items()}
-        live = [(k, got) for k, got in setups.items() if got is not None]
-        batch.advance([got[0] for _k, got in live], [got[1] for _k, got in live])
-        verdicts = {k: False for k in want}
-        verdicts.update({k: self._alive(got[0]) for k, got in live})
-        for key, verdict in verdicts.items():
+        if not want:
+            return
+        for key, verdict in zip(want, self._probe_verdicts(list(want.values()))):
             projector.memo(_LANDING_CACHE, key, _LANDING_CACHE_MAX, lambda v=verdict: v)
 
     def _probe_ahead(self, cands):
-        """``cands`` in order, each yielded after its landing is cached: probed in windows
-        that double up to the parallel width, so a consumer that stops where the serial
-        loop would has probed under twice what it used."""
-        ahead, size = 0, 1
+        """``cands`` in order, each yielded after its landing is cached.  The CPU probes
+        one at a time, exactly the serial walk; the cuda backend probes a thread-count
+        window per launch, since the extra probes run beside the needed one."""
+        window = batch.width() if kern.backend() == "cuda" else 1
         for i, cand in enumerate(cands):
-            if i == ahead:
-                self._probe_landings(cands[i : i + size])
-                ahead, size = i + size, min(2 * size, batch.width())
+            if i % window == 0:
+                self._probe_landings(cands[i : i + window])
             yield cand
 
     def _fuel_map(self, reach=10):

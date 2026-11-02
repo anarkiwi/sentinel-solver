@@ -14,6 +14,8 @@ import os
 import sys
 import types
 
+import numpy as np
+
 from sentinel import jitcache
 
 jitcache.install()  # must precede numba: the cache key carries the kernel sources
@@ -27,6 +29,8 @@ except ImportError:  # pragma: no cover - numba absent -> specs stay plain Pytho
 
 BACKENDS = ("cpu", "cuda")
 _SPECS = {}
+TABLE_BYTES = 32
+_DEVICE_TABLES = {}
 
 
 def spec(fn=None, *, inline=False):
@@ -67,6 +71,12 @@ def _cuda_module(name):
         if isinstance(val, Dispatcher) and val in _SPECS:
             if val.py_func.__module__ != name:
                 scope[key] = _cuda_module(val.py_func.__module__)[val.py_func.__name__]
+        elif (
+            scope.get("DEVICE_TABLES")
+            and isinstance(val, np.ndarray)
+            and val.nbytes > TABLE_BYTES
+        ):
+            scope[key] = _device_table(val)
     mine = {}
     for disp in _SPECS:
         fn = disp.py_func
@@ -75,6 +85,18 @@ def _cuda_module(name):
             twin.__qualname__ = fn.__qualname__
             mine[fn.__name__] = scope[fn.__name__] = cuda.jit(device=True)(twin)
     return mine
+
+
+def _device_table(table):
+    """``table`` as one device array shared by every spec that reads it: a table past
+    :data:`TABLE_BYTES` would otherwise be frozen into each function as constant data,
+    which the device caps at 64 KB per kernel."""
+    from numba import cuda  # pylint: disable=import-outside-toplevel
+
+    key = id(table)
+    if key not in _DEVICE_TABLES:
+        _DEVICE_TABLES[key] = (table, cuda.to_device(table))
+    return _DEVICE_TABLES[key][1]
 
 
 def _cuda_build(disp):
@@ -103,7 +125,6 @@ def cuda_available():
     if importlib.util.find_spec("numba_cuda") is None:
         return False
     try:
-        import numpy as np  # pylint: disable=import-outside-toplevel
         from numba import cuda  # pylint: disable=import-outside-toplevel
 
         cell = cuda.to_device(np.zeros(1, dtype=np.int32))
