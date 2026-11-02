@@ -69,8 +69,12 @@ def test_advance_runs_identical_states_once(new_game, monkeypatch):
     assert all(_same(a, b) for a, b in zip(sts, want))
 
 
+class _Enough(BaseException):
+    """Stops the play once enough replot advances are recorded."""
+
+
 def _replot_advances(monkeypatch, count):
-    """``[(state, frames)]``: the first ``count`` advances of a real play of ls42 that
+    """``[(state, frames)]``: the first ``count`` distinct advances of a real play of ls42 that
     stopped at a strip replot, each state as it was before the call."""
     from sentinel.game import Game  # pylint: disable=import-outside-toplevel
     from sentinel.phase_player import (
@@ -88,13 +92,17 @@ def _replot_advances(monkeypatch, count):
     def record(state, frames, plotting=False):
         before, priced[0] = state.clone(), 0
         run(state, frames, plotting)
-        if priced[0] and len(found) < count:
+        if priced[0] and not any(n == frames and _same(st, before) for st, n in found):
             found.append((before, frames))
+            if len(found) == count:
+                raise _Enough
 
     monkeypatch.setattr(enemies, "_price_replot", counted)
     monkeypatch.setattr(enemies, "advance_frames", record)
-    PhasePlayer(Game.typed(42), verbose=False).run(max_actions=4)
-    assert len(found) == count
+    with pytest.raises(_Enough):
+        PhasePlayer(Game.typed(42), verbose=False).run()
+    monkeypatch.setattr(enemies, "advance_frames", run)
+    monkeypatch.setattr(enemies, "_price_replot", price)
     return found
 
 
