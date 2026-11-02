@@ -5,3 +5,4 @@ jennings>=0.8.1
 vice-driver>=0.6.0
 av>=19.0.2
 d64>=1.10
+greenlet>=3.5.6

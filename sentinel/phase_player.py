@@ -16,6 +16,7 @@ from sentinel import (
     batch,
     engine,
     enemies,
+    fleet,
     footprint,
     kern,
     memmap as mm,
@@ -150,6 +151,17 @@ class PhasePlayer(BasePlayer):
             st.energy,
         )
 
+    def _try(self, name):
+        """The score of ``name`` played out on a fork, or None if it did not move."""
+        twin = self._fork()
+        if not getattr(twin, name)(_Views(twin.st)):
+            return None
+        for _ in range(ARBITRATE_ACTIONS):
+            if actions.player_dead(twin.st) or actions.won(twin.st):
+                break
+            twin._tick()
+        return self._score(twin)
+
     def _arbitrate(self, options):
         """Run each option on a fork for a few ticks and take the one that ends best.
 
@@ -159,21 +171,12 @@ class PhasePlayer(BasePlayer):
         """
         if self.rollout:
             return False
+        scored = fleet.run([lambda name=name: self._try(name) for name in options])
         best = None
-        for name in options:
-            twin = self._fork()
-            try:
-                if not getattr(twin, name)(_Views(twin.st)):
-                    continue
-                for _ in range(ARBITRATE_ACTIONS):
-                    if actions.player_dead(twin.st) or actions.won(twin.st):
-                        break
-                    twin._tick()
-            except Exception:
-                continue
-            score = self._score(twin)
-            if best is None or score > best[0]:
-                best = (score, name)
+        for name, score in zip(options, scored):
+            if score is not None and not isinstance(score, fleet.Failure):
+                if best is None or score > best[0]:
+                    best = (score, name)
         if best is None:
             return False
         return bool(getattr(self, best[1])(_Views(self.st)))
@@ -458,11 +461,11 @@ class PhasePlayer(BasePlayer):
         its payoff.  What separates them is the outcome, so take the outcome: a fork
         plays the fixed ladder, which is a whole board in seconds, and ties are rare.
         """
+
         for cand in tied:
-            _score, tile, k, _cost, _gain = cand
             twin = self._fork()
             try:
-                if not twin._build_and_mount(_Views(twin.st), tile, k):
+                if not twin._build_and_mount(_Views(twin.st), cand[1], cand[2]):
                     continue
                 twin.run(max_actions=ROLLOUT_ACTIONS)
             except Exception:  # pylint: disable=broad-except
