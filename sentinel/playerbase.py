@@ -296,6 +296,8 @@ class _Landings:
         self.by_bound = np.lexsort((self.bound, self.tid))
         self.known = np.zeros(ncell, dtype=bool)
         self.table = np.zeros((2, ncell))
+        self.pan = np.zeros(ncell)
+        self.turn = np.zeros(ncell)
         self.frames = np.full(self.ray.size, np.inf)
         self.won = np.full(self.tiles.size, -1, dtype=np.int64)
 
@@ -307,6 +309,28 @@ class _Landings:
                 self.st, new, self.grids, self.aim_from, self.st.player
             )
             self.known[new] = True
+
+    def fill(self, cells, pan, turn):
+        """Record ``cells`` priced elsewhere: their ``pan`` and ``turn`` terms and the
+        :func:`aim_table` sum state they give."""
+        self.table[:, cells] = _sum_step(
+            *_sum_step(np.full(len(cells), TOGGLE_FRAMES), 0.0, turn), pan
+        )
+        self.pan[cells], self.turn[cells] = pan, turn
+        self.known[cells] = True
+
+    def winners(self, tids):
+        """Winning rays of tile ids ``tids``, every rep's cell already priced: the least
+        ``(frames, ray)`` of each tile's reps, the answer :meth:`price` bounds its way to.
+        """
+        want = np.zeros(self.tiles.size, dtype=bool)
+        want[tids] = True
+        reps = np.flatnonzero(want[self.tid])
+        frames = aim_total(self.table[:, self.cell[reps]], self.drive[reps])
+        order = np.lexsort((self.ray[reps], frames, self.tid[reps]))
+        won = _first_per(self.tid, reps[order])
+        self.won[self.tid[won]] = self.ray[won]
+        return self.won[tids]
 
     def _fill(self, sel):
         """Frames of the ``sel`` reps whose cells are priced; ``sel`` returned unpriced."""
@@ -478,6 +502,46 @@ class _Views:
         """The full pitch-band view for `tile`; the lazy fallback lookup passed
         to :meth:`BasePlayer._view_with_band`."""
         return self._one(tile, False)
+
+
+def settle_frames(st, verb, view=None, observer=None, tile=None):
+    """World frames the ROM advances AFTER `verb` fires; the placed object is
+    on the board and exposable for this whole settle, so a danger window must
+    cover the aim plus this before an enemy's cone can rotate in.
+
+    A transfer moves the eye ($0C63) then settles through the $357D redraw as
+    the NEW body sees it (settlecost.viewpoint_settle_frames); a create/absorb
+    settles through the $12EC dither replot of the acted slot, priced on a
+    clone carrying the mid-animation posture ($1F10 flags $80 for an absorb)."""
+    if verb == "transfer":
+        eye = observer
+        if eye is None:
+            eye = terrain.top_object(st, *tile) if tile is not None else st.player
+        return actioncost.FRAME_TICKS * settlecost.viewpoint_settle_frames(
+            st, eye, view
+        )
+    key = {"boulder": "create", "robot": "create"}.get(verb, verb)
+    if tile is None:
+        return actioncost.SETTLE.get(key, 60)
+    clone = st.clone()
+    if view is not None:  # the settle runs with the player facing the aim
+        clone.obj_h_angle[clone.player] = view["h_angle"]
+        clone.obj_v_angle[clone.player] = view["v_angle"]
+    plot_state = None
+    if key == "create":
+        otype = mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
+        slot = actions.create(clone, otype, tile)
+    else:
+        slot = terrain.top_object(clone, *tile)
+        if slot is not None:
+            plot_state = clone.clone()
+            actions.absorb(plot_state, slot)  # the strip plots the object erased
+            clone.obj_flags[slot] = 0x80
+    if slot is None:
+        return actioncost.SETTLE.get(key, 60)
+    return actioncost.FRAME_TICKS * settlecost.action_settle_frames(
+        clone, slot, view, plot_state=plot_state
+    )
 
 
 class BasePlayer:
@@ -935,44 +999,9 @@ class BasePlayer:
         return self._top(tile) if verb == "transfer" else None
 
     def _settle(self, verb, view=None, observer=None, tile=None):
-        """World frames the ROM advances AFTER `verb` fires; the placed object is
-        on the board and exposable for this whole settle, so a danger window must
-        cover the aim plus this before an enemy's cone can rotate in.
-
-        A transfer moves the eye ($0C63) then settles through the $357D redraw as
-        the NEW body sees it (settlecost.viewpoint_settle_frames); a create/absorb
-        settles through the $12EC dither replot of the acted slot, priced on a
-        clone carrying the mid-animation posture ($1F10 flags $80 for an absorb)."""
-        st = self.st
-        if verb == "transfer":
-            eye = observer
-            if eye is None:
-                eye = self._top(tile) if tile is not None else st.player
-            return actioncost.FRAME_TICKS * settlecost.viewpoint_settle_frames(
-                st, eye, view
-            )
-        key = {"boulder": "create", "robot": "create"}.get(verb, verb)
-        if tile is None:
-            return actioncost.SETTLE.get(key, 60)
-        clone = st.clone()
-        if view is not None:  # the settle runs with the player facing the aim
-            clone.obj_h_angle[clone.player] = view["h_angle"]
-            clone.obj_v_angle[clone.player] = view["v_angle"]
-        plot_state = None
-        if key == "create":
-            otype = mm.T_BOULDER if verb == "boulder" else mm.T_ROBOT
-            slot = actions.create(clone, otype, tile)
-        else:
-            slot = terrain.top_object(clone, *tile)
-            if slot is not None:
-                plot_state = clone.clone()
-                actions.absorb(plot_state, slot)  # the strip plots the object erased
-                clone.obj_flags[slot] = 0x80
-        if slot is None:
-            return actioncost.SETTLE.get(key, 60)
-        return actioncost.FRAME_TICKS * settlecost.action_settle_frames(
-            clone, slot, view, plot_state=plot_state
-        )
+        """World frames the ROM advances AFTER `verb` fires: :func:`settle_frames` on this
+        player's board."""
+        return settle_frames(self.st, verb, view, observer, tile)
 
     def _account(self, verb, tile):
         """Strict post-settle invariant on the ACTUAL placed object via the ROM's

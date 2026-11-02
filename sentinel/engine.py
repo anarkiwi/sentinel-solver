@@ -25,6 +25,7 @@ from sentinel import (
     footprint,
     kern,
     landtable,
+    projector,
     rows_jit,
 )
 from sentinel.state import State
@@ -63,7 +64,8 @@ class Pool:
 
     def __init__(self, static, device=False):
         self.static = np.frombuffer(bytes(static), dtype=np.uint8).copy()
-        self.addrs, amap = footprint.region()
+        self.addrs, self.amap = footprint.region()
+        amap = self.amap
         self.keep = np.ones(self.addrs.size, dtype=np.int64)
         self.keep[[amap[a] for a in footprint.LOS_TRACKERS if amap[a] >= 0]] = 0
         self.device = bool(device)
@@ -147,17 +149,15 @@ class Pool:
 
     def view(self, idx):
         """``(len(idx), 65536)`` full images of rows ``idx``: the static image with each
-        row's mutable bytes laid over it (a host or a device array)."""
+        row's mutable bytes laid over it (a host array, or a device array that is a view
+        of a persistent buffer, valid until the next call)."""
         idx = np.asarray(idx, dtype=np.int64)
         if not self.device:
-            img = np.empty((len(idx), IMAGE), dtype=np.uint8)
-            img[:] = self.static
-            img[:, self.addrs] = self.mut[idx]
-            return img
+            return self.overlay(self.mut[idx])
         from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
-        img = self._cuda.device_array((len(idx), IMAGE), dtype=np.uint8)
-        rows = self._cuda.to_device(idx)
+        img = kern_cuda.scratch("pool_images", (len(idx), IMAGE), np.uint8)
+        rows = kern_cuda.stage("pool_rows", idx)
         grid, block = kern_cuda.grid2(IMAGE, len(idx))
         kern_cuda._fill_kernel[grid, block](self._static_d, img)
         grid, block = kern_cuda.grid2(self.addrs.size, len(idx))
@@ -173,7 +173,7 @@ class Pool:
 
         grid, block = kern_cuda.grid2(self.addrs.size, len(idx))
         kern_cuda._store_kernel[grid, block](
-            self._addrs_d, img, self._cuda.to_device(idx), self.mut
+            self._addrs_d, img, kern_cuda.stage("pool_rows", idx), self.mut
         )
 
     def add(self, states):
@@ -210,17 +210,38 @@ class Pool:
 
         return kern_cuda.gather_rows(self.mut, idx)
 
+    def overlay(self, mut):
+        """``(len(mut), 65536)`` host images: the static image with each row of the
+        mutable bytes ``mut`` laid over it."""
+        img = np.empty((len(mut), IMAGE), dtype=np.uint8)
+        img[:] = self.static
+        img[:, self.addrs] = mut
+        return img
+
+    def read(self, mut, addrs):
+        """``(len(mut), len(addrs))`` uint8: the bytes at image ``addrs`` of the rows whose
+        mutable bytes are ``mut``; an address outside the footprint reads the static
+        image."""
+        addrs = np.asarray(addrs, dtype=np.int64)
+        at = self.amap[addrs]
+        out = np.broadcast_to(self.static[addrs], (len(mut), addrs.size)).copy()
+        held = at >= 0
+        out[:, held] = mut[:, at[held]]
+        return out
+
+    @staticmethod
+    def as_states(images, clocks):
+        """:class:`State` objects over host ``images`` and their ``(n, 12)`` ``clocks``."""
+        return [
+            State(bytearray(img.tobytes()), *clk.tolist())
+            for img, clk in zip(images, clocks)
+        ]
+
     def states(self, idx):
         """Rows ``idx`` as independent :class:`State` objects: only the mutable bytes cross
         from the device, laid over the static image on the host."""
         idx = np.asarray(idx, dtype=np.int64)
-        mut, clock = self.mutable(idx), self.clocks(idx)
-        out = []
-        for row, clk in zip(mut, clock):
-            img = self.static.copy()
-            img[self.addrs] = row
-            out.append(State(bytearray(img.tobytes()), *clk.tolist()))
-        return out
+        return self.as_states(self.overlay(self.mutable(idx)), self.clocks(idx))
 
     def state(self, i):
         """Row ``i`` as an independent :class:`State`."""
@@ -236,7 +257,9 @@ class Pool:
 
             grid, block = kern_cuda.grid2(self.addrs.size, len(idx))
             kern_cuda._copy_kernel[grid, block](
-                self.mut, self._cuda.to_device(idx), self._cuda.to_device(new)
+                self.mut,
+                kern_cuda.stage("fork_src", idx),
+                kern_cuda.stage("fork_dst", new),
             )
         else:
             self.mut[new] = self.mut[idx]
@@ -253,9 +276,13 @@ class Pool:
         if self.device:
             from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
 
-            dev = self._cuda.device_array(len(idx), dtype=np.int64)
+            dev = kern_cuda.scratch("pool_keys", len(idx), np.int64)
             kern_cuda._hash_kernel[kern_cuda._blocks(len(idx)), kern_cuda.BLOCK](
-                self.mut, self.clock, self._cuda.to_device(idx), dev, self._keep_d
+                self.mut,
+                self.clock,
+                kern_cuda.stage("pool_idx", idx),
+                dev,
+                self._keep_d,
             )
             return dev.copy_to_host()
         rows_jit.hash_rows(
@@ -281,9 +308,9 @@ class Pool:
                     kern_cuda,
                 )  # pylint: disable=import-outside-toplevel
 
-                res = self._cuda.device_array(len(rows), dtype=np.int64)
+                res = kern_cuda.scratch("pool_ok", len(rows), np.int64)
                 kern_cuda._ops_kernel[kern_cuda._blocks(len(rows)), kern_cuda.BLOCK](
-                    img, self._cuda.to_device(ops[lo : lo + step]), res
+                    img, kern_cuda.stage("pool_ops", ops[lo : lo + step]), res
                 )
                 part[:] = res.copy_to_host()
             else:
@@ -304,7 +331,7 @@ class Pool:
                     kern_cuda,
                 )  # pylint: disable=import-outside-toplevel
 
-                dev = self._cuda.device_array(part.shape, dtype=np.int64)
+                dev = kern_cuda.scratch("pool_fields", part.shape, np.int64)
                 kern_cuda._fields_kernel[kern_cuda._blocks(len(part)), kern_cuda.BLOCK](
                     img, dev
                 )
@@ -335,8 +362,9 @@ class Pool:
                     kern_cuda,
                 )  # pylint: disable=import-outside-toplevel
 
+                reads, price = _replot_pricer()
                 kern_cuda.advance_rows(
-                    img, self.clock, rows, todo[lo : lo + step], plotting, _price
+                    img, self.clock, rows, todo[lo : lo + step], plotting, reads, price
                 )
             else:
                 carry = np.ascontiguousarray(self.clock[rows])
@@ -355,7 +383,9 @@ class Pool:
 
             grid, block = kern_cuda.grid2(self.addrs.size, len(src))
             kern_cuda._copy_kernel[grid, block](
-                self.mut, self._cuda.to_device(src), self._cuda.to_device(dst)
+                self.mut,
+                kern_cuda.stage("fork_src", src),
+                kern_cuda.stage("fork_dst", dst),
             )
         else:
             self.mut[dst] = self.mut[src]
@@ -386,17 +416,27 @@ class Pool:
         return table[back]
 
 
-def _price(img, clock, request):
-    """Price the $1FFC strip replot ``request`` of one stopped row: its ``(image,
-    clock)`` after the stall is booked."""
-    state = State(bytearray(img), *clock.tolist())
-    enemies._price_replot(  # pylint: disable=protected-access
-        state, *[int(v) for v in request]
-    )
-    return (
-        np.frombuffer(state.mem, dtype=np.uint8).copy(),
-        np.array([getattr(state, f) for f in enemies.CLOCK], dtype=np.int64),
-    )
+def _price_scalar(seen, clock, request):
+    """:func:`enemies.price_replots` on the scalar path, for the pricing the batched path
+    does not cover: ``seen`` is the whole image of each stopped row, and every byte of it
+    is patched back."""
+    fresh = np.zeros_like(clock)
+    for i, (img, clk, req) in enumerate(zip(seen, clock, request)):
+        state = State(bytearray(img.tobytes()), *clk.tolist())
+        enemies._price_replot(  # pylint: disable=protected-access
+            state, *[int(v) for v in req]
+        )
+        seen[i] = np.frombuffer(state.mem, dtype=np.uint8)
+        fresh[i] = [getattr(state, f) for f in enemies.CLOCK]
+    return fresh, np.tile(np.arange(IMAGE), (len(seen), 1)), seen.astype(np.int64)
+
+
+def _replot_pricer():
+    """``(reads, price)`` of the strip-replot stops of a device advance: the image
+    addresses the pricing reads and the function pricing a round of them."""
+    if projector._batchable():  # pylint: disable=protected-access
+        return enemies.REPLOT_READS, enemies.price_replots
+    return np.arange(IMAGE), _price_scalar
 
 
 def default_device(rows):

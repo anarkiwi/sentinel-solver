@@ -62,41 +62,43 @@ def test_the_objective_is_lexicographic_on_the_phase_players_terms():
 
 def _board(code):
     st = Game.typed(code).state
-    return st, bp.Board(st)
+    return st, bp.Board.of_states([st])
 
 
 def test_board_columns_match_the_state():
     st, board = _board(335)
-    assert board.player == st.player and board.energy == st.energy
-    assert board.eye == st.eye_z()
-    slots = [s for s in range(mm.NUM_SLOTS) if board.occupied[s]]
+    assert board.player[0] == st.player and board.energy[0] == st.energy
+    assert board.eye[0] == st.eye_z()
+    slots = [s for s in range(mm.NUM_SLOTS) if board.occupied[0, s]]
     assert slots == st.occupied_slots()
-    assert board.fuel().shape == (mm.N, mm.N) and board.fuel().max() > 0
+    assert board.fuel().shape == (1, mm.N, mm.N) and board.fuel().max() > 0
 
 
 def test_moves_are_gated_like_the_phase_player_and_always_include_a_wait():
     st = Game.typed(42).state
-    board = bp.Board(st)
+    board = bp.Board.of_states([st])
     landed = _Views(st).landed()
-    kind, tile, k, slot = bp.moves(board, landed, 2)
+    got = bp.moves(board, landed[None], 2)
+    kind, tile, k, slot = (got[f] for f in ("kind", "tile", "k", "slot"))
     assert kind[-1] == bp.WAIT and (kind == bp.WAIT).sum() == 1
+    assert (got["parent"] == 0).all()
     assert len(kind) == len(tile) == len(k) == len(slot)
     assert (np.bincount(kind, minlength=4)[:3] <= 2).all()
     hop = kind == bp.HOP
     assert hop.any() and (k[hop] <= bp.MAX_BOULDERS).all()
-    here = board.x[board.player] * mm.N + board.y[board.player]
+    here = board.x[0, board.player[0]] * mm.N + board.y[0, board.player[0]]
     assert tile[kind == bp.WAIT][0] == here and here not in tile[~(kind == bp.WAIT)]
     for t in tile[kind == bp.ABSORB]:
         assert landed[t // mm.N, t % mm.N]
     st.obj_flags[actions.SENTINEL_SLOT] = 0x80
-    kind, *_ = bp.moves(bp.Board(st), landed, 2)
+    kind = bp.moves(bp.Board.of_states([st]), landed[None], 2)["kind"]
     assert not (kind == bp.ABSORB).any()
 
 
 def test_a_branch_cap_of_zero_leaves_only_the_wait():
     st = Game.typed(42).state
-    kind, *_ = bp.moves(bp.Board(st), _Views(st).landed(), 0)
-    assert kind.tolist() == [bp.WAIT]
+    landed = _Views(st).landed()[None]
+    assert bp.moves(bp.Board.of_states([st]), landed, 0)["kind"].tolist() == [bp.WAIT]
 
 
 def test_build_ops_lays_out_each_move_class():
@@ -165,11 +167,11 @@ def test_a_pluggable_objective_changes_the_line():
 
 
 def test_a_row_that_cannot_be_planned_is_reported(monkeypatch):
-    def boom(_player, _branch):
+    def boom(*_args):
         raise ValueError("boom")
 
     monkeypatch.setattr(bp, "plan", boom)
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(ValueError, match="boom"):
         _play(0, width=2, depth=2, branch=1)
 
 
