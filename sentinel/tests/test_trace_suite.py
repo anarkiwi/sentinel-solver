@@ -2,7 +2,10 @@
 
 import json
 
+import pytest
+
 from sentinel.tests import trace_suite
+from sentinel.tests.test_kern import SIM, gpu
 
 REC = {
     "landscape": 7,
@@ -114,6 +117,7 @@ def test_make_builds_the_named_player():
 def test_time_suite_warms_up_times_each_board_and_splits_a_profile(monkeypatch, capsys):
     from sentinel.tests import time_suite  # pylint: disable=import-outside-toplevel
 
+    monkeypatch.setenv("SENTINEL_BACKEND", "cpu")
     calls = []
 
     def play(number, player, width):
@@ -131,3 +135,20 @@ def test_the_beam_width_reaches_the_player():
     game = trace_suite.Game.typed(0)
     assert trace_suite.make("beam", game, 5).width == 5
     assert trace_suite.make("beam", game).width == 16
+
+
+@gpu
+@pytest.mark.skipif(SIM, reason="the simulator has no profiler hooks")
+def test_time_suite_compiles_the_device_kernel_and_brackets_the_capture(
+    monkeypatch, capsys
+):
+    from sentinel.tests import time_suite  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setenv("SENTINEL_BACKEND", "cuda")
+    monkeypatch.setattr(
+        trace_suite,
+        "play",
+        lambda number, player, width: {"won": False, "trace": [], "frames": 0},
+    )
+    assert time_suite.main(["3", "--capture"]) == 0
+    assert "    3" in capsys.readouterr().out
