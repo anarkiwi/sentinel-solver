@@ -2222,45 +2222,54 @@ def _advance(
     )
 
 
+@njit(cache=True, nogil=True)
+def advance_one(mem, n_frames, plotting, carry, maps):
+    """:func:`_advance` over one memory image (advanced in place) from the resume point
+    ``carry`` (the clock fields): the updated fields, the frames left, and the replot
+    request ``(target, left column, columns, span)``."""
+    zp = np.zeros(ZP_N, dtype=np.int64)
+    r = _advance(
+        mem,
+        zp,
+        n_frames,
+        plotting,
+        carry[0],
+        carry[1],
+        carry[2],
+        carry[3],
+        carry[4],
+        carry[5],
+        carry[6],
+        carry[7],
+        carry[8],
+        carry[9],
+        carry[10],
+        carry[11],
+        maps,
+    )
+    out = np.empty(12, dtype=np.int64)
+    for k in range(12):
+        out[k] = r[k]
+    replot = np.empty(4, dtype=np.int64)
+    replot[0] = zp[ZP_REPLOT] - 1
+    replot[1] = zp[ZP_REPLOT_LEFT]
+    replot[2] = zp[ZP_REPLOT_COLS]
+    replot[3] = zp[ZP_REPLOT_SPAN]
+    return out, r[12], replot
+
+
 @njit(cache=True, parallel=True)
 def _advance_many(mems, n_frames, plotting, carry, maps):
-    """:func:`_advance` over the rows of ``mems`` (one memory image each, advanced in
-    place) from the resume points in ``carry`` (the clock fields of each row): the
-    updated ``carry``, the frames left per row, and per row the replot request
-    ``(target, left column, columns, span)``."""
+    """:func:`advance_one` over the rows of ``mems``, in parallel: the updated ``carry``,
+    the frames left per row, and per row the replot request."""
     n = mems.shape[0]
     out = np.empty_like(carry)
     rest = np.empty(n, dtype=np.int64)
     replot = np.empty((n, 4), dtype=np.int64)
     for b in prange(n):  # pylint: disable=not-an-iterable
-        zp = np.zeros(ZP_N, dtype=np.int64)
-        c = carry[b]
-        r = _advance(
-            mems[b],
-            zp,
-            n_frames[b],
-            plotting,
-            c[0],
-            c[1],
-            c[2],
-            c[3],
-            c[4],
-            c[5],
-            c[6],
-            c[7],
-            c[8],
-            c[9],
-            c[10],
-            c[11],
-            maps,
+        out[b], rest[b], replot[b] = advance_one(
+            mems[b], n_frames[b], plotting, carry[b], maps
         )
-        for k in range(12):
-            out[b, k] = r[k]
-        rest[b] = r[12]
-        replot[b, 0] = zp[ZP_REPLOT] - 1
-        replot[b, 1] = zp[ZP_REPLOT_LEFT]
-        replot[b, 2] = zp[ZP_REPLOT_COLS]
-        replot[b, 3] = zp[ZP_REPLOT_SPAN]
     return out, rest, replot
 
 
