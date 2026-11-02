@@ -3,7 +3,7 @@ and a claim-ordered sweep marches only the rays a consumer keeps."""
 
 import numpy as np
 import pytest
-from numba import njit
+from numba import njit, prange
 
 from sentinel import actions, batch, landtable as lt, los, memmap as mm, playerbase
 from sentinel import terrain
@@ -12,13 +12,13 @@ from sentinel.tests.test_landtable import _landings, _stack_and_transfer
 pytestmark = pytest.mark.skipif(not los._HAVE_JIT, reason="numba absent")
 
 
-@njit(cache=True)
+@njit(cache=True, parallel=True)
 def _old_stop(vx, vy, vz, lo, hi, slope, ex, ey, zseed, max_steps, edge):
     """The pre-short-circuit :func:`landtable._stop_one` over every ray."""
     n = vx.shape[0]
     first = np.full(n, -1, dtype=np.int32)
     ncand = np.zeros(n, dtype=np.int32)
-    for j in range(n):
+    for j in prange(n):  # pylint: disable=not-an-iterable
         ax, ay, az = np.int64(vx[j]), np.int64(vy[j]), np.int64(vz[j])
         i0 = 1
         while i0 <= max_steps:
