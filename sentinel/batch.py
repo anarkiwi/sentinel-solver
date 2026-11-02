@@ -16,7 +16,6 @@ except ImportError:  # pragma: no cover - numba absent
     numba = None
 
 from sentinel import enemies, kern, landtable, memmap as mm
-from sentinel.state import State
 
 
 def width():
@@ -110,92 +109,3 @@ def first_by_tile(dense):
     """:func:`first_ray` of a dense landing matrix (tile per ray, -1 none)."""
     row, ray = np.nonzero(dense >= 0)
     return first_ray(row, ray, dense[row, ray], len(dense))
-
-
-class Pool:
-    """Board states as arrays addressed by integer row: ``mem`` ``(P, 65536)`` uint8 and
-    ``clock`` ``(P, 12)`` int64 (:data:`enemies.CLOCK`).  Queries take row indices and
-    return fixed-shape arrays, so selection and scoring over a batch are vectorized numpy.
-    """
-
-    def __init__(self, mem=None, clock=None):
-        self.mem = np.zeros((0, 1 << 16), np.uint8) if mem is None else mem
-        self.clock = (
-            np.zeros((0, len(enemies.CLOCK)), np.int64) if clock is None else clock
-        )
-
-    def __len__(self):
-        return len(self.mem)
-
-    @classmethod
-    def from_states(cls, states):
-        """A pool holding a copy of each of ``states``, in order."""
-        pool = cls()
-        pool.add(states)
-        return pool
-
-    def add(self, states):
-        """Append copies of ``states``; the new rows' indices."""
-        first = len(self)
-        self.mem = np.concatenate(
-            [self.mem] + [np.frombuffer(st.mem, dtype=np.uint8)[None] for st in states]
-        )
-        self.clock = np.concatenate(
-            [self.clock, [[getattr(st, f) for f in enemies.CLOCK] for st in states]]
-        ).astype(np.int64)
-        return np.arange(first, len(self))
-
-    def fork(self, idx):
-        """Append a copy of each row of ``idx``: the expansion primitive; new indices."""
-        first = len(self)
-        self.mem = np.concatenate([self.mem, self.mem[idx]])
-        self.clock = np.concatenate([self.clock, self.clock[idx]])
-        return np.arange(first, len(self))
-
-    def state(self, i):
-        """Row ``i`` as an independent :class:`State`."""
-        return State(bytearray(self.mem[i].tobytes()), *self.clock[i].tolist())
-
-    def keys(self, idx):
-        """Per row of ``idx`` the digest of its image and clock."""
-        out = []
-        for i in idx:
-            dig = hashlib.blake2b(self.mem[i].tobytes(), digest_size=16)
-            dig.update(self.clock[i].tobytes())
-            out.append(dig.digest())
-        return out
-
-    def advance(self, idx, n_frames, plotting=False):
-        """Advance rows ``idx`` in place by ``n_frames`` (one count or one per row);
-        identical rows asked for the same frames run once."""
-        idx = np.asarray(idx, dtype=np.int64)
-        frames = np.broadcast_to(np.asarray(n_frames, dtype=np.int64), idx.shape)
-        reps, back = first_of(list(zip(self.keys(idx), frames.tolist())))
-        run = idx[reps]
-        sub_mem, sub_clock = self.mem[run], self.clock[run]
-        enemies.advance_rows(sub_mem, sub_clock, frames[reps], plotting)
-        self.mem[idx], self.clock[idx] = sub_mem[back], sub_clock[back]
-
-    def landing(
-        self, idx, grids, slots=None, eye_z=None, max_steps=landtable.MAX_STEPS
-    ):
-        """``(B, 1024)`` int64: for each row of ``idx`` the lowest ray of ``grids`` landing
-        on each packed tile (-1 none).  Identical rows are marched once."""
-        idx = np.asarray(idx, dtype=np.int64)
-        reps, back = first_of(
-            [
-                (k, -1 if slots is None else slots[j])
-                for j, k in enumerate(self.keys(idx))
-            ]
-        )
-        views = [self.state(i) for i in idx[reps]]
-        slot = [v.player if slots is None else slots[r] for v, r in zip(views, reps)]
-        pairs = landings(views, grids, slot, eye_z, max_steps)
-        counts = [rays.size for rays, _t in pairs]
-        first = first_ray(
-            np.repeat(np.arange(len(pairs)), counts),
-            np.concatenate([rays for rays, _t in pairs]),
-            np.concatenate([tiles for _r, tiles in pairs]),
-            len(pairs),
-        )
-        return first[back]

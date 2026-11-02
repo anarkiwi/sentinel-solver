@@ -1161,50 +1161,95 @@ reaches `numba.get_num_threads()`. Both are the same statement -- parallel width
 hardware's -- so no constant is tuned. The lattices (262144 to 3.5M rays) fill the RTX 5080's
 129k resident threads from one state.
 
-**Enemy clock.** `enemies.advance_frames_many` runs rounds of the jit frame loop one state per
-thread (`enemies_jit._advance_many`, `prange` over a stacked image array); a state that stopped
-at a $1FFC strip replot is priced in Python and re-enters the next round, so each equals its
-own `advance_frames`. It is not ported to CUDA:
+**Enemy clock.** `enemies.advance_rows` runs rounds of the jit frame loop one row per thread
+(`enemies_jit._advance_many`, `prange` over a stacked image array); a row that stopped at a
+$1FFC strip replot is priced in Python and re-enters the next round, so each equals its own
+`advance_frames`. The whole clock -- `enemies_jit`, `badline_jit` and the helpers it calls in
+`los_jit` -- is `@spec`, and `kern_cuda._advance_kernel` runs `_advance` with one thread per row
+from the same source. The two allocations that blocked it are gone: `frame_clock` resets a
+caller-owned clock, and the clocks and the zero-page window live in the per-thread `zp`
+scratch (`ZP_CLK`, `ZP_IDLE`). A module that sets `DEVICE_TABLES` (the clock, the actions and
+the row kernels) has every table past 32 bytes bound as a device array shared by all its specs
+(`kern._device_table`): the badline run maps are 600 KB, and a table frozen into each function
+as constant data overruns the device's 64 KB per kernel. A kernel that references a device
+table cannot be written to numba's on-disk cache, so the device clock compiles once per
+process (about 50 s) when first launched; the ray march and landing kernels keep constant
+tables and their cache.
 
-* the parallel width is the number of independent hops in hand (tens), against 129k resident
-  threads, and a GPU lane is far slower than a CPU core on this branch-heavy 6502 model;
-* the strip replot price (`projector.strip_replot_frames`, Python plus the render-cost
-  kernels) is needed hundreds of times over a few dozen actions of play, so a device loop would round-trip to
-  the host at every such stop with its 64 KB image;
-* ~80 `@njit` helpers (the badline clock, relative angles, object visibility, the PRNG)
-  would each need conversion to the spec subset, and `frame_clock`/`zp` allocate per call
-  (fixable with per-thread scratch).
+* The replot price (`projector.strip_replot_frames`, Python plus the render-cost kernels) is
+  still host work: a device row stopped at a replot is handed to `engine._price` between
+  rounds. Pricing it on the device means porting scene projection, `fill_frames`, the pan and
+  notch pricing and the occlusion tables to specs, which is not done.
+* A GPU lane is far slower than a CPU core on this branch-heavy model, so the device clock pays
+  only when the rows fill the machine; the phase player's batches (tens of rows) stay on the
+  CPU build. `engine.default_device(rows)` is the rule (`batch.cuda_pays(1, rows)`).
 
-**State pool.** `batch.Pool` holds states as arrays addressed by row: `mem` `(P, 65536)`
-uint8 and `clock` `(P, 12)` int64. `add`, `fork(idx)` (the expansion primitive: append copies of
-rows), `state(i)`, `keys(idx)`, `advance(idx, n_frames)` (in place, identical rows run once,
-rows stopped at a strip replot priced on a temporary `State` between jit rounds) and
-`landing(idx, grids)` returning a fixed-shape `(B, 1024)` matrix of the lowest landing ray per
-packed tile (-1 none), so pruning and scoring are vectorized numpy over the batch. Nothing in
-it is specific to the phase player.
+## The search engine (`engine.py`, `footprint.py`, `rows_jit.py`, `actions_jit.py`)
 
-*Mutable bytes.* Over the first 40 actions of boards 42, 335, 0 and 110, the bytes of `mem`
-that ever change (between two `advance_frames` calls or across the run) number 309 to 528 per
-board and 1005 in the union, 1.5% of the image: the zero page (a handful of bytes), the object
-table pages ($0100 flags, $0900/$0A00 z, and neighbours), the tile map $0400-$07FF, and a few
-bytes of $0C00, $1300, $2100 and $8E00. The rest is the static code and table image.
-Compacting the pool to that region plus one shared image means every kernel that reads
-`mem[addr]` indirects through an address map; it is not done here because it touches every
-spec's memory access, and the union above is a lower bound that a compaction must replace with
-the writes' static footprint.
+`engine.Pool` holds board states by row and is what a strategy drives. Nothing in it is
+specific to the phase player.
 
-*Device-side expansion.* A resident pool is `mem`/`clock` as device arrays. `fork` is a
-row-copy kernel; `landing` is `_clear_kernel` over the pool rows (it already takes the stack and
-per-row seed/observer parameters, which would be derived in-kernel from the row's object table
-instead of the host `State`); `advance` needs the enemy clock on device (see above) with the
-replot price as a device kernel; `actions.create/absorb/transfer` become spec kernels writing a
-row's tile map and object table. Until those exist the pool round-trips rows through the host
-only at replot stops and for params.
+**Row layout.** A row is the *mutable region* -- the bytes the modelled routines can write --
+plus the twelve enemy-clock fields (`enemies.CLOCK`, kept on the host: twelve integers). Every
+row shares one static image (the pool's first state); `Pool.add` rejects a state that differs
+from it outside the region. Row memory is `P x M` bytes with `M` the size of
+`footprint.region()`.
 
-**Callers.** `PhasePlayer._probe_landings` advances the landing probes of a window of
-candidates as one `batch.advance`; `_leaders`/`_any_climb` walk the candidates in the original
-order through `_probe_ahead`, whose windows double from one up to the thread count, so the
-chosen candidate is the one the serial loop picks and at most twice the serial probes run.
+*Footprint.* `footprint.py` derives the region from the sources of the spec'd routines
+(`enemies_jit`, `los_jit`, `badline_jit`, `actions_jit`) and of the camera writes the replot
+pricing makes (`projector`), not from observed runs. Every store into the image -- `mem[...] =`,
+`_wr`, `_set_tile_byte`, an object-array or player-scalar assignment -- contributes the interval
+its address expression can take: constants and module integers are exact, `+ - * & | << >>`
+combine intervals, a `for x in range(...)` variable that is not a parameter takes its loop bounds,
+and anything else (a slot, a coordinate, a table read) is a byte, as a 6502 index register is.
+The result is a superset by construction; `test_engine.py` checks that every byte changed by
+actions and a long enemy run lies inside it.
+
+*Views.* Kernels still read `mem[addr]` over a 64 KB image, so the spec source is unchanged:
+`Pool.view(rows)` lays each row's mutable bytes over the static image in a scratch stack
+(chunks of at most 256 MB), a kernel runs on that stack, and `Pool._store` writes the region
+back. On the device the same two steps are `_fill_kernel`/`_overlay_kernel` and
+`_store_kernel`, so no image crosses the bus.
+
+**Calls.**
+
+| call | does |
+|---|---|
+| `Pool.add(states)` / `from_states` / `state(i)` | host `State` in and out of rows |
+| `Pool.fork(rows)` | row copy (a copy kernel on the device) |
+| `Pool.keys(rows)` | `rows_jit.row_hash`: 64-bit digest of region and clock; equal rows share a key |
+| `Pool.expand(rows, ops)` -> `(children, ok)` | fork each row, apply its `(K, 3)` op sequence (`rows_jit.apply_ops`: `CREATE type tile`, `ABSORB slot`, `TRANSFER slot-or-LAST`, `NOOP`); `ok` marks sequences that took effect; `engine.pad_ops` builds ragged batches |
+| `Pool.advance(rows, frames)` | the enemy clock, identical rows (key and frames) run once and are copied to their twins |
+| `Pool.evaluate(rows)` | `{field: (B,)}` of `rows_jit.FIELDS`: energy, player, eye (1/256), alive, won, enemies, x, y |
+| `Pool.landing(rows, grids)` | `(B, 1024)` lowest landing ray per tile |
+| `engine.first(mask)`, `engine.argbest(*keys)` | selection: first true, lexicographic best with earliest-wins ties |
+
+Actions are `@spec` (`actions_jit.create/absorb/transfer`, byte-identical to `actions.py`; the
+golden tests pin `actions.py` to the 6502) and `rows_jit` kernels run one thread per row on both
+targets, `prange` on the CPU.
+
+**Writing a strategy or a pruning rule.** A strategy keeps its logic in numpy over the arrays
+the calls return and calls the pool once per step for the whole batch:
+
+```python
+pool = engine.Pool.from_states([state])
+kids, built = pool.expand(np.zeros(n, int), engine.pad_ops(op_lists))
+pool.advance(kids[built], spans[built])
+fields = pool.evaluate(kids[built])
+keep = fields["alive"] == 1                      # a pruning rule: one line of numpy
+pick = engine.first(keep)                        # selection: first passing, original order
+```
+
+A new rule needs no kernel unless it reads a byte `FIELDS` does not carry: add the field to
+`rows_jit.fields` (one scalar store) and its name to `FIELDS`. A new action is one `@spec` in
+`actions_jit` and one branch of `apply_ops`; a store outside the footprint is caught by
+`test_footprint_holds_every_write_and_stays_small` extending its action list.
+
+**Callers.** `PhasePlayer._probe_verdicts` expands the hops of a window of candidates from the
+live state, advances them over their spans and reads `alive` from one pool; `_probe_ahead`
+walks the candidates in the original order, one at a time on the CPU (the serial walk, no
+speculative probes) and a thread-count window per launch on the cuda backend, so the chosen
+candidate is the one the serial loop picks.
 
 ## Render cost (`projector.py`, `pancost.py`, `rendercost_exact.py`)
 

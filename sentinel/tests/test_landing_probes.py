@@ -5,7 +5,7 @@ import inspect
 
 import pytest
 
-from sentinel import batch, phase_player
+from sentinel import batch, kern, phase_player
 from sentinel.game import Game
 from sentinel.phase_player import CLOCK_FIELDS, LOS_TRACKERS, PhasePlayer
 from sentinel.playerbase import _Views
@@ -69,28 +69,32 @@ def test_the_positions_exercise_the_lazy_walk():
     assert len(want) > 1
 
 
-def test_a_lazy_ask_probes_no_more_than_needed(monkeypatch):
-    """Existence stops at the first landable candidate in band order, probing ahead at
-    most twice what the serial walk would, and a re-ask on the same state, or on a fork
-    of it, runs nothing."""
-    monkeypatch.setattr(batch, "width", lambda: 64)
+@pytest.mark.parametrize("backend", ("cpu", "cuda"))
+def test_a_lazy_ask_probes_no_more_than_the_backend_walks(monkeypatch, backend):
+    """Existence stops at the first landable candidate in band order.  The CPU probes
+    exactly the candidates the serial walk visits; the cuda backend probes whole
+    windows, and a re-ask on the same state, or on a fork of it, runs nothing."""
+    monkeypatch.setattr(batch, "width", lambda: 4)
     player = _position(335, 2)
     views = _Views(player.st)
     cands = player._climb_candidates(views, True)
     first = next(i for i, c in enumerate(cands) if player._probe_landing(c[1], c[2]))
     asked = []
-    setup = PhasePlayer._probe_setup
+    verdicts = PhasePlayer._probe_verdicts
 
-    def counted(self, tile, k):
-        asked.append(tile)
-        return setup(self, tile, k)
+    def counted(self, group):
+        asked.extend(c[1] for c in group)
+        return verdicts(self, group)
 
-    monkeypatch.setattr(PhasePlayer, "_probe_setup", counted)
+    monkeypatch.setattr(PhasePlayer, "_probe_verdicts", counted)
+    monkeypatch.setattr(kern, "backend", lambda: backend)
     phase_player._LANDING_CACHE.clear()
     assert player._any_climb(views)
     walked = [c[1] for c in cands[: first + 1]]
-    assert asked[: len(walked)] == walked
-    assert len(asked) <= 2 * first + 1
+    if backend == "cpu":
+        assert asked == walked
+    else:
+        assert asked[: len(walked)] == walked and len(asked) < first + 1 + 4
     asked.clear()
     assert player._any_climb(views)
     assert player._fork()._landing_holds(cands[first][1], cands[first][2])

@@ -10,10 +10,10 @@ from sentinel import jitcache
 
 jitcache.install()  # must precede numba: the cache key carries the cost constants
 
-from numba import njit  # noqa: E402  pylint: disable=wrong-import-position
-
 from sentinel import badline, passcost, writeruns  # noqa: E402
+from sentinel.kern import spec  # noqa: E402
 
+DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
 _EVENT_POS = badline.EVENT_POS
 _EVENT_SHORT_IRQ = badline.EVENT_SHORT_IRQ
 _START = writeruns.START
@@ -31,16 +31,17 @@ _WEIGHT_SHIFT = badline.WEIGHT_SHIFT
 _OWED = writeruns.OWED
 
 
-@njit(cache=True)
-def frame_clock(armed):
-    """A clock at the raster IRQ, its events re-armed; ``armed`` False places none."""
-    clk = np.zeros(_FIELDS, dtype=np.int64)
+@spec
+def frame_clock(clk, armed):
+    """Reset the caller's ``_FIELDS``-long ``clk`` to a clock at the raster IRQ with its
+    events re-armed; ``armed`` False places none."""
+    for k in range(_FIELDS):
+        clk[k] = 0
     clk[1] = _EVENT_POS[0] if armed else _NO_EVENT
     clk[2] = 0 if armed else _N_EVENTS
-    return clk
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def owed_at(anchor, offset):
     """Cycles the instruction ``offset`` into the run at ``anchor`` has still to run."""
     start = _START[anchor]
@@ -49,7 +50,7 @@ def owed_at(anchor, offset):
     return np.int64(_OWED[start + offset])
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def run_at(anchor, offset):
     """Consecutive write cycles ``offset`` cycles into the run counted from ``anchor``."""
     start = _START[anchor]
@@ -58,7 +59,7 @@ def run_at(anchor, offset):
     return _RUN[start + offset]
 
 
-@njit(cache=True)
+@spec
 def _place(clk, anchor, cycles):
     """The slow half of :func:`charge`: the events this term's cycles reach."""
     pos = clk[0]
@@ -86,7 +87,7 @@ def _place(clk, anchor, cycles):
     return cycles - refund
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def charge(clk, anchor, cycles):
     """Spend ``cycles`` of the run at ``anchor``, less what its writes refund."""
     end = clk[0] + cycles
@@ -98,13 +99,13 @@ def charge(clk, anchor, cycles):
     return _place(clk, anchor, cycles)
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def overhang(clk):
     """How far past the raster this frame's clock ran: the next frame's own carry."""
     return clk[0] - _PAL_FRAME_CYCLES + clk[7]
 
 
-@njit(cache=True)
+@spec
 def spend(clk, anchor, budget):
     """Run the clock over every cycle ``budget`` buys of the run at ``anchor``."""
     pos = clk[0]
@@ -131,7 +132,7 @@ def spend(clk, anchor, budget):
     clk[3] += refund
 
 
-@njit(cache=True)
+@spec
 def stall(clk, cycles):
     """The whole video frames a strip replot stalls the play loop for."""
     index = clk[2]
@@ -149,7 +150,7 @@ def stall(clk, cycles):
     clk[7] += cycles
 
 
-@njit(cache=True)
+@spec
 def _place_run(clk, cycles, step):
     """The slow half of :func:`_charge_step`: the events this term's cycles reach."""
     index = clk[2]
@@ -176,7 +177,7 @@ def _place_run(clk, cycles, step):
     return cycles - refund
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _charge_step(clk, cycles, step):
     """Spend ``cycles`` whose every window refunds the fixed-point ``step``."""
     end = clk[0] + cycles
@@ -189,13 +190,13 @@ def _charge_step(clk, cycles, step):
     return _place_run(clk, cycles, step)
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def charge_run(clk, cycles, weight):
     """Spend ``cycles`` of a run no static map reaches, less what its writes refund."""
     return _charge_step(clk, cycles, (weight << _WEIGHT_SHIFT) // cycles)
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def carry(clk, cycles, step):
     """Advance over ``cycles`` a previous frame's budget paid; return their refund."""
     return cycles - _charge_step(clk, cycles, step)

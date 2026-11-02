@@ -2,6 +2,7 @@
 CPU-versus-CUDA bit identity (real GPU when present, numba's simulator in CI)."""
 
 import ast
+import importlib
 import inspect
 import os
 import textwrap
@@ -34,6 +35,8 @@ BANNED = (
     ast.Await,
     ast.Pow,
 )
+for _mod in ("actions_jit", "badline_jit", "enemies_jit", "rows_jit"):
+    importlib.import_module(f"sentinel.{_mod}")
 SPECS = sorted(kern.specs().items())
 
 
