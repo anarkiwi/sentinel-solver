@@ -35,7 +35,17 @@ BANNED = (
     ast.Await,
     ast.Pow,
 )
-for _mod in ("actions_jit", "badline_jit", "enemies_jit", "rows_jit"):
+for _mod in (
+    "actions_jit",
+    "badline_jit",
+    "enemies_jit",
+    "exposure_jit",
+    "objectcost",
+    "pricing_jit",
+    "projector_jit",
+    "rendercost",
+    "rows_jit",
+):
     importlib.import_module(f"sentinel.{_mod}")
 SPECS = sorted(kern.specs().items())
 

@@ -1,7 +1,9 @@
 """Per-call timings of the solver's hot kernels on one board: ``python -m
 sentinel.tests.bench_kernels [landscape]``; ``... sweep [landscape [actions]]`` times the
 landable-view sweep's steps; ``... grain`` derives :data:`landtable.CROSS_GRAIN`;
-``... probes [landscape [actions]]`` counts the phase player's landing probes."""
+``... probes [landscape [actions]]`` counts the phase player's landing probes;
+``... pricing [landscape]`` times the pricing kernel on the CPU threads and on the device
+per batch size."""
 
 import sys
 import time
@@ -9,7 +11,15 @@ import time
 import numba
 import numpy as np
 
-from sentinel import landtable, occlusioncost, pancost, playerbase, projector
+from sentinel import (
+    kern,
+    landtable,
+    occlusioncost,
+    pancost,
+    playerbase,
+    pricing_jit,
+    projector,
+)
 from sentinel.game import Game
 from sentinel.playerbase import BOARD_TILES
 
@@ -44,6 +54,43 @@ def main(landscape=335):
         ],
         3,
     )
+
+
+def pricing(landscape=335, sizes=(1, 16, 64, 256, 1024, 4096)):
+    """Seconds per pricing batch of each size on the CPU threads and, with numba-cuda, on
+    the device: the crossover is :data:`projector.DEVICE_PRICING_JOBS`."""
+    st = Game.typed(landscape).state
+    rng = np.random.default_rng(0)
+    model = projector._object_backend()[1]
+    obs = st.player
+    jobs = np.stack(
+        [
+            projector._cost_job(
+                st,
+                int(rng.integers(256)),
+                int(rng.integers(256)),
+                obs,
+                pancost.PAN_MODE[d],
+                None,
+                pancost.PAN_ROWS[d],
+                0,
+            )
+            for d in rng.integers(0, 4, max(sizes))
+        ]
+    )
+    vis = np.stack([projector._occlusion_memo(st, obs)[1]])
+    mem = np.frombuffer(st.mem, dtype=np.uint8)
+    scr = pricing_jit.scratch(pricing_jit.slot_count(max(sizes)))
+    for n in sizes:
+        out = np.zeros(n, dtype=np.int64)
+        cpu = _best(pricing_jit.render_many, (mem, jobs[:n], vis, model, scr, out), 5)
+        line = f"{n:6d} jobs  cpu {cpu * 1e3:8.2f} ms"
+        if kern.cuda_available():
+            from sentinel import kern_cuda
+
+            dev = _best(kern_cuda.render_cycles_many, (mem, jobs[:n], vis, model), 5)
+            line += f"  device {dev * 1e3:8.2f} ms"
+        print(line)
 
 
 def _best(fn, args, reps):
@@ -187,7 +234,9 @@ def probes(landscape=335, max_actions=200):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["grain"]:
+    if sys.argv[1:2] == ["pricing"]:
+        pricing(*(int(a) for a in sys.argv[2:]))
+    elif sys.argv[1:] == ["grain"]:
         crossing_grain()
     elif sys.argv[1:2] == ["sweep"]:
         sweep(*(int(a) for a in sys.argv[2:]))

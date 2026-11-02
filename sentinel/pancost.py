@@ -79,6 +79,21 @@ def notch_frames(state, direction, plot_h, plot_v, observer=None, skey=None):
     return projector.memo(_NOTCH_CACHE, key, _CACHE_MAX, make)
 
 
+def prime_notches(state, plots, observer=None):
+    """Price every ``(direction, plot_h, plot_v)`` of ``plots`` not yet memoized in one
+    batched launch, so the :func:`notch_frames` calls that follow all hit."""
+    obs = state.player if observer is None else observer
+    skey = projector.scene_key(state)
+    projector.prime_costs(
+        state,
+        [
+            ({"h_angle": ph, "v_angle": pv}, obs, PAN_MODE[d], None, PAN_ROWS[d])
+            for d, ph, pv in plots
+            if (skey, obs, d, ph, pv) not in _NOTCH_CACHE
+        ],
+    )
+
+
 def pan_frames(state, h0, v0, h1, v1, scroll, observer=None):
     """Total frames a keyboard aim from (``h0``, ``v0``) to (``h1``, ``v1``) spends
     panning: per notch, its own redraw plus ``scroll[axis]`` queued scroll steps.  The

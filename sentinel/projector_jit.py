@@ -9,6 +9,7 @@ import numpy as np
 from numba import njit
 
 from sentinel import memmap as mm, passcost
+from sentinel.kern import spec
 from sentinel.enemies_jit import (
     ZP_LO,
     ZP_HI,
@@ -18,7 +19,8 @@ from sentinel.enemies_jit import (
     _wcycles,
 )
 
-# Object-array bases in the 64 KB image, inlined so the njit code needs no Python object.
+# Object-array bases in the full image, inlined so the njit code needs no Python object.
+DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device arrays
 _OFLAGS = mm.OBJECTS_FLAGS
 _OX = mm.OBJECTS_X
 _OY = mm.OBJECTS_Y
@@ -170,7 +172,7 @@ _P_ROW_BACK_LOW = passcost.PLOT_ROW_BACK_LOW
 _P_ROW_BACK_EMPTY = passcost.PLOT_ROW_BACK_EMPTY
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _tile_byte(mem, x, y):
     """terrain.tile_byte: the raw tiles_table byte via the ROM address arithmetic
     ``page=(x&3)+4``, ``lo=((x<<3)&0xE0)|(y&0x1F)``."""
@@ -179,7 +181,7 @@ def _tile_byte(mem, x, y):
     return int(mem[((xx & 3) + 4) * 256 + (((xx << 3) & 0xE0) | (yy & 0x1F))])
 
 
-@njit(cache=True)
+@spec
 def _ground(mem, x, y):
     """terrain.resolve_ground: (height, slope) at (x,y).  An object tile resolves to the
     bottommost stacked object's z_height with slope 0."""
@@ -195,7 +197,7 @@ def _ground(mem, x, y):
     return int(mem[_OZHEIGHT + slot]), 0
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _maxz(mz, row, xi):
     """($72),Y horizon lookup; off-table reads hit zeroed RAM."""
     if 0 <= row <= _LAST and 0 <= xi <= _LAST:
@@ -203,7 +205,7 @@ def _maxz(mz, row, xi):
     return 0
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _axis(tile_k, olo_k, ohi_k):
     """$2503 per-axis signed delta: returns (lo, hi, sign_extension, |hi|)."""
     lo = (0 - olo_k) & 0xFF
@@ -215,7 +217,7 @@ def _axis(tile_k, olo_k, ohi_k):
     return lo, h, 0, h
 
 
-@njit(cache=True)
+@spec
 def _trace(tz, mz, objx, objy, objz, zfrac, ty, tx):
     """$24E2: ray-march observer->tile, 1 if unobstructed."""
     d0, h0, e0, a0 = _axis(tx, 0x80, objx)
@@ -269,22 +271,23 @@ def _trace(tz, mz, objx, objy, objz, zfrac, ty, tx):
     return 1
 
 
-@njit(cache=True)
-def occlusion_table(mem, observer):
-    """populate_tile_visibility_bit_table ($245B) over the 64 KB image ``mem``, rays cast
-    from object slot ``observer`` -> uint8[32,32], 1 where the tile is unoccluded.
-    ``out[ty, tx]`` is the $3E80/$24DA bit for tile (tx,ty)."""
+@spec
+def occlusion_into(mem, observer, tz, mz, raw, vis):
+    """populate_tile_visibility_bit_table ($245B) over the full image ``mem``, rays cast
+    from object slot ``observer``, into the caller's ``(32, 32)`` scratch: ``tz`` and ``mz``
+    int64, ``raw`` and ``vis`` uint8.  ``vis[ty, tx]`` is the $3E80/$24DA bit for tile
+    (tx,ty), 1 where the tile is unoccluded."""
     objx = int(mem[_OX + observer])
     objy = int(mem[_OY + observer])
     objz = int(mem[_OZHEIGHT + observer])
     zfrac = int(mem[_OZFRAC + observer])
-    tz = np.zeros((_N, _N), dtype=np.int64)  # $25C4: (z<<1)|not_flat per tile
-    for y in range(_N):
+    for y in range(_N):  # $25C4: (z<<1)|not_flat per tile
         for x in range(_N):
             z, slope = _ground(mem, x, y)
             tz[y, x] = ((z << 1) | (1 if slope else 0)) & 0xFF
-    mz = np.zeros((_N, _N), dtype=np.int64)  # $25ED: min of the 4 corner bytes, >>1
-    for y in range(_LAST, -1, -1):
+            mz[y, x] = 0
+            vis[y, x] = 0
+    for y in range(_LAST, -1, -1):  # $25ED: min of the 4 corner bytes, >>1
         for x in range(_LAST, -1, -1):
             b = tz[y, x]
             if not b & 1:
@@ -298,11 +301,9 @@ def occlusion_table(mem, observer):
                 if tz[y + 1, x] < m:
                     m = tz[y + 1, x]
                 mz[y, x] = m >> 1
-    raw = np.zeros((_N, _N), dtype=np.uint8)
     for ty in range(_N):
         for tx in range(_N):
             raw[ty, tx] = _trace(tz, mz, objx, objy, objz, zfrac, ty, tx)
-    vis = np.zeros((_N, _N), dtype=np.uint8)
     for y in range(_LAST, -1, -1):  # $248A combine: 2x2 raytrace dilation AND height
         for x in range(_LAST, -1, -1):
             b = tz[y, x]
@@ -310,6 +311,16 @@ def occlusion_table(mem, observer):
             block = raw[y, x] or raw[y, x + 1] or raw[y + 1, x] or raw[y + 1, x + 1]
             if block and height_ok:
                 vis[y, x] = 1
+
+
+@njit(cache=True)
+def occlusion_table(mem, observer):
+    """:func:`occlusion_into` on fresh scratch -> uint8[32,32]."""
+    tz = np.zeros((_N, _N), dtype=np.int64)
+    mz = np.zeros((_N, _N), dtype=np.int64)
+    raw = np.zeros((_N, _N), dtype=np.uint8)
+    vis = np.zeros((_N, _N), dtype=np.uint8)
+    occlusion_into(mem, observer, tz, mz, raw, vis)
     return vis
 
 
@@ -326,14 +337,14 @@ S_FRAC = 11  # $0028, the odd strip's half column ($29CF)
 S_N = 12
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _neg16(hi, lo):
     """Two's-complement negate the 16-bit (hi:lo), as $2865/$286C do."""
     borrow = 1 if lo != 0 else 0
     return (-hi - borrow) & 0xFF, (-lo) & 0xFF
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _tile_xy(quadrant, col, row):
     """($28A3) map (column,row) to (tile_x,tile_y) for the view orientation."""
     if quadrant == 0:
@@ -345,13 +356,13 @@ def _tile_xy(quadrant, col, row):
     return (_LAST_TILE - row) & 0xFF, col
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _signed16(hi, lo):
     """A corner's signed 16-bit projected coordinate ($2F02/$2DD2)."""
     return (hi - 256 if hi & 0x80 else hi) * 256 + lo
 
 
-@njit(cache=True, inline="always")
+@spec(inline=True)
 def _clamp(v, lo, hi):
     """Clamp ``v`` into ``[lo, hi]``."""
     if v < lo:
@@ -361,7 +372,7 @@ def _clamp(v, lo, hi):
     return v
 
 
-@njit(cache=True)
+@spec
 def _tile_height(mem, x, y):
     """projector._tile_height: ($28E9) height, tile byte and object levels walked."""
     b = _tile_byte(mem, x, y)
@@ -378,7 +389,7 @@ def _tile_height(mem, x, y):
     return int(mem[_OZHEIGHT + slot]), b, levels
 
 
-@njit(cache=True)
+@spec
 def _project(mem, zp, su, vis, col, row, out):
     """$283D for grid point (col,row) -> out = sx_lo, sx_hi, sy_lo, sy_hi, tile_byte,
     onscreen, cycles.  ``zp`` is zeroed first because the reference allocates a fresh
@@ -462,7 +473,7 @@ def _project(mem, zp, su, vis, col, row, out):
     out[6] = tab if su[S_TABLE] else cyc
 
 
-@njit(cache=True)
+@spec
 def _cached(mem, zp, su, vis, cres, seen, col, row):
     """Fill the projection cache slot for (col & $FF, row) and return its column index."""
     c = col & 0xFF
@@ -472,7 +483,7 @@ def _cached(mem, zp, su, vis, cres, seen, col, row):
     return c
 
 
-@njit(cache=True)
+@spec
 def _probe(mem, zp, su, vis, cres, seen, cnt, col, row):
     """One $2845 examination: counted on every call, cache hits included."""
     c = _cached(mem, zp, su, vis, cres, seen, col, row)
@@ -481,7 +492,7 @@ def _probe(mem, zp, su, vis, cres, seen, cnt, col, row):
     return cres[c, row, 5]
 
 
-@njit(cache=True)
+@spec
 def _find_end(mem, zp, su, vis, cres, seen, cnt, row, col):
     """find_end_of_row_loop $27E2."""
     while True:
@@ -514,7 +525,7 @@ def _find_end(mem, zp, su, vis, cres, seen, cnt, row, col):
             return start, col
 
 
-@njit(cache=True)
+@spec
 def _start_left(mem, zp, su, vis, cres, seen, cnt, row, end, col):
     """find_first_visible_tile_at_start_of_row_loop $2820."""
     while True:
@@ -530,7 +541,7 @@ def _start_left(mem, zp, su, vis, cres, seen, cnt, row, end, col):
         return col, end
 
 
-@njit(cache=True)
+@spec
 def _crop_right(mem, zp, su, vis, cres, seen, cnt, row, col):
     """tile_is_cropped_to_right $27FF."""
     while True:
@@ -553,7 +564,7 @@ def _crop_right(mem, zp, su, vis, cres, seen, cnt, row, col):
         return _start_left(mem, zp, su, vis, cres, seen, cnt, row, end, col)
 
 
-@njit(cache=True)
+@spec
 def _find_extent(mem, zp, su, vis, cres, seen, cnt, row, hint):
     """find_visible_extent $27D7."""
     col = hint & 0xFF
@@ -582,24 +593,42 @@ def _find_extent(mem, zp, su, vis, cres, seen, cnt, row, hint):
         return _start_left(mem, zp, su, vis, cres, seen, cnt, row, col, hint & 0xFF)
 
 
-@njit(cache=True)
-def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
+@spec
+def scan_scene(
+    mem,
+    zp,
+    su,
+    vis,
+    row_hint,
+    screen_h,
+    want,
+    cres,
+    seen,
+    cnt,
+    rrow,
+    rlo,
+    rhi,
+    out,
+    ws,
+    fill,
+):
     """plot_world's tile selection: the $27D7/$26DE walk then the $2A24 plot range.
 
-    Returns (ints[n,11], span[n], n, n_examine) with ints = col, row, tx, ty, sx_lo,
-    sx_hi, sy_lo, sy_hi, tile_byte, onscreen, h; the caller clamps the unclamped span
-    to the screen width.  ``vis`` is the memoized $245B table."""
-    zp = np.zeros(ZP_HI, dtype=np.int64)
-    # The walk masks col to $FF and steps y down through 0, and the plot range reaches
-    # row $20, so the cache spans 256 columns by 33 rows -- not 32 by 32.
-    cres = np.zeros((256, _N + 1, 7), dtype=np.int64)
-    seen = np.zeros((256, _N + 1), dtype=np.uint8)
-    cnt = np.zeros(3, dtype=np.int64)
+    Fills the caller's scratch and returns ``(n, nfill)``: with ``want`` set ``out[:n]``
+    holds col, row, tx, ty, sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, h and
+    ``ws[:n]`` the unscaled corner x extent; ``fill[:nfill]`` is every plotted tile
+    for :mod:`rendercost`; ``cnt`` is n_examine, exam cycles and walk cycles.  ``vis`` is
+    the $245B table.  The projection cache spans 256 columns by 33 rows: the walk masks
+    col to $FF and steps y down through 0, and the plot range reaches row $20."""
+    for i in range(ZP_HI):
+        zp[i] = 0
+    for c in range(256):
+        for r in range(_N + 1):
+            seen[c, r] = 0
+    for i in range(3):
+        cnt[i] = 0
     c3 = su[S_C3]
     c1d = su[S_C1D]
-    rrow = np.zeros(_N + 1, dtype=np.int64)
-    rlo = np.zeros(_N + 1, dtype=np.int64)
-    rhi = np.zeros(_N + 1, dtype=np.int64)
     nrows = 0
     row = _LAST_TILE
     cnt[2] += (
@@ -697,10 +726,6 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
     s1b = _OFFSET_TO_TILE[su[S_QUAD]]
     offc = s1b & 1
     offr = (s1b >> 5) & 1
-    cap = (_N + 1) * (_N + 1)
-    out = np.zeros((cap, 11), dtype=np.int64)
-    ws = np.zeros(cap, dtype=np.float64)
-    fill = np.zeros((cap, _FILL_COLS), dtype=np.int64)
     n = 0
     nfill = 0
     c3 = su[S_C3]
@@ -757,20 +782,59 @@ def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
             x1 = _signed16(cres[i1, re, 1], cres[i1, re, 0])
             x2 = _signed16(cres[i2, r1, 1], cres[i2, r1, 0])
             x3 = _signed16(cres[i3, r1, 1], cres[i3, r1, 0])
-            top = _clamp(min(y0, y1, y2, y3), 0, screen_h)
-            bot = _clamp(max(y0, y1, y2, y3), 0, screen_h)
-            span = (max(x0, x1, x2, x3) - min(x0, x1, x2, x3)) / w_scale
-            out[n, 0] = ce
-            out[n, 1] = re
-            out[n, 2] = tx
-            out[n, 3] = ty
-            out[n, 4] = cres[i0, re, 0]
-            out[n, 5] = cres[i0, re, 1]
-            out[n, 6] = cres[i0, re, 2]
-            out[n, 7] = cres[i0, re, 3]
-            out[n, 8] = tile_byte
-            out[n, 9] = cres[i0, re, 5]
-            out[n, 10] = bot - top
-            ws[n] = span
+            if want:
+                top = _clamp(min(y0, y1, y2, y3), 0, screen_h)
+                bot = _clamp(max(y0, y1, y2, y3), 0, screen_h)
+                out[n, 0] = ce
+                out[n, 1] = re
+                out[n, 2] = tx
+                out[n, 3] = ty
+                out[n, 4] = cres[i0, re, 0]
+                out[n, 5] = cres[i0, re, 1]
+                out[n, 6] = cres[i0, re, 2]
+                out[n, 7] = cres[i0, re, 3]
+                out[n, 8] = tile_byte
+                out[n, 9] = cres[i0, re, 5]
+                out[n, 10] = bot - top
+                ws[n] = max(x0, x1, x2, x3) - min(x0, x1, x2, x3)
             n += 1
-    return out, ws, n, cnt[0], cnt[1], fill[:nfill], cnt[2]
+    return n, nfill
+
+
+SCAN_CAP = (_N + 1) * (_N + 1)
+
+
+@njit(cache=True)
+def project_scene(mem, su, vis, row_hint, screen_h, w_scale):
+    """:func:`scan_scene` on fresh scratch: ``(out[n, 11], span[n], n, n_examine,
+    exam_cycles, fill[nfill], walk_cycles)`` with ``span`` the corner x extent over
+    ``w_scale``, unclamped."""
+    zp = np.zeros(ZP_HI, dtype=np.int64)
+    cres = np.zeros((256, _N + 1, 7), dtype=np.int64)
+    seen = np.zeros((256, _N + 1), dtype=np.uint8)
+    cnt = np.zeros(3, dtype=np.int64)
+    rrow = np.zeros(_N + 1, dtype=np.int64)
+    rlo = np.zeros(_N + 1, dtype=np.int64)
+    rhi = np.zeros(_N + 1, dtype=np.int64)
+    out = np.zeros((SCAN_CAP, 11), dtype=np.int64)
+    ws = np.zeros(SCAN_CAP, dtype=np.int64)
+    fill = np.zeros((SCAN_CAP, _FILL_COLS), dtype=np.int64)
+    n, nfill = scan_scene(
+        mem,
+        zp,
+        su,
+        vis,
+        row_hint,
+        screen_h,
+        1,
+        cres,
+        seen,
+        cnt,
+        rrow,
+        rlo,
+        rhi,
+        out,
+        ws,
+        fill,
+    )
+    return out, ws / w_scale, n, cnt[0], cnt[1], fill[:nfill], cnt[2]

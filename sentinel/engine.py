@@ -7,7 +7,7 @@ for the rest.  A strategy drives it in three calls over row indices and keeps it
 logic in numpy over the returned fixed-shape arrays:
 
 * :meth:`Pool.expand` ``(rows, ops)`` forks each row and applies an action sequence to the
-  child, returning the child rows and which sequences took effect;
+  child, returning the child rows and the sequences that applied;
 * :meth:`Pool.advance` ``(rows, frames)`` runs the enemy clock, rows that are identical
   and asked for the same frames running once;
 * :meth:`Pool.evaluate` ``(rows)`` reads the decision fields (:data:`rows_jit.FIELDS`).
@@ -63,7 +63,9 @@ class Pool:
 
     def __init__(self, static, device=False):
         self.static = np.frombuffer(bytes(static), dtype=np.uint8).copy()
-        self.addrs, _amap = footprint.region()
+        self.addrs, amap = footprint.region()
+        self.keep = np.ones(self.addrs.size, dtype=np.int64)
+        self.keep[[amap[a] for a in footprint.LOS_TRACKERS if amap[a] >= 0]] = 0
         self.device = bool(device)
         self.n = 0
         self.clock = np.zeros((0, len(enemies.CLOCK)), dtype=np.int64)
@@ -73,6 +75,7 @@ class Pool:
             self._cuda = cuda
             self._static_d = cuda.to_device(self.static)
             self._addrs_d = cuda.to_device(self.addrs)
+            self._keep_d = cuda.to_device(self.keep)
         self.mut = self._empty(0)
 
     @classmethod
@@ -186,8 +189,9 @@ class Pool:
         return new
 
     def keys(self, idx):
-        """``(len(idx),)`` int64 digest of each row's mutable bytes and clock: equal rows
-        have equal keys, so they are one entry of a transposition table."""
+        """``(len(idx),)`` int64 digest of each row's mutable bytes and clock, bar the
+        :data:`footprint.LOS_TRACKERS`: equal rows have equal keys, so they are one entry of
+        a transposition table."""
         idx = np.asarray(idx, dtype=np.int64)
         out = np.zeros(len(idx), dtype=np.int64)
         if self.device:
@@ -199,9 +203,12 @@ class Pool:
                 self._cuda.to_device(np.ascontiguousarray(self.clock[idx])),
                 self._cuda.to_device(idx),
                 dev,
+                self._keep_d,
             )
             return dev.copy_to_host()
-        rows_jit.hash_rows(self.mut[idx], np.ascontiguousarray(self.clock[idx]), out)
+        rows_jit.hash_rows(
+            self.mut[idx], np.ascontiguousarray(self.clock[idx]), out, self.keep
+        )
         return out
 
     def expand(self, idx, ops):

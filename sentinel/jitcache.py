@@ -22,6 +22,8 @@ KERNEL_SOURCES = (
     "kern_cuda.py",
     "actions_jit.py",
     "rows_jit.py",
+    "exposure_jit.py",
+    "pricing_jit.py",
     "badline_jit.py",  # inlined into enemies_jit, so its own stamp is not consulted
 )
 

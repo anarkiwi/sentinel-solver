@@ -370,6 +370,7 @@ def _geometry(state, h, v):
         obj_work,
         left,
         right,
+        objectcost.scratch_slots(),
     )
     rows = tile_work[4] + obj_work[4]
     flags = tile_work[5] + obj_work[5]

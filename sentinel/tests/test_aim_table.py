@@ -133,3 +133,22 @@ def test_views_pin_the_board_of_their_first_query():
     assert views.band_ordered(lambda t: t[0] % 2) == [
         (t, v) for t, v in band.items() if t[0] % 2
     ]
+
+
+def test_group_min_matches_sorted_reps():
+    """The dense-table reduction keeps, per (tile, cell), the first key of the sorted run."""
+    rng = np.random.default_rng(7)
+    ncell, dsz = 32, 40
+    drive_of = rng.integers(0, 60, dsz)
+    rays = np.sort(rng.choice(ncell * dsz, 400, replace=False))
+    tiles = rng.integers(0, 1024, rays.size)
+    rb = (ncell * dsz - 1).bit_length()
+    db = int(drive_of.max()).bit_length()
+    cell, off = np.divmod(rays, dsz)
+    key = np.sort(
+        (((tiles * ncell + cell) << db | drive_of[off]) << rb) | rays.astype(np.int64)
+    )
+    want = key[playerbase._starts(key >> (rb + db))]
+    for _ in range(2):
+        got = playerbase._group_min(rays, tiles, drive_of, ncell, rb, db)
+        assert np.array_equal(got, want)

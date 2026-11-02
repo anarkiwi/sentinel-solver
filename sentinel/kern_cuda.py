@@ -16,7 +16,15 @@ import types
 import numpy as np
 from numba import cuda
 
-from sentinel import enemies_jit, kern, landtable, los_jit, memmap as mm, rows_jit
+from sentinel import (
+    enemies_jit,
+    kern,
+    landtable,
+    los_jit,
+    memmap as mm,
+    pricing_jit,
+    rows_jit,
+)
 
 BLOCK = 128
 LOS_CLEAR = los_jit.LOS_CLEAR
@@ -321,11 +329,93 @@ def row_kernels():
             fields(imgs[b], out[b])
 
     @cuda.jit
-    def hash_kernel(mut, clock, idx, out):
+    def hash_kernel(mut, clock, idx, out, keep):
         b = cuda.grid(1)
         if b < idx.shape[0]:
-            out[b] = row_hash(mut[idx[b]], clock[b])
+            out[b] = row_hash(mut[idx[b]], clock[b], keep)
 
     return types.SimpleNamespace(
         advance=advance_kernel, ops=ops_kernel, fields=fields_kernel, hash=hash_kernel
     )
+
+
+@functools.cache
+def render_kernel():
+    """The pricing kernel over :func:`pricing_jit.render_cycles`, built on first use: thread
+    ``t`` of the launch owns scratch slot ``t`` and prices jobs ``t, t + threads, ...``.
+    """
+    render_one = kern.build(pricing_jit.render_cycles, "cuda")
+
+    @cuda.jit
+    def render_kernel_(mem, jobs, vis, model, scr, out):
+        t = cuda.grid(1)
+        slots = scr[0].shape[0]
+        if t < slots:
+            tile_work = (
+                scr[14][t],
+                scr[15][t],
+                scr[16][t],
+                scr[17][t],
+                scr[18][t],
+                scr[19][t],
+            )
+            obj_work = (
+                scr[20][t],
+                scr[21][t],
+                scr[22][t],
+                scr[23][t],
+                scr[24][t],
+                scr[25][t],
+            )
+            for j in range(t, jobs.shape[0], slots):
+                out[j] = render_one(
+                    mem,
+                    jobs[j],
+                    vis[jobs[j, pricing_jit.J_VIS]],
+                    model,
+                    scr[0][t],
+                    scr[1][t],
+                    scr[2][t],
+                    scr[3][t],
+                    scr[4][t],
+                    scr[5][t],
+                    scr[6][t],
+                    scr[7][t],
+                    scr[8][t],
+                    scr[9][t],
+                    scr[10][t],
+                    scr[11][t],
+                    tile_work,
+                    obj_work,
+                    scr[12][t],
+                    scr[13][t],
+                )
+
+    return render_kernel_
+
+
+_MODEL_DEVICE = {}
+
+
+def render_cycles_many(mem, jobs, vis, model):
+    """:func:`pricing_jit.render_many` on the device: ``(n,)`` int64 cycles of each job of
+    ``jobs`` over the image ``mem`` and occlusion tables ``vis``, one thread per job up to
+    the threads the device keeps resident."""
+    key = id(model)
+    if key not in _MODEL_DEVICE:
+        _MODEL_DEVICE[key] = (model, tuple(cuda.to_device(a) for a in model))
+    slots = max(1, min(len(jobs), resident_threads() or len(jobs)))
+    scr = tuple(
+        cuda.device_array((slots,) + a.shape[1:], dtype=a.dtype)
+        for a in pricing_jit.scratch(1)
+    )
+    out = cuda.device_array(len(jobs), dtype=np.int64)
+    render_kernel()[_blocks(slots), BLOCK](
+        cuda.to_device(np.ascontiguousarray(mem)),
+        cuda.to_device(jobs),
+        cuda.to_device(np.ascontiguousarray(vis)),
+        _MODEL_DEVICE[key][1],
+        scr,
+        out,
+    )
+    return out.copy_to_host()
