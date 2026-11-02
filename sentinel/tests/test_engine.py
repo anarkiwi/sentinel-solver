@@ -308,6 +308,43 @@ def test_device_advance_prices_replots(monkeypatch):
     assert all(_same(pool.state(i), w) for i, w in enumerate(want))
 
 
+@gpu
+@pytest.mark.parametrize("who", ["device", "host", "race"])
+def test_device_rows_are_the_same_whoever_runs_them(new_game, monkeypatch, who):
+    from sentinel import kern_cuda  # pylint: disable=import-outside-toplevel
+
+    kernel = kern_cuda._advance_kernel
+
+    class Halted:
+        def __getitem__(self, cfg):
+            launch = kernel[cfg]
+
+            def run(*args):
+                args[-2].copy_to_device(np.ones(args[-2].size, dtype=np.int32))
+                launch(*args)
+
+            return run
+
+    def idle(b, *args):
+        while not args[-2][b]:
+            pass
+
+    if who == "host":
+        monkeypatch.setattr(kern_cuda, "_advance_kernel", Halted())
+    if who == "device":
+        monkeypatch.setattr(kern_cuda, "take_row", idle)
+    st = new_game(42).state
+    frames = [20, 7, 13, 3] if SIM else [1500, 90, 700, 3, 400]
+    want = []
+    for n in frames:
+        ref = st.clone()
+        enemies.advance_frames(ref, n)
+        want.append(ref)
+    pool = engine.Pool.from_states([st] * len(frames), device=True)
+    pool.advance(np.arange(len(frames)), frames)
+    assert all(_same(pool.state(i), w) for i, w in enumerate(want))
+
+
 def test_default_device_wants_cuda_and_a_batch(monkeypatch):
     monkeypatch.setattr(engine.kern, "backend", lambda: "cuda")
     assert engine.default_device(2) and not engine.default_device(1)

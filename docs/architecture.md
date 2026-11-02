@@ -1185,6 +1185,17 @@ their tables as device arrays and compile once per process.
   and only that row's image crosses the bus. Pricing it on the device means porting scene
   projection, `fill_frames`, the pan and notch pricing and the occlusion tables to specs, which
   is not done.
+* **Work sharing.** Every row costs the same per frame (about twenty idle passes of the 64-slot
+  loop, no LOS march unless an enemy scans), so a round lasts as long as its row with the most
+  frames, and a GPU lane runs that serial integer code about ten times slower than a CPU core. No
+  frame is skippable in closed form: the pass count of a frame depends on the badline events
+  its cycle position meets and the prnd stream advances once per pass. `_advance_kernel` runs
+  every row on the device one frame per `_advance` call, polling `halt[b]`; the host threads
+  (`take_row`, one per CPU) claim rows longest first, set `halt`, wait for the thread's `ack`
+  (written after its image, clock and status are final) and run the rest of the row's frames with
+  `enemies_jit.advance_one`, the same `_advance` over the same state. A row the device finished
+  before the host reached it is left alone, so the two meet where the claims cross, and each row's
+  result is the same whoever ran which frames.
 * A GPU lane is far slower than a CPU core on this branch-heavy model, so the device clock pays
   when rows are many. `engine.default_device(rows)` is the rule: the backend is cuda and a round
   has a batch of more than one row.
