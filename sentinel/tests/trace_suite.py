@@ -47,18 +47,18 @@ def summary(record):
     return out
 
 
-def make(player, game):
-    """The ``player`` ("phase" or "beam") for ``game``."""
+def make(player, game, width=None):
+    """The ``player`` ("phase" or "beam") for ``game``; ``width`` is the beam's."""
     if player == "beam":
-        return BeamPlayer(game)
+        return BeamPlayer(game) if width is None else BeamPlayer(game, width=width)
     return PhasePlayer(game, verbose=False)
 
 
-def play(landscape, max_actions=None, player="phase"):
+def play(landscape, max_actions=None, player="phase", width=None):
     """One board's record: ``landscape``, ``enemies``, ``trace``, ``frames``, ``energy``, ``won``."""
     game = Game.typed(landscape)
     enemies = len(game.enemy_slots())
-    agent = make(player, game)
+    agent = make(player, game, width)
     won = agent.run(max_actions=max_actions or ACTIONS[player])
     return {
         "landscape": landscape,
@@ -70,13 +70,13 @@ def play(landscape, max_actions=None, player="phase"):
     }
 
 
-def run(boards, player="phase"):
+def run(boards, player="phase", width=None):
     """``{landscape: record}`` for ``boards`` played by ``player``, with progress."""
     out = {}
     with tqdm(boards, unit="board") as progress:
         for number in progress:
             progress.set_postfix(ls=number)
-            out[str(number)] = play(number, player=player)
+            out[str(number)] = play(number, player=player, width=width)
     return out
 
 

@@ -1079,6 +1079,18 @@ may only stop where the ray **provably** stops (`zmin <= surface_lo`); an undeci
 (object stack with `lo < hi`, or alias risk) makes the ray multi-candidate and always marched
 (`test_stop_cell_partition_holds_every_landing`).
 
+**Climbing rays.** The ROM rejects a look-up (`vz >= 0`, `s30` bit 7 clear) at every flat or
+object tile unless `$0C6E | $0C67` has bit 7 set; the sweeps keep `$0C6E` bit 7 clear, a
+sloping tile never ends CLEAR, and `$0C67` is local to one object-stack walk (0, or `$80` when
+that walk reaches a boulder), so it never carries across tiles. A climbing ray therefore lands
+only on a tile whose stack holds a boulder, and on nothing on a board without one:
+`surface_maps` flags both (`HAS_BOULDER`, `BOARD_BOULDER`) and `_stop_one` restricts to them.
+
+**Claim order.** The consumers keep the least ray per tile (`engine.landing`, `keep="first"`)
+or the least `(drive, ray)` per tile and cursor cell (`playerbase._Landings`, `keep="cell"`).
+`claim_plan` orders the sweep that way; a ray whose only candidate tile its group has already
+landed on is never marched (`test_keep_holds_every_group_minimum`).
+
 **Validation.** `test_landtable.py` pins the property everything rests on — over several
 boards, a stacked/raised-eye stance and an `eye_z` override, every ray the full sweep lands on
 a tile is in that tile's candidate set, on all three lattices including below-eye, object and
@@ -1165,8 +1177,7 @@ hardware's -- so no constant is tuned. The lattices (262144 to 3.5M rays) fill t
 (`enemies_jit._advance_many`, `prange` over a stacked image array); a row that stopped at a
 $1FFC strip replot is priced in Python and re-enters the next round, so each equals its own
 `advance_frames`. The whole clock -- `enemies_jit`, `badline_jit` and the helpers it calls in
-`los_jit` -- is `@spec`, and `kern_cuda._advance_kernel` runs `_advance` with one thread per row
-from the same source. The clocks and the zero-page window live in the per-thread `zp` scratch
+`los_jit` -- is `@spec`. The clocks and the zero-page window live in the per-thread `zp` scratch
 (`ZP_CLK`, `ZP_IDLE`).
 
 The badline clock's tables travel as an argument: `badline_jit.MAPS` is the tuple `(RUN, START,
@@ -1174,10 +1185,9 @@ LENGTH_AT, OWED, EVENT_POS, EVENT_SHORT_IRQ)`, passed as `maps` through `charge`
 `run_at`, `_place`, `spend`, `stall`, `charge_run`, `carry` and every `enemies_jit` caller up to
 `_advance`. A table frozen into a device function is copied into every use site (the 240-byte
 event tables alone reached 150 KB of the device's 64 KB constant budget), so no table the clock
-reads is frozen on the device: the run maps are 600 KB, and the kernels (`_advance_kernel`,
-`_ops_kernel`, `_fields_kernel`, `_hash_kernel` and the clock row copies) are module-level
-`cuda.jit(cache=True)` with no per-process compile. `kern_cuda.device_maps()` holds the tuple on
-the device. The pricing kernel's modules (`rendercost`, `objectcost`, `projector_jit`) still bind
+reads is frozen on the device: the run maps are 600 KB, and the kernels (`_ops_kernel`,
+`_fields_kernel`, `_hash_kernel` and the clock row copies) are module-level
+`cuda.jit(cache=True)` with no per-process compile. The pricing kernel's modules (`rendercost`, `objectcost`, `projector_jit`) still bind
 their tables as device arrays and compile once per process.
 
 * The replot price (`projector.strip_replot_frames`, Python plus the render-cost kernels) is
@@ -1185,8 +1195,16 @@ their tables as device arrays and compile once per process.
   and only that row's image crosses the bus. Pricing it on the device means porting scene
   projection, `fill_frames`, the pan and notch pricing and the occlusion tables to specs, which
   is not done.
-* A GPU lane is far slower than a CPU core on this branch-heavy model, so the device clock pays
-  when rows are many. `engine.default_device(rows)` is the rule: the backend is cuda and a round
+* **Host clock on a device pool.** Every row costs the same per frame (about twenty idle passes
+  of the 64-slot loop, no LOS march unless an enemy scans), so a round lasts as long as its row
+  with the most frames, and one GPU lane runs that serial integer code about ten times slower
+  than a CPU core. No frame is skippable in closed form: the pass count of a frame depends on the
+  badline events its cycle position meets and the prnd stream advances once per pass. Game
+  states therefore stay in the device `Pool`, and `kern_cuda.advance_rows` copies down only the
+  rows being advanced into a persistent pinned staging buffer, runs them longest first on a
+  `ThreadPoolExecutor` of one thread per CPU with the `nogil` `enemies_jit.advance_one`, and
+  copies them back. Rows stopped at a strip replot are priced together, as on the host pool.
+  `engine.default_device(rows)` is the rule for a device pool: the backend is cuda and a round
   has a batch of more than one row.
 
 ## The search engine (`engine.py`, `footprint.py`, `rows_jit.py`, `actions_jit.py`)
@@ -1348,12 +1366,26 @@ winner, so lockstep would only add work). An `Exception` in a task is a `Failure
 old handlers did); the `Deferred` round state of `prefetch` is a `ContextVar`, so it is private
 to each task.
 
+**Device buffers and replot stops.** `kern_cuda.scratch`/`stage` keep named device buffers
+that grow geometrically and are never freed between calls: the clock rounds, the landing
+sweep, the pricing launch and the `Pool` image views reuse them, and the pricing slot cap
+reads the free device memory once. Each `advance_rows` round uploads one `(3, n)` input array
+and downloads one `(n, 17)` status array (frames left, replot request, the twelve clock fields).
+The rows a round stopped at a strip replot are priced together: one gather of the scene bytes
+and scalars the replot reads (`enemies.REPLOT_READS`), `enemies.price_replots` over arrays
+(one pricing launch over every chunk of every stopped row), and one patch launch writing back
+the three bytes the replot changes (`CAMERA_SAVED`, `CAMERA_REF_LO`, the camera's bearing) and
+the clock rows.
+
 **Not done.** Each item below is a design, not an implementation.
 
 * *Fleet `advance` handler.* The device clock is in place (see above); what remains is a fleet
   handler that takes `(pool row, frames)` payloads from tasks whose forks live in a device `Pool`,
   so a lockstep search advances its forks in one launch. The beam player (`docs/players.md`) calls
   `Pool.advance` directly instead.
+* *Array form of the settle terms* (`playerbase.settle_frames`: create/absorb strip replot,
+  dither, fire ray, transfer redraw): the beam player prices them per (row, tile, verb) on the
+  scalar models with batched render costs; its aims are arrays (`aimbatch.py`).
 * *Array rewrite of the phase player's candidate logic* (`_climb_candidates`, `_leaders`,
   `_strike`, `_refuel`, `_breakout`): done for the beam player (`beam_player.moves`), not for the
   phase player.

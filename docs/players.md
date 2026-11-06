@@ -175,10 +175,16 @@ hundreds of independent rows in flight per ply. One ply:
    class contributes at most `branch` moves, ranked by the phase player's own order (height per
    energy then fuel for hops; enemy then energy value for absorbs; eye for mounts), ties to the
    lower index.
-2. **Pricing.** Each row runs `plan` as a fleet task: its landing sweeps and the phase player's
-   aim and settle spans (`PhasePlayer._span`) are batched across the beam by the `landing` and
-   `price` handlers. A move's span is its verbs' spans summed (a hop: its boulders, the robot
-   and the transfer).
+2. **Pricing** (`plan`, no per-row tasks). Both lattices are swept for every row in one
+   launch each (`batch.landings`). The (bearing, pitch) cells of the tiles the moves aim at are
+   priced for all rows together by `aimbatch.aim_parts`: pan notches and u-turn redraws become
+   one pricing job each, deduplicated on the scene digest (hashed once per row), observer and
+   notch, priced in one launch, and summed per cell with `sum`'s own compensated accumulation
+   (`aimbatch.aim_total_columns` is `aim_frames` over columns). Winners per tile come from
+   `_Landings.winners`. Only the settle terms (`playerbase.settle_frames`: create/absorb
+   strip replots, the transfer redraw) still run on the phase player's scalar models; their
+   render costs are batched by `projector.prefetch`. A move's span is its verbs' spans summed
+   (a hop: its boulders, the robot and the transfer).
 3. **Expand, advance, evaluate.** `build_ops` lays the moves out as one `(n, 6, 3)` op tensor
    (`FACE` the aim, then the verbs); one `Pool.expand`, one `Pool.advance` over the spans and
    one `Pool.evaluate` run every child. The pool is on the device whenever the backend is cuda

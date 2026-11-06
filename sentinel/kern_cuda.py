@@ -8,15 +8,16 @@ stay resident on the device between calls, and B board images march in one launc
 
 # pylint: disable=no-value-for-parameter,too-many-function-args,comparison-with-callable
 
+import concurrent.futures
 import functools
 import hashlib
 import os
+import threading
 
 import numpy as np
 from numba import cuda
 
 from sentinel import (
-    badline_jit,
     enemies_jit,
     kern,
     landtable,
@@ -30,7 +31,6 @@ BLOCK = 128
 LOS_CLEAR = los_jit.LOS_CLEAR
 _march_one = kern.build(los_jit._march_one, "cuda")
 _stop_one = kern.build(landtable._stop_one, "cuda")
-_advance_one = kern.build(enemies_jit._advance, "cuda")
 _apply_ops = kern.build(rows_jit.apply_ops, "cuda")
 _fields = kern.build(rows_jit.fields, "cuda")
 _row_hash = kern.build(rows_jit.row_hash, "cuda")
@@ -78,6 +78,31 @@ def _blocks(n):
     return (n + BLOCK - 1) // BLOCK
 
 
+_BUFFERS = {}
+
+
+def scratch(name, shape, dtype):
+    """A device array of ``shape`` over the buffer called ``name``, which persists between
+    calls and grows geometrically: the contents are the caller's to fill."""
+    size = int(np.prod(shape))
+    buf = _BUFFERS.get(name)
+    if buf is None or buf.dtype != np.dtype(dtype) or buf.size < size:
+        have = 0 if buf is None or buf.dtype != np.dtype(dtype) else buf.size
+        _BUFFERS[name] = None
+        _BUFFERS[name] = buf = cuda.device_array(max(size, 2 * have, 1), dtype=dtype)
+    return buf[:size].reshape(shape)
+
+
+def stage(name, host):
+    """``host`` copied into the persistent device buffer ``name``: one upload, no
+    allocation once the buffer has grown to the largest call."""
+    host = np.ascontiguousarray(host)
+    view = scratch(name, host.shape, host.dtype)
+    if host.size:
+        view.reshape(-1).copy_to_device(host.reshape(-1))
+    return view
+
+
 def resident_threads():
     """Threads the device keeps in flight at once (0 under the simulator, which has no
     occupancy to fill)."""
@@ -91,15 +116,16 @@ def landing_dense(mems, vecs, params):
     """``(B, rays)`` int16 on the device for the ``(B, 65536)`` image stack ``mems`` and
     ``params`` rows (seed then observer, as :func:`landtable._march_params`): the packed
     landing tile of every ray of ``vecs`` against each image, -1 where it does not land.
-    One launch; the result stays a device array."""
+    One launch; the result is a view of a persistent device buffer, valid until the next
+    call."""
     n = vecs[0].shape[0]
     rows = np.asarray(params, dtype=np.int64)
-    dense = cuda.device_array((len(mems), n), dtype=np.int16)
+    dense = scratch("landing_out", (len(mems), n), np.int16)
     _clear_kernel[(_blocks(n), len(mems)), BLOCK](
-        cuda.to_device(np.ascontiguousarray(mems, dtype=np.uint8)),
+        stage("landing_img", np.asarray(mems, dtype=np.uint8)),
         *vecs,
-        cuda.to_device(np.ascontiguousarray(rows[:, :9])),
-        cuda.to_device(np.ascontiguousarray(rows[:, 9:])),
+        stage("landing_params", rows[:, :9]),
+        stage("landing_obs", rows[:, 9:]),
         dense,
     )
     return dense
@@ -238,52 +264,6 @@ def grid2(width, rows):
     return (_blocks(width), rows), BLOCK
 
 
-@functools.cache
-def device_maps():
-    """The badline run maps of :data:`badline_jit.MAPS` resident on the device: the clock
-    kernel's table argument."""
-    return tuple(cuda.to_device(a) for a in badline_jit.MAPS)
-
-
-@cuda.jit(cache=True)
-def _advance_kernel(imgs, pos, clock, rows, zps, left, plotting, out, maps):
-    """One thread per live row ``b``: :func:`enemies_jit._advance` over ``imgs[pos[b]]`` from
-    and into the clock fields ``clock[rows[b]]``.  ``out[b]`` takes the frames left, then
-    the strip replot request, if any (target or -1, left column, columns, span)."""
-    b = cuda.grid(1)
-    if b < rows.shape[0]:
-        zp = zps[b]
-        for k in range(zp.shape[0]):
-            zp[k] = 0
-        c = clock[rows[b]]
-        r = _advance_one(
-            imgs[pos[b]],
-            zp,
-            left[b],
-            plotting,
-            c[0],
-            c[1],
-            c[2],
-            c[3],
-            c[4],
-            c[5],
-            c[6],
-            c[7],
-            c[8],
-            c[9],
-            c[10],
-            c[11],
-            maps,
-        )
-        for k in range(12):
-            c[k] = r[k]
-        out[b, 0] = r[12]
-        out[b, 1] = zp[enemies_jit.ZP_REPLOT] - 1
-        out[b, 2] = zp[enemies_jit.ZP_REPLOT_LEFT]
-        out[b, 3] = zp[enemies_jit.ZP_REPLOT_COLS]
-        out[b, 4] = zp[enemies_jit.ZP_REPLOT_SPAN]
-
-
 @cuda.jit(cache=True)
 def _ops_kernel(imgs, ops, ok):
     b = cuda.grid(1)
@@ -339,69 +319,144 @@ def _gather_kernel(mut, idx, out):
 
 def gather_rows(mut, idx):
     """The host ``(len(idx), M)`` copy of device rows ``idx`` of ``mut``."""
-    out = cuda.device_array((len(idx), mut.shape[1]), dtype=np.uint8)
+    out = scratch("gather_out", (len(idx), mut.shape[1]), np.uint8)
     grid, block = grid2(mut.shape[1], len(idx))
-    _gather_kernel[grid, block](mut, cuda.to_device(idx), out)
+    _gather_kernel[grid, block](mut, stage("gather_idx", idx), out)
     return out.copy_to_host()
 
 
 def copy_clock(clock, src, dst):
     """Device clock rows ``dst`` <- rows ``src`` (host index arrays)."""
     grid, block = grid2(clock.shape[1], len(src))
-    _copy_clock_kernel[grid, block](clock, cuda.to_device(src), cuda.to_device(dst))
+    _copy_clock_kernel[grid, block](
+        clock, stage("clock_src", src), stage("clock_dst", dst)
+    )
 
 
 def put_clock(clock, rows, vals):
     """Device clock rows ``rows`` <- the host ``(len(rows), 12)`` ``vals``."""
     grid, block = grid2(clock.shape[1], len(rows))
     _put_clock_kernel[grid, block](
-        clock, cuda.to_device(rows), cuda.to_device(np.ascontiguousarray(vals))
+        clock, stage("clock_rows", rows), stage("clock_vals", vals)
     )
 
 
 def get_clock(clock, rows):
     """The host ``(len(rows), 12)`` copy of device clock rows ``rows``."""
-    out = cuda.device_array((len(rows), clock.shape[1]), dtype=np.int64)
+    out = scratch("clock_out", (len(rows), clock.shape[1]), np.int64)
     grid, block = grid2(clock.shape[1], len(rows))
-    _get_clock_kernel[grid, block](clock, cuda.to_device(rows), out)
+    _get_clock_kernel[grid, block](clock, stage("clock_rows", rows), out)
     return out.copy_to_host()
 
 
-def advance_rows(imgs, clock, rows, n_frames, plotting, price):
+@cuda.jit(cache=True)
+def _peek_kernel(imgs, pos, addrs, out):
+    """``out[b, j]`` <- byte ``addrs[j]`` of image ``imgs[pos[b]]``."""
+    j, b = cuda.grid(2)
+    if b < pos.shape[0] and j < addrs.shape[0]:
+        out[b, j] = imgs[pos[b], addrs[j]]
+
+
+@cuda.jit(cache=True)
+def _patch_kernel(imgs, clock, pos, rows, at, val, fresh):
+    """Image ``imgs[pos[b]]`` byte ``at[b, j]`` <- ``val[b, j]`` and clock row ``rows[b]``
+    <- ``fresh[b]``."""
+    j, b = cuda.grid(2)
+    if b < pos.shape[0]:
+        if j < at.shape[1]:
+            imgs[pos[b], at[b, j]] = val[b, j]
+        if j < clock.shape[1]:
+            clock[rows[b], j] = fresh[b, j]
+
+
+_THREADS = threading.local()
+_PINNED = []
+
+
+@functools.cache
+def _cpu_pool():
+    """The host threads that run the enemy clock: one per CPU."""
+    return concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1)
+
+
+def _pinned(n, width):
+    """A persistent page-locked ``(n, width)`` uint8 host array: the staging rows of the
+    images being advanced, grown geometrically."""
+    if not _PINNED or _PINNED[0].shape[0] < n:
+        have = _PINNED[0].shape[0] if _PINNED else 0
+        _PINNED[:] = [cuda.pinned_array((max(n, 2 * have), width), dtype=np.uint8)]
+    return _PINNED[0]
+
+
+def _run_row(b, imgs, clock, pos, rows, left, host, plotting):
+    """Row ``b`` of the round on a host thread: image and clock fields down, the frames
+    run by :func:`enemies_jit.advance_one`, both back up.  Returns the status row
+    ``(frames left, replot request, clock fields)``."""
+    if not hasattr(_THREADS, "stream"):
+        _THREADS.stream = cuda.stream()
+    stream = _THREADS.stream
+    mem = host[b]
+    imgs[pos[b]].copy_to_host(mem, stream=stream)
+    carry = clock[rows[b]].copy_to_host(stream=stream)
+    stream.synchronize()
+    new, rest, replot = enemies_jit.advance_one(
+        mem, left[b], plotting, carry, enemies_jit.MAPS
+    )
+    imgs[pos[b]].copy_to_device(mem, stream=stream)
+    clock[rows[b]].copy_to_device(new, stream=stream)
+    stream.synchronize()
+    return np.concatenate(([rest], replot, new))
+
+
+def advance_rows(imgs, clock, rows, n_frames, plotting, reads, price):
     """Advance row ``i`` of the device stack ``imgs`` by ``n_frames[i]`` frames in place, from
-    and into the device ``clock`` row ``rows[i]``.  Rounds of :func:`_advance_kernel` run the
-    live rows and read back one small status row each; a row stopped at a strip replot is
-    handed to ``price(image bytes, clock row, request)``, which returns its image and clock
-    row, and re-enters the next round."""
+    and into the device ``clock`` row ``rows[i]``.  Each round copies the live rows down to
+    the pinned staging buffer and runs them on the host threads, longest first, with
+    :func:`enemies_jit.advance_one`; the rows go back up when they stop.
+    The rows a round stopped at a strip replot are priced together: ``price(seen, clock,
+    request)`` takes the image bytes at the addresses ``reads`` of those rows, their clock
+    rows and their requests, and returns the new clock rows and the ``(at, val)`` byte
+    patches (``(k, m)`` each), which one launch writes back before the rows re-enter the
+    next round."""
     left = np.array(n_frames, dtype=np.int64)
-    maps = device_maps()
+    want = stage("replot_reads", np.asarray(reads, dtype=np.int64))
     while True:
         live = np.flatnonzero(left > 0)
         if not live.size:
             return
-        out = cuda.device_array((live.size, 5), dtype=np.int64)
-        _advance_kernel[_blocks(live.size), BLOCK](
-            imgs,
-            cuda.to_device(live),
-            clock,
-            cuda.to_device(rows[live]),
-            cuda.device_array((live.size, enemies_jit.ZP_N), dtype=np.int64),
-            cuda.to_device(left[live]),
-            bool(plotting),
-            out,
-            maps,
-        )
-        out = out.copy_to_host()
-        stopped = out[:, 1] >= 0
-        for k in np.flatnonzero(stopped):
-            at = live[k]
-            img, row = price(
-                imgs[at].copy_to_host().tobytes(),
-                clock[rows[at]].copy_to_host(),
-                out[k, 1:],
+        host = _pinned(live.size, imgs.shape[1])
+        owned, todo = rows[live], left[live]
+        longest_first = np.argsort(todo, kind="stable")[::-1].tolist()
+        done = list(
+            _cpu_pool().map(
+                lambda b: _run_row(
+                    b, imgs, clock, live, owned, todo, host, bool(plotting)
+                ),
+                longest_first,
             )
-            imgs[at].copy_to_device(img)
-            clock[rows[at]].copy_to_device(row)
+        )
+        out = np.empty((live.size, 17), dtype=np.int64)
+        out[longest_first] = done
+        stopped = out[:, 1] >= 0
+        at = live[stopped]
+        if at.size:
+            pos = stage("replot_pos", at)
+            seen = scratch("replot_seen", (at.size, len(reads)), np.uint8)
+            grid, block = grid2(len(reads), at.size)
+            _peek_kernel[grid, block](imgs, pos, want, seen)
+            fresh, where, val = price(
+                seen.copy_to_host(), out[stopped, 5:], out[stopped, 1:5]
+            )
+            grid, block = grid2(max(where.shape[1], clock.shape[1]), at.size)
+            _patch_kernel[grid, block](
+                imgs,
+                clock,
+                pos,
+                stage("replot_rows", rows[at]),
+                stage("replot_at", where),
+                stage("replot_val", val),
+                stage("replot_clock", fresh),
+            )
         left[live] = np.where(stopped, np.maximum(out[:, 0], 0), 0)
 
 
@@ -481,13 +536,14 @@ def _pricing_buffers(jobs):
     """``(slots, scratch, out)`` of a launch over ``jobs`` jobs, from the persistent
     device buffers: grown when a launch needs more slots, never freed between launches.
     A slot is one thread's scratch, so the slot count is capped by the threads the device
-    keeps resident and by half the device memory."""
+    keeps resident and by half the device memory free at the first launch."""
     per_slot = sum(a.nbytes for a in pricing_jit.scratch(1))
     slots = jobs
     if not _simulated():
-        held = len(_PRICING["scr"][0]) * per_slot if _PRICING["scr"] else 0
-        free = cuda.current_context().get_memory_info()[0]
-        slots = min(slots, resident_threads(), max(1, (free + held) // 2 // per_slot))
+        if "slots" not in _PRICING:
+            free = cuda.current_context().get_memory_info()[0]
+            _PRICING["slots"] = min(resident_threads(), max(1, free // 2 // per_slot))
+        slots = min(slots, _PRICING["slots"])
     slots = max(1, slots)
     if not _PRICING["scr"] or len(_PRICING["scr"][0]) < slots:
         _PRICING["scr"] = ()
@@ -509,9 +565,9 @@ def render_cycles_many(mems, jobs, vis, model):
         _MODEL_DEVICE[key] = (model, tuple(cuda.to_device(a) for a in model))
     slots, scr, out = _pricing_buffers(len(jobs))
     render_kernel()[_blocks(slots), BLOCK](
-        cuda.to_device(np.ascontiguousarray(mems)),
-        cuda.to_device(jobs),
-        cuda.to_device(np.ascontiguousarray(vis)),
+        stage("price_mems", mems),
+        stage("price_jobs", jobs),
+        stage("price_vis", vis),
         _MODEL_DEVICE[key][1],
         scr,
         out,

@@ -1573,6 +1573,95 @@ def _price_replot(state, target, left, columns, span):
         projector.hold_camera(state, left)
 
 
+REPLOT_READS = np.concatenate(
+    [
+        projector._SCENE_INDEX,
+        [
+            mm.PLAYER_OBJECT,
+            projector.SCREEN_SCROLL,
+            mm.CAMERA_OBJECT,
+            projector.CAMERA_SAVED,
+            projector.CAMERA_REF_LO,
+        ],
+    ]
+).astype(np.int64)
+_C_SHIFT, _C_CLEAR, _C_RESIDUAL, _C_OVERHANG = (
+    CLOCK.index(f)
+    for f in ("camera_shift", "camera_clear", "cycle_residual", "clock_overhang")
+)
+
+
+def price_replots(seen, clock, request):
+    """:func:`_price_replot` of ``k`` stopped rows at once: ``(clock, at, val)``, each
+    row's new clock fields and the bytes it writes -- the camera's saved bearing, half
+    column and bearing -- as ``(k, 3)`` addresses and values.
+
+    ``seen`` holds each row's image bytes at :data:`REPLOT_READS` (the scene the strips
+    plot from and the few scalars the replot reads), ``clock`` its ``(k, 12)`` fields and
+    ``request`` its ``(k, 4)`` ``(target, left, columns, span)``; every row's chunk renders
+    price in one launch."""
+    k = len(seen)
+    mems = np.zeros((k, 1 << 16), dtype=np.uint8)
+    mems[:, REPLOT_READS] = seen
+    rows = np.arange(k)
+    player = mems[rows, mm.PLAYER_OBJECT].astype(np.int64)
+    bearing = mems[rows, mm.OBJECTS_H_ANGLE + player].astype(np.int64)
+    pitch = mems[rows, mm.OBJECTS_V_ANGLE + player].astype(np.int64)
+    chunks = [projector.replot_chunks(int(r[1]), int(r[3])) for r in request]
+    owner = np.repeat(rows, [len(c) for c in chunks])
+    left, cols = np.array([c for cs in chunks for c in cs], dtype=np.int64).T
+    window = np.stack(
+        [
+            projector.window_plan(
+                projector.PLAY_MODE, projector.strip_window(int(c)), None
+            )
+            for c in cols
+        ]
+    )
+    jobs_obs = player[owner]
+    vis, vis_at = projector.occlusion_stack(mems, owner, jobs_obs)
+    jobs = projector.cost_job_columns(
+        mems,
+        owner,
+        owner,
+        jobs_obs,
+        (bearing[owner] + (left >> 1)) & 0xFF,
+        pitch[owner],
+        np.where(left & 1, 0x80, 0),
+        window,
+        vis_at,
+    )
+    cost = iter(projector.render_cycles_of(mems, jobs, vis).tolist())
+    fresh = np.array(clock, dtype=np.int64)
+    at = np.zeros((k, 3), dtype=np.int64)
+    val = np.zeros((k, 3), dtype=np.int64)
+    for i, (chunk, req) in enumerate(zip(chunks, request)):
+        shift, span = int(req[1]), int(req[3])
+        frames = projector.strip_line_cycles(
+            span, len(chunk), int(mems[i, projector.SCREEN_SCROLL])
+        )
+        frames /= projector.FRAME_CYCLES
+        for _ in chunk:
+            frames += projector._cost_of(next(cost))
+        debt = int(round(frames * passcost.PAL_FRAME_CYCLES))
+        clear = _clear_cycles(span) - debt
+        fresh[i, _C_SHIFT] = shift
+        fresh[i, _C_CLEAR] = clear
+        fresh[i, _C_RESIDUAL] -= debt
+        fresh[i, _C_OVERHANG] += debt
+        held = fresh[i, _C_RESIDUAL] >= clear
+        cam = int(mems[i, mm.CAMERA_OBJECT])
+        saved = int(mems[i, mm.OBJECTS_H_ANGLE + cam])
+        at[i] = (
+            projector.CAMERA_SAVED,
+            projector.CAMERA_REF_LO,
+            mm.OBJECTS_H_ANGLE + cam,
+        )
+        ref = (0x80 if shift & 1 else 0) if held else 0
+        val[i] = (saved, ref, (saved + (shift >> 1)) & 0xFF if held else saved)
+    return fresh, at, val
+
+
 def advance_rows(mems, clock, n_frames, plotting=False):
     """Advance row ``i`` of a ``(B, 65536)`` uint8 image stack, with the ``(B, 12)`` int64
     :data:`CLOCK` resume fields in ``clock``, by ``n_frames[i]`` frames, in place: each row

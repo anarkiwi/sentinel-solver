@@ -6,35 +6,42 @@ reads them with one ``Pool.evaluate``, drops duplicate rows through the row hash
 the best ``width`` under a pluggable objective.  The moves are the phase player's own
 verbs: absorb a reachable object, hop (stack boulders, cap with a robot, transfer), mount a
 robot already owned, or wait one quantum; each is priced by the phase player's aim and settle
-spans, batched across the beam through the fleet scheduler.
+spans, the aims over arrays for the whole beam at once.
 """
 
 import argparse
 import json
+from functools import partial
 
 import numpy as np
 from tqdm import tqdm
 
 from sentinel import (
     actions,
+    aimbatch,
+    batch,
     engine,
-    fleet,
+    landtable,
     memmap as mm,
     projector,
     rows_jit,
+    terrain,
 )
 from sentinel.game import Game
-from sentinel.phase_player import WAIT_QUANTUM, PhasePlayer
+from sentinel.phase_player import WAIT_QUANTUM
 from sentinel.playerbase import (
     BOULDER_H,
     EYE_EPS,
     ROBOT_EYE,
     SIGHTS_CENTRE,
-    _Views,
+    TOGGLE_FRAMES,
+    _Landings,
+    _view_at,
+    settle_frames,
 )
 
-ABSORB, HOP, MOUNT, WAIT = range(4)
-KINDS = ("absorb", "hop", "mount", "wait")
+ABSORB, HOP, MOUNT, WAIT, RELOCATE = range(5)
+KINDS = ("absorb", "hop", "mount", "wait", "hyperspace")
 MAX_BOULDERS = 3
 OP_LEN = 3 + MAX_BOULDERS
 REACH = 10
@@ -77,133 +84,175 @@ def keep_best(identity, keys, frames, width):
 
 
 class Board:
-    """The decision-relevant arrays of one state, as numpy columns over its slots."""
+    """The decision-relevant arrays of ``n`` states, as ``(n, slots)`` numpy columns.
 
-    def __init__(self, st):
-        mem = np.frombuffer(st.mem, dtype=np.uint8)
+    ``read(addrs)`` gives the ``(n, len(addrs))`` uint8 bytes at image ``addrs`` of every
+    state: a pool's mutable region, or the images themselves."""
 
+    def __init__(self, read):
         def col(base):
-            return mem[base : base + mm.NUM_SLOTS].astype(np.int64)
+            return read(base + SLOTS).astype(np.int64)
 
         self.flags, self.otype = col(mm.OBJECTS_FLAGS), col(mm.OBJECTS_TYPE)
         self.x, self.y = col(mm.OBJECTS_X), col(mm.OBJECTS_Y)
+        self.h, self.v = col(mm.OBJECTS_H_ANGLE), col(mm.OBJECTS_V_ANGLE)
         self.z = col(mm.OBJECTS_Z_HEIGHT) + col(mm.OBJECTS_Z_FRACTION) / 256.0
-        self.tile = mem[TILE_ADDR].astype(np.int64)
-        self.player = int(mem[mm.PLAYER_OBJECT])
-        self.energy = int(mem[mm.PLAYER_ENERGY])
+        self.n = len(self.flags)
+        self.rows = np.arange(self.n)
+        shape = (self.n, mm.N, mm.N)
+        self.tile = read(TILE_ADDR.ravel()).astype(np.int64).reshape(shape)
+        self.player = read([mm.PLAYER_OBJECT])[:, 0].astype(np.int64)
+        self.energy = read([mm.PLAYER_ENERGY])[:, 0].astype(np.int64)
         self.occupied = (self.flags & 0x80) == 0
-        xs, ys = np.where(self.occupied, self.x, 0), np.where(self.occupied, self.y, 0)
-        at = self.tile[xs, ys]
+        self.xs, self.ys = (np.where(self.occupied, a, 0) for a in (self.x, self.y))
+        at = self.tile[self.rows[:, None], self.xs, self.ys]
         self.tops = self.occupied & (at >= mm.OBJECT_TILE) & ((at & 0x3F) == SLOTS)
-        self.eye = self.z[self.player]
+        self.eye = self.z[self.rows, self.player]
+
+    @classmethod
+    def of_states(cls, states):
+        """The board of each of ``states``."""
+        mems = np.stack([np.frombuffer(st.mem, dtype=np.uint8) for st in states])
+        return cls(lambda addrs: mems[:, addrs])
+
+    def aim_from(self):
+        """``(n, 2)`` bearing and pitch each player faces."""
+        return np.stack([a[self.rows, self.player] for a in (self.h, self.v)], 1)
 
     def fuel(self):
-        """``(N, N)`` int: absorbable objects within :data:`REACH` of each tile in both axes
-        (what a landing there can live on): each stamps its own box."""
-        take = self.occupied & (SLOTS != self.player)
+        """``(n, N, N)`` int: absorbable objects within :data:`REACH` of each tile in both
+        axes (what a landing there can live on): each stamps its own box."""
+        take = self.occupied & (SLOTS != self.player[:, None])
         take &= ~np.isin(self.otype, mm.ENEMY_TYPES + (mm.T_PLATFORM,))
-        grid = np.zeros((mm.N, mm.N), dtype=np.int64)
-        np.add.at(grid, (self.x[take], self.y[take]), 1)
-        total = np.zeros((mm.N + 1, mm.N + 1), dtype=np.int64)
-        total[1:, 1:] = grid.cumsum(0).cumsum(1)
+        grid = np.zeros((self.n, mm.N, mm.N), dtype=np.int64)
+        row = np.broadcast_to(self.rows[:, None], take.shape)
+        np.add.at(grid, (row[take], self.x[take], self.y[take]), 1)
+        total = np.zeros((self.n, mm.N + 1, mm.N + 1), dtype=np.int64)
+        total[:, 1:, 1:] = grid.cumsum(1).cumsum(2)
         idx = np.arange(mm.N)
         lo, hi = np.clip(idx - REACH, 0, mm.N), np.clip(idx + REACH + 1, 0, mm.N)
-        return total[hi][:, hi] - total[lo][:, hi] - total[hi][:, lo] + total[lo][:, lo]
+        return (
+            total[:, hi][:, :, hi]
+            - total[:, lo][:, :, hi]
+            - total[:, hi][:, :, lo]
+            + total[:, lo][:, :, lo]
+        )
 
 
 def _top_ranked(mask, keys, branch):
-    """The first ``branch`` indices of ``mask`` under the lexicographic order of ``keys``
-    (the first most significant, smaller first), the lower index first among equals."""
-    at = np.flatnonzero(mask)
-    order = np.lexsort([at] + [np.asarray(k)[at] for k in keys[::-1]])
-    return at[order][:branch]
+    """``(row, index)`` of the first ``branch`` true entries of each row of ``mask`` under
+    the lexicographic order of ``keys`` (the first most significant, smaller first), the
+    lower index first among equals; rows ascending."""
+    row, at = np.nonzero(mask)
+    order = np.lexsort([at] + [np.asarray(k)[row, at] for k in keys[::-1]] + [row])
+    row, at = row[order], at[order]
+    keep = np.arange(row.size) - np.searchsorted(row, row) < branch
+    return row[keep], at[keep]
 
 
 def moves(board, landed, branch):
-    """``(kind, tile, k, slot)`` int64 arrays of a board's candidate moves: absorbs, hops,
-    mounts and one wait, each class capped at ``branch`` and gated as the phase player gates
-    it.  ``landed`` masks the tiles a keyboard view reaches; ``tile`` is packed x * N + y.
-    """
-    me, energy = board.player, board.energy
-    reach = landed[
-        np.where(board.occupied, board.x, 0), np.where(board.occupied, board.y, 0)
-    ]
-    notme = (SLOTS != me) & ~((board.x == board.x[me]) & (board.y == board.y[me]))
+    """The candidate moves of every board, as int64 columns ``parent``, ``kind``, ``tile``,
+    ``k`` and ``slot``: absorbs, hops, mounts, one wait per board and, where the board is
+    barren, one relocation, each class capped at ``branch`` and gated as the phase player
+    gates it, a board's moves together and in that order.  A board is barren when no
+    absorb, hop or mount reaches it; the relocation also needs the toll in hand and the
+    Sentinel still standing (:meth:`PhasePlayer._relocate`).  ``landed`` is ``(n, N, N)``: the tiles a keyboard view reaches; ``tile``
+    is packed x * N + y."""
+    me, ar = board.player[:, None], board.rows[:, None]
+    energy = board.energy[:, None]
+    reach = landed[ar, board.xs, board.ys]
+    at_me = [np.take_along_axis(a, me, 1) for a in (board.x, board.y)]
+    notme = (SLOTS != me) & ~((board.x == at_me[0]) & (board.y == at_me[1]))
     foe = board.occupied & np.isin(board.otype, mm.ENEMY_TYPES)
-    sentinel_ok = (foe.sum() == 1) & (
-        energy + mm.ENERGY_IN_OBJECTS[mm.T_SENTINEL] >= 2 * ROBOT_E
+    sentinel_ok = (foe.sum(1) == 1) & (
+        board.energy + mm.ENERGY_IN_OBJECTS[mm.T_SENTINEL] >= 2 * ROBOT_E
     )
-    low = board.z <= board.eye + EYE_EPS
+    low = board.z <= board.eye[:, None] + EYE_EPS
     kind = board.otype
     spent = (
         (kind == mm.T_TREE)
         | (((kind == mm.T_ROBOT) | (kind == mm.T_BOULDER)) & low)
         | (kind == mm.T_SENTRY)
-        | ((kind == mm.T_SENTINEL) & sentinel_ok)
+        | ((kind == mm.T_SENTINEL) & sentinel_ok[:, None])
     )
-    gone = bool(board.flags[actions.SENTINEL_SLOT] & 0x80)
-    eat = (
-        board.tops & reach & notme & spent & (not gone) & (energy < mm.ENERGY_MASK - 4)
-    )
-    pick_eat = _top_ranked(eat, (~foe, -VALUE[kind]), branch)
+    gone = (board.flags[:, actions.SENTINEL_SLOT] & 0x80) != 0
+    eat = board.tops & reach & notme & spent & ~gone[:, None]
+    eat &= energy < mm.ENERGY_MASK - 4
+    eat_row, eat_at = _top_ranked(eat, (~foe, -VALUE[kind]), branch)
 
     covered = board.tile >= mm.OBJECT_TILE
-    under = board.tile & 0x3F
-    utype = board.otype[under]
+    under = (board.tile & 0x3F).reshape(board.n, -1)
+    utype = np.take_along_axis(board.otype, under, 1).reshape(board.tile.shape)
+    uz = np.take_along_axis(board.z, under, 1).reshape(board.tile.shape)
     base = np.where(
         covered,
-        board.z[under] + np.where(utype == mm.T_PLATFORM, 1.0, BOULDER_H),
+        uz + np.where(utype == mm.T_PLATFORM, 1.0, BOULDER_H),
         (board.tile >> 4) + ROBOT_EYE,
     )
     stack = ~covered | (utype == mm.T_BOULDER) | (utype == mm.T_PLATFORM)
-    need = np.maximum(0, np.ceil((board.eye + EYE_EPS - base) / BOULDER_H)).astype(
-        np.int64
-    )
-    gain = base + BOULDER_H * need - board.eye
+    eye = board.eye[:, None, None]
+    need = np.maximum(0, np.ceil((eye + EYE_EPS - base) / BOULDER_H)).astype(np.int64)
+    gain = base + BOULDER_H * need - eye
     cost = 2 * need + ROBOT_E
     fuel = board.fuel()
-    hop = landed & stack & (gain > 0) & (need <= MAX_BOULDERS) & (cost <= energy)
-    hop &= (energy - cost > 0) & ((energy - cost >= ROBOT_E) | (fuel > 0))
-    flat = hop.ravel()
-    pick_hop = _top_ranked(flat, (-(gain / cost).ravel(), -fuel.ravel()), branch)
+    purse = energy[:, :, None]
+    hop = landed & stack & (gain > 0) & (need <= MAX_BOULDERS) & (cost <= purse)
+    hop &= (purse - cost > 0) & ((purse - cost >= ROBOT_E) | (fuel > 0))
+    flat = (board.n, -1)
+    hop_row, hop_at = _top_ranked(
+        hop.reshape(flat), (-(gain / cost).reshape(flat), -fuel.reshape(flat)), branch
+    )
 
     ours = (
         board.tops
         & reach
         & notme
         & (kind == mm.T_ROBOT)
-        & (board.z > board.eye + EYE_EPS)
+        & (board.z > board.eye[:, None] + EYE_EPS)
     )
-    near = fuel[
-        np.where(board.occupied, board.x, 0), np.where(board.occupied, board.y, 0)
-    ]
+    near = fuel[ar, board.xs, board.ys]
     ours &= (energy >= ROBOT_E) | (near > 0)
-    pick_mount = _top_ranked(ours, (-board.z,), branch)
+    mount_row, mount_at = _top_ranked(ours, (-board.z,), branch)
 
-    here = board.x[me] * mm.N + board.y[me]
-    tiles = np.concatenate(
+    own = board.rows
+    barren = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1))
+    away = np.flatnonzero(barren & ~gone & (board.energy >= ROBOT_E))
+    sizes = [eat_row.size, hop_row.size, mount_row.size, own.size, away.size]
+    parent = np.concatenate([eat_row, hop_row, mount_row, own, away])
+    cls = np.repeat([ABSORB, HOP, MOUNT, WAIT, RELOCATE], sizes)
+    pack = lambda row, at: board.x[row, at] * mm.N + board.y[row, at]
+    tile = np.concatenate(
         [
-            board.x[pick_eat] * mm.N + board.y[pick_eat],
-            pick_hop,
-            board.x[pick_mount] * mm.N + board.y[pick_mount],
-            [here],
-        ]
-    ).astype(np.int64)
-    kinds = np.repeat(
-        [ABSORB, HOP, MOUNT, WAIT],
-        [len(pick_eat), len(pick_hop), len(pick_mount), 1],
-    )
-    ks = np.concatenate(
-        [
-            np.zeros(len(pick_eat), dtype=np.int64),
-            need.ravel()[pick_hop],
-            np.zeros(len(pick_mount) + 1, dtype=np.int64),
+            pack(eat_row, eat_at),
+            hop_at,
+            pack(mount_row, mount_at),
+            pack(own, board.player),
+            pack(away, board.player[away]),
         ]
     )
-    slots = np.concatenate(
-        [pick_eat, np.full(len(pick_hop), -1), pick_mount, [-1]]
-    ).astype(np.int64)
-    return kinds.astype(np.int64), tiles, ks, slots
+    k = np.concatenate(
+        [
+            np.zeros(eat_row.size, dtype=np.int64),
+            need.reshape(flat)[hop_row, hop_at],
+            np.zeros(mount_row.size + own.size + away.size, dtype=np.int64),
+        ]
+    )
+    slot = np.concatenate(
+        [
+            eat_at,
+            np.full(hop_row.size, -1),
+            mount_at,
+            np.full(own.size + away.size, -1),
+        ]
+    )
+    order = np.lexsort([cls, parent])
+    return {
+        "parent": parent[order].astype(np.int64),
+        "kind": cls[order].astype(np.int64),
+        "tile": tile[order].astype(np.int64),
+        "k": k[order].astype(np.int64),
+        "slot": slot[order].astype(np.int64),
+    }
 
 
 def build_ops(kind, tile, k, slot, view):
@@ -250,66 +299,123 @@ def _verbs(kind, k):
     return VERBS.get(kind, ())
 
 
-def _span_of(kind, k, tile, span):
-    """Frames of a move from the priced ``span[(tile, verb)]``."""
+def _span_of(kind, k, span):
+    """Frames of a move from the priced ``span[verb]`` of its tile."""
     if kind == HOP:
-        return (
-            k * span.get((tile, "boulder"), 0.0)
-            + span[(tile, "robot")]
-            + span[(tile, "transfer")]
-        )
+        return k * span.get("boulder", 0.0) + span["robot"] + span["transfer"]
     if kind == WAIT:
         return float(WAIT_QUANTUM)
-    return span[(tile, _verbs(kind, k)[0])]
+    return span[_verbs(kind, k)[0]]
 
 
-def plan(player, branch):
-    """The priced moves of ``player``'s board, as a dict of columns: ``kind``, ``tile``,
-    ``k``, ``slot``, ``span`` (frames, int64) and ``view`` (bearing, pitch, cursor x, y)
-    with -1 where a move has no aim.  Runs as a fleet task, so its landing sweeps and
-    span pricings are batched with the other rows'."""
-    st = player.st
-    views = _Views(st)
-    kind, tile, k, slot = moves(Board(st), views.landed(), branch)
-    xy = [(int(p) // mm.N, int(p) % mm.N) for p in tile]
-    aimed = np.flatnonzero(kind != WAIT)
-    seen, calls, found = {}, [], {}
-    for i in aimed:
-        t = xy[i]
-        if t not in found:
-            found[t] = views.get(t, band=True)
-        if found[t] is None:
-            continue
-        for verb in _verbs(kind[i], k[i]):
-            if (int(tile[i]), verb) not in seen:
-                seen[(int(tile[i]), verb)] = (t, verb)
-                calls += player._span_calls(  # pylint: disable=protected-access
-                    t, (verb,), found[t]
-                )
-    projector.prefetch(calls)
-    span = {
-        key: player._span(verb, found[t], t)  # pylint: disable=protected-access
-        for key, (t, verb) in seen.items()
-    }
+def lattice_axes(ray, grids):
+    """``(h, v, cx, cy, cell)`` of lattice ``ray`` of ``grids``: the aim's four axes and
+    its (bearing, pitch) cell index."""
+    hgrid, vgrid, cxs, cys = (np.asarray(g, dtype=np.int64) for g in grids)
+    per_h = len(cxs) * len(cys)
+    vi, rem = np.divmod(ray, len(hgrid) * per_h)
+    hi, rem = np.divmod(rem, per_h)
+    cxi, cyi = np.divmod(rem, len(cys))
+    return hgrid[hi], vgrid[vi], cxs[cxi], cys[cyi], vi * len(hgrid) + hi
+
+
+def _landings(states, grids, aim_from):
+    """:class:`_Landings` of every state on lattice ``grids``, one launch for the sweeps."""
+    return [
+        _Landings(st, rays, tiles, grids, (int(a[0]), int(a[1])))
+        for st, (rays, tiles), a in zip(states, batch.landings(states, grids), aim_from)
+    ]
+
+
+def plan(states, imgs, board, beam, branch):
+    """The priced moves of every board as a dict of columns: :func:`moves`' ``parent``,
+    ``kind``, ``tile``, ``k`` and ``slot`` for the moves some view reaches, with ``span``
+    (frames, int64) and ``view`` (bearing, pitch, cursor x, y; -1 where a move has no aim).
+
+    Both lattices are swept for every board in one launch each, the (bearing, pitch) cells
+    of the aimed tiles are priced together and their aims summed over arrays; only the
+    settles run on the scalar models, sharing one pricing pass."""
+    n, tiles = len(states), mm.N * mm.N
+    aim_from = board.aim_from()
+    grids = [landtable.lattice(v_primary=p) for p in (True, False)]
+    lands = [_landings(states, g, aim_from) for g in grids]
+    tid_of = np.full((2, n, tiles), -1, dtype=np.int64)
+    for lat in range(2):
+        for r, land in enumerate(lands[lat]):
+            tid_of[lat, r, land.tiles] = np.arange(land.tiles.size)
+    reach = (tid_of >= 0).any(axis=0).reshape(n, mm.N, mm.N)
+    mv = moves(board, reach, branch)
+    parent, kind, tile = mv["parent"], mv["kind"], mv["tile"]
+    in_primary, in_band = (tid_of[g, parent, tile] >= 0 for g in range(2))
+    lat = np.where(in_primary, 0, np.where(in_band, 1, -1))
+    aimed = (kind != WAIT) & (lat >= 0)
+    tid = tid_of[np.maximum(lat, 0), parent, tile]
+    want = np.unique(np.stack([parent, lat, tid])[:, aimed], axis=1)
+    pair, start = np.unique(want[0] * 2 + want[1], return_index=True)
+    ends = np.append(start[1:], want.shape[1])
+    ask_tids = [want[2, a:b] for a, b in zip(start, ends)]
+    row, la = pair // 2, pair % 2
+    asks = [
+        np.unique(lands[g][r].cell[np.isin(lands[g][r].tid, t)])
+        for r, g, t in zip(row, la, ask_tids)
+    ]
+    pan, turn, uturn = aimbatch.aim_parts(
+        imgs, row, la, aim_from[row, 0], aim_from[row, 1], asks, grids
+    )
+    ray_of = np.full((2, n, tiles), -1, dtype=np.int64)
+    pan_of = np.zeros((2, n, max(len(g[0]) * len(g[1]) for g in grids)))
+    ut_of = np.zeros(n)
+    for q, (r, g) in enumerate(zip(row, la)):
+        land = lands[g][r]
+        land.fill(asks[q], pan[q], turn[q])
+        ray_of[g, r, land.tiles[ask_tids[q]]] = land.winners(ask_tids[q])
+        pan_of[g, r, asks[q]] = pan[q]
+        ut_of[r] = uturn[q]
+
+    ray = ray_of[np.maximum(lat, 0), parent, tile]
     view = np.full((len(kind), 4), -1, dtype=np.int64)
+    cell = np.zeros(len(kind), dtype=np.int64)
+    for g in range(2):
+        pick = aimed & (lat == g)
+        *axes, cell[pick] = lattice_axes(ray[pick], grids[g])
+        view[pick] = np.stack(axes, 1)
+    bear = beam["bearing"][parent]
+    reuse = (bear[:, 0] == view[:, 0]) & (bear[:, 1] == view[:, 1])
+    cursor = np.where(reuse[:, None], beam["cursor"][parent], SIGHTS_CENTRE)
+    drive = np.maximum(
+        np.abs(view[:, 2] - cursor[:, 0]), np.abs(view[:, 3] - cursor[:, 1])
+    )
+    turns = aimbatch.press_plan(aim_from[parent, 0], view[:, 0])[0]
+    aim = aimbatch.aim_total_columns(
+        np.where(reuse, 0.0, TOGGLE_FRAMES),
+        np.where(turns > 0, ut_of[parent], 0.0),
+        pan_of[np.maximum(lat, 0), parent, cell],
+        drive,
+    )
+
+    verbs = {}
+    for i in np.flatnonzero(aimed):
+        for verb in _verbs(kind[i], int(mv["k"][i])):
+            verbs.setdefault((int(parent[i]), int(tile[i]), verb), i)
+    calls = []
+    for (r, t, verb), i in verbs.items():
+        xy = (t // mm.N, t % mm.N)
+        eye = terrain.top_object(states[r], *xy) if verb == "transfer" else None
+        view_i = _view_at(ray[i], grids[lat[i]])
+        calls.append(partial(settle_frames, states[r], verb, view_i, eye, tile=xy))
+    projector.prefetch(calls)
+    span = {}
+    for (key, i), call in zip(verbs.items(), calls):
+        same = key[2] == "transfer" and reuse[i]
+        span[key] = (0.0 if same else aim[i]) + call()
     frames = np.zeros(len(kind), dtype=np.int64)
-    live = np.ones(len(kind), dtype=bool)
-    for i, t in enumerate(xy):
-        if kind[i] != WAIT and found.get(t) is None:
-            live[i] = False
-            continue
-        if kind[i] != WAIT:
-            v = found[t]
-            view[i] = (v["h_angle"], v["v_angle"], *v["cursor"])
-        frames[i] = int(round(_span_of(kind[i], int(k[i]), int(tile[i]), span)))
-    return {
-        "kind": kind[live],
-        "tile": tile[live],
-        "k": k[live],
-        "slot": slot[live],
-        "span": frames[live],
-        "view": view[live],
-    }
+    live = (kind == WAIT) | (kind == RELOCATE) | aimed
+    for i in np.flatnonzero(live & (kind != RELOCATE)):
+        k = int(mv["k"][i])
+        per = {v: span[(int(parent[i]), int(tile[i]), v)] for v in _verbs(kind[i], k)}
+        frames[i] = int(round(float(_span_of(kind[i], k, per))))
+    mv["span"], mv["view"] = frames, view
+    return {name: col[live] for name, col in mv.items()}
 
 
 class BeamPlayer:
@@ -324,18 +430,6 @@ class BeamPlayer:
         self.verbose = verbose
         self.trace = []
         self.frames = 0
-
-    def _players(self, states, cursor, bearing, frames):
-        out = []
-        for st, cur, bear, fr in zip(states, cursor, bearing, frames):
-            player = PhasePlayer(Game(st), verbose=False, rollout=True)
-            player.cursor = [int(c) for c in cur]
-            player.last_bearing = (
-                None if bear[0] == NO_BEARING else tuple(map(int, bear))
-            )
-            player.frames = int(fr)
-            out.append(player)
-        return out
 
     @staticmethod
     def _finishable(st):
@@ -366,19 +460,16 @@ class BeamPlayer:
         final = None
         with tqdm(range(depth + 1), unit="ply", desc="beam") as progress:
             for ply in progress:
-                states = pool.states(beam["row"])
+                mut = pool.mutable(beam["row"])
+                imgs = pool.overlay(mut)
+                states = pool.as_states(imgs, pool.clocks(beam["row"]))
                 done = [self._finishable(st) for st in states]
                 if any(done) or ply == depth:
                     final = int(np.flatnonzero(done)[0]) if any(done) else 0
                     break
-                players = self._players(
-                    states, beam["cursor"], beam["bearing"], beam["frames"]
-                )
-                parts = fleet.run([lambda p=p: plan(p, self.branch) for p in players])
-                bad = [p for p in parts if isinstance(p, fleet.Failure)]
-                if bad:
-                    raise RuntimeError(f"a beam row failed: {bad[0].error!r}")
-                nxt = self._ply(pool, beam, parts)
+                board = Board(lambda addrs, m=mut: pool.read(m, addrs))
+                cols = plan(states, imgs, board, beam, self.branch)
+                nxt = self._ply(pool, beam, cols)
                 if nxt is None:
                     final = 0
                     break
@@ -387,23 +478,40 @@ class BeamPlayer:
                 progress.set_postfix(rows=len(pool), best=int(record["eye"][0]))
         return self._conclude(pool, beam, history, final)
 
-    def _ply(self, pool, beam, parts):
+    def _children(self, pool, rows, kind, ops):
+        """``(children, ok, tile)`` of pool ``rows`` under ``ops``: the engine builds every
+        move but a relocation, whose hyperspace is PRNG-driven and runs on the host state;
+        ``tile`` is the packed player tile of each relocation child, 0 elsewhere."""
+        away = kind == RELOCATE
+        kids = np.zeros(len(rows), dtype=np.int64)
+        built = np.ones(len(rows), dtype=bool)
+        tile = np.zeros(len(rows), dtype=np.int64)
+        if (~away).any():
+            kids[~away], built[~away] = pool.expand(rows[~away], ops[~away])
+        if away.any():
+            states = pool.states(rows[away])
+            for st in states:
+                actions.hyperspace(st)
+            kids[away] = pool.add(states)
+            tile[away] = [x * mm.N + y for x, y in (st.player_xy() for st in states)]
+        return kids, built, tile
+
+    def _ply(self, pool, beam, cols):
         """``(next beam, record)`` after one ply, or None when no child survives."""
-        count = [len(p["kind"]) for p in parts]
-        cols = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
-        parent = np.repeat(np.arange(len(parts)), count)
+        parent = cols["parent"]
         ops = build_ops(
             cols["kind"], cols["tile"], cols["k"], cols["slot"], cols["view"][:, :2]
         )
-        kids, built = pool.expand(beam["row"][parent], ops)
+        kids, built, landed = self._children(
+            pool, beam["row"][parent], cols["kind"], ops
+        )
         run = np.flatnonzero(built)
         pool.advance(kids[run], cols["span"][run])
         fields = pool.evaluate(kids[run])
         alive, keys = self.objective(fields)
         move = cols["kind"][run]
-        cursor = np.where(
-            (move == WAIT)[:, None], beam["cursor"][parent[run]], cols["view"][run, 2:]
-        )
+        stay = ((move == WAIT) | (move == RELOCATE))[:, None]
+        cursor = np.where(stay, beam["cursor"][parent[run]], cols["view"][run, 2:])
         bearing = np.where(
             (move == WAIT)[:, None],
             beam["bearing"][parent[run]],
@@ -429,10 +537,11 @@ class BeamPlayer:
             "bearing": bearing[pick],
             "frames": frames[pick],
         }
+        tile = np.where(cols["kind"] == RELOCATE, landed, cols["tile"])
         record = {
             "parent": parent[at],
             "kind": cols["kind"][at],
-            "tile": cols["tile"][at],
+            "tile": tile[at],
             "k": cols["k"][at],
             "frames": frames[pick],
             "energy": fields["energy"][pick],
