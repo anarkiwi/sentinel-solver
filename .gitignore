@@ -38,3 +38,4 @@ sentinel/tests/*.tmp
 /out/csdb/
 /out/logs/
 /out/ckpt/
+/out/live_ticks/

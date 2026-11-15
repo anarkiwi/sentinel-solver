@@ -174,7 +174,7 @@ class KbdDriver:
                         r, c = _k(key)
                         self.bm.keymatrix_set([(r, c, 1)])
                         held = key
-                    self.bm.run_until_pc(self.PC_PAN_DONE, timeout=_RU_COMMIT)
+                    self._run_pass()
                     new = self.rd(addr)
                     self.bm.advance_instructions(1)  # step off $365D
                     if new == cur:
@@ -187,6 +187,11 @@ class KbdDriver:
                 self.bm.keymatrix_release_all()
         self._resume()
         return result
+
+    def _run_pass(self):
+        """Run one main-loop pass to PC_PAN_DONE ($365D): the previous notch's scroll
+        loop, update_game $127C and this pass's pan_viewpoint $10B7."""
+        self.bm.run_until_pc(self.PC_PAN_DONE, timeout=_RU_COMMIT)
 
     def _run_to_scan(self, timeout=6.0):
         """Run to the next GATED full input scan ($9678). The IRQ reaches it only with

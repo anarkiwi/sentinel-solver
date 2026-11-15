@@ -19,8 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _make_player(args, session, log, result):
     if args.player == "phase":
-        return LivePhase(session, log, result)
-    return LiveGreedy(session, log, result)
+        return LivePhase(session, log, result, ticks_dir=args.ticks)
+    return LiveGreedy(session, log, result, ticks_dir=args.ticks)
 
 
 def main(argv=None):
@@ -35,6 +35,11 @@ def main(argv=None):
     parser.add_argument("--player", choices=("greedy", "phase"), default="phase")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--video", default=None)
+    parser.add_argument(
+        "--ticks",
+        default=None,
+        help="directory to save every observed tick's live image (driver.replay_tick)",
+    )
     args = parser.parse_args(argv)
     digits = f"{args.landscape:04d}"
     video = args.video or f"player_ls{args.landscape}_win.avi"
@@ -56,6 +61,7 @@ def main(argv=None):
         result["won"] = bool(won and lp.ex.won())
         result["trace"] = [list(r) for r in lp.trace]
         result["final_energy"] = lp.st.energy
+        result["pan_passes"] = lp.kbd.passes
         log(f"play loop done: won={result['won']} actions={len(lp.trace)}")
 
     core.boot_and_play(tap, renders, digits, video, log, play_fn, result)

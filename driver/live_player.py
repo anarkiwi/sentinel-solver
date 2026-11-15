@@ -6,10 +6,18 @@ logic (``_tick``) comes from the composed sim player via MRO.
 It goes first in the bases so its execution overrides win over ``BasePlayer``'s.
 """
 
+import os
+
+import numpy as np
+
 from driver import clock, core, kbd_aim, sentinel_execute as sx
 from sentinel import phase_player, memmap as mm, player as sim_player, playerbase
 from sentinel.game import Game
 from sentinel.state import State
+
+PC_PASS = 0x363D  # update_game_and_continue: a main-loop pass begins
+PC_PAN_CALL = 0x365A  # JSR pan_viewpoint $10B7
+RASTER_LINES = 312  # PAL 6569
 
 
 class MeasuringKbdDriver(kbd_aim.KbdDriver):
@@ -21,6 +29,8 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         super().__init__(bm, log, quantized=quantized)
         self._ex = ex
         self.subframes = {}
+        self.passes = []  # (step, frozen, scroll, update, pan) per pan pass
+        self._label = None
 
     def _timed(self, name, fn, *args):
         f0 = self._ex.frames()
@@ -28,6 +38,27 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         df = self._ex.frames() - f0
         self.subframes[name] = self.subframes.get(name, 0) + df
         return r
+
+    def _run_pass(self):
+        """Run one pan pass split at its ROM boundaries, appending ``(scroll, update,
+        pan)`` frames (raster-resolved) to ``passes``: $365D->$363D is the previous
+        notch's scroll loop, $363D->$365A update_game $127C, $365A->$365D $10B7."""
+        t = [self._now()]
+        for pc in (PC_PASS, PC_PAN_CALL, self.PC_PAN_DONE):
+            self.bm.run_until_pc(pc, timeout=kbd_aim._RU_COMMIT)
+            t.append(self._now())
+            if pc != self.PC_PAN_DONE:
+                self.bm.advance_instructions(1)
+        self.passes.append(
+            (self._label, self._ex.rd(mm.PLAYER_NOT_ACTED) >> 7)
+            + tuple(round(b - a, 3) for a, b in zip(t, t[1:]))
+        )
+
+    def _now(self):
+        """Frames since record start at raster resolution: the $9630 count plus the
+        raster line ($D011 bit7:$D012) over the PAL frame's 312 lines."""
+        ctrl, line = self.bm.mem_get(0xD011, 0xD012, bank="io")
+        return self._ex.frames() + (((ctrl & 0x80) << 1) | line) / RASTER_LINES
 
     def coarse_h(self, want):
         return self._timed("pan_h", super().coarse_h, want)
@@ -77,6 +108,32 @@ def drive_transfer_aim(kbd, tile, view, log):
     return False
 
 
+def save_tick(ticks_dir, n, player):
+    """Write the observed live image and the aim state the player decides from to
+    ``ticks_dir/tNNNN.npz``: everything :func:`load_tick` needs to replay that tick's
+    decision on the simulator."""
+    os.makedirs(ticks_dir, exist_ok=True)
+    bearing = player.last_bearing
+    np.savez_compressed(
+        os.path.join(ticks_dir, f"t{n:04d}.npz"),
+        mem=np.frombuffer(bytes(player.st.mem), dtype=np.uint8),
+        cursor=np.array(player.cursor, dtype=np.int64),
+        bearing=np.array((-1, -1) if bearing is None else bearing, dtype=np.int64),
+        trace_len=np.int64(len(player.trace)),
+    )
+
+
+def load_tick(path, cls=phase_player.PhasePlayer, **kwargs):
+    """A simulator player ``cls`` standing exactly where :func:`save_tick` saw the live
+    one: the same memory image, cursor and committed bearing."""
+    with np.load(path) as z:
+        mem, cursor, bearing = (np.asarray(z[k]) for k in ("mem", "cursor", "bearing"))
+    player = cls(Game(State.from_mem(mem.tobytes())), **kwargs)
+    player.cursor = cursor.tolist()
+    player.last_bearing = None if bearing[0] < 0 else tuple(bearing.tolist())
+    return player
+
+
 class LiveMixin:
     """Observation + execution over live VICE memory; no decision logic.
 
@@ -84,8 +141,10 @@ class LiveMixin:
     player-specific kwargs to the composed sim player's constructor via
     ``super().__init__``."""
 
-    def __init__(self, session, log, result, **kwargs):
+    def __init__(self, session, log, result, ticks_dir=None, **kwargs):
         game = Game(State.from_mem(core.live_image(session.bm)))
+        self.ticks_dir = ticks_dir
+        self.tick_no = 0
         super().__init__(game, verbose=True, **kwargs)
         self.bm = session.bm
         self.bm.auto_resume = False  # world runs ONLY in deliberate run windows
@@ -107,6 +166,9 @@ class LiveMixin:
         self.st = State.from_mem(mem)
         self.g.state = self.st
         self._sync_aim_state()
+        if self.ticks_dir:
+            save_tick(self.ticks_dir, self.tick_no, self)
+            self.tick_no += 1
         if self.acted and self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80:
             self.life_lost = "died (landscape auto-reset observed)"
 
@@ -163,6 +225,7 @@ class LiveMixin:
             otype = st.obj_type[top]
         whole_f0 = self.ex.frames()  # exact whole-action bracket (incl. transfer aim)
         self.kbd.subframes = {}  # per-step aim sub-term (pan/cursor/toggle) accumulator
+        self.kbd._label = f"p{self.step_no + 1}"
         if pverb == "transfer" and not self._drive_transfer_aim(tile, view):
             self._observe()
             return False
