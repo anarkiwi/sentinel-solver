@@ -24,6 +24,7 @@ pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 
 python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
+python -m driver.play_player 335 --emu  # the same stack on the emulated release (vagrant-moses)
 python -m driver.instrument 42          # race the model against the ROM, frame for frame
 python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```
@@ -73,9 +74,9 @@ The game is copyrighted and is **not** included.
 
 `out/sentinel_stage2.bin`, the 64 KB memory image of the loaded game that the `oracle`-marked
 tests run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is
-downloaded once into `out/csdb/` (SHA-256 pinned) and booted headless in jennings, running the
-game's own setup and title screen under a PAL raster interrupt to its keyboard wait. `pytest`
-builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
+downloaded once into `out/csdb/` (SHA-256 pinned) and RUN on a cycle-exact emulated C64
+([vagrant-moses](https://github.com/anarkiwi/vagrant-moses), real ROMs fetched and verified) to
+the title's keyboard wait. `pytest` builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
 without it (CI does).
 
 ```bash

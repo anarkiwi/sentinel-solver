@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run a sim player against the REAL game in VICE, recording an AVI.
+"""Run a sim player against the REAL game in VICE, recording an AVI, or with ``--emu``
+against the CSDb release on vagrant-moses (no AVI).
 
 The live-execution machinery lives in :mod:`driver.live_player`; this is the
 shared runner.  ``--player {greedy,phase}`` selects ``LiveGreedy``/``LivePhase``
@@ -11,8 +12,10 @@ import json
 import os
 import time
 
-from driver import core
+from driver import core, sentinel_state as gs
+from driver.emu import EmuMon
 from driver.live_player import LiveGreedy, LivePhase
+from sentinel import emu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,6 +24,17 @@ def _make_player(args, session, log, result):
     if args.player == "phase":
         return LivePhase(session, log, result, ticks_dir=args.ticks)
     return LiveGreedy(session, log, result, ticks_dir=args.ticks)
+
+
+def emu_session(number, log):
+    """A :class:`core.GameSession` in play on the emulated release, entered as
+    :func:`core.boot_and_play` enters VICE (no AVI)."""
+    landscape = core.landscape_from_digits(f"{number:04d}")
+    log(f"EMU replanning mode: landscape {landscape}")
+    bm = EmuMon(emu.enter(number))
+    entry_match = gs.verify_entry(bm, landscape, log)
+    state0 = gs.read_game_state(gs.ViceSource(bm))
+    return core.GameSession(bm, landscape, time.time(), entry_match, state0, None)
 
 
 def main(argv=None):
@@ -35,6 +49,12 @@ def main(argv=None):
     parser.add_argument("--player", choices=("greedy", "phase"), default="phase")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--video", default=None)
+    parser.add_argument(
+        "--emu",
+        action="store_true",
+        help="play the CSDb release on vagrant-moses (sentinel.emu) instead of VICE",
+    )
+    parser.add_argument("--out", default=None, help="result JSON path")
     parser.add_argument(
         "--ticks",
         default=None,
@@ -64,10 +84,19 @@ def main(argv=None):
         result["pan_passes"] = lp.kbd.passes
         log(f"play loop done: won={result['won']} actions={len(lp.trace)}")
 
-    core.boot_and_play(tap, renders, digits, video, log, play_fn, result)
-    ok, size, frames, msg = core.validate_avi(result.get("video", ""))
+    if args.emu:
+        t_start = time.time()
+        play_fn(emu_session(args.landscape, log))
+        result["wall_seconds"] = round(time.time() - t_start, 1)
+        ok, size, frames, msg = True, 0, 0, "emu"
+    else:
+        core.boot_and_play(tap, renders, digits, video, log, play_fn, result)
+        ok, size, frames, msg = core.validate_avi(result.get("video", ""))
     result["avi"] = {"ok": ok, "bytes": size, "frames": frames, "msg": msg}
-    out_path = os.path.join(ROOT, "out", f"play_player_{digits}.json")
+    suffix = "_emu" if args.emu else ""
+    out_path = args.out or os.path.join(
+        ROOT, "out", f"play_player_{digits}{suffix}.json"
+    )
     with open(out_path, "w") as fh:
         json.dump(result, fh, indent=1, default=str)
     log(

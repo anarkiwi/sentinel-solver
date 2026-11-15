@@ -584,6 +584,12 @@ REGISTRY = {
     "tap.hold": _u(_CORE, "keypress hold frames; unmeasured"),
     "tap.settle": _u(_CORE, "post-keypress settle frames; unmeasured"),
     "load_snapshot.timeout": _u("driver.boot", _GUARD),
+    "BOOT_TIMEOUT": entry(
+        "sentinel.emu",
+        MEASURED,
+        "hang guard on each emulated boot leg; the whole boot fits inside one",
+        "test_boot_fits_its_hang_guard",
+    ),
 }
 
 # Pinned debt as a count; lower it when a constant is validated away, never raise it.

@@ -618,6 +618,36 @@ a memory or PC predicate rather than a host clock.
 
 `vice_code_entry.vsf` is restored when present, skipping the tape boot entirely.
 
+### The emulated game (`sentinel/emu.py`, `driver/emu.py`)
+
+The same stack plays the CSDb release offline on vagrant-moses, a cycle-exact PAL C64
+(VIC-II badlines and raster IRQ, both CIAs, the 6510; native, GIL released).
+`emu.boot()` powers on with the real KERNAL/BASIC/CHARGEN, RUNs the release's PRG from
+BASIC's keyboard buffer, holds SPACE through its intro until the loader jumps to
+`$3F00`, and stops at the title's first keyboard read `$8D17`; `emu.enter(n)` drives
+`core.navigate` from there (three SPACE taps, `CODE_PATCHES`, digits, code, preview) and
+checks `verify_entry` object for object. Both are cached templates handed out as
+`clone()`s. `python -m driver.play_player 335 --emu` builds the `GameSession` from
+`emu.enter` and runs `LivePhase` unchanged; `sentinel.tests.csdb` builds the oracle
+image from `emu.boot()`.
+
+`EmuMon` answers exactly the BinMon calls the live path makes. Its rules are VICE's
+(`6510dtvcore.c` `DO_INTERRUPT`, `mon_breakpoint.c`, asid-vice's keymatrix core):
+
+| call | semantics |
+|---|---|
+| `run_until_pc(pc, timeout)` | returns at once when already at `pc`; else a stop-on-hit checkpoint, so the CPU stops **before** executing `pc` |
+| `advance_instructions(n)` | `n` decodes; the step test precedes the checkpoint test, so a step ending on a checkpointed pc counts and stops there only on the next resume |
+| `checkpoint_set/get/toggle/delete`, `wait_for_checkpoint` | exec checkpoints with `hit_count`; a silent one only counts (`clock.FRAME_PC`) |
+| `mem_get(…, bank)` | bank 0: the CPU view through `$01`; `"io"`: RAM with the I/O page peeked side-effect free; `"ram"` |
+| `keymatrix_set/release_all/tap` | the CIA 1 matrix, row = PA line, col = PB line; a fixed tap releases `frames · 19656` cycles after the press |
+| timeouts | `timeout` seconds of PAL cycles, then `BinmonError`; a stop at another checkpoint also raises |
+
+A VICE run and an emulated run of the same command agree row for row in the action trace
+and every audit; only a wait that expires can split them, since VICE times waits in host
+seconds and the emulator in PAL cycles. `python -m driver.compare_runs A.json
+B.json --ticks A B` reports the first divergent audit row and tick image.
+
 ### The keyboard aim primitive
 
 `driver/kbd_aim.py` drives one aim as three sub-machines, each ending on state and never on
