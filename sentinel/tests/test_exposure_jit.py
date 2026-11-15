@@ -1,17 +1,23 @@
 """The exposure scan spec matches the pure-Python scan, results and memory side effects."""
 
+import numpy as np
 import pytest
 
-from sentinel import enemies, memmap as mm, relative
+from sentinel import exposure_jit, memmap as mm, relative
 from sentinel.game import Game
-from sentinel.playerbase import BasePlayer
+from sentinel.tests import aimref
 
 LANDSCAPES = [0, 42, 335]
 
 
+def _exposures(st, slot):
+    rows = exposure_jit.exposures_of(np.frombuffer(st.mem, dtype=np.uint8), slot)
+    return [(int(e), int(ah), bool(full)) for e, ah, full in rows.tolist()]
+
+
 def _reference(st, slot):
     out = []
-    for e in enemies.enemy_slots(st):
+    for e in st.enemy_slots():
         see = relative.can_see_object(st, e, slot, mm.T_ROBOT, 0x100)
         if see["exposure"]:
             out.append(
@@ -33,24 +39,24 @@ def _bodies(st):
 
 
 @pytest.mark.parametrize("landscape", LANDSCAPES)
-def test_matches_python_over_time(landscape):
-    game = Game.typed(landscape)
-    st = game.state
-    st.mem[mm.PLAYER_NOT_ACTED] = 0
+@pytest.mark.parametrize("boulders", [0, 4])
+def test_matches_python_on_every_body(landscape, boulders):
+    st = aimref.board(landscape, boulders)
     seen_any = False
-    for _ in range(6):
+    for turn in range(0, 256, 64):
+        for e in st.enemy_slots():
+            st.obj_h_angle[e] = (st.obj_h_angle[e] + turn) & 0xFF
         for slot in _bodies(st):
             ref, got = st.clone(), st.clone()
             want = _reference(ref, slot)
-            assert BasePlayer._exposures(got, slot) == want
+            assert _exposures(got, slot) == want
             assert bytes(got.mem) == bytes(ref.mem)
             seen_any |= bool(want)
-        enemies.advance_frames(st, 400)
     assert seen_any or landscape != 0
 
 
 def test_empty_when_no_enemy_sees():
     st = Game.typed(335).state
-    for e in enemies.enemy_slots(st):
+    for e in st.enemy_slots():
         st.obj_flags[e] = 0x80
-    assert BasePlayer._exposures(st, st.player) == []
+    assert _exposures(st, st.player) == []

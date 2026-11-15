@@ -93,17 +93,3 @@ def prime_notches(state, plots, observer=None):
             if (skey, obs, d, ph, pv) not in _NOTCH_CACHE
         ],
     )
-
-
-def pan_frames(state, h0, v0, h1, v1, scroll, observer=None):
-    """Total frames a keyboard aim from (``h0``, ``v0``) to (``h1``, ``v1``) spends
-    panning: per notch, its own redraw plus ``scroll[axis]`` queued scroll steps.  The
-    scene digest is taken once -- an aim prices up to 30 notches off one board."""
-    plots = notch_plots(h0, v0, h1, v1)
-    if not plots:
-        return 0
-    skey = projector.scene_key(state)
-    return sum(
-        notch_frames(state, d, ph, pv, observer, skey) + scroll[0 if d < V_UP else 1]
-        for d, ph, pv in plots
-    )

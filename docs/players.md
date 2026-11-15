@@ -1,378 +1,99 @@
-# The players
+# The search player
 
-Three players share the world model: the **phase player** (`sentinel/phase_player.py`), the
-default, which wins all eight measured boards, the **beam player** (`sentinel/beam_player.py`),
-a wide search on the GPU substrate (and, on the emulated game, the [search
-player](#the-search-player) built on its move generator), and the **reactive greedy player** (`sentinel/player.py`),
-which wins landscape 0 and is what the live-determinism gate drives. The phase and greedy
-players share `BasePlayer` (`sentinel/playerbase.py`). Neither reads the PRNG. Every tile-targeted action resolves
-through the ROM aim oracle (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path), and each
-tick advances the world by that action's real duration, so enemies rotate, target and drain
-while the player aims — there are no free moves.
+`driver/search_player.py` plays the real game. It plans on the ROM itself, running
+cycle-exact on vagrant-moses, so a candidate's outcome is the game's own: there is no model
+of time, of the enemies or of a move's effect to get wrong.
 
 ```bash
-python -m sentinel.phase_player 335     # offline
-python -m sentinel.beam_player 335 --width 16 --depth 60 --branch 3
-python -m sentinel.player 0 --audit     # offline, + strict post-settle invariant accounting
-python -m driver.play_player 335        # live in VICE (--player greedy for the reactive one)
+python -m driver.play_player 335 --emu          # open loop on the emulator
+python -m driver.play_player 335                # live in VICE, recording an AVI
+python -m driver.play_player 335 --preset narrow --width 8 --commit 2
 ```
 
-## The phase player
+`--preset` picks the knobs and `--width/--depth/--branch/--commit` override them one by one:
 
-Built from the game's rules rather than a cost model. Three facts:
-
-**Time is free; only exposure costs.** An idle frame costs nothing unless a cone is on the
-body, so an unseen body may wait as long as it likes. Corollary: waiting is the one move
-that cannot help while you ARE being drained.
-
-**A gap does not need forecasting.** `enemies.step` is byte-exact, so instead of predicting
-when a cone arrives, clone the state, run it forward over the action's real duration and
-look (`_drained_over`). On the emulated game (`play_player --emu`, `driver.emu_phase`) the
-clone is the machine itself: the action is done on a fork through the real keyboard driver and
-its outcome read off, so the lookahead takes exactly the game's time
-([architecture](architecture.md#the-emulated-game-sentinelemupy-driveremupy)).
-
-**Height buys freedom, and nothing else does.** Measured over every stance on ls335:
-
-| eye | tiles it can land | stances it can climb to | enemies it can strike |
-|---|---|---|---|
-| 4.0 | 6 | 18 | 0 |
-| 7.0 | 8 | 6 | 0 |
-| 8.5 | 62 | 146 | 0 |
-| 9.5 | 107 | 140 | 2.91 |
-| 11.5 | 153 | 13 | 4.78 |
-
-Nothing on the board can strike any enemy below eye 8.875, and the body starts at 3.875, so
-the opening cannot be scored by progress toward a target: for the first five units of climb
-there is no reachable target. Exposure rises with height too (`hot` 2.75 → 4.9), so the
-climb is not into safety, it is into options.
-
-### The phases
-
-| phase | goal | ends when |
-|---|---|---|
-| **1a establish** | energy in hand, in fuel-rich ground | the best climb on offer is affordable |
-| **1b breakout** | height, per unit of a finite purse | an enemy is landable |
-| **2 convert** | absorb, Sentinel last, then the platform | hyperspace from the platform |
-
-1a and 1b want opposite things from the same tile — 1a to stay where the trees are, 1b to
-leave for height — and a single scorer blending them strands the body at eye 7.875 with 56
-climbs available and one absorbable object in reach.
-
-### The rules that decide a move
-
-Each is a fact about the ROM, not a tuned quantity.
-
-* **Never idle under fire** — a cone on the body makes every waiting quantum a drain.
-* **A hop's danger is at the destination**, and the probe must cover the *whole* hop
-  including aims (`_span`, each action's real aim-plus-settle), not a fixed duration.
-  The score is known before the probe, so the probe is asked lazily: `_leaders` walks
-  candidates in descending score (band order breaking ties) and stops once the score falls
-  below the first landable one; `_any_climb` stops at the first landable candidate. Each
-  probe is memoized in `_LANDING_CACHE` on a blake2b digest of the state's memory, its
-  enemy-clock resume fields (`CLOCK_FIELDS`), the committed bearing and cursor `_hop_span`
-  prices from, the hop and the player class, so forks and re-asks share one run. The
-  digest skips `LOS_TRACKERS` (`$0C56`, `$0CDD`): pricing's marches rewrite them on the
-  live state, and every march LSRs them (`$1CDF`/`$1CE2`) before reading bit7, which only
-  that march sets, so no verdict depends on what they held.
-* **Never land on zero** — `$1A00` kills on a drain arriving at zero energy.
-* **Do not hop where you cannot eat** — a landing with no fuel under it is a dead end,
-  whatever it gains in height.
-* **The Sentinel is the point of no return** — `$1B91` reads `objects_flags[0]` absolutely,
-  so once its slot empties EVERY later absorb is refused. The robot and the 3-energy
-  hyperspace toll (`$216A`, which kills on underflow at `$2170`) must be banked before the
-  strike, not gathered after it.
-* **The endgame is exclusive** — with the Sentinel gone the platform is an eye gain, so an
-  unguarded climb will spend the hyperspace toll on height.
-* **A tie is settled by the outcome** — when the score cannot separate candidates it holds
-  no information about them, so each is played to the end and one that wins is kept.
-* **A policy reports whether it MOVED**, not whether its goal was met — `_arbitrate` drops
-  every option whose policy returned False, so `_harvest` answering `_refuel`'s question
-  ("do I now hold `want`") discarded a taken absorb whenever one +1 tree was all there was.
-  Measuring the purse before and after instead shortened ls60 (46 → 41) and ls335 (58 → 55).
-* **A stance that offers nothing is left, not waited out** — `_barren` is every generator
-  *empty* (nothing absorbable, reclaimable, climbable or mountable in view), which is a
-  different state from every generator *refusing*: the second is a wait, the first cannot
-  change by waiting. `_relocate` then fires `$216A`, the one move that shifts the body with no
-  sightline, for the 3-energy toll. It runs on every tick, so it asks per tile and stops at
-  the first available action rather than reading a whole lattice.
-
-**Relocation is taken, never scored.** The landing tile is PRNG-driven (`$2165 JSR $1238`)
-and this model treats it as unknowable, so there is nothing to rank: a barren stance has no
-income and no climb, so it loses whether or not a cone ever finds it, and any landing is
-weakly better. The purse is the entire gate — `$2170` kills on underflow, so 3 in hand is
-both necessary and sufficient. It is the *last* thing `_tick` tries, below the cornered
-robot-drop, so it can never pre-empt a move that exists. A floor above the ROM's own 3 is a
-dead lever, measured (see [open items, disproved](open_items.md#disproved--do-not-resurrect)).
-
-### Results
-
-No node budget and no wall-clock cutoff: the planner is deterministic, so a run's outcome
-does not depend on host load.  Action counts move with the enemy clock, not with the policy.
-
-The nine suite boards' offline results (actions, frames, final energy, verdict, trace digest)
-are committed in `docs/results/offline.json` and the live runs in `docs/results/live.json`;
-the README results table is rendered from the two (`python -m sentinel.tests.trace_suite
---out docs/results/offline.json --readme`) and is not repeated here. Offline counts are under
-the ROM-derived settle prices (`sentinel/settlecost.py`). The ls42 live entry is a
-`driver.frozen_run` win (`update_enemies $16B5` RTS-stubbed): it verifies frame-cost fidelity,
-not survival under fire. A live row marked with a dagger was recorded against an older model.
-
-ls335 live in VICE is verified by the ROM's own landscape-complete flag `$0CDE` bit 6.
-
-Off the suite, relocation puts the eight hardest-128 boards that took **zero** actions into
-play: ls8589 won in 47, ls7414 won in 81, and the other six lose in 5-28 actions instead of
-idling to death
-([open item 12](open_items.md#12-the-hardest-boards-are-unsolved-and-mostly-unfinished)).
-
-**The arbitration horizon is a bound, not a depth.** `_arbitrate` scores each option on a fork
-that plays the FIXED rollout ladder, so when that continuation blunders the death is charged to
-the option under test. On ls373 the `_breakout` fork tracks the winning line node for node — eye
-5.875 E=7, 6.875 E=3, 7.875 E=1 — and then the ladder dies at the third node where the
-arbitrating player absorbs `(14,3)` and goes on to win. Deeper lookahead therefore imports more
-of the ladder's errors: `ARBITRATE_ACTIONS` 3, 4, 5, 6 and 8 all lose ls373, and off the suite
-deeper search returns longer solutions. 2 bounds the damage and wins all eight; what needs
-fixing is the attribution, in
-[open item 13](open_items.md#13-arbitration-charges-an-option-with-its-continuations-mistakes).
-
-### The tie that decided ls110
-
-Ties are settled by rollout because no measurement available at the tie separates the
-candidates. At eye 6.375 with E=10, **nine candidates scored identically** —
-`(gain/cost, fuel_near) = (0.1667, 5)` for every one — so `_best_climb` returned whichever the
-band lattice yielded first (by winning ray: `_Views.band_ordered` preserves exactly that
-order), and the run died 4 ticks later at 17 actions, eye 7.375, E=0
-(that stall was forced: 11 of its 12 candidates failed the arrival probe and the survivor
-was the tile it died on). Forcing each of the nine and playing on, the planner otherwise
-untouched:
-
-| forced | outcome | | forced | outcome |
+| preset | width | depth | branch | commit |
 |---|---|---|---|---|
-| (23,1) | **won** 73, E=11 | | (25,0) | lost — the one taken |
-| (24,1) | **won** 53, E=17 | | (26,0) (26,8) (26,9) | lost |
-| (25,4) | **won** 42, E=5 | | (24,11) (26,10) | lost |
+| `wide` (default) | 16 | 30 | 3 | 10 |
+| `narrow` | 4 | 12 | 2 | 1 |
 
-Three of nine win outright, and the score cannot see which — nor can any other measurement
-taken there: eye, energy, the landing's reachable fuel, how many enemies watch it, its
-landable-set size, its hop-distance to a strike, and the 4-tick fork outcome were all
-computed for the nine, and **two of the three winners rank last on every one**. Deepening
-the lookahead from 4 to 8 to 16 changed nothing: the winning hop's payoff is 40 actions
-away, and no valuation at any affordable depth reaches it.
+## How it plans
 
-So the tie is not scored, it is **played**. `_settle_tie` forks each tied candidate, builds
-it, and runs the fixed ladder to termination, keeping the first that wins — no weight, no
-horizon, the only thing consulted is whether the game was won. It is affordable because
-ties are rare (two of fifteen ticks on ls110) and a rollout plays a whole board; a tie costs
-one rollout per candidate until one wins, and the full nine at the ls110 opening, where none
-does.
-
-## The beam player
-
-A beam search over macro-actions on `engine.Pool` (`sentinel/beam_player.py`), built to put
-hundreds of independent rows in flight per ply. One ply:
-
-1. **Candidates** (numpy over each row's slot and tile arrays, `Board` and `moves`): *absorb*
-   an object that tops a reachable tile and is spent or a tree (enemies first; the Sentinel only
-   when it is the last enemy and its energy is banked; none once it is gone), *hop* onto
-   stackable ground (`k` boulders, a robot, a transfer; the phase player's affordability and
-   fuel gates), *mount* a robot already owned that stands higher, and *wait* one quantum. Each
-   class contributes at most `branch` moves, ranked by the phase player's own order (height per
-   energy then fuel for hops; enemy then energy value for absorbs; eye for mounts), ties to the
-   lower index.
-2. **Pricing** (`plan`, no per-row tasks). Both lattices are swept for every row in one
-   launch each (`batch.landings`). The (bearing, pitch) cells of the tiles the moves aim at are
-   priced for all rows together by `aimbatch.aim_parts`: pan notches and u-turn redraws become
-   one pricing job each, deduplicated on the scene digest (hashed once per row), observer and
-   notch, priced in one launch, and summed per cell with `sum`'s own compensated accumulation
-   (`aimbatch.aim_total_columns` is `aim_frames` over columns). Winners per tile come from
-   `_Landings.winners`. Only the settle terms (`playerbase.settle_frames`: create/absorb
-   strip replots, the transfer redraw) still run on the phase player's scalar models; their
-   render costs are batched by `projector.prefetch`. A move's span is its verbs' spans summed
-   (a hop: its boulders, the robot and the transfer).
-3. **Expand, advance, evaluate.** `build_ops` lays the moves out as one `(n, 6, 3)` op tensor
-   (`FACE` the aim, then the verbs); one `Pool.expand`, one `Pool.advance` over the spans and
-   one `Pool.evaluate` run every child. The pool is on the device whenever the backend is cuda
-   and a round has a batch (`engine.default_device`), so children advance where they live.
-4. **Select** (`keep_best`): drop rows whose digest, aim cursor and committed bearing equal a
-   better row's, then keep the best `width` under the objective, ties to fewer frames then the
-   lower position, so the cpu and cuda backends pick the same rows.
-
-The objective is one function, `objective(fields) -> (alive mask, keys)` over the arrays
-`Pool.evaluate` returns; the keys are compared lexicographically, larger better. The default,
-`lexicographic`, is the phase player's score on facts: alive, then won, fewer enemies, higher
-eye, more energy. A row standing on the platform with the Sentinel gone and the toll in hand
-ends the search and plays the hyperspace on the host (its landing is PRNG-driven, so it is
-never searched).
-
-`width`, `depth` and `branch` are parameters of `BeamPlayer` and flags of the module.
-Not searched: relocation by hyperspace, and the sequencing of a hop's own verbs against the
-enemy clock (a hop is one macro priced as its verbs' sum and advanced after its ops apply, the
-phase player's own landing probe). `python -m sentinel.tests.trace_suite --player beam --out
-docs/results/beam.json --readme` records the suite; the README table shows the beam columns
-beside the phase player's.
-
-## The search player
-
-`driver/search_player.py` is one search core over the emulated game
-(`python -m driver.play_player N [--emu] --player search [--preset wide|narrow] [--width W
---depth D --branch B --commit M]`; without `--emu` the line is also played live in VICE). The emulator reproduces the game cycle for cycle, so a
-child's outcome is the game's own and needs no model clock:
+A receding-horizon beam over machine states (`SearchPlayer.run`). From the current machine it
+searches `depth` plies, or until a child wins, then plays the first `commit` moves of the best
+line and searches again from where they leave it.
 
 | part | what it is |
 |---|---|
-| moves | `beam_player.views`: `moves(..., exact=True)` over `Board` (absorb, hop with `k` boulders, mount, wait, relocation), each view the frame-cheapest lattice view of the model's pricing; `action_views` re-aims each later action of a hop at the stack its creates leave |
-| expansion | each move one `kbd_prog.compile_move` program; one `prog.forks` (`run_forks`, `keep=True`) per parent, the parents concurrently with the cores shared by program count; `move_facts` read off each child |
-| selection | `keep_best(width)` under `lexicographic` (alive, won, fewer enemies, higher eye, more energy), ties to fewer frames; identity is the machine state (RAM digest, cycle, registers, monitor state), so transpositions merge; a refused move (`status` not `HALT_OK`) is no child |
-| live | without `--emu`, VICE boots and records as for any live run and the search plans on an emulated session of the same landscape; each committed move's program is also `prog.interpret`ed on VICE and its `move_facts` compared (`live_audit`, the entry as move 0); the first disagreement is logged, recorded as `divergence` and ends the run, and a win counts only with VICE's `$0CDE` bit 6 (`landscape_done`) |
-| execution | receding horizon: search `depth` plies (or to a win), play the first `commit` moves of the best line on the session with the same programs (`prog.execute`; `prog.interpret` over a BinMon), each move's facts and machine key checked against the child that predicted it (`audit`) |
+| moves | `moves.views` over `moves.Board`: every candidate of every parent, each with the frame-cheapest keyboard view of its tile ([view selection](architecture.md#view-selection-viewspy)); `moves.action_views` re-aims each later action of a hop at the stack its creates leave |
+| expansion | each move one `kbd_prog.compile_move` program; one `prog.forks` (`run_forks`, `keep=True`) per parent, the parents concurrently with the cores shared by program count; `kbd_prog.move_facts` read off each child |
+| selection | `moves.keep_best(width)` under `moves.lexicographic`, ties to fewer frames; identity is the machine state (`machine_key`: RAM digest, cycle, registers, monitor state), so transpositions merge; a refused move (`status` not `HALT_OK`) is no child |
+| execution | the committed moves are played on the session with the same programs (`prog.execute`) and each move's facts and machine key checked against the child that predicted it (`audit`, `lookahead_audit` in the run's JSON) |
 
-On an exact world `moves` offers the relocation wherever the toll is in hand: its
-PRNG-driven landing is whatever the machine does. With the Sentinel gone the platform tile
-takes a hop (no boulders, toll kept, ranked first) or a mount whatever its height, and the
-relocation from the platform is the terminal hyperspace (`compile_move("finish")`). Each
-parent's expansion is memoized on its machine key and carried into the next search, so a
-replan re-expands only what the new root's beam adds. A move's waits stop past the flag
-stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the win (`$219B`), so
-a death or the win ends the move there (`Prog.guard`).
+Each parent's expansion is memoized on its machine key and carried into the next search, so
+a replan re-expands only what the new root's beam adds.
 
-### Results
+## The move set
 
-The ten suite boards with `python -m driver.emu_suite --player search --preset P --jobs 3`
-(`--tabulate --out-dir DIR` re-reads a run): won, actions, final energy and wall seconds per
-board; `audit` is executed moves whose facts equal the planned child's; `cores` is CPU over
-wall time during expansions. `EmuPhase` is `python -m driver.emu_suite` (the phase player
-on the emulator, ten jobs).
+`moves.moves` generates, per board, numpy over the object and tile arrays of many boards:
 
-| board | wide (16/30/3, commit 10) | narrow (4/12/2, commit 1) | EmuPhase |
-|---|---|---|---|
-| 0 | won 10, E0, 37 s | won 10, E0, 23 s | won 17, E1, 177 s |
-| 42 | won 16, E1, 61 s | won 16, E1, 37 s | lost 18, E0 |
-| 60 | won 21, E3, 89 s | won 21, E3, 69 s | won 34, E0, 321 s |
-| 110 | won 17, E2, 71 s | won 18, E2, 34 s | won 93, E6, 974 s |
-| 298 | won 18, E6, 129 s | won 18, E5, 102 s | won 30, E1, 346 s |
-| 321 | won 17, E2, 108 s | won 17, E1, 61 s | won 52, E4, 302 s |
-| 335 | won 26, E1, 174 s | won 26, E1, 83 s | lost 25, E0 |
-| 373 | won 16, E0, 85 s | lost 73, E0 | lost 11, E0 |
-| 1442 | won 18, E5, 126 s | won 18, E5, 77 s | won 29, E3, 402 s |
-| 9716 | won 26, E5, 78 s | won 26, E5, 64 s | lost 15, E2 |
-| suite | **10/10**, 6:02 wall, 1897 % CPU | 9/10, 3:40 wall, 938 % CPU | 6/10 |
+* **absorb** — an object topping a keyboard-landable tile that is a tree, a sentry, a spent
+  robot or boulder at or below the eye, or the Sentinel once it is the last enemy and the
+  endgame is affordable; enemies first, then by energy value. Nothing once the Sentinel is
+  gone: `$1B91` reads `objects_flags[0]` absolutely and refuses every later absorb.
+* **hop** — `k` boulders (at most three), a robot and the transfer onto stackable ground
+  (bare flat tile, boulder or platform) that raises the eye, affordable and leaving either a
+  robot's energy or fuel in reach; ranked by height gained per energy, then fuel.
+* **mount** — a transfer into a robot already standing higher.
+* **wait** — `WAIT_QUANTUM` (60) frames.
+* **relocate** — the hyperspace, wherever its 3-energy toll is in hand. Its landing is
+  PRNG-driven; the child is wherever the machine puts the body.
 
-Every executed move's facts and machine state equal its planned child's (audit 100 % on
-every board), and a repeated run reproduces each trace and audit exactly. The narrow
-preset's ls373 line stays at eye 7.875 (absorbs, waits, one relocation) until every child
-dies.
+Absorbs, hops and mounts are each capped at `branch` per parent. With the Sentinel gone the
+platform tile takes a hop (no boulders, ranked first) or a mount whatever its height, and
+relocating from the platform is the win (`compile_move("finish")`). A move's waits stop past
+the flag stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the win
+(`$219B`), so a death or the win ends the move there (`Prog.guard`).
 
-Live in VICE (`python -m driver.play_player N --player search`, wide preset, AVI
-recording, `out/play_player_NNNN_search.json`), VICE agrees with the emulated session on
-every move's facts:
+## The objective
 
-| board | result | live_audit | wall | media |
-|---|---|---|---|---|
-| 9716 | won 26, E5 | 27/27 | 328 s | [ls9716_search_win.png](media/ls9716_search_win.png) |
-| 335 | won 26, E1 | 27/27 | 354 s | [ls335_search_win.png](media/ls335_search_win.png) |
+`moves.lexicographic`: a child lives while the player does (a win counts as alive); among the
+living the order is won, fewer enemies, higher eye, more energy, the first key most
+significant. `keep_best` breaks ties to fewer frames, then the lower position, so the order is
+total.
 
-Both traces equal the emulated runs above move for move, and both end with `$0CDE` =
-`$C0` read from VICE.
+## Live in VICE
 
-`python -m driver.search_player N PLY [--preset P]` builds search ply `PLY`'s fork batches
-from the entry to landscape `N` (`ply_batches`: `[(base EmuMon, [programs])]`) and times
-each `prog.forks`, a reproducible workload for profiling. `python -m driver.emu_suite
---player search [--preset P ...]` plays the suite; the audit column is plan against
-execution.
+Without `--emu`, VICE boots and records as for any live run and the search plans on an
+emulated session of the same landscape (`play_player.emu_session`). Each committed move's
+program is also `prog.interpret`ed on VICE and its `move_facts` compared with the session's
+(`live_audit`, the entry as move 0). The first disagreement is logged, recorded as
+`divergence` and ends the run; a win counts only with VICE's own `$0CDE` bit 6
+(`landscape_done`). The run's JSON is `out/play_player_NNNN_search.json`, the AVI
+`renders/player_lsN_search.avi` ([media](media.md)).
 
-## The reactive greedy player
+## Tools
 
-Tick-by-tick, no search tree and no lookahead branching: each tick observes the live `State`
-and commits one action. `urgent` means the player's own tile window is at or below
-`SAFE_FRAMES`. `_tick` picks the first applicable action:
+* `python -m driver.decision_audit N [--game wide] [--preset narrow] [--decisions 12]` plays
+  the `--game` search's game once on the emulator, clones the machine before each move, and at
+  each decision forces every candidate the search generates there on a fork and continues it
+  with a fresh `--preset` search to the end. It reports won, alive, energy, eye and actions
+  per candidate, the chosen one starred (`--out` writes the rows as JSON).
+* `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork
+  batches from the entry to landscape `N` (`ply_batches`) and times each `prog.forks`, a
+  reproducible workload for profiling.
+* `python -m driver.emu_suite` plays the suite boards with the search player on the emulator
+  in parallel processes (`--preset`, `--jobs`, `--tabulate` re-reads a run).
 
-1. **Endgame** (Sentinel already absorbed, `_endgame`) — robot on the platform tile,
-   transfer in, hyperspace (`do_hyperspace $2156` sets the complete flag), waiting out a
-   surviving cone on the platform for up to one rotation period first.
-2. **Dissolve a meanie** (`_meanie_response`) — absorb it, but only when the aim beats its
-   rotate-to-face window (`$16F2`: ±8 units per update reload); otherwise the transfer-out
-   dissolve outruns it.
-3. **Counterattack** (urgent only) — seen by an absorbable enemy: absorb IT rather than
-   flee. No facing requirement; the budget is the seer's own drain countdown (`$0C20`). The
-   Sentinel qualifies only as the last enemy standing.
-4. **Hunt enemies** (non-urgent) — absorb any sentry whose tile is aim-landable, cheapest
-   aim first, only while the aim leaves `SAFE_FRAMES` of the own-tile window intact. Each
-   kill permanently deletes a rotating gaze.
-5. **Absorb the Sentinel** (non-urgent) — dead last (the `$1B8E` slot-0 lock would strand
-   every remaining enemy), no meanie alive, and the endgame affordable (robot 3 +
-   hyperspace 3 − Sentinel's +4 ⇒ energy >= 2).
-6. **Transfer up** — into the highest aim-landable robot that raises the eye, never into a
-   gaze, safe window required unless urgent.
-7. **Finish the hop in progress** (`_climb(only_tile=self.hop_tile)`).
-8. **Reclaim / harvest** (non-urgent) — absorb old shells and spent pedestals below the
-   eye, trees while energy is under `HOP_COST + 6`, ordered by aim-frames per energy unit,
-   and only when the aim leaves room for the hop that must follow.
-9. **Climb** — boulder on the best safe landable tile, robot on the pedestal, transfer.
-   `_no_strand` refuses a pedestal that leaves the next hop unaffordable unless the
-   abandoned shell stays keyboard-landable from the destination.
-10. **Urgent fallbacks** — a cheap reclaim when cornered and under `HOP_COST`; `_escape` (a
-    transfer that strictly improves the arrival window, else hyperspace as the true last
-    resort); a least-bad hop while the world is still frozen; otherwise `_wait`.
+## Results
 
-`_climb_scan` ranks builds by `(gains LOS on the hunt target, robot eye height, cheaper
-aim, wider window)` over the primary-plane view dict, falling back to the full pitch band,
-then to graded relaxations: `seen_tier` 1 tolerates undrainable partial sight, 2 is
-least-exposed no-other-choice (urgent or frozen only). It prices every candidate off its own
-view, so it reads the whole dict; the phase player's generators ask `band_ordered`, which
-prices only the tiles their filter takes.
-Landability queries go through `_Views`: each lattice is swept once per board and a tile is a
-lookup into that sweep, and either lattice falls back to the full pitch band only for
-down-looks a single-ray visibility check first confirms plausible. Each lattice is pinned to
-the board at its first query, so a caller that builds or transfers mid-tick keeps reading one
-consistent board.
+`python -m driver.emu_suite --out docs/results/search.json --readme` plays the ten suite
+boards (0 42 60 110 298 321 335 373 1442 9716) and regenerates the README results table from
+`docs/results/search.json` and the live runs in `docs/results/live.json`. The README table is
+the record; it is not repeated here.
 
-### Placement invariant
+## Retired players
 
-`_drain_gate` (`playerbase`): a boulder is exempt (`$16E6` drains robots only); a robot or
-transfer destination must keep its time-to-first-drain past the budget it will stand
-exposed — the aim **plus** the post-action settle, since the object is on the board and
-exposable for the whole settle. Standing in a live cone is not itself a refusal: sight only
-ARMS the `$0C20` countdown (`$1825`), so `_gaze_window` already prices that body's
-residual. Partial sight is not a drain; its slower meanie arm (a tree within 10 tiles,
-`$19C3`) is priced into `_gaze_window` instead. Exposure is judged at ARRIVAL, on the ROM's
-own `$8401` bearing and `$18B8` cone gate. `--audit` (`_account`) re-checks the invariant on
-the ACTUAL placed object after each settle via `relative.can_see_object`: only a robot body
-left in a live full-sight cone is recorded as a breach.
-
-Creates are gated by `_affords`, which prices exposure as the RATE it is: an action may
-spend down to 0 (`$1BBF`; `$1A00` kills only on a drain arriving at an already-empty
-meter), so the test is `energy - cost - drains_over_this_span >= _reserve`. `_reserve` is 0
-unless a meanie is ALIVE, when it holds the 3 a forced hyperspace costs (`$215F` kills below
-it). A flat floor for merely being SEEN refused 6 of the 35 creates in the recorded ls335
-human win.
-
-### Enemy model (deterministic only)
-
-- **Gaze window** per tile (`_gaze_window`): frames until some enemy can take energy off a
-  robot there — the cone onset (`_cone_onset`: rotating ±10-unit `$0C68` cone, ±4 margin,
-  from current facing, the fixed rotation step and the `$130C`/`$1317` cadence) **plus** the
-  `$0C20` draining countdown that arrival only ARMS (`_drain_clock`; `$1825` loads 120
-  rounds = 449.6 f, `$1A31` re-zeroes it after each drain), so a cone pass costs nothing for
-  its first 449.6 f. The residual is the live cooldown byte when the enemy already holds
-  that body. `inf` = never.
-- **Meanie window** (`_meanie_window`): a partially-seeing enemy must rotate on, run the
-  ~120-round drain countdown to the meanie branch (`$183D`/`$1852`), spawn (`$1869`) and
-  rotate the meanie to face (`$171B`) — always far slower than a drain, never 0.
-  `enemies.meanie_threat` omits the tree gate that `attempt_to_create_meanie $19A1`
-  applies, so it over-reports; `playerbase._tree_near`/`_meanie_window` apply it.
-- Hyperspace and meanie landing tiles are treated as unknowable.
-
-### Tests (`sentinel/tests/test_player.py`)
-
-- `test_player_wins_landscape_0` — wins alive and solvent, last verb `hyperspace`, Sentinel
-  slot empty.
-- `test_player_wins_landscape_0042` — **xfail** (non-strict): under the accurate view-aware
-  transfer settle the greedy heuristics have no safe winning line on landscape 42 and the
-  player dies escaping.
-- `test_player_placement_invariant` — zero audit breaches on landscape 0 (a win) and on
-  landscape 42 (a loss, but breach-free): the player refuses the unsafe transfers rather
-  than taking them.
-
-Landscape 335 is the stress board for this path — interleaved cones, short out-of-phase
-windows, constant meanie arm pressure. Run it with `--audit` to exercise the relaxation
-tiers.
+The phase, greedy and beam players planned on a hand-written world clock (an enemy and frame
+model of the ROM) and were retired with it. The live ls335 and ls1442 phase-player wins in
+`docs/media/` came from them; their `docs/results/live.json` rows carry `player: phase`.

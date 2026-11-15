@@ -1,42 +1,9 @@
-"""The line of sight -- a bit-exact, pure-Python transcription of the game's
-action-time aim + LOS path.
+"""Bit-exact transcription of the ROM's player aim and line-of-sight ray march.
 
-This reproduces the C64 ROM's player aim and ray-march in integer math exactly
-(bit-for-bit), so the simulator can answer "can the observer at this tile, aimed
-this way, see that tile?" in microseconds with no emulator.
-
-Faithful transcription of these routines:
-
-  prepare_vector_from_player_sights  $1C10
-  prepare_vector_from_angle          $1C54
-  sin_cos_lookup                     $0E75  (multiply_double_A_by_pi $0F3E,
-      method one $0ECB, method two $0EA1, sign fix $0F19)
-  multiply_byte_by_byte              $0D03/$0D05
-  multiply_double_by_double          $0F9E
-  multiply_double_by_byte            $0F4A
-  process_sine_or_cosine             $1C9D
-  set_vector                         $1C7D
-  invert_A_and_a_fraction[_if_negative] $1009/$1007
-  get_object_details                 $1ECC
-  add_vector_to_object_position      $1CBB
-  check_for_line_of_sight_to_tile    $1CDD
-      (calculate_tile_address_z_and_slope $1DF9, calculate_tile_address $2BA8,
-       check_sloping_tile $1D46, looking-up rejection $1D2E)
-
-The player-aim path uses sin_cos_lookup $0E75 (a polynomial); it does NOT use the
-$AC80 table (only the enemy/relative-angle path $848F reaches that), so no table
-is needed here.
-
-Public entry points:
-  aim_target(state, h_angle, v_angle, cur_x, cur_y, player_slot, eye_z=None)
-      -> (tx, ty, los): where the sights, at that pan, land and whether visible.
-  landable_views / landable_view / landable_sweep_with_centres: the ROM-faithful
-      keyboard-aim buildability oracle (which tiles a real keyboard aim can land on).
-
-`state` is a :class:`sentinel.state.State`.
+Answers "can the observer at this tile, aimed this way, see that tile?" in integer math with
+no emulator.  The aim uses the sin_cos_lookup $0E75 polynomial, not the $AC80 table.
+:func:`landable_sweep_with_centres` is the keyboard-aim buildability oracle.
 """
-
-import math
 
 import numpy as np
 
@@ -49,18 +16,14 @@ from sentinel import los_jit
 _HAVE_JIT = True  # tests set this False to drive the pure-Python reference bodies
 
 
-# ============================================================================
 # math core (multiply / invert) -- $0D03-$1016
-# ============================================================================
 def _bits(v):
     """Set bits of a $0D03 multiplier: each costs MUL8_BIT more than a clear one."""
     return bin(v & 0xFF).count("1")
 
 
 def _mul8(a, b):
-    """multiply_byte_by_byte ($0D03 entry, A=0): returns (high, low) of a*b using
-    the ROM's shift-add. Result is exactly (a*b) >> ... well it is the standard
-    8x8->16 product: high = (a*b)>>8, low = (a*b)&0xFF."""
+    """multiply_byte_by_byte $0D03/$0D05: the 8x8->16 product as (a*b >> 8, a*b & 0xFF)."""
     p = (a & 0xFF) * (b & 0xFF)
     return (p >> 8) & 0xFF, p & 0xFF
 
@@ -73,28 +36,11 @@ def invert16(high, frac):
 
 
 def multiply_double_by_byte(low74, high75, byte76):
-    """multiply_double_by_byte $0F4A: ($0075:$0074) * $0076, the double (16-bit)
-    times byte. Returns (low=$0074, high=$0075).
+    """multiply_double_by_byte $0F4A: the 16-bit ($0076:$0074) times $0075.
 
-    ROM body ($0F4A..$0F61):
-      $0075=high75 already; $0F4A JSR multiply_byte_by_byte ($0D05) with $0074=low74,
-      $0075=$0076(byte)? -- trace carefully below.
+    The shared tail of multiply_double_A_by_pi: r1 = $0074*$0075, r2 = $0076*$0075, then
+    $0074 = r1h + r2l and $0075 = r2h plus the carry.  Returns (low, high, cycles).
     """
-    # $0F4A is reached as 'multiply_double_by_byte'. Trace from $0F4A:
-    #   (the label multiply_double_by_byte == $0F4A). Body:
-    #   $0F4A JSR multiply_byte_by_byte (entry $0D05) -- multiplier_low=$0074(low74),
-    #        multiplicand=$0075. But what is $0075 here? Callers set $0075=high75 and
-    #        $0076=byte. The $0D05 entry computes $0074 * $0075.
-    # Re-reading the actual ROM: multiply_double_by_byte begins at $0F4A which is
-    # INSIDE multiply_double_A_by_pi ($0F3E..$0F61). The shared tail at $0F4A:
-    #   $0F4A JSR $0D05 (mult $0074*$0075 -> A=high) ; $0F4D STA $0077 ;
-    #   $0F4F LDA $0076 ; $0F51 JSR $0D03 ($0074=$0076 ; *$0075 -> A=high) ;
-    #   $0F54 STA $0075 ; $0F56 LDA $0077 ; CLC ADC $0074 -> $0074 ; BCC/INC $0075.
-    # So it computes ($0074:$0076) interpreted as a 16-bit value times $0075:
-    #   low part:  $0074 * $0075  -> r1 (high=r1h, low=r1l); $0077 = r1h
-    #   high part: $0076 * $0075  -> r2 (high=r2h, low=r2l); $0075 = r2h
-    #   $0074 = $0077(r1h) + r2l ; carry -> $0075++
-    # Returns A=$0074(result_low), a=$0075(result_high).
     cyc = passcost.MUL_DBL_BYTE + passcost.MUL8_BIT * (_bits(low74) + _bits(byte76))
     r1h, _r1l = _mul8(low74, high75)
     r2h, r2l = _mul8(byte76, high75)
@@ -126,8 +72,7 @@ def multiply_double_A_by_pi(A, frac74):
     )
     r1h, _r1l = _mul8(frac, 0xC9)
     r77 = r1h  # STA $0077 (a_fraction discarded)
-    # LDA $0076 ; JSR multiply_byte_by_byte ($0F51 `20 03 0d` entry $0D03):
-    #   $0D03 STA $0074(=m76) ; $0D05 mult m76*$0075($c9)
+    # LDA $0076 ; JSR $0D03 ($0F51): STA $0074(=m76) ; mult m76*$0075($c9)
     r2h, _r2l = _mul8(m76, 0xC9)
     r75 = r2h  # STA $0075
     # LDA $0077 ; CLC ADC $0074(=_r2l) -> $0074 ; BCC/INC $0075
@@ -158,8 +103,7 @@ def sin_cos_lookup(angle, frac74=0):
         cyc += passcost.SIN_COS_QUAD
     else:
         cyc += passcost.SIN_COS_NOQUAD
-    # After $0E81 LDA $0075 / STA $0C54, A = c54. The loop-top CMP #$7a tests A,
-    # which on pass 1 is c54 and on pass 2 is the recomputed c54.
+    # the loop-top CMP #$7a tests A: c54 ($0E81 STA $0C54) on pass 1, recomputed on pass 2
     A_cmp = c54
     cur_c53 = c53
     cur_c54 = c54
@@ -171,8 +115,7 @@ def sin_cos_lookup(angle, frac74=0):
         if (A_cmp & 0xFF) >= 0x7A:
             cyc += passcost.SIN_COS_HIGH + passcost.SIN_COS_TWO
             cyc += passcost.MUL_DBL_BYTE_CALL
-            # method two $0ECB (A>=$7a): sin a =~ 1 - 2*(PI/4 - aPI)^2
-            # A=#0; SEC; SBC $0C53 -> $0074
+            # method two $0ECB (A>=$7a): sin a =~ 1 - 2*(PI/4 - aPI)^2 ; 0 - $0C53 -> $0074
             t74 = (0 - cur_c53) & 0xFF
             borrow1 = 1 if (0 - cur_c53) < 0 else 0
             # LDA #$c9; SBC $0C54 -> $0075,$0076 ; (PI/4 - aPI)
@@ -191,9 +134,7 @@ def sin_cos_lookup(angle, frac74=0):
             low = (sub_lo & 0xFF) & 0xFE
             borrow2 = 1 if sub_lo < 0 else 0
             sc_low[X] = low
-            # A=#0; SBC $0075 ; BCC skip_overflow.
-            # SBC borrows (carry CLEAR) when 0 - r75 - borrow2 < 0 -> BCC taken ->
-            # store the (negative) result. Carry SET (>=0) -> the overflow clamp.
+            # A=#0; SBC $0075: BCC (borrow) stores the negative result, carry set clamps
             sub_hi = 0 - r75 - borrow2
             if sub_hi < 0:
                 sc_high[X] = sub_hi & 0xFF  # skip_overflow: store result_high
@@ -245,13 +186,9 @@ def sin_cos_lookup(angle, frac74=0):
     # set_signs $0F19
     sin_lo, cos_lo = sc_low[0], sc_low[1]
     sin_hi, cos_hi = sc_high[0], sc_high[1]
-    # NB sc index 0 is the slot computed first. With X start 0 (or 1 if opposite),
-    # index 0 = sine, index 1 = cosine ALWAYS (X selects which is computed first but
-    # both end in their fixed slots: pass1 writes sc[X], pass2 writes sc[sixty];
-    # {X,sixty}={0,1}, so slot0 and slot1 always get filled -- slot0=sine, slot1=cos.)
-    # $0F19: if $0C0C bit7 set (sin negative) -> ORA #1 into sin_lo
+    # slot 0 is always sine, slot 1 cosine: pass 1 writes sc[X], pass 2 sc[sixty]
     cyc += passcost.SIN_COS_SIGNS
-    if c0c & 0x80:
+    if c0c & 0x80:  # $0F19: $0C0C bit7 set (sin negative) -> ORA #1 into sin_lo
         sin_lo |= 1
         cyc += passcost.SIN_COS_SIGN
     # cos sign: A=$0C0C; ASL A; EOR $0C0C; if result bit7 set -> cos negative
@@ -268,8 +205,7 @@ def process_sine_or_cosine(low, high):
     t74 = low & 0xFF  # STA $0074
     A = high & 0xFF
 
-    # LSR A ; ROR $0074 ; PHP (save the carry = bit0 of low = the sign) ; then three
-    # more (LSR A ; ROR $0074) to divide by 16 ; PLP -> carry = sign ; invert if set.
+    # LSR A ; ROR $0074 ; PHP saves the sign (bit0 of low) ; 3 more divide by 16 ; PLP
     def lsr_a_ror74(A, t74):
         c = A & 1
         A >>= 1
@@ -332,8 +268,7 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
         cyc += passcost.MUL_DBL_DBL_CARRY
     # $0075=$006A ; LDA $0069 ; multiply_byte_by_byte: $0069 * $006A -> high,low
     r3h, r3l = _mul8(s69, s6a)  # x_high * y_low
-    # $0075=r3h, $0074=r3l ; LDA $0074(=r3l); CLC ADC $0076 -> A ; LDA $0075(=r3h)
-    #   ADC $0077 -> $0074 ; BCC/INC $0078
+    # LDA $0074(=r3l) ; CLC ADC $0076 ; LDA $0075(=r3h) ; ADC $0077 -> $0074 ; BCC/INC $0078
     t = r3l + r76
     carry = 1 if t > 0xFF else 0
     t2 = r3h + r77 + carry
@@ -350,9 +285,7 @@ def multiply_double_by_double(x_lo, x_hi, y_lo, y_hi):
     return A & 0xFF, frac & 0xFF, cyc
 
 
-# ============================================================================
 # vector construction -- prepare_vector_from_player_sights / _from_angle
-# ============================================================================
 class Vector:
     """The marching ray state: vector components (signed 16-bit, lo/hi) and the
     position triples (frac/sub/whole). Mirrors zero-page $2C-$3C."""
@@ -380,59 +313,12 @@ class Vector:
     )
 
 
-def prepare_vector_from_player_sights(state, h_angle, v_angle, cur_x, cur_y, slot):
-    """$1C10: build vector h_angle ($003E) + h_frac ($003D) and v_angle ($0040) +
-    v_frac ($003F,$0074) from the sights cursor + objects_h_angle/objects_v_angle.
-    Then call prepare_vector_from_angle $1C54.
-    Returns a Vector with vx/vz/vy and the $30/$33/$32 (sin/cos of v) set."""
-    cc6 = cur_x & 0xFF
-    # $1C13 STA $0075 ; A=#0 ; LSR $75/ROR A x3 -> A = (cc6 >> ... ) the bottom 3 bits
-    # of cc6 shifted into top of A: effectively A = (cc6 << 5) & 0xE0 ; $0075=cc6>>3
-    s75 = cc6
-    A = 0
-    for _ in range(3):
-        c = s75 & 1
-        s75 >>= 1
-        A = (A >> 1) | (c << 7)
-    # CLC ; STA $003D (h_frac)
-    h_frac = A & 0xFF
-    # LDA $0075 ; ADC objects_h_angle,X ; SEC ; SBC #$0a -> $003E
-    # NB the player aim sets objects_h_angle[player] = h_angle (the param), so we use
-    # h_angle directly as objects_h_angle[slot] (matches aim_oracle.aim_target).
-    obj_h = h_angle & 0xFF
-    val = s75 + obj_h  # ADC (carry clear from CLC at $1C20)
-    # SEC SBC #$0a
-    h_angle_v = (val - 0x0A) & 0xFF
-    # $1C2D LDA $0CC7 ; SEC SBC #$05 -> $0075
-    s75 = (cur_y - 0x05) & 0xFF
-    # A=#0 ; LSR $75/ROR A x4 -> A = bottom 4 bits of s75 into top of A; $0075 = s75>>4
-    A = 0
-    for _ in range(4):
-        c = s75 & 1
-        s75 >>= 1
-        A = (A >> 1) | (c << 7)
-    # CLC ADC #$20 -> $003F (v_frac) ; STA $0074
-    v_frac = (A + 0x20) & 0xFF
-    s74 = v_frac
-    # LDA $0075 ; ADC objects_v_angle,X ; CLC ADC #$03 -> $0040 (v_angle)
-    obj_v = v_angle & 0xFF
-    # ADC objects_v_angle,X with carry = carry out of the (A+$20) above
-    carry_in = 1 if (A + 0x20) > 0xFF else 0
-    val2 = s75 + obj_v + carry_in
-    # CLC ADC #$03
-    v_angle_v = ((val2 & 0xFF) + 0x03) & 0xFF
-    return prepare_vector_from_angle(h_angle_v, h_frac, v_angle_v, v_frac, s74)
-
-
 def prepare_vector_from_angle(h_angle, h_frac, v_angle, v_frac, s74):
     """$1C54: compute the unit direction vector from horizontal/vertical angles.
     h_frac=$003D, h_angle=$003E, v_frac/s74 used as a_fraction for v's sin_cos.
     Returns a Vector."""
     vec = Vector()
-    # $1C54 sin_cos_lookup of vertical angle (A=$0040=v_angle, $0074=s74... actually
-    # at $1C54 entry $0074 holds v_frac stored at $1C48 STA $0074). Wait prepare_
-    # vector_from_angle is also entered standalone with $0074 set by caller. For the
-    # player path $1C48 STA $0074 = v_frac. So a_fraction = v_frac.
+    # sin_cos_lookup of v_angle, a_fraction $0074 = v_frac ($1C48 STA $0074 on the player path)
     sin_lo_v, cos_lo_v, sin_hi_v, cos_hi_v, cyc = sin_cos_lookup(v_angle, v_frac)
     cyc += passcost.PREP_VEC
     # process cosine (Y=1) -> $0033=A, $0032=X
@@ -448,19 +334,13 @@ def prepare_vector_from_angle(h_angle, h_frac, v_angle, v_frac, s74):
     # $1C69 LDA $003D -> $0074 ; LDA $003E -> sin_cos_lookup (horizontal)
     h_sin_lo, h_cos_lo, h_sin_hi, h_cos_hi, hcyc = sin_cos_lookup(h_angle, h_frac)
     cyc += hcyc
-    # set_vector for Y=1 (cos h) X=2 -> vector_y ; Y=0 (sin h) X=0 -> vector_x
-    # set_vector multiplies cos(v) [$0032/$0033] by sin/cos(h) [$0C00+Y]:
-    #   multiply_double_by_double(x_lo=h_sincos_low, x_hi=h_sincos_high,
-    #                             y_lo=$006A=$0032=cos(v)_low, y_hi=$006B=$0033=cos(v)_high)
-    # Y=1 -> uses cosine(h); store to vector_y ($2E/$31) [X=2]
+    # set_vector: cos(v) [$0032/$0033] times cos(h) (Y=1) -> vector_y ($2E/$31) [X=2]
     vy_hi, vy_lo, mcyc = multiply_double_by_double(h_cos_lo, h_cos_hi, s32, s33)
     cyc += mcyc
     # Y=0 -> uses sine(h); store to vector_x ($2C/$2F) [X=0]
     vx_hi, vx_lo, mcyc = multiply_double_by_double(h_sin_lo, h_sin_hi, s32, s33)
     cyc += mcyc
-    # set_vector stores: $2F+X = result_high(A) ; $2C+X = $0074(result_low/frac)
-    # vector_z ($2D/$30) = sin(v): from process sine, $0030=high, $002D=low
-    # (the ROM sets vector_z directly as the v-sine result -- $30/$2D)
+    # set_vector stores $2F+X=high, $2C+X=low; vector_z ($2D/$30) is the v-sine directly
     vec.vx_lo = vx_lo
     vec.vx_hi = vx_hi
     vec.vz_lo = s2d
@@ -474,9 +354,7 @@ def prepare_vector_from_angle(h_angle, h_frac, v_angle, v_frac, s74):
     return vec
 
 
-# ============================================================================
 # line-of-sight march -- get_object_details + add_vector + check_for_los_to_tile
-# ============================================================================
 def _get_object_details(vec, state, slot, eye_z=None):
     """$1ECC: seed the ray position from observer object `slot`."""
     vec.px_frac = 0
@@ -527,11 +405,10 @@ def _add_vector(vec):
 
 
 def _calc_tile_z_and_slope(state, x, y):
-    """calculate_tile_address_z_and_slope $1DF9 for the LOS (flat) case: returns
-    (z, slope_nibble, carry_set, is_object). For an object tile (byte>=$C0) the ROM
-    branches to get_tile_z_from_object -- but in the player-aim LOS for a bare tile
-    target we handle only terrain here; object tiles are resolved by the caller's
-    height-field semantics (object base z). Returns carry_set True if not flat."""
+    """calculate_tile_address_z_and_slope $1DF9: (z, slope, carry_set, is_object, byte).
+
+    An object tile (byte >= $C0) returns is_object with the other fields None, for the caller's
+    object-stack walk.  carry_set is True for a sloping tile."""
     b = tile_byte(state, x, y)
     if b >= 0xC0:
         return None, None, None, True, b
@@ -597,11 +474,10 @@ def _is_tree(vec, state, Y, minxy, c56, cdd):
 
 
 def _get_tile_z_from_object(vec, state, raw, c56, cdd, c58):
-    """get_tile_z_from_object $1E3F and its helpers ($1E0E, $1E48, $1E69, $1E99,
-    $1EA4) as one bounded walk of the object stack -- the OBJECT-tile branch of
-    calculate_tile_address_z_and_slope ($1E00 BCS).
+    """get_tile_z_from_object $1E3F with its helpers ($1E0E, $1E48, $1E69, $1E99, $1EA4).
 
-    Every exit leaves carry CLEAR, so the caller always takes check_flat_tile.
+    One bounded object-stack walk: the object-tile branch of $1DF9 ($1E00 BCS).  Every exit
+    leaves carry clear, so the caller always takes check_flat_tile.
     Returns (z, s79, c0c, c67, c56, cdd, s60, cycles)."""
     s60, s79, c0c, c67 = 0x80, 0, 0x80, 0
     raw &= 0xFF
@@ -683,24 +559,11 @@ def _get_tile_z_from_object(vec, state, raw, c56, cdd, c58):
 def check_for_line_of_sight_to_tile(
     vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
 ):
-    """$1CDD: march the ray; return (tx, ty, los_ok, cycles). los_ok True == carry clear.
+    """$1CDD: march the ray; return (tx, ty, los_ok, cycles), los_ok True == carry clear.
 
-    ``cycles`` is what the march cost the ROM, charged per sub-step by the branch the
-    tile takes, with the laps' write weight packed above it
-    (:mod:`sentinel.writeweight`).
-
-    Dispatches to the numba fast-march (:func:`_march_jit`) when numba is present,
-    else the reference pure-Python march (:func:`_march_python`).  The two are
-    bit-for-bit identical (see ``tests/test_los_jit.py``); the JIT path is the hot
-    one every LOS sweep runs.
-
-    do_los_checks = the $0C6E byte (its top bit cleared by the player path at $1B40);
-    we pass 0 (top bit clear), matching handle_player_actions for the player aim.
-
-    max_steps bounds the march. The ROM exits naturally at the board edge; the
-    default 20000 reproduces that. PLANNING callers may pass a small cap so that
-    near-horizontal "miss" rays (which march thousands of sub-steps to the edge)
-    return no-LOS cheaply -- a sound approximation for nearby down-looking aims.
+    ``cycles`` is the ROM cost per sub-step by tile branch, with write weight packed above it.
+    Runs :func:`_march_jit`, or the bit-identical :func:`_march_python` with ``_HAVE_JIT`` off.
+    ``do_los_checks`` is $0C6E (0 for the player aim); a small ``max_steps`` cuts miss rays short.
     """
     if _HAVE_JIT:
         return _march_jit(vec, state, slot, do_los_checks, eye_z, max_steps)
@@ -710,37 +573,28 @@ def check_for_line_of_sight_to_tile(
 def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000):
     """Reference pure-Python march (the bit-exact 6502 transcription)."""
     _get_object_details(vec, state, slot, eye_z=eye_z)
-    # $1CDF LSR $0C56 ; $1CE2 LSR $0CDD -- clear top bits (targeted-object trackers).
-    # We seed them from live memory and clear bit7 exactly as the ROM does.
+    # $1CDF LSR $0C56 ; $1CE2 LSR $0CDD: clear the targeted-object trackers' top bits
     c56 = (state.mem[0x0C56] >> 1) & 0xFF
     cdd = (state.mem[0x0CDD] >> 1) & 0xFF
-    # $0C56/$0CDD live in memory: seed them (LSR) back so a caller reading them
-    # after the march (the enemy visibility plumbing) sees the ROM's value on the
-    # edge-return paths too.  They only change again in the object branch below.
-    # The read-only player-aim path (bytes-backed state) never reads them back.
+    # write the trackers back so a post-march reader sees the ROM value on edge returns too
     writable = not isinstance(state.mem, bytes)
     if writable:
         state.mem[0x0C56] = c56
         state.mem[0x0CDD] = cdd
     c58 = state.mem[0x0C58] & 0xFF  # $0C58 targeted object slot ($FF = none)
     c67 = 0  # $0C67 boulder-consider flag
-    # $0C6E as the caller left it: the player path LSRs bit7 clear ($1B40), while
-    # the enemy's robot upper-point probe sets it ($18DD is_robot) so bit7 waives
-    # the looking-up rejection below.  Only bit7 is read (at the $1D26 check).
+    # $0C6E bit7 (read at $1D26) waives the looking-up rejection; the player path clears it
     c6e = do_los_checks & 0xFF
     tx = ty = 0
     cycles = 0
-    # $1CBB costs 4 more per component whose high byte is negative ($1CCC DEC $0074);
-    # the signs are fixed for the whole march, so the sub-step's fixed part is too.
+    # $1CBB costs more per negative high byte ($1CCC DEC $0074); the signs are fixed per march
     neg = sum(1 for h in (vec.vy_hi, vec.vz_hi, vec.vx_hi) if h & 0x80)
     step_fixed = wcost.ADD_VECTOR + wcost.ADD_VECTOR_NEG * neg + 2 * wcost.STEP_EDGE
     # $1CFB..$1DFE: only reached once both edge tests fall through.
     tile_fixed = (
         wcost.STEP_SETUP + wcost.TILE_Z_CALL + wcost.TILE_ADDR + wcost.TILE_Z_READ
     )
-    # bound the march like the ROM's natural board-edge exit; an off-board ray
-    # eventually trips the $1F edge test. Cap to avoid an infinite near-horizontal
-    # ray (treated as no-LOS, walked off board).
+    # the ROM exits at the board edge; a ray still marching at the cap is treated as no-LOS
     for _step in range(max_steps):
         cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
         _add_vector(vec)
@@ -753,8 +607,7 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         if ty >= 0x1F:
             cycles += wcost.STEP_EDGE_EXIT + wcost.LEAVE_SET
             return tx, ty, False, cycles
-        # $1CFB LDA #$80 ; STA $0060 ; STA $000C ; $1D01 LDA #0 ; STA $0079 ;
-        # $1D05 STA $0C67 (clear boulder-consider flag).
+        # $1CFB..$1D05: $0060 = $000C = $80, $0079 = 0, clear $0C67 (boulder-consider flag)
         cycles += tile_fixed
         s60 = 0x80
         c0c_var = 0x80  # $000C tolerance (object path may lower it)
@@ -764,33 +617,25 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
         cycles += wcost.TILE_Z_OBJ if is_obj else wcost.TILE_Z_FLAT
         cycles += wcost.SLOPE_BRANCH if carry_set else wcost.FLAT_BRANCH
         if is_obj:
-            # $1E00 BCS get_tile_z_from_object: faithfully walk the object stack. This
-            # sets z (surface high byte), $0079 (surface fraction), $000C (tolerance),
-            # $0C67 (boulder targetable) and $0C56/$0CDD trackers; carry is always
-            # clear on return -> check_flat_tile path. (calculate_tile_address_z_and_
-            # slope $1DF9 -> $1E3F.)
+            # $1E00 BCS get_tile_z_from_object: z, $0079, $000C, $0C67, trackers; carry clear
             z, s79, c0c_var, c67, c56, cdd, s60, ocyc = _get_tile_z_from_object(
                 vec, state, raw, c56, cdd, c58
             )
             cycles += ocyc
-            # $1E13 ROR $0C56 / the $0CDD tree tracker are memory writes in the ROM;
-            # persist them so the caller's post-march plumbing reads the right byte.
+            # persist the $0C56/$0CDD tracker writes ($1E13 ROR) for post-march readers
             if writable:
                 state.mem[0x0C56] = c56
                 state.mem[0x0CDD] = cdd
             carry_set = False
             slope = 0
         if not carry_set:
-            # check_flat_tile $1D0D
-            # X=A(=z) ; A=$0079(=s79) ; SEC SBC $0038(pz_sub) -> $0079
+            # check_flat_tile $1D0D: X=z ; A=$0079 ; SEC SBC $0038(pz_sub) -> $0079
             cycles += wcost.FLAT_DIFF
             tX = z & 0xFF
             t = s79 - vec.pz_sub
             s79 = t & 0xFF
             borrow = 1 if t < 0 else 0
-            # TXA ; SBC $003B(pz_whole) ; BMI loop (tile below) ; BNE leave_set (above)
-            # BMI tests bit7 of the 8-BIT result (the 6502 N flag), NOT the true sign:
-            # e.g. 4 - 132 - 1 = -129 -> &0xFF = 0x7F (bit7 clear) -> NOT BMI.
+            # TXA ; SBC $003B ; BMI on the 8-bit N flag, not the true sign
             d = (tX - vec.pz_whole - borrow) & 0xFF
             if d & 0x80:
                 # BMI: 8-bit result negative -> tile below position, keep marching
@@ -801,25 +646,17 @@ def _march_python(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20
                 cycles += wcost.FLAT_ABOVE + wcost.LEAVE_SET
                 return tx, ty, False, cycles
             cycles += wcost.FLAT_TOL
-            # equal high byte: $1D1C LDA $0079 ; CMP $000C; BCS leave_set
-            # ($000C defaults to $80 but the object path lowers it to $10 for a
-            # near-centre platform -- a tight vertical tolerance.)
+            # $1D1C LDA $0079 ; CMP $000C ; BCS leave_set ($000C is $10 near a platform centre)
             if (s79 & 0xFF) >= c0c_var:
                 cycles += wcost.FLAT_TOL_HIT + wcost.LEAVE_SET
                 return tx, ty, False, cycles
             cycles += wcost.FLAT_BIT60
-            # $1D22 BIT $0060 ; $1D24 BVS leave_set -- $0060 bit6 ($40) is set if a
-            # SLOPE or an OBJECT has been checked (partial-obscure rejection). Note
-            # this is the LOCAL $0060 (set $C0 by the object path / $40 by a slope),
-            # NOT $0C6E.
+            # $1D22 BIT $0060 ; BVS leave_set: local $0060 bit6 marks a checked slope or object
             if s60 & 0x40:
                 cycles += wcost.FLAT_BIT60_HIT + wcost.LEAVE_SET
                 return tx, ty, False, cycles
             cycles += wcost.FLAT_ANGLE
-            # $1D26 LDA $0C6E ; $1D29 ORA $0C67 ; $1D2C BMI skip_angle_check
-            # ($0C67 top bit = a boulder on this tile is TARGETABLE -> SKIP the
-            # looking-up rejection, so a centre-aimed boulder above the eye is
-            # visible/buildable.)
+            # $1D26 LDA $0C6E ; ORA $0C67 ; BMI: a targetable boulder skips the looking-up check
             if (c6e | c67) & 0x80:
                 cycles += wcost.FLAT_ANGLE_SKIP
             else:
@@ -913,9 +750,7 @@ def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
         cdd,
         max_steps,
     )
-    # $1E13 ROR $0C56 / the $0CDD tree tracker are memory writes in the ROM; persist
-    # the marched-out values so the caller's post-march plumbing reads the right byte
-    # (only the final value is observable, so one write-back is bit-exact).
+    # persist the marched-out trackers; only the final value is observable
     if writable:
         state.mem[0x0C56] = c56 & 0xFF
         state.mem[0x0CDD] = cdd & 0xFF
@@ -923,15 +758,10 @@ def _march_jit(vec, state, slot, do_los_checks=0x00, eye_z=None, max_steps=20000
 
 
 def _check_sloping_tile(vec, state, x, y, z00, slope):
-    """check_sloping_tile $1D46. Returns (verdict, cycles): 'loop' (vector above the
-    slope, keep marching) or 'blocked' (vector below the slope -> tile hit, no LOS).
+    """check_sloping_tile $1D46. Returns (verdict, cycles): 'loop' (above the slope) or 'blocked'.
 
-    The four corner heights:
-      $0073=$0077 = z at (x,y)        [the calculate_tile_address_z_and_slope value
-                                       that produced the slope; passed in as z00]
-      $0076 = z at (x+1, y)
-      $0075 = z at (x+1, y+1)
-      $0074 = z at (x,   y+1)
+    Corner heights: $0073=$0077 = z00 at (x,y), $0076 at (x+1,y), $0075 at (x+1,y+1),
+    $0074 at (x,y+1).
     """
     cyc = wcost.SLOPE_HEAD
     p73 = z00 & 0xFF
@@ -989,11 +819,10 @@ _EDGES = (0x00, 0x03, 0x01, 0x00, 0x01, 0x02, 0x02, 0x03)  # the $1DF1-$1DF8 ROM
 
 
 def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
-    """$1D8A-$1DEE, literal instruction-faithful port (corner/quadrilateral slope).
-    The 6502 control flow here is bit-intricate (the $1D8B BCC lands on $1D9C, an
-    EXTRA LSR before use_corner_for_slope), so we transcribe it opcode-by-opcode with
-    explicit A and the carry flag. Returns (verdict, cycles): 'loop' (ray above the
-    slope -> keep marching) or 'blocked' (ray below it -> tile hit)."""
+    """$1D8A-$1DEE corner/quadrilateral slope, opcode-by-opcode with explicit A and carry.
+
+    The $1D8B BCC lands on $1D9C, an extra LSR before use_corner_for_slope.
+    Returns (verdict, cycles): 'loop' (ray above the slope) or 'blocked' (tile hit)."""
     # zero-page square: $73=p73, $74=p74, $75=p75, $76=p76, $77=p73 (first==last)
     corners = [p73 & 0xFF, p74 & 0xFF, p75 & 0xFF, p76 & 0xFF, p73 & 0xFF]  # $73..$77
 
@@ -1004,8 +833,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     A >>= 1
     if C == 0:
         cyc += wcost.SLOPE_Q_C2
-        # $1D8B BCC tile_is_corner_type_two -> target is $1D9C (an extra LSR)
-        # $1D9C LSR A
+        # $1D8B BCC tile_is_corner_type_two lands on $1D9C LSR A (the extra LSR)
         C = A & 1
         A >>= 1
         # falls into use_corner_for_slope $1D9D
@@ -1032,8 +860,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
         A >>= 1
         if C == 1:
             cyc += wcost.SLOPE_Q_C1
-            # $1D8E BCS tile_is_corner_type_two -> $1D95 (NOTE: no extra LSR here)
-            # $1D95 ADC #$1 : A = A + 1 + C (C is the carry from $1D8D LSR, =1)
+            # $1D8E BCS -> $1D95 ADC #$1 (no extra LSR): A + 1 + C, C set by $1D8D
             A = (A + 1 + C) & 0xFF
             A &= 0x03  # $1D97 AND #$3
             # $1D99 JMP use_corner_for_slope $1D9D
@@ -1084,8 +911,7 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     # $1DD2 LDA $0002 ; $1DD4 JSR multiply_byte_by_byte ($0D03): $0074=$0002 * $0075
     prod_h, prod_lo = _mul8(s02, s75)  # A=high, $0074=low
     cyc += passcost.MUL8_BIT * _bits(s02)
-    # $1DD7 PLP ; $1DD8 invert_A_and_a_fraction_if_negative: invert (A:$0074) if the
-    # slope subtraction (N flag we saved) was negative.
+    # $1DD7 PLP ; $1DD8 invert (A:$0074) if the saved slope subtraction was negative
     if neg:
         prod_h, prod_lo = invert16(prod_h, prod_lo)
         cyc += wcost.SLOPE_Q_NEG
@@ -1100,65 +926,27 @@ def _slope_corner_or_quad(vec, state, nib, p73, p74, p75, p76):
     return "loop", cyc
 
 
-# ============================================================================
-# public entry points
-# ============================================================================
-# The sights pan on a keyboard-reachable lattice: azimuth in 8-unit steps, pitch
-# on a 4-unit lattice inside the pan clamp [$CD..$35] ($10FF/$1149; every body's
-# v_angle == $F5 per put_object_in_tile $1F7E).  Views off this lattice cannot be
-# reached by the keyboard.
+# keyboard pan lattice: h in AZIMUTH_STEP notches, pitch every 4 in the $10FF/$1149 clamp
 AZIMUTH_STEP = 8  # h ≡ 0 (mod 8): ±8 pans / u-turn EOR $80 from any body's facing
 PITCH_BAND = [
     v & 0xFF for v in list(range(0xCD, 0x100, 4)) + list(range(0x01, 0x36, 4))
 ]
-SIGHTS_CX = 0x50  # centred sights cursor ($1356); cx range midpoint 80
-SIGHTS_CY = 0x5F  # 95; cy range midpoint
 
-# The REAL keyboard aim lattice (the buildability oracle). The ROM keyboard pitches/pans
-# by MOVING the sights cursor ONE PIXEL AT A TIME (cursor-move $9965/$9994), each 1px step
-# a distinct ray sub-angle ($1C10) -- so the lattice samples the cursor at 1px resolution.
-# The cursor move routines $9965 (x) / $9994 (y) step by +/-1 pixel, clamped to
-# cx $10..$8F (16..143) and cy $20..$9F (32..159) ($9965/$9994 range checks); the ROM
-# centres are cx=$50=80, cy=$5F=95.  prepare_vector_from_player_sights $1C10 then makes
-# EACH 1px cursor step a DISTINCT ray sub-angle: h_frac=(cx&7)<<5 / h_int+=cx>>3, and
-# v_frac=((cy-5)&0xF)<<4 / v_int+=(cy-5)>>4.  So the faithful oracle enumerates the cursor
-# at 1px resolution, NOT the old 9px notch grid (which false-negatived far/adjacent tiles
-# the human actually builds on -- e.g. ls0 build (8,24) lands at cy=115).
-#
-# PERF (bit-equivalence proof, tests/test_landable.py::test_window_equals_full_1px_cursor):
-# a 64px-wide, step-1 cursor WINDOW per axis is BIT-EQUIVALENT to the full 1px range.
-# Body-h steps by AZIMUTH_STEP=8 and cx>>3 over 64px spans 8 consecutive h-int offsets,
-# so (h_int, h_frac) is tiled identically to the full cx range (h is cyclic -- position-
-# independent).  Body-v steps by 4 (PITCH_BAND) and (cy-5)>>4 over 64px spans the 4 gap
-# offsets, with (cy-5)&0xF covering all 16 v-fracs, so the full-band sweep's ray SET (and
-# thus every marched tile + tile-centre fraction) is identical to a full cx[16,143] x
-# cy[32,159] 1px sweep -- verified exactly (0 diff) on the recorded human-win states.
-# The window is centred on the ROM centres 80/95 so they sit inside it.
+# each 1px cursor step ($9965/$9994) is a distinct $1C10 sub-angle; bodies face v $F5 ($1F7E)
 KBD_V_ANGLE = 0xF5
-_CURSOR_CX_LO, _CURSOR_CX_HI = 16, 143  # ROM cursor x clamp $10..$8F ($9965)
 _CURSOR_CY_LO, _CURSOR_CY_HI = 32, 159  # ROM cursor y clamp $20..$9F ($9994)
-CURSOR_CX = list(range(48, 112))  # 64px step-1 window, centre 80 (== SIGHTS_CX) inside
-CURSOR_CY = list(range(63, 127))  # 64px step-1 window, centre 95 (== SIGHTS_CY) inside
-# The full 1px ROM cursor range -- the ground-truth the window is proven equal to.
-CURSOR_CX_FULL = list(range(_CURSOR_CX_LO, _CURSOR_CX_HI + 1))
+CURSOR_CX = list(
+    range(48, 112)
+)  # spans one AZIMUTH_STEP of cx>>3, centre 80 (== SIGHTS_CX)
+CURSOR_CY = list(
+    range(63, 127)
+)  # one PITCH_BAND step of (cy-5)>>4, centre 95 (== SIGHTS_CY)
 CURSOR_CY_FULL = list(range(_CURSOR_CY_LO, _CURSOR_CY_HI + 1))
 
-# The COMPLETE keyboard aim has THREE pitch controls: the body v_angle (over PITCH_BAND)
-# AND the sights cursor cy.  Fixing v_angle at $F5 is SOUND but INCOMPLETE -- the player
-# also pitches the BODY down to aim at near/below tiles (the ls335 opening (11,17)->(11,18)
-# adjacent build was fired at v=225).  landable_views/_sweep_with_centres therefore sweep
-# the body v_angle too.  KBD_V_ANGLE is kept FIRST in the sweep order so every tile already
-# landable at v=$F5 keeps its exact (h, v, cursor) view; only tiles reachable ONLY via a
-# pitched body get a pitched view.
+# body pitch is a further aim DOF for near/below builds; $F5 first keeps its views
 _V_PRIORITY = [KBD_V_ANGLE] + [v for v in PITCH_BAND if v != KBD_V_ANGLE]
 
-# The pitched-body angles sweep the SAME 1px cursor window as $F5 (the full 4-DOF brute
-# sweep = the ROM via aim_target).  Precomputed lattice ray vectors, keyed by the
-# (h, v, cx, cy) grid, are built ONCE by the numba batch builder
-# (:func:`sentinel.los_jit.build_lattice`) and cached here.  The ray vector for an
-# aim depends ONLY on the aim params (prepare_vector_from_player_sights reads neither `state`
-# nor `slot`), so the whole lattice is built ONCE and reused for every state/sweep -- the
-# only per-state work left is the march itself (batched in los_jit.march_batch).
+# a ray vector depends only on the aim, so los_jit.build_lattice builds each lattice once
 _VEC_CACHE = {}
 
 
@@ -1177,13 +965,10 @@ def kbd_grids(cxs=None, cys=None, v_primary=False):
 
 
 def _lattice_vectors(hgrid, vgrid, cxs, cys):
-    """Build (or fetch cached) the per-aim ray-vector arrays for the keyboard lattice, nested
-    ``for v in vgrid: for h in hgrid: for cx: for cy`` (one uniform 1px cursor window at every
-    pitch).  Returns ``(vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30)`` -- the six int16
-    component arrays + s30 that feed :func:`los_jit.march_batch`.  Each landing's (h, v, cx, cy)
-    build view is reconstructed from the flat index by :func:`_meta_at` (no millions-of-tuples
-    meta list).  The build runs in :func:`los_jit.build_lattice` (numba, prange) so the full 1px
-    lattice is assembled in a fraction of a second; result cached in :data:`_VEC_CACHE`.
+    """Build (or fetch from :data:`_VEC_CACHE`) the keyboard lattice's ray-vector arrays.
+
+    Order is ``for v: for h: for cx: for cy``; returns ``(vx_lo, vx_hi, vz_lo, vz_hi, vy_lo,
+    vy_hi, s30)`` for :func:`los_jit.march_batch`, each aim recovered by :func:`_meta_at`.
     """
     key = (tuple(hgrid), tuple(vgrid), tuple(cxs), tuple(cys))
     cached = _VEC_CACHE.get(key)
@@ -1202,7 +987,7 @@ def _lattice_vectors(hgrid, vgrid, cxs, cys):
 def _meta_at(i, hgrid, vgrid, cxs, cys):
     """Reconstruct the ``(h, v, cx, cy)`` aim for flat lattice index ``i`` (order
     ``for v: for h: for cx: for cy``) -- the inverse of :func:`los_jit.build_lattice`'s
-    indexing, so no parallel meta list of millions of tuples is stored."""
+    indexing, so no per-aim meta list is stored."""
     nh, ncx, ncy = len(hgrid), len(cxs), len(cys)
     per_h = ncx * ncy
     per_v = nh * per_h
@@ -1274,44 +1059,12 @@ def _landable_batch(state, slot, eye_z, max_steps, hgrid, vgrid, cxs, cys):
     return status, tx, ty, centre, (hgrid, vgrid, cxs, cys)
 
 
-def landable_views(state, slot=None, eye_z=None, max_steps=6000):
-    """Every tile a real KEYBOARD aim can land the sights on with line of sight from the
-    observer at `slot` (default player), in ONE forward sweep of the keyboard input
-    lattice: body h in :data:`AZIMUTH_STEP` notches x sights cursor (cx, cy) on the 1px
-    window, v_angle over :data:`_V_PRIORITY`. Returns
-    ``{(tx, ty): {"h_angle", "v_angle", "cursor"}}`` -- the keystroke target that BUILDS
-    on each tile (first LOS hit per tile).
-
-    This is the buildability oracle: AIM-landability, not mere geometric
-    visibility.  The sweep now covers the body v_angle DOF too (over :data:`_V_PRIORITY`,
-    $F5 first) so it returns every tile ANY keyboard aim lands on -- including near/below
-    tiles the player pitches the body down for (the ls335 (11,18) adjacent build).  One
-    batched numba march over the precomputed lattice yields the whole landable set at once.
-    """
-    if slot is None:
-        slot = state.player
-    return _landable_sweep(state, slot, eye_z, max_steps, want_centres=False)[0]
-
-
 def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False):
-    """Shared body of :func:`landable_views` / :func:`landable_sweep_with_centres`: sweep the
-    full keyboard aim lattice (h notches x body v_angle over :data:`_V_PRIORITY` x sights
-    cursor 1px window) and return ``(views, centres)`` -- first-LOS view per tile (lattice
-    order) and the min tile-centre fraction per tile.  Uses the batched numba march when
-    numba is present, else a per-aim :func:`aim_target` fallback (bit-identical, slower).
+    """Sweep the keyboard aim lattice: ``(views, centres)``, first-LOS view and min centre per tile.
 
-    ``v_primary`` restricts the body v_angle to :data:`KBD_V_ANGLE` ($F5) alone -- the
-    up/level pitch of every non-regressing climb build (a foothold whose top is at or above
-    the eye is never reached by pitching the body DOWN).  Dropping the pitch band marches
-    one v-plane instead of the whole band and loses only the down/adjacent tiles a climb
-    discards anyway; the full band stays the default for the completeness-critical endgame
-    launch gate.
-
-    Cursor grid: the 64px cy WINDOW is bit-equivalent to the full cy range ONLY when the
-    body v_angle sweeps the pitch band (body-v step 4 fills the cy-integer gaps).  With
-    ``v_primary`` there is no body-v, so the cursor cy is the sole pitch control and MUST
-    span its full ROM range (:data:`CURSOR_CY_FULL`) or the $F5 plane under-reports.  The cx
-    window stays faithful either way (body-h step 8 fills the h-integer gaps).
+    ``v_primary`` keeps only the $F5 body plane (a climb foothold never needs a pitched-down
+    body); cursor cy is then the sole pitch control, so it spans :data:`CURSOR_CY_FULL`.  The cy
+    window matches the full range only beside the body pitch band; the cx window always does.
     """
     grids = kbd_grids(v_primary=v_primary)
     status, tx, ty, centre, grids = _landable_batch(
@@ -1321,10 +1074,7 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
     centres = {}
     clear = np.flatnonzero(status == los_jit.LOS_CLEAR)
     if clear.size:
-        # Pack each clear hit's tile (tx,ty) into one int64 key. `clear` is ascending, so
-        # np.unique(return_index=True) yields the FIRST clear lattice index per tile; sorting
-        # those first-indices restores the original loop's ascending-i discovery order (so the
-        # dicts get the same insertion order, not just the same contents).
+        # `clear` ascends, so np.unique's first indices, re-sorted, keep discovery order
         key = (tx[clear].astype(np.int64) << 16) | ty[clear].astype(np.int64)
         uniq, first = np.unique(key, return_index=True)
         order_ins = np.argsort(first, kind="stable")
@@ -1332,8 +1082,7 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
         first = first[order_ins]
         cmin = None
         if want_centres:
-            # Min tile-centre per tile: stable-sort by key into contiguous groups and take a
-            # per-group minimum. Keyed by the same packed int64 for lookup in discovery order.
+            # min tile-centre per tile: stable-sort into key groups, reduceat each minimum
             order = np.argsort(key, kind="stable")
             ks = key[order]
             cs = centre[clear][order].astype(np.int64)
@@ -1352,182 +1101,14 @@ def _landable_sweep(state, slot, eye_z, max_steps, want_centres, v_primary=False
 def landable_sweep_with_centres(
     state, slot=None, eye_z=None, max_steps=6000, v_primary=False
 ):
-    """One forward sweep of the REAL keyboard aim lattice (h notches x 1px cursor window x
-    body v_angle) returning (views, centres):
-      views:   {(tx,ty): {"h_angle","v_angle","cursor"}}  first LOS landing per tile
-      centres: {(tx,ty): min tile-centre fraction seen}    for the on-boulder centre gate
-                                                           ($1E48 needs fraction < $40)
-    The buildability oracle -- aim-landability (which tiles a real keyboard aim lands
-    the sights on), not mere geometric visibility.  Sweeps the body v_angle DOF too
-    (:data:`_V_PRIORITY`, $F5 first) so near/below builds are covered.
+    """The buildability oracle: one sweep of the keyboard aim lattice returning (views, centres).
 
-    ``v_primary=True`` restricts the sweep to :data:`KBD_V_ANGLE` -- the up/level pitch of
-    every non-regressing climb foothold -- for a single-plane sweep in the hot climb loop.
+    ``views`` maps (tx,ty) to the first-LOS {"h_angle","v_angle","cursor"}; ``centres`` to the
+    min tile-centre fraction (the $1E48 boulder gate needs < $40).  ``v_primary=True`` sweeps
+    only the $F5 plane, for the hot climb loop.
     """
     if slot is None:
         slot = state.player
     return _landable_sweep(
         state, slot, eye_z, max_steps, want_centres=True, v_primary=v_primary
     )
-
-
-def landable_view(state, tile, slot=None, eye_z=None, max_steps=6000):
-    """The build view for a SINGLE `tile`, or None if no keyboard aim lands the sights on
-    it with line of sight.  Returns ``{"h_angle","v_angle","cursor"}``.
-
-    The primary ($F5) plane first, then the full pitch band (the body pitched DOWN at
-    near/below tiles), each by :func:`landable_view_targeted`: only the rays that can land
-    on ``tile`` are marched, and the answer is that plane's full-sweep entry.
-    """
-    if slot is None:
-        slot = state.player
-    key = (tile[0], tile[1])
-    for v_primary in (True, False):
-        if _HAVE_JIT:
-            view = landable_view_targeted(
-                state, key, slot, eye_z, max_steps, v_primary=v_primary
-            )
-        else:  # pragma: no cover - numba absent
-            views, _ = _landable_sweep(
-                state, slot, eye_z, max_steps, want_centres=False, v_primary=v_primary
-            )
-            view = views.get(key)
-        if view is not None:
-            return view
-    return None
-
-
-_HEADING_CACHE = {}
-_TWO_PI = 2.0 * math.pi
-
-
-def _lattice_headings(hgrid, vgrid, cxs, cys):
-    """``(head_sorted, order)`` for the cached lattice, keyed like :data:`_VEC_CACHE`.
-    ``head`` = per-ray horizontal heading ``atan2(vy, vx)`` in tile space (``vx, vy`` are the
-    march's signed 16-bit per-substep increments), sorted once so a per-tile arc query is two
-    :func:`numpy.searchsorted` bisections, not a full-lattice scan."""
-    key = (tuple(hgrid), tuple(vgrid), tuple(cxs), tuple(cys))
-    rec = _HEADING_CACHE.get(key)
-    if rec is None:
-        vx_lo, vx_hi, _, _, vy_lo, vy_hi, _ = _lattice_vectors(hgrid, vgrid, cxs, cys)
-
-        def _s16(hi, lo):
-            v = ((hi.astype(np.int32) & 0xFF) << 8) | (lo.astype(np.int32) & 0xFF)
-            return np.where(v >= 0x8000, v - 0x10000, v).astype(np.float64)
-
-        head = np.arctan2(_s16(vy_hi, vy_lo), _s16(vx_hi, vx_lo))
-        order = np.argsort(head, kind="stable")
-        rec = (head[order], order)
-        _HEADING_CACHE[key] = rec
-    return rec
-
-
-def _tile_arc_ranges(head_sorted, ex, ey, tx, ty):
-    """``[lo, hi)`` slices of ``head_sorted`` whose heading points into cell ``(tx, ty)``
-    from the eye centre ``(ex+.5, ey+.5)`` -- a PROVABLE superset of the rays that can land
-    on the cell (a straight ray reaching a convex cell has heading within its angular span
-    from the fixed seed).  One slice, two when the arc wraps past +pi, the whole circle
-    when the eye centre is inside the cell."""
-    dxlo, dxhi = tx - ex - 0.5, tx - ex + 0.5
-    dylo, dyhi = ty - ey - 0.5, ty - ey + 0.5
-    if dxlo <= 0.0 <= dxhi and dylo <= 0.0 <= dyhi:
-        return ((0, head_sorted.size),)
-    corners = ((dxlo, dylo), (dxlo, dyhi), (dxhi, dylo), (dxhi, dyhi))
-    angs = [math.atan2(dy, dx) for dx, dy in corners]
-    ref = angs[0]
-    deltas = [((a - ref + math.pi) % _TWO_PI) - math.pi for a in angs]
-    a_lo = ((ref + min(deltas) + math.pi) % _TWO_PI) - math.pi - 1e-9
-    a_hi = a_lo + (max(deltas) - min(deltas)) + 2e-9
-    lo_i = int(np.searchsorted(head_sorted, a_lo, side="left"))
-    if a_hi <= math.pi:
-        return ((lo_i, int(np.searchsorted(head_sorted, a_hi, side="right"))),)
-    hi_i = int(np.searchsorted(head_sorted, a_hi - _TWO_PI, side="right"))
-    return ((lo_i, head_sorted.size), (0, hi_i))
-
-
-def landable_view_targeted(
-    state,
-    tile,
-    slot=None,
-    eye_z=None,
-    max_steps=6000,
-    cxs=None,
-    cys=None,
-    v_primary=False,
-):
-    """Build view for ONE ``tile``, bit-identical to its entry in that lattice's full sweep.
-
-    Marches only the rays that can land there: the heading arc (:func:`_tile_arc_ranges`)
-    narrowed by the landability filter (:func:`sentinel.landtable.landable_view`).  ``cxs``/``cys`` override the cursor grid (1px window); ``v_primary`` =
-    :func:`_landable_sweep`'s $F5 plane, cys CURSOR_CY_FULL.
-    """
-    if slot is None:
-        slot = state.player
-    key = (tile[0], tile[1])
-    from sentinel import landtable  # deferred: landtable imports los
-
-    return landtable.landable_view(
-        state, key, slot, eye_z, kbd_grids(cxs, cys, v_primary), max_steps
-    )
-
-
-def _prepare_vector(state, h_angle, v_angle, cur_x, cur_y, player_slot):
-    """The action-time ray vector for one aim.  When numba is present this is the njit
-    :func:`sentinel.los_jit._prep_vec` (bit-identical to the pure
-    Python :func:`prepare_vector_from_player_sights`); otherwise the pure-Python path.  The
-    player aim reads neither `state` nor `player_slot` (obj_h/obj_v are the aim params), so
-    both accept them only for signature parity."""
-    if not _HAVE_JIT:
-        return prepare_vector_from_player_sights(
-            state, h_angle, v_angle, cur_x, cur_y, player_slot
-        )
-    vx_lo, vx_hi, vz_lo, vz_hi, vy_lo, vy_hi, s30 = los_jit._prep_vec(
-        h_angle & 0xFF, v_angle & 0xFF, cur_x & 0xFF, cur_y & 0xFF
-    )
-    vec = Vector()
-    vec.vx_lo = int(vx_lo)
-    vec.vx_hi = int(vx_hi)
-    vec.vz_lo = int(vz_lo)
-    vec.vz_hi = int(vz_hi)
-    vec.vy_lo = int(vy_lo)
-    vec.vy_hi = int(vy_hi)
-    vec.s30 = int(s30)
-    return vec
-
-
-def aim_target(
-    state,
-    h_angle,
-    v_angle,
-    cur_x,
-    cur_y,
-    player_slot,
-    eye_z=None,
-    max_steps=20000,
-    return_centre=False,
-):
-    """Native port of the action-time aim (handle_player_actions $1B40-$1B46):
-    prepare_vector_from_player_sights $1C10 then check_for_line_of_sight_to_tile
-    $1CDD. Returns (tx, ty, los) where los True == ROM carry clear (visible).
-
-    The ray vector is built by the numba :func:`sentinel.los_jit._prep_vec` when numba is
-    present -- bit-for-bit identical to :func:`prepare_vector_from_player_sights` (locked by
-    tests/test_landable.py::test_prep_vec_matches_python) so the 1px single-tile
-    short-circuit runs compiled."""
-    vec = _prepare_vector(state, h_angle, v_angle, cur_x, cur_y, player_slot)
-    # do_line_of_sight_checks $0C6E: the player aim path clears its top bit ($1B40
-    # LSR $0C6E). Read it from live memory and mask, matching the ROM exactly.
-    do_los = state.mem[0x0C6E] & 0x7F
-    tx, ty, los, _steps = check_for_line_of_sight_to_tile(
-        vec, state, player_slot, do_los_checks=do_los, eye_z=eye_z, max_steps=max_steps
-    )
-    if return_centre:
-        # get_minimum_x_or_y_fraction_from_tile_centre $1EAF (the EXACT 6502 form, not
-        # plain abs): < $40 => the boulder on this tile is targetable ($1E4B) and the
-        # looking-up rejection is skipped -> you can build on it. Uses the FINAL marched
-        # px_sub/py_sub ($0037/$0039) -- the same inputs the ROM's $1EAF reads when the
-        # ray reaches the object tile. This lets the NATIVE model compute a centre-
-        # aimed view without any emulation.
-        centre = _get_min_xy_fraction(vec)[0]
-        return tx, ty, los, centre
-    return tx, ty, los

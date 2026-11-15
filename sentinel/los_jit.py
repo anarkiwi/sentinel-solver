@@ -1,21 +1,8 @@
 """Numba fast-march for the line-of-sight ray (:func:`sentinel.los.march`).
 
-A bit-exact numba transcription of the HOT part of the ROM ray-march
-(check_for_line_of_sight_to_tile $1CDD): the per-sub-step ``add_vector``, the
-board-edge test, and the flat-tile / sloping-tile surface comparison, all over a
-raw ``numpy.uint8`` view of the whole memory image.
-
-Flat, sloping and object tiles are all resolved here.  Within a tile the sub-steps
-that provably keep marching on one branch path are taken in closed form with their
-exact summed cost, so a march costs O(tiles crossed); the per-sub-step reference it
-matches bit for bit lives in ``tests/test_los_jit.py``.
-
-Return status:
-  * ``LOS_CLEAR`` (1) -- the ray reached a visible tile (ROM carry clear).
-  * ``BLOCKED``   (0) -- tile above the ray / board edge / max_steps (no LOS).
-
-Every integer is kept in a Python-int-width (int64) register and masked with
-``& 0xFF`` exactly where the 6502 truncates, so uint8 wrap never corrupts a byte.
+Bit-exact check_for_line_of_sight_to_tile $1CDD over a uint8 view of the memory image,
+matching the per-sub-step reference in tests/test_los_jit.py; status is LOS_CLEAR (carry
+clear) or BLOCKED. Registers are int64, masked with ``& 0xFF`` where the 6502 truncates.
 """
 
 import numpy as np
@@ -34,8 +21,7 @@ from sentinel.writeweight import MARCH as wcost  # noqa: E402
 LOS_CLEAR = 1
 BLOCKED = 0
 
-# march_batch runs batch // BATCH_GRAIN threads (serially below two): the rays per
-# thread at the measured fastest thread count (sentinel.tests.test_los_jit.batch_grain).
+# rays per march_batch thread (serial below two threads); tuned by test_los_jit.batch_grain
 BATCH_GRAIN = 8
 
 _RUN_QUAD = 0
@@ -124,7 +110,6 @@ _OBJ_SKIP_OTHER = wcost.OBJ_SKIP_OTHER
 _OBJ_GHOL_LOOP = wcost.OBJ_GHOL_LOOP
 _OBJ_GHOL_RTS = wcost.OBJ_GHOL_RTS
 _MUL8 = passcost.MUL8
-_MUL8_LOW = passcost.MUL8_LOW
 _MUL8_BIT = passcost.MUL8_BIT
 _MUL_DBL_BYTE = passcost.MUL_DBL_BYTE
 _MUL_DBL_BYTE_CARRY = passcost.MUL_DBL_BYTE_CARRY
@@ -149,11 +134,8 @@ _MUL_DBL_DBL_NEG_Y = passcost.MUL_DBL_DBL_NEG_Y
 _MUL_DBL_DBL_ODD = passcost.MUL_DBL_DBL_ODD
 _MUL_DBL_DBL_CARRY = passcost.MUL_DBL_DBL_CARRY
 _MUL_DBL_DBL_NEG = passcost.MUL_DBL_DBL_NEG
-_PREP_VEC = passcost.PREP_VEC
 
-# Object-array bases in the memory image (sentinel.memmap), inlined so the njit
-# code needs no Python object: OBJECTS_FLAGS $0100, OBJECTS_Z_HEIGHT $0940,
-# OBJECTS_Z_FRACTION $0A00, OBJECTS_TYPE $0A40.
+# sentinel.memmap OBJECTS_FLAGS / _Z_HEIGHT / _Z_FRACTION / _TYPE, inlined for njit
 _OFLAGS = 0x0100
 _OZHEIGHT = 0x0940
 _OZFRAC = 0x0A00
@@ -300,11 +282,10 @@ def _tile_steps(a, v):
 def _flat_run(z, za, vz, n):
     """Leading sub-steps of ``1..n`` that stay below flat height ``z``.
 
-    Below means ``((z << 8) - pz16) & 0x8000`` with ``pz16 = za_j >> 8``; that is
-    ``ceil(w_j / 256) mod 2^16 >= 0x8000`` for ``w_j = ((z << 16) - za) mod 2^24 - j*vz``.
-    Step 0 is below, so ``ceil(w_0/256)`` is in [0x8000, 0xFFFF]; it moves by at most
-    0x80 per step, so it leaves that band only through 0x7FFF (climbing) or 0x10000
-    (descending), at the first ``j`` solving the matching linear inequality."""
+    Below is ``ceil(w_j / 256) mod 2^16 >= 0x8000``, ``w_j = ((z << 16) - za) mod 2^24 - j*vz``.
+    It moves by at most 0x80 per step, so it leaves [0x8000, 0xFFFF] only through 0x7FFF
+    (climbing) or 0x10000 (descending), at the first ``j`` solving that linear inequality.
+    """
     if vz == 0:
         return n
     w = ((z << 16) - za) & 0xFFFFFF
@@ -366,8 +347,7 @@ def _object_ok(z0, z2, x0, x2, y0, y2, zs, uses, tk):
         if uses & _USE_64 and (fa >= 0x64) != (fb >= 0x64):
             return False
         if uses & _USE_TREE:
-            # V = (tk - pz16) mod 2^16: >= $8000 below, >= $400 high, else near iff
-            # V >> 2 < frac, i.e. 256*tk' - Z - 4*Lf < -(Z mod 256) - 4*(Lf mod 256)
+            # V = (tk - pz16) mod 2^16: >= $8000 below, >= $400 high, else near iff V >> 2 < frac
             vlo = tk - (max(z0, z2) >> 8)
             vhi = tk - (min(z0, z2) >> 8)
             if vlo >> 16 != vhi >> 16:
@@ -526,11 +506,11 @@ def _is_tree_cdd(mem, Y, pz_sub, pz_whole, minxy, c56, cdd):
 
 @spec
 def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
-    """los._get_tile_z_from_object $1E3F and its helpers, flattened into one bounded
-    iterative walk of the object stack.  Returns ``(z, s79, c0c, c67, c56, cdd, s60,
-    cycles, hits, uses, tk, seen)``: the surface, the $0C56/$0CDD trackers, the walk's
-    6502 cost, the targeted-slot visits, its ``_USE_*`` position dependences, and the
-    is_tree height + $E0 and $0CDD marks of its tree."""
+    """los._get_tile_z_from_object $1E3F and helpers as one bounded walk of the object stack.
+
+    Returns ``(z, s79, c0c, c67, c56, cdd, s60, cycles, hits, uses, tk, seen)``: the surface,
+    the trackers, the 6502 cost, targeted-slot visits, ``_USE_*`` position dependences, and
+    the is_tree height + $E0 and $0CDD marks of its tree."""
     s60 = 0x80
     hits = 0
     uses = 0
@@ -622,8 +602,7 @@ def _object_surface(mem, raw0, px_sub, py_sub, pz_sub, pz_whole, c58, c56, cdd):
                     z = (int(mem[_OZHEIGHT + Y]) + carry) & 0xFF
                     return (z, s79, c0c, c67, c56, cdd, s60, cyc, hits, uses, tk, seen)
         if do_ghol:
-            # get_height_of_lowest_object $1EA4: stacked -> recurse on the object
-            # beneath (raw = flags); else the bottom object's z_height.
+            # get_height_of_lowest_object $1EA4: stacked recurses on raw = flags, else z_height
             flags = int(mem[_OFLAGS + Y])
             if flags >= 0x40:
                 cyc += _OBJ_GHOL_LOOP
@@ -677,26 +656,19 @@ def march(
 ):
     """March the ray from the given position for at most ``max_steps`` sub-steps.
 
-    Fully self-contained: flat, sloping AND object tiles are resolved in numba, so
-    the march never bails back to Python.  Returns the 16-tuple::
+    Flat/sloping runs that provably keep marching (:func:`_flat_run`, :func:`_slope_run`) are
+    taken in closed form with their exact summed cost, so a march costs O(tiles crossed).
 
-        (status, tx, ty,
-         px_frac, px_sub, px_whole, pz_frac, pz_sub, pz_whole,
-         py_frac, py_sub, py_whole, c56, cdd, steps_used, cycles)
+    Args:
+        s30: the ray's vector_z high byte (the looking-up sign).
+        c6e: do_line_of_sight_checks $0C6E; bit7 waives the looking-up rejection.
+        c58: the targeted-object slot.
+        c56: the $0C56 tracker, seeded by the caller and returned for it to persist.
+        cdd: the $0CDD tracker, likewise.
 
-    ``cycles`` is the march's 6502 cost, per sub-step by the branch taken, with the
-    laps' own write weight packed above it (:mod:`sentinel.writeweight`).
-
-    ``s30`` is the ray's vector_z high byte (the looking-up sign).  ``c6e`` is the
-    do_line_of_sight_checks byte ($0C6E); bit7 waives the looking-up rejection.
-    ``c58`` is the targeted-object slot; ``c56``/``cdd`` are the $0C56/$0CDD
-    trackers (seeded/LSR'd by the caller, returned so the caller can persist them).
-
-    add_vector $1CBB is a signed 16-bit step on each 24-bit (whole:sub:frac)
-    accumulator.  Once a flat or sloping tile's sub-step keeps marching, the run of
-    further sub-steps inside that tile that provably keep marching (:func:`_flat_run`,
-    :func:`_slope_run`) is taken in closed form with its exact summed cost, so the
-    march costs O(tiles crossed), not O(sub-steps); object tiles go sub-step by sub-step.
+    Returns:
+        ``(status, tx, ty, px_frac..py_whole, c56, cdd, steps_used, cycles)``; ``cycles`` is
+        the 6502 cost with the laps' write weight packed above it (:mod:`sentinel.writeweight`).
     """
     vx = _s16(ax_hi, ax_lo)
     vy = _s16(ay_hi, ay_lo)
@@ -864,8 +836,7 @@ def march(
 
         if cnib == 0:
             cycles += np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF)
-            # check_flat_tile $1D0D, fast path (s79=0, tolerance $000C=$80,
-            # $0060 bit6 clear, $0C67 clear).
+            # check_flat_tile $1D0D fast path: s79=0, $000C=$80, $0060 bit6 and $0C67 clear
             s79 = (-pz_sub) & 0xFF
             d = (cz - pz_whole - (1 if pz_sub else 0)) & 0xFF
             if d & 0x80:
@@ -1094,18 +1065,12 @@ def march_batch(
     cdd,
     max_steps,
 ):
-    """March a whole PRECOMPUTED lattice of ray vectors against one memory snapshot in
-    a single numba call (the v-complete keyboard-aim sweep).  ``ax_lo..s30`` are equal-
-    length arrays of per-aim vector components (state-INDEPENDENT -- built once from the
-    aim params, see :func:`sentinel.los._lattice_vectors`); every ray starts from the
-    SAME seed position (``px_frac0`` .. ``py_whole0``, from get_object_details $1ECC) and
-    is marched by :func:`march`.  Returns per-ray ``(status, tx, ty, centre)`` where
-    ``centre`` is the final tile-centre fraction ($1EAF).
+    """March a precomputed lattice of ray vectors against one memory snapshot in one call.
 
-    Bit-for-bit identical to calling :func:`march` per aim: the $0C56/$0CDD trackers are
-    seeded fresh (not threaded through memory between rays), which never changes the
-    ``(status, tx, ty)`` verdict -- within a single march they feed only the $0CDD tree
-    marker, not the LOS result."""
+    ``ax_lo..s30`` are per-aim components (:func:`sentinel.los._lattice_vectors`) all marched by
+    :func:`march` from one get_object_details $1ECC seed; returns per-ray ``(status, tx, ty,
+    centre)``, centre the final $1EAF fraction. Fresh per-ray trackers leave verdicts unchanged.
+    """
     seed = tuple(
         int(v)
         for v in (
@@ -1135,13 +1100,7 @@ def march_batch(
     return out[0], out[1], out[2], out[3]
 
 
-# ============================================================================
-# lattice ray-vector builder (numba twin of sentinel.los.prepare_vector_from_
-# player_sights).  A batched, prange builder so the full 1px keyboard-cursor
-# lattice can be constructed in a fraction of a second instead of ~1min of pure
-# Python.  Bit-for-bit identical to the pure-Python path (locked by
-# tests/test_landable.py::test_lattice_vectors_match_python).
-# ============================================================================
+# lattice ray-vector builder: prepare_vector_from_player_sights $1C10 over the whole lattice
 @spec(inline=True)
 def _vmul8(a, b):
     p = (a & 0xFF) * (b & 0xFF)

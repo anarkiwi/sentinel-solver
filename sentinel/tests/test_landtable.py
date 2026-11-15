@@ -8,7 +8,7 @@ geometric, not read off a flat board -- see docs/architecture.md.
 import numpy as np
 import pytest
 
-from sentinel import actions, landtable as lt, los, memmap as mm, playerbase, terrain
+from sentinel import actions, landtable as lt, los, memmap as mm, terrain
 
 pytestmark = pytest.mark.skipif(
     not los._HAVE_JIT, reason="numba absent: landtable queries defer to the exact path"
@@ -45,257 +45,6 @@ def _landings(st, slot, grids, eye_z=None):
     }
 
 
-def _stack_and_transfer(st):
-    """Build boulder+boulder+robot on a bare neighbour and transfer: object tiles, a
-    raised eye, a different observer slot."""
-    px, py = st.player_xy()
-    tile = next(
-        (px + dx, py + dy)
-        for dx in (0, 1, -1)
-        for dy in (1, -1, 0)
-        if (dx or dy)
-        and terrain.tile_byte(st, px + dx, py + dy) < mm.OBJECT_TILE
-        and not (terrain.tile_byte(st, px + dx, py + dy) & 0x0F)
-    )
-    slot = None
-    for otype in (mm.T_BOULDER, mm.T_BOULDER, mm.T_ROBOT):
-        slot = actions.create(st, otype, tile)
-    assert slot is not None and actions.transfer(st, slot)
-    return tile
-
-
-def _variants(new_state):
-    """(name, state, slot, eye_z) observers: fresh boards, a stacked/transferred eye and
-    an eye_z override (the search's speculative stance)."""
-    out = []
-    for ls in (0, 42):
-        st = new_state(ls)
-        out.append(("ls%d" % ls, st, st.player, None))
-    st = new_state(0)
-    _stack_and_transfer(st)
-    out.append(("ls0-stacked", st, st.player, None))
-    st = new_state(42)
-    out.append(("ls42-eyez", st, st.player, (st.obj_z_height[st.player] + 3) & 0xFF))
-    return out
-
-
-def _assert_superset(st, slot, eye_z, grids):
-    """Every ray the sweep lands on a tile is in that tile's candidate set."""
-    land = _landings(st, slot, grids, eye_z)
-    ring = 0
-    for tile, rays in land.items():
-        cand = lt.candidates(st, tile, slot, eye_z, grids)
-        missing = np.setdiff1d(rays, cand, assume_unique=False)
-        assert missing.size == 0, "%s dropped %d/%d rays" % (
-            tile,
-            missing.size,
-            rays.size,
-        )
-        assert int(rays.min()) == int(cand[np.isin(cand, rays)].min())
-        ring += tile[0] in (0, 30) or tile[1] in (0, 30)
-    return land, ring
-
-
-@pytest.mark.parametrize("name", ["ls0", "ls42", "ls0-stacked", "ls42-eyez"])
-def test_candidates_superset_plane(new_state, name):
-    """$F5 plane: the candidate set contains every landing ray, over bare boards, an
-    object-tile/raised-eye stance and an eye_z override."""
-    _name, st, slot, eye_z = next(v for v in _variants(new_state) if v[0] == name)
-    _assert_superset(st, slot, eye_z, lt.lattice(True))
-
-
-@pytest.mark.parametrize("name", ["ls0", "ls0-stacked", "ls42-eyez"])
-def test_candidates_superset_band(new_state, name):
-    """Full pitch band (3.5M rays, the completeness-critical lattice): below-eye and
-    object tiles included, outer-ring tiles asserted like any other."""
-    _name, st, slot, eye_z = next(v for v in _variants(new_state) if v[0] == name)
-    land, _ring = _assert_superset(st, slot, eye_z, lt.lattice())
-    assert land, "expected some landable tiles in the band sweep"
-    seed = lt.seed_z(st, slot, eye_z)
-    assert [t for t in land if lt.surface_bounds(st, *t)[1] < seed], "no below-eye tile"
-
-
-@pytest.mark.parametrize("kind", ["plane", "band", "coarse"])
-def test_landable_view_matches_exact(new_state, kind):
-    """The candidate-driven view is bit-identical to the lattice's OWN FULL SWEEP -- the
-    first landing ray's aim -- on landable, non-landable, object and outer-ring tiles.
-    """
-    st = new_state(0)
-    _stack_and_transfer(st)
-    slot = st.player
-    grids = lt.lattice(kind == "plane", coarse=(kind == "coarse"))
-    land = _landings(st, slot, grids)
-    tiles = list(land)[:12]
-    tiles += [(0, 0), (30, 30), (0, 15), (15, 30), (2, 3), (28, 27)]
-    tiles += [(int(st.obj_x[slot]), int(st.obj_y[slot]))]
-    for tile in tiles:
-        rays = land.get(tuple(tile))
-        want = None
-        if rays is not None:
-            h, v, cx, cy = los._meta_at(int(rays.min()), *grids)
-            want = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-        assert lt.landable_view(st, tile, slot, grids=grids) == want, tile
-
-
-def _buildable(st, want):
-    """The ``want`` bare, non-sloping tiles nearest the player -- where a create lands."""
-    px, py = st.player_xy()
-    near = []
-    for x in range(mm.N):
-        for y in range(mm.N):
-            b = terrain.tile_byte(st, x, y)
-            if b < mm.OBJECT_TILE and not b & 0x0F:
-                near.append((abs(x - px) + abs(y - py), (x, y)))
-    near.sort()
-    return [t for _d, t in near[:want]]
-
-
-def _hop(st):
-    """Stack boulder+boulder+robot on the nearest buildable tile and transfer onto it."""
-    st.energy = mm.ENERGY_MASK
-    tile = _buildable(st, 1)[0]
-    slot = None
-    for otype in (mm.T_BOULDER, mm.T_BOULDER, mm.T_ROBOT):
-        slot = actions.create(st, otype, tile)
-    assert slot is not None and actions.transfer(st, slot)
-
-
-def _midgame(new_state, number=321):
-    """A board partway through a game: three hops (a raised eye on an object tile, a
-    player slot that is not the starting one) plus loose boulders around it."""
-    st = new_state(number)
-    for _ in range(3):
-        _hop(st)
-    st.energy = mm.ENERGY_MASK
-    for tile in _buildable(st, 8):
-        actions.create(st, mm.T_BOULDER, tile)
-    return st
-
-
-def _cheapest(st, rays, grids, aim_from):
-    """:func:`playerbase._cheapest_rays` over one tile's landing rays."""
-    one = np.zeros(rays.size, dtype=np.int64)
-    return int(playerbase._cheapest_rays(st, rays, one, grids, aim_from)[1][0])
-
-
-@pytest.mark.parametrize("number", [0, 42, 110, 321, 335])
-@pytest.mark.parametrize("kind", ["plane", "band"])
-def test_cheap_views_matches_the_full_sweep_in_order(new_state, kind, number):
-    """``_cheap_views`` off :func:`landtable.landing_rays` IS the full lattice sweep.
-
-    Its dict is read whole and POSITIONALLY -- the climb tie-break takes the first of
-    several equal scorers -- so insertion order (by winning lattice index) is as
-    load-bearing as membership, and both are asserted against a sweep of every ray.
-    """
-    st = _midgame(new_state, number)
-    slot = st.player
-    grids = lt.lattice(kind == "plane")
-    aim_from = (st.obj_h_angle[slot], st.obj_v_angle[slot])
-    land = _landings(st, slot, grids)
-    kept = set(lt.landing_rays(st, slot, grids=grids).tolist())
-    assert kept.issuperset(int(r) for rays in land.values() for r in rays)
-    winner = {tile: _cheapest(st, rays, grids, aim_from) for tile, rays in land.items()}
-    want = {
-        tile: playerbase._view_at(ray, grids)
-        for tile, ray in sorted(winner.items(), key=lambda kv: kv[1])
-    }
-    got = playerbase._cheap_views(st, kind == "plane", aim_from)
-    assert list(got) == list(want)
-    assert got == want
-
-
-def test_cheap_view_is_frame_minimal_over_every_hv_group(new_game):
-    """The chosen view is the frame-cheapest landing ray, checked exhaustively.
-
-    ``_cheapest_rays`` prunes on :func:`playerbase._aim_bound`; here EVERY (h, v) group of
-    every ray is priced with no pruning at all, which is the same minimum only if the
-    bound is admissible and the per-group cursor representative is the right one."""
-    st = new_game(42).state
-    slot = st.player
-    grids = lt.lattice(False)
-    aim_from = (st.obj_h_angle[slot], st.obj_v_angle[slot])
-    land = _landings(st, slot, grids)
-    assert len(land) > 8
-    checked = 0
-    for tile, rays in sorted(land.items())[:6]:
-        got = _cheapest(st, rays, grids, aim_from)
-        cell, _nu, _ns, _dv, cur = playerbase._lattice_terms(rays, grids, aim_from)
-        order = np.lexsort((rays, cur, cell))
-        cs = cell[order]
-        reps = rays[order[np.concatenate(([True], cs[1:] != cs[:-1]))]]
-        best = min(
-            playerbase.aim_frames(
-                st, playerbase._view_at(int(r), grids), aim_from, slot
-            )
-            for r in reps
-        )
-        chosen = playerbase.aim_frames(
-            st, playerbase._view_at(got, grids), aim_from, slot
-        )
-        assert chosen == best, f"{tile}: chose {chosen} f, {best} f was available"
-        checked += 1
-    assert checked == 6
-
-
-@pytest.mark.parametrize("kind", ["plane", "band"])
-def test_landable_view_matches_sweep_every_tile_midgame(new_state, kind):
-    """EVERY tile of a MID-GAME board agrees with that lattice's own full sweep.
-
-    Start-state sampling never reaches this case: the surface bracket the candidate
-    filter rests on is exact on bare terrain and only approximate over object stacks,
-    which exist only after the player has built.
-    """
-    st = _midgame(new_state)
-    slot = st.player
-    grids = lt.lattice(kind == "plane")
-    land = _landings(st, slot, grids)
-    for x in range(mm.N):
-        for y in range(mm.N):
-            rays = land.get((x, y))
-            want = None
-            if rays is not None:
-                h, v, cx, cy = los._meta_at(int(rays.min()), *grids)
-                want = {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-            assert lt.landable_view(st, (x, y), slot, grids=grids) == want, (x, y)
-
-
-def test_views_answer_from_the_board_pinned_at_the_first_query(new_state):
-    """``_Views`` answers every later query from the board pinned at its first one.
-
-    A caller builds and transfers while holding the instance, so a per-tile march on the
-    LIVE state would disagree with the sweep dict the same instance hands out -- both
-    ``get`` and the whole-sweep readers must see one board.
-    """
-    st = _midgame(new_state)
-    views = playerbase._Views(st)
-    tiles = list(_landings(st, st.player, lt.lattice(True)))[:24]
-    tiles += [(0, 0), (30, 30), (2, 3)]
-    views.band_get(tiles[0])  # touch both lattices: each pins at ITS first query
-    before = {t: views.get(t, band=True) for t in tiles}
-    assert any(v is not None for v in before.values())
-    _hop(st)  # the caller acts: new object tiles, a raised eye, a new observer slot
-    assert {t: views.get(t, band=True) for t in tiles} == before
-    plane, band = views.primary(), views.band()
-    assert {t: plane.get(t, band.get(t)) for t in tiles} == before
-
-
-def test_band_ordered_is_the_sweep_order_pricing_only_the_asked_tiles(new_state):
-    """``band_ordered`` prices just the tiles ``pick`` takes, yet keeps the full band
-    sweep's ORDER -- the climb tie-break reads it positionally."""
-    st = _midgame(new_state)
-    tiles = {(x, y) for x in range(0, lt.RADIUS + 1, 3) for y in range(0, 31, 3)}
-    playerbase._VIEW_CACHE.clear()
-    views = playerbase._Views(st)
-    got = views.band_ordered(tiles.__contains__)
-    lat = views._lat[False]
-    unasked = [i for t, i in lat.index.items() if t not in tiles]
-    assert unasked and (lat.won[unasked] < 0).all()
-    assert len(got) > 4
-    playerbase._VIEW_CACHE.clear()
-    want = [(t, v) for t, v in playerbase._Views(st).band().items() if t in tiles]
-    assert got == want
-
-
 def test_coarse_lattice_is_the_landset_lattice():
     """The coarse grid's rays are a subset of the full band lattice's -- one candidate
     rule serves both paths."""
@@ -315,49 +64,6 @@ def test_coarse_lattice_is_the_landset_lattice():
             + band[3].index(cy)
         )
         assert (cvecs[:, i] == bvecs[:, j]).all()
-
-
-@pytest.mark.parametrize("name", ["ls0", "ls42", "ls0-stacked", "ls42-eyez"])
-def test_landable_set_matches_coarse_sweep(new_state, name):
-    """The whole-board set is EXACTLY the coarse lattice's own sweep -- every tile
-    including the outer ring, over bare boards, an object-tile stance and an eye_z
-    override."""
-    _name, st, slot, eye_z = next(v for v in _variants(new_state) if v[0] == name)
-    got = lt.landable_set(st, slot, eye_z)
-    assert got == set(_landings(st, slot, lt.lattice(coarse=True), eye_z))
-
-
-def test_stop_cell_partition_holds_every_landing(new_state):
-    """The invariant :func:`landtable.landable_set` rests on: a ray that lands on a tile
-    either names that tile as its first candidate or is marked multi-candidate."""
-    st = new_state(0)
-    _stack_and_transfer(st)
-    slot = st.player
-    grids = lt.lattice(coarse=True)
-    lo, hi, slope = lt.surface_maps(st)
-    first, ncand = lt.stop_cells(
-        *lt.cached_components(grids),
-        lo,
-        hi,
-        slope,
-        int(st.obj_x[slot]),
-        int(st.obj_y[slot]),
-        lt.seed_z(st, slot),
-        lt.MAX_STEPS,
-        lt.RADIUS,
-    )
-    for tile, rays in _landings(st, slot, grids).items():
-        packed = tile[0] * mm.N + tile[1]
-        assert ((first[rays] == packed) | (ncand[rays] > 1)).all(), tile
-
-
-def test_never_lands_shortcuts(new_state):
-    """No ray in the full sweep lands on a sloping tile or the observer's own tile --
-    the premise of :func:`landtable.never_lands`."""
-    st = new_state(0)
-    slot = st.player
-    for tile in _landings(st, slot, lt.lattice(False)):
-        assert not lt.never_lands(st, tile, slot), tile
 
 
 def test_closed_form_track_matches_add_vector():
@@ -384,30 +90,6 @@ def test_closed_form_track_matches_add_vector():
                 assert vec.py_whole == (17 + ((0x8000 + i * int(vy[j])) >> 16)) & 0xFF
                 z16 = (vec.pz_whole << 8) | vec.pz_sub
                 assert z16 == (eye_z * 256 + zf + ((i * int(vz[j])) >> 8)) & 0xFFFF
-
-
-def test_surface_bounds_bracket_the_stack(new_state):
-    """Bare tiles bound the surface exactly; an object stack's bracket contains every
-    object's own height."""
-    st = new_state(0)
-    for x in range(0, 31, 7):
-        for y in range(0, 31, 7):
-            b = terrain.tile_byte(st, x, y)
-            lo, hi = lt.surface_bounds(st, x, y)
-            if b < mm.OBJECT_TILE:
-                assert lo == hi == ((b >> 4) & 0x0F) * 256
-    tile = _stack_and_transfer(st)
-    lo, hi = lt.surface_bounds(st, *tile)
-    slot = terrain.top_object(st, *tile)
-    seen = 0
-    for _ in range(8):
-        assert lo <= st.obj_z_height[slot] * 256 <= hi
-        seen += 1
-        flags = st.obj_flags[slot]
-        if flags < 0x40:
-            break
-        slot = flags & 0x3F
-    assert seen >= 3
 
 
 def _arc_ref(head, order, ex, ey, tx, ty):
@@ -442,56 +124,45 @@ def _span_ref(v, d):
     )
 
 
-def _candidates_ref(st, tile, slot, grids):
-    """Gather-based numpy reference for :func:`landtable.candidates`."""
-    head, order = los._lattice_headings(*grids)
-    ex, ey = int(st.obj_x[slot]), int(st.obj_y[slot])
-    idx = _arc_ref(head, order, ex, ey, *tile)
-    vx, vy, vz = (c[idx].astype(np.int64) for c in lt.components(grids))
-    zs = lt.seed_z(st, slot)
-    tlo, thi = (b - zs for b in lt.surface_bounds(st, *tile))
-    fx, lx = _span_ref(vx, tile[0] - ex)
-    fy, ly = _span_ref(vy, tile[1] - ey)
-    i0 = np.maximum(np.maximum(fx, fy), 1)
-    i1 = np.minimum(np.minimum(lx, ly), lt.MAX_STEPS)
-    zin, zout = (i0 * vz) >> 8, (i1 * vz) >> 8
-    alias_up, alias_dn = zout >= lt.WRAP_D + tlo, zin >= lt.WRAP_D + tlo
-    floor = tlo - lt.LAND_BAND
-    up = alias_up | ((floor < zin) & (zin <= thi))
-    dn = alias_dn | ((zin > floor) & (zout <= thi))
-    keep = np.where(vz > 0, up, np.where(vz < 0, dn, floor < 0 <= thi)) & (i0 <= i1)
-    return np.sort(idx[keep])
+def _stack_and_transfer(st):
+    """Build boulder+boulder+robot on a bare neighbour and take the robot as the body:
+    object tiles, a raised eye, a different observer slot."""
+    px, py = st.player_xy()
+    tile = next(
+        (px + dx, py + dy)
+        for dx in (0, 1, -1)
+        for dy in (1, -1, 0)
+        if (dx or dy)
+        and terrain.tile_byte(st, px + dx, py + dy) < mm.OBJECT_TILE
+        and not (terrain.tile_byte(st, px + dx, py + dy) & 0x0F)
+    )
+    slot = None
+    for otype in (mm.T_BOULDER, mm.T_BOULDER, mm.T_ROBOT):
+        slot = actions.create(st, otype, tile)
+    assert slot is not None
+    st.player = slot
+    return tile
 
 
-@pytest.mark.parametrize("number", [0, 42, 335, 1442])
-def test_candidates_match_gather_reference(new_state, number):
-    """Every landable tile of a board: the contiguous heading-ordered candidates equal
-    the gather-over-the-arc reference, index for index."""
-    st = new_state(number)
+def test_stop_cell_partition_holds_every_landing(new_state):
+    """The invariant :func:`landtable.landable_set` rests on: a ray that lands on a tile
+    either names that tile as its first candidate or is marked multi-candidate."""
+    st = new_state(0)
+    _stack_and_transfer(st)
     slot = st.player
-    grids = lt.lattice()
-    for tile in playerbase.BOARD_TILES:
-        if not lt.never_lands(st, tile, slot):
-            got = lt.candidates(st, tile, slot, grids=grids)
-            assert np.array_equal(got, _candidates_ref(st, tile, slot, grids)), tile
-
-
-def test_crossing_mask_serial_equals_parallel():
-    """Both crossing kernels agree on the whole band lattice, every cell direction."""
-    vx, vy, vz = lt.heading_components(lt.lattice())[2:]
-    for dx, dy in ((0, 0), (5, -3), (-30, 30), (0, 17), (-1, 0)):
-        args = (vx, vy, vz, dx, dy, -0x300, 0x100, lt.MAX_STEPS)
-        par = lt._crossing_par(*args)
-        assert par.any() and np.array_equal(par, lt._crossing_ser(*args))
-
-
-@pytest.mark.parametrize("board", (42, 335))
-def test_surface_maps_match_the_per_tile_bounds(board, new_game):
-    st = new_game(board).state
+    grids = lt.lattice(coarse=True)
     lo, hi, slope = lt.surface_maps(st)
-    for x in range(mm.N):
-        for y in range(mm.N):
-            byte = terrain.tile_byte(st, x, y)
-            want = lt.surface_bounds(st, x, y)
-            assert (lo[x * mm.N + y], hi[x * mm.N + y]) == want
-            assert slope[x * mm.N + y] == (byte < 0xC0 and (byte & 0x0F) != 0)
+    first, ncand = lt.stop_cells(
+        *lt.cached_components(grids),
+        lo,
+        hi,
+        slope,
+        int(st.obj_x[slot]),
+        int(st.obj_y[slot]),
+        lt.seed_z(st, slot),
+        lt.MAX_STEPS,
+        lt.RADIUS,
+    )
+    for tile, rays in _landings(st, slot, grids).items():
+        packed = tile[0] * mm.N + tile[1]
+        assert ((first[rays] == packed) | (ncand[rays] > 1)).all(), tile

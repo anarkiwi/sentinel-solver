@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """The keyboard driver compiled to driver programs (:mod:`driver.prog`).
 
-:class:`Compiler` emits each :class:`driver.kbd_aim.KbdDriver` primitive as the quantized
-:class:`driver.live_player.MeasuringKbdDriver` runs it -- same keys, PCs, retry bounds, stop
-points and timing records; :class:`ProgKbd` runs them, a whole step per program segment.
+:class:`Compiler` emits each :class:`driver.kbd_aim.KbdDriver` primitive as a program
+segment -- same keys, PCs, retry bounds and stop points, plus timing records;
+:func:`compile_move` builds one whole macro move.
 """
 
 import contextlib
 import functools
 
-from vice_driver.binmon import BinmonError
 
-from driver import core, prog
+from driver import prog
 from driver.clock import FRAME_PC
 from driver.emu import cycles
 from driver.kbd_aim import (
@@ -30,7 +29,6 @@ from driver.kbd_aim import (
     K_UTURN,
     PC_PAN_CALL,
     PC_PASS,
-    RASTER_LINES,
     _PAN_MAX_FRAMES,
     _PAN_STALL_FRAMES,
     _RU_COMMIT,
@@ -39,12 +37,10 @@ from driver.kbd_aim import (
     _k,
 )
 from sentinel import aimcost as ac, memmap as mm
-from sentinel.badline import PAL_FRAME_CYCLES
+from sentinel.passcost import PAL_FRAME_CYCLES
 
-R = prog.R
 SCRATCH = prog.SCRATCH
 UNREACHABLE, OK, HYPERSPACE = 0, 1, 2
-STATUS = ("unreachable", "ok", "hyperspace")
 T_BEGIN, T_END, T_NOW, T_PASS, T_VAL, T_LOG = range(1, 7)
 ARITY = {T_BEGIN: 2, T_END: 2, T_NOW: 3, T_PASS: 1, T_VAL: 2, T_LOG: 3}
 TIMERS = ("pan_h", "pan_v", "toggle", "cursor", "uturn")
@@ -148,8 +144,7 @@ class Compiler:
 
     @contextlib.contextmanager
     def timed(self, name):
-        """``MeasuringKbdDriver._timed``: the block's frames, recorded only when it
-        completes."""
+        """The block's frames, recorded only when it completes."""
         name = TIMERS.index(name)
         self.p.rec(T_BEGIN, name).frames(SCRATCH).out(SCRATCH)
         yield
@@ -196,8 +191,7 @@ class Compiler:
             p.mov(k, n).label(loop).step().run(FRAME_PC, 6.0).djnz(k, loop)
 
     def probe_settle(self):
-        """``core.probe_tile``'s machine effect: two frames at a time while $0CE4 bit7
-        is set, eight times at most."""
+        """Settle a redraw: two frames at a time while $0CE4 bit7 is set, eight times at most."""
         p = self.p
         loop, done = p.new(2)
         with p.regs(1) as (n,):
@@ -207,14 +201,14 @@ class Compiler:
             p.djnz(n, loop).label(done)
 
     def now(self):
-        """``MeasuringKbdDriver._now``: the frame count and the raster line."""
+        """Record the frame count and the raster line."""
         p = self.p
         p.rec(T_NOW).frames(SCRATCH).out(SCRATCH)
         p.ldio(SCRATCH, 0xD011).out(SCRATCH).ldio(SCRATCH, 0xD012).out(SCRATCH)
 
     def run_pass(self):
-        """``MeasuringKbdDriver._run_pass``: one main-loop pass to $365D split at its ROM
-        boundaries, with the frozen flag."""
+        """``_run_pass``: one main-loop pass to $365D split at its ROM boundaries, with the
+        frozen flag."""
         p = self.p
         self.now()
         for pc in (PC_PASS, PC_PAN_CALL, KbdDriver.PC_PAN_DONE):
@@ -448,47 +442,14 @@ class Compiler:
 
 
 @functools.lru_cache(maxsize=1 << 12)
-def compiled(kind, *args):
-    """The cached :class:`driver.prog.Prog` of segment ``kind`` with ``args``."""
-    c = Compiler(frames=args[0] if kind == "wait" else 0)
-    p = c.p
-    if kind == "wait":
-        c.run_frames(args[0])
-    elif kind == "step":
-        view, fire = args
-        if view is not None:
-            c.aim(_view(view))
-        if fire is not None:
-            c.fire(*fire)
-    elif kind == "cursor_probe":
-        with p.regs(1) as (a,):
-            c.fine_cursor(*args, a)
-            c.val(V_OKC, a)
-        c.probe_settle()
-    elif kind == "drive_probe":
-        fail = p.new()
-        c.drive_to(_view(args[0]), fail)
-        c.probe_settle()
-        p.halt(prog.HALT_OK).label(fail).halt(H_NOT_OK)
-    elif kind == "hyperspace":
-        _hyperspace_attempt(c)
-    else:
-        with p.regs(1) as (a,):
-            getattr(c, kind)(*args, a)
-            c.val(V_RES, a)
-    return p
-
-
-@functools.lru_cache(maxsize=1 << 12)
 def compile_move(kind, view=None, k=0, frames=0, reuse=False):
-    """One :class:`driver.prog.Prog` playing a macro move: ``"absorb"`` or ``"mount"``
-    (transfer) on ``view``'s tile, ``"hop"`` (``k`` boulders, a robot, the transfer),
-    ``"wait"`` ``frames``, ``"relocate"`` (the escape hyperspace, one tap) or
-    ``"finish"`` (the platform hyperspace attempt); outputs :func:`move_facts`.
-    ``view`` is one view key, or one per action; an action on the bearing the previous
-    one (or, with ``reuse``, the sights) stands on drives the cursor only; a wait
-    ends early on a death (``H_DIED``: drained, or the hyperspace toll) or the win, and
-    so does the move."""
+    """One :class:`driver.prog.Prog` playing a macro move, read by :func:`move_facts`.
+
+    ``kind``: ``"absorb"``/``"mount"`` on ``view``'s tile, ``"hop"`` (``k`` boulders, a robot,
+    the transfer), ``"wait"`` ``frames``, ``"relocate"`` (escape hyperspace) or ``"finish"``.
+    An action on the previous bearing (or, with ``reuse``, the sights) drives the cursor only.
+    """
+
     keys = {"wait": (), "relocate": (), "finish": ()}.get(kind)
     keys = MOVE_KEYS.get(kind, ("B",) * k + ("R", "Q")) if keys is None else keys
     steps = view if keys and isinstance(view[0], tuple) else (view,) * len(keys)
@@ -592,128 +553,3 @@ def _hyperspace_attempt(c):
 def _view(key):
     h, v, cx, cy = key
     return {"h_angle": h, "v_angle": v, "cursor": (cx, cy)}
-
-
-def view_key(view):
-    """The hashable ``(h, v, cx, cy)`` of a view dict."""
-    return (view["h_angle"], view["v_angle"], *map(int, view["cursor"]))
-
-
-class Run:
-    """A program's decoded outputs: ``vals`` by key and the ``halt`` code; its timing
-    records and logs applied to the driver ``kbd`` as the interactive driver keeps them.
-    """
-
-    def __init__(self, kbd, outcome, f0):
-        self.halt, self.vals = outcome.code, {}
-        out, i, begun, nows = outcome.outputs, 0, [], []
-        while i < len(out):
-            tag, args = out[i], out[i + 1 : i + 1 + ARITY[out[i]]]
-            i += 1 + len(args)
-            if tag == T_BEGIN:
-                begun.append(args)
-            elif tag == T_END:
-                while begun and begun[-1][0] != args[0]:
-                    begun.pop()
-                name = TIMERS[args[0]]
-                kbd.subframes[name] = (
-                    kbd.subframes.get(name, 0) + args[1] - begun.pop()[1]
-                )
-            elif tag == T_NOW:
-                f, ctrl, line = args
-                nows.append(f0 + f + (((ctrl & 0x80) << 1) | line) / RASTER_LINES)
-            elif tag == T_PASS:
-                t, nows = nows[-4:], []
-                kbd.passes.append(
-                    (kbd._label, args[0])  # pylint: disable=protected-access
-                    + tuple(round(b - a, 3) for a, b in zip(t, t[1:]))
-                )
-            elif tag == T_VAL:
-                self.vals[args[0]] = args[1]
-            else:
-                _log(kbd, *args)
-
-    def __getitem__(self, key):
-        return self.vals[key]
-
-
-def _log(kbd, which, a, b):
-    if which == LOG_UTURN:
-        kbd.log(
-            f"    uturn MISSED ${a:02x}->${b:02x}: paying "
-            f"{ac.h_steps(a, b)} notches instead of {ac.h_press_count(a, b)[1]}"
-        )
-    else:
-        kbd.log(f"    tap_action {TAPS[a]} stop: BinmonError")
-
-
-class ProgKbd(KbdDriver):
-    """The quantized measuring keyboard driver, every primitive and step segment a
-    driver program run by :func:`driver.prog.execute`.  ``advisory`` keeps the aim's
-    advisory ray probe, splitting a step there; a fork without it runs aim and fire as
-    one program."""
-
-    def __init__(self, bm, log, ex):
-        super().__init__(bm, log, quantized=True)
-        self._ex = ex
-        self.subframes = {}
-        self.passes = []
-        self._label = None
-        self.advisory = True
-
-    def run(self, kind, *args):
-        """The decoded :class:`Run` of segment ``kind``; an unhandled timeout raises
-        after its records are applied."""
-        f0 = self._ex.frames()
-        got = Run(self, prog.execute(self.bm, compiled(kind, *args)), f0)
-        if got.halt == prog.HALT_RAISE:
-            raise BinmonError("driver program: wait timed out")
-        return got
-
-    def _res(self, kind, *args):
-        return self.run(kind, *args)[V_RES]
-
-    # ---- the primitives, one program each -------------------------------------
-    def coarse_h(self, want):
-        return STATUS[self._res("coarse_h", want & 0xFF)]
-
-    def coarse_v(self, want):
-        return STATUS[self._res("coarse_v", want & 0xFF)]
-
-    def fine_cursor(self, cx, cy):
-        return bool(self._res("fine_cursor", cx & 0xFF, cy & 0xFF))
-
-    def sights_set(self, on):
-        return bool(self._res("sights_set", bool(on)))
-
-    def tap_action(self, name, settle=True):
-        return bool(self._res("tap_action", name, bool(settle)))
-
-    def run_frames(self, n):
-        """``clock.run_frames``; the frames run."""
-        self.run("wait", int(n))
-        return max(0, int(n))
-
-    # ---- step segments -----------------------------------------------------------
-    def step(self, view, fire):
-        """The full aim on ``view`` (a view key, or None) then ``fire``'s ``(key,
-        min_energy)`` (or None) as one program."""
-        return self.run("step", view, fire)
-
-    def cursor_probe(self, cx, cy):
-        """``fine_cursor`` then the probe's settle; whether the cursor landed."""
-        return bool(self.run("cursor_probe", cx & 0xFF, cy & 0xFF)[V_OKC])
-
-    def drive_probe(self, view):
-        """``drive_to(view)``, then the probe's settle when it landed; whether it did."""
-        return self.run("drive_probe", view_key(view)).halt == prog.HALT_OK
-
-    def probe_ray(self):
-        """Where the settled sights ray lands: ``core.probe_tile``'s answer."""
-        return core.probe_ray(self.bm)
-
-    def hyperspace_attempt(self):
-        """One ``fire_hyperspace`` attempt: ($0CDE after it, whether the marker
-        stopped)."""
-        got = self.run("hyperspace")
-        return got[V_DONE], bool(got[V_RES])

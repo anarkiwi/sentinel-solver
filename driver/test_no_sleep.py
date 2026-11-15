@@ -13,14 +13,14 @@ import tokenize
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 LIVE_MODULES = [
-    "driver/live_player.py",
-    "driver/sentinel_execute.py",
     "driver/kbd_aim.py",
     "driver/core.py",
     "driver/clock.py",
     "driver/play_player.py",
     "driver/boot.py",
-    "driver/instrument.py",
+    "driver/prog.py",
+    "driver/kbd_prog.py",
+    "driver/search_player.py",
 ]
 
 MARKER = "sleep-ok:"

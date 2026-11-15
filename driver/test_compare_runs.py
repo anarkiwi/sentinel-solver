@@ -14,12 +14,12 @@ def _tick(directory, n, mem):
 
 
 def test_audits_report_the_first_divergent_row():
-    a = {"trace": [[0, "boulder"], [1, "robot"]], "frame_audit": [["p1", 5]]}
-    b = {"trace": [[0, "boulder"], [1, "tree"]], "frame_audit": [["p1", 5], ["p2", 3]]}
+    a = {"trace": [[0, "boulder"], [1, "robot"]], "live_audit": [[0, "entry"]]}
+    b = {"trace": [[0, "boulder"], [1, "tree"]], "live_audit": [[0, "entry"], [1, "a"]]}
     got = compare_runs.audits(a, b)
     assert got["trace"] == (2, 2, 1, 1)
-    assert got["frame_audit"] == (1, 2, 1, 1)
-    assert got["settle_audit"] == (0, 0, 0, None)
+    assert got["live_audit"] == (1, 2, 1, 1)
+    assert got["lookahead_audit"] == (0, 0, 0, None)
 
 
 def test_ticks_separate_new_differences_from_the_entry_images(tmp_path, capsys):

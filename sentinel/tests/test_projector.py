@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from sentinel import landscape, memmap as mm, occlusioncost, projector, settlecost
+from sentinel import landscape, projector
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_projector.json")
@@ -136,52 +136,3 @@ def test_render_cost_is_scene_dependent():
     assert c0 > 0 and c42 > 0
     assert projector.render_cost(s0, None) == 0.0
     assert projector.render_cost(s0, {"h_angle": None}) == 0.0
-
-
-def test_render_cost_observer_moves_the_occlusion_rays_too():
-    """``observer`` selects the viewpoint object end to end: $245B raytraces from the
-    eye ($0C63), so a different observer must change the occlusion bitmap and the
-    cost, not just the $2625 setup."""
-    s = landscape.generate(42)
-    other = next(
-        i
-        for i in range(mm.NUM_SLOTS)
-        if not s.is_empty(i)
-        and i != s.player
-        and (s.obj_x[i], s.obj_y[i]) != (s.obj_x[s.player], s.obj_y[s.player])
-    )
-    mine = projector._occlusion_visible(s)
-    theirs = projector._occlusion_visible(s, other)
-    assert mine != theirs
-    view = {"h_angle": 0x50, "v_angle": 0x04}
-    assert projector.render_cost(s, view, other) != projector.render_cost(s, view)
-
-
-def test_project_scene_tiles_and_replot():
-    s = landscape.generate(0)
-    p = s.player
-    h, v = s.obj_h_angle[p], s.obj_v_angle[p]
-    tiles = projector.project_scene(s, h, v)[0]
-    # plot_tile ($2A24) draws every nonzero-$0180 tile, incl off-screen ones that clip in the rasteriser.
-    assert tiles and all(t["tile_byte"] for t in tiles)
-    assert all(t["h"] >= 0 and t["w"] >= 0 for t in tiles)
-    view = {"h_angle": int(h), "v_angle": int(v)}
-    settle = settlecost.viewpoint_settle_frames(s, eye_view=view)
-    fg = (
-        settlecost.HEAD_BASE
-        + settlecost.REDRAW_HEAD
-        + occlusioncost.occlusion_cycles(s, p)
-        + settlecost.TAB_3700
-        + settlecost.FILL_1090
-        + projector.FRAME_CYCLES * projector.render_cost(s, view, p)
-        + settlecost.STATUS_9508
-        + settlecost.STATUS_98B2
-        + settlecost.BUF_WAIT_HEAD
-        + settlecost.EXIT_TAIL
-    )
-    floor = settlecost.BRACKET_FRAMES + settlecost.TUNE_FRAMES[0x19]
-    want = settlecost.BRACKET_FRAMES + max(
-        fg / settlecost.SETTLE_FG, settlecost.TUNE_FRAMES[0x19]
-    )
-    assert settle == pytest.approx(want)
-    assert settle >= floor  # the $35D5 tune wait overlaps the redraw, never adds

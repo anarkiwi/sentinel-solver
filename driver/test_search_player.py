@@ -7,7 +7,7 @@ import pytest
 
 from driver import kbd_prog, prog, search_player as sp
 from driver.kbd_aim import A_SFLAG
-from sentinel import actions, beam_player as bp, memmap as mm
+from sentinel import actions, memmap as mm, moves as bp
 from sentinel.game import Game
 
 oracle = pytest.mark.oracle
@@ -78,7 +78,7 @@ def test_each_move_class_maps_to_its_move_program():
     assert sp.move_program(st, kind, k, steps)[1] is kbd_prog.compile_move(
         "hop", steps, 1, 0, True
     )
-    actions.remove_object(st, actions.SENTINEL_SLOT)
+    st.obj_flags[actions.SENTINEL_SLOT] = 0x80
     me = st.player
     st.obj_x[me], st.obj_y[me] = st.platform_xy
     assert sp.move_program(st, *_cols(st, bp.RELOCATE))[0] == "finish"

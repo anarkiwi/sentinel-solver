@@ -15,7 +15,7 @@ from vagrant_moses import memmap as vmm
 from vice_driver.binmon import CHECK_EXEC, TAP_MODE_FIXED, BinmonError, Checkpoint
 
 from driver.clock import FRAME_PC
-from sentinel.badline import PAL_FRAME_CYCLES
+from sentinel.passcost import PAL_FRAME_CYCLES
 
 _CPU_BANKS = (0, "default", "cpu")
 _REG_A, _REG_X, _REG_Y, _REG_PC, _REG_SP, _REG_FLAGS = range(6)

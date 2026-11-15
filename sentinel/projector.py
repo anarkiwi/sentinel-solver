@@ -6,12 +6,11 @@ trig cores; the projected corners feed :func:`render_cost`.
 """
 
 import collections
-import contextvars
 import os
 
 import numpy as np
 
-from sentinel import fleet, kern, passcost, relative, rendercost, terrain, memmap as mm
+from sentinel import kern, passcost, relative, rendercost, terrain, memmap as mm
 from sentinel.state import State
 from sentinel.writeweight import cycles as _plain  # the $8401 chain rides packed
 
@@ -26,9 +25,7 @@ except Exception:  # pragma: no cover - numba absent -> pure-Python fallback
 # initialise_buffer_variables ($2993) mode -> ($0007, $0012=($0007>>1)^$80, $0028), table $29C4; mode 0 = play buffer and vertical-pan strip ($9939), mode 2 = horizontal-pan strip ($994F).  $29B4 zeroes $0028 in every mode; only $29C7's odd strip sets it.
 BUF_WINDOW = {0: (0x14, 0x8A, 0x00), 1: (0x14, 0x8A, 0x00), 2: (0x08, 0x84, 0x00)}
 PLAY_MODE = 0
-_BUF_LEFT, _BUF_RIGHT = BUF_WINDOW[PLAY_MODE][:2]
-# $0C48 furthest-row extent hint ($26CD): plot_world's own carry between passes, 0 in a
-# fresh play state and up to $1F once the game has plotted. RENDER_ROW_HINT overrides it.
+# $0C48 furthest-row hint ($26CD): plot_world's carry between passes; RENDER_ROW_HINT overrides.
 _ROW_HINT_ENV = os.environ.get("RENDER_ROW_HINT")
 
 
@@ -569,14 +566,6 @@ def _occlusion_tables(state, observer):
     return [[bool(v) for v in row] for row in arr], arr
 
 
-def _occlusion_visible(state, observer=None):
-    """:func:`_occlusion_visible_py` via the numba twin (:mod:`sentinel.projector_jit`)
-    when numba is present; the two are element-for-element identical
-    (``tests/test_projector_jit.py``).  Returns a list-of-lists of bools either way."""
-    obs = state.player if observer is None else observer
-    return _occlusion_tables(state, obs)[0]
-
-
 # Every byte plot_world reads: tiles_table (`$0400`) + the object flags/v_angle (`$0100`) and x/z/y/h_angle/z_frac/type (`$0900`) arrays + the `$283D` examine flag and the `$26CD` row hint -- 1538 bytes.
 _SCENE_SPANS = (
     (0x0400, 0x0800),
@@ -754,8 +743,7 @@ def _project_scene_jit(state, setup, observer):
         _SCREEN_H,
         _W_SCALE,
     )
-    # .tolist() once: the columns come back as Python ints/floats, as the reference has;
-    # the width clamp stays here, applied by the same expression the reference uses.
+    # .tolist() gives Python ints/floats as the reference has; width clamp as the reference's.
     tiles = [
         {
             "col": r[0],
@@ -909,45 +897,16 @@ def _object_base_cycles(state, tile_bytes):
     return total
 
 
-def _exact_render_cost(state, h, v, observer):
-    """The exact backend's cost of ``observer``'s view when
-    :func:`rendercost_exact.backend` is selected and available, else None."""
-    from sentinel import rendercost_exact
-
-    exact = rendercost_exact.backend()
-    if exact is None:
-        return None
-    return exact.render_cost_exact(exact.viewer(state, observer), h, v)
-
-
 def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=None):
     """One plot_world pass in PAL frames (docs/architecture.md): examine floor +
     terrain/object prepare_polygon floors + the area fill proxy, into ``mode``'s $2993
-    buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none.
-    ``RENDER_COST_BACKEND=exact`` (ROM present) replaces the proxy for the play buffer.
-    """
+    buffer. ``view`` maps ``h_angle``/``v_angle``; 0.0 if none."""
     if not view or view.get("h_angle") is None:
         return 0.0
     h = view["h_angle"] & 0xFF
     v = (view.get("v_angle") or 0) & 0xFF
     ref_lo = (view.get("ref_lo") or 0) & 0xFF  # $001F, $1FD0 on an odd-column strip
-    if mode == PLAY_MODE and window is None and not ref_lo:
-        exact = _exact_render_cost(state, h, v, observer)
-        if exact is not None:
-            return exact
     obs = state.player if observer is None else observer
-    deferring = _DEFERRING.get()
-    if deferring is not None or fleet.in_task():
-        key = (scene_key(state), obs, h, v, mode, window, rows, ref_lo)
-        if key not in _COST_CACHE:
-            want = (h, v, obs, mode, window, rows, ref_lo)
-            if deferring is not None:
-                deferring.add(state, key, want)
-                raise Deferred
-            if _batchable():
-                one = _Wanted()
-                one.add(state, key, want)
-                fleet.call("price", one)
 
     def make():
         setup = _setup(state, h, v, obs, mode, window, ref_lo)
@@ -966,12 +925,6 @@ def render_cost(state, view, observer=None, mode=PLAY_MODE, window=None, rows=No
 
 
 _PRICING_SCRATCH = []
-
-
-def _exact_selected():
-    from sentinel import rendercost_exact
-
-    return rendercost_exact.backend() is not None
 
 
 _PLAN_ROWS = {}
@@ -997,10 +950,8 @@ def window_plan(mode, win, rows):
 def cost_job_columns(mems, row, scene, obs, h, v, ref_lo, window, vis_at):
     """The :mod:`pricing_jit` job rows of requests given as columns: request ``i`` is the
     view ``(h[i], v[i])`` from observer ``obs[i]`` with half column ``ref_lo[i]`` and plan
-    ``window[i]`` (a :func:`window_plan` row), on the board image ``mems[row[i]]``; it
-    names image ``scene[i]`` of the launch's stack and occlusion table ``vis_at[i]``.  A
-    row equals what :func:`_setup`, :func:`_setup_vector` and :func:`fill_frames` give
-    the request."""
+    ``window[i]`` (a :func:`window_plan` row) on ``mems[row[i]]``, naming launch image
+    ``scene[i]`` and occlusion table ``vis_at[i]``; rows match :func:`fill_frames`."""
 
     def gather(base):
         return mems[row, base + obs].astype(np.int64)
@@ -1131,13 +1082,8 @@ def _render_cycles_many(scenes):
     return render_cycles_of(mems, np.concatenate(rows), np.stack(tables)).tolist()
 
 
-class Deferred(BaseException):
-    """Raised by :func:`render_cost` inside :func:`prefetch` for a cost not yet priced; a
-    BaseException so no ``except Exception`` on the way up can swallow it."""
-
-
 class _Wanted:
-    """The costs one :func:`prefetch` round found missing, by scene."""
+    """Render costs not yet priced, by scene."""
 
     def __init__(self):
         self.scenes = {}
@@ -1164,68 +1110,21 @@ class _Wanted:
                 memo(_COST_CACHE, key, _CACHE_MAX, lambda c=next(cycles): _cost_of(c))
 
 
-def _price_fleet(wanteds):
-    """The fleet's ``price`` handler: every task's missing costs, merged by scene."""
-    merged = _Wanted()
-    for wanted in wanteds:
-        for skey, (image, wants) in wanted.scenes.items():
-            scene = merged.scenes.setdefault(skey, (image, {}))
-            for key, want in wants.items():
-                scene[1].setdefault(key, want)
-    merged.price()
-    return [True] * len(wanteds)
-
-
-fleet.register("price", _price_fleet)
-
-
 def _cost_of(cycles):
     return (BASE_CYCLES + cycles) / FRAME_CYCLES
 
 
-_DEFERRING = contextvars.ContextVar("deferring", default=None)
-
-
-def prefetch(calls):
-    """Run every zero-argument callable of ``calls`` for its side effect on the cost
-    memos, pricing the :func:`render_cost` calls they miss in batches: each round runs the
-    callables that stopped at a missing cost, prices everything missing at once, and
-    repeats until none stops.  The callables must be pure over the memos.  A scalar path
-    (the exact backend, no object model) prices as it goes and nothing defers."""
-    if not _batchable():
-        return
-    pending = list(calls)
-    while pending:
-        wanted, stopped = _Wanted(), []
-        mark = _DEFERRING.set(wanted)
-        try:
-            for call in pending:
-                try:
-                    call()
-                except Deferred:
-                    stopped.append(call)
-        finally:
-            _DEFERRING.reset(mark)
-        if fleet.call("price", wanted) is None:
-            wanted.price()
-        pending = stopped
-
-
 def _batchable():
-    """Whether render costs can be priced in batches: the scalar path answers the exact
-    backend, a missing object model and a fractional base itself."""
-    return (
-        _object_backend() is not None
-        and BASE_CYCLES == int(BASE_CYCLES)
-        and not _exact_selected()
-    )
+    """Whether render costs can be priced in batches: the scalar path answers a missing
+    object model and a fractional base itself."""
+    return _object_backend() is not None and BASE_CYCLES == int(BASE_CYCLES)
 
 
 def prime_costs(state, requests):
     """Fill the :func:`render_cost` memo for ``requests`` -- ``(view, observer, mode,
     window, rows)`` tuples of its arguments -- with one batched pricing launch, so the
     scalar calls that follow all hit.  Requests the scalar path answers differently (the
-    exact backend, no object model, a fractional base) are left to it."""
+    object model, a fractional base) are left to it."""
     if not _batchable():
         return
     skey = scene_key(state)
@@ -1240,7 +1139,7 @@ def prime_costs(state, requests):
         key = (skey, obs, h, v, mode, window, rows, ref_lo)
         if key not in _COST_CACHE:
             wanted.add(state, key, (h, v, obs, mode, window, rows, ref_lo))
-    if wanted.scenes and fleet.call("price", wanted) is None:
+    if wanted.scenes:
         wanted.price()
 
 
@@ -1248,242 +1147,3 @@ def _window_columns(window):
     """The $0C69 column count a :func:`strip_window` triple came from ($29C9 halves it,
     $29CF keeping the odd bit in $0028)."""
     return window[0] * 2 + (1 if window[2] else 0)
-
-
-def strip_window(columns):
-    """$29C7 with A = $0C69: the buffer window $1F9F gives the strip plot.
-
-    $29C9 halves the column count into $0007 and $29D3 folds that into $0012, the same
-    pair $2993 sets from its own table for a full-screen mode; $29CF rotates the halving's
-    carry into $0028, so an ODD strip drops the left column's near half."""
-    left = columns >> 1
-    return left, (left >> 1) ^ 0x80, 0x80 if columns & 1 else 0x00
-
-
-MAX_CHUNK = 0x14  # $2105: $0C69 never exceeds 20, so a wider span replots in chunks
-
-
-def replot_chunks(left, span):
-    """$1FC2..$2029: the (left, columns) strips $2625 replots to cover ``span``.
-
-    $2105 caps $0C69 at 20 and $201E/$2021 re-enter $1FC2 with what is left, so a
-    span over 20 columns is two passes, each at its own $1FC2 camera shift."""
-    out = []
-    while span > 0:
-        take = min(span, MAX_CHUNK)
-        out.append((left, take))
-        left += take
-        span -= take
-    return tuple(out)
-
-
-def clear_strip_cycles(span):
-    """clear_strip $2211 over ``span`` columns of 24 rows, from its own loops.
-
-    $2247 stores 8 bytes a column and $2276 re-enters for the columns past 32."""
-    if span < 32:
-        entry, row = passcost.CLEAR_ENTRY, passcost.CLEAR_ROW
-    elif span == 32:
-        entry, row = passcost.CLEAR_ENTRY_EXACT, passcost.CLEAR_ROW
-    else:
-        entry = passcost.CLEAR_ENTRY_WIDE
-        row = passcost.CLEAR_ROW + passcost.CLEAR_ROW_SPLIT
-    body = passcost.CLEAR_COLUMN * span + row
-    return entry + passcost.CLEAR_ROWS * body + passcost.CLEAR_TAIL
-
-
-def flush_cycles(scroll):
-    """One $9730 buffer flush, from the 24 $3A00 rows it copies at ``scroll`` = $0095.
-
-    $9792 rolls X over the 25 screen banks, so the 24-row window skips bank
-    ``scroll - 1``; a bank with a nonzero $3A40 entry buys a second $9888."""
-    splits = sum(
-        1
-        for r in passcost.FLUSH_SPLIT_ROWS
-        if (r - scroll) % passcost.FLUSH_BANKS < passcost.FLUSH_ROWS
-    )
-    wrap = passcost.FLUSH_WRAP if scroll else 0
-    return passcost.FLUSH + passcost.FLUSH_SPLIT * splits + wrap
-
-
-CHUNK_CYCLES = (
-    passcost.REDRAW_CHUNK_HEAD
-    + passcost.REDRAW_CHUNK_TAIL
-    + passcost.BUF_WINDOW_CALL  # $1FE5 JSR $29C7
-)
-
-
-def strip_flush_cycles(span, scroll):
-    """$202C..$1F9E: the $207E $9730 flush loop over ``span`` columns, and the exit."""
-    tail = passcost.REDRAW_TAIL + passcost.REDRAW_FLUSH_ENTRY + passcost.REDRAW_EXIT
-    return tail + span * (passcost.REDRAW_FLUSH_LOOP + flush_cycles(scroll))
-
-
-def strip_line_cycles(span, chunks, scroll):
-    """$1FA4..$1F9E: everything the strip replot costs but the $2625 chunks themselves.
-
-    The $2211 clear and the $207E $9730 flush loop are both driven by the uncapped
-    $211B span, the $29C7 window by each chunk."""
-    cyc = passcost.REDRAW_CLEAR_CALL + clear_strip_cycles(span)
-    cyc += chunks * CHUNK_CYCLES
-    cyc += (chunks - 1) * (passcost.REDRAW_CHUNK_MORE + passcost.REDRAW_CHUNK_RESUME)
-    return cyc + strip_flush_cycles(span, scroll)
-
-
-SCREEN_SCROLL = 0x95  # $2043: the first screen bank $9730 flushes, $0097 for its loop
-CAMERA_SAVED = mm.CAMERA_SAVED
-STRIP_LEFT = 0x0C62  # $20D8: the column the strip being plotted starts at
-STRIP_COLUMNS = 0x0C69  # $210B: that strip's own width, capped at 20
-STRIP_REMAINING = 0x0C6A  # $20FD: the columns left to plot, this strip included
-STRIP_SPAN = 0x211B  # $2100: the whole span, which the chunk loop never rewrites
-PLOT_ROW = 0x26  # $26C9 seeds it $1F and $26EF walks it down to the observer row $001D
-PLOT_COLUMN = 0x25  # $295D drives it across the row it plots
-CAMERA_OBJECT = mm.CAMERA_OBJECT
-BUF_LEFT, BUF_RIGHT, BUF_FRAC = (
-    0x07,
-    0x12,
-    0x28,
-)  # the $2993/$29C7 window plot_world is plotting into
-CAMERA_REF_LO = mm.CAMERA_REF_LO
-
-
-def strip_view(h_angle, v_angle, left):
-    """$1FC2/$1FCC: the camera the ROM plots a strip starting at column ``left`` from.
-
-    $209A holds $0C62 halved, and the halving's carry is the camera's own $001F half
-    column ($1FCF/$1FD0)."""
-    return {
-        "h_angle": (h_angle + (left >> 1)) & 0xFF,
-        "v_angle": v_angle,
-        "ref_lo": 0x80 if left & 1 else 0x00,
-    }
-
-
-def hold_camera(state, left):
-    """$1FCF..$1FDB with $211A already saved: $09C0,X and $001F for a strip at ``left``.
-
-    Idempotent -- it re-derives the shifted bearing from $211A, never from itself."""
-    mem = state.mem
-    mem[CAMERA_REF_LO] = 0x80 if left & 1 else 0x00
-    state.obj_h_angle[mem[CAMERA_OBJECT]] = (mem[CAMERA_SAVED] + (left >> 1)) & 0xFF
-
-
-def shift_camera(state, left):
-    """$1FC2..$1FDB: save the camera object's own bearing in $211A, then point it at
-    the strip -- so the shift is in the object table, live to anything reading it."""
-    state.mem[CAMERA_SAVED] = state.obj_h_angle[state.mem[CAMERA_OBJECT]]
-    hold_camera(state, left)
-
-
-def restore_camera(state):
-    """$2003/$2008: put the camera's own bearing and half column back."""
-    mem = state.mem
-    mem[CAMERA_REF_LO] = 0
-    state.obj_h_angle[mem[CAMERA_OBJECT]] = mem[CAMERA_SAVED]
-
-
-def held_strip(state):
-    """The $0C62 a still-shifted $09C0,X names, 0 when the camera is its own again.
-
-    $1FCF/$1FD0 put $0C62's low bit in $001F and $1FD8 adds the rest to the saved
-    bearing, so the two together give the column back."""
-    mem = state.mem
-    shift = (state.obj_h_angle[mem[CAMERA_OBJECT]] - mem[CAMERA_SAVED]) & 0xFF
-    return (shift << 1) | (1 if mem[CAMERA_REF_LO] else 0)
-
-
-def strip_replot_frames(state, target, left, columns, span=None):
-    """$1FA4..$1F9E out of update_object_on_screen $1F9F, in PAL frames.
-
-    Around the $2625 chunks sit the $2211 clear and the $9730 flush, both over the
-    uncapped ``span`` ($0C6A; ``columns`` when not given).
-    ``RENDER_COST_BACKEND=exact`` runs the real $1F9F."""
-    from sentinel import rendercost_exact
-
-    exact = rendercost_exact.backend()
-    if exact is not None:
-        return exact.strip_replot_cost_exact(state, target)
-    span = columns if span is None else span
-    player = state.player
-    chunks = replot_chunks(left, span)
-    frames = strip_line_cycles(span, len(chunks), state.mem[SCREEN_SCROLL])
-    frames /= FRAME_CYCLES
-    h, v = state.obj_h_angle[player], state.obj_v_angle[player]
-    for chunk_left, chunk_columns in chunks:
-        frames += render_cost(
-            state,
-            strip_view(h, v, chunk_left),
-            player,
-            window=strip_window(chunk_columns),
-        )
-    return frames
-
-
-def replot_owed(state, row, column, in_plot):
-    """The cycles an interrupted $1FFC JSR $2625 still owes $1F9F, from its own progress.
-
-    ``row`` is the next row $295D will plot, ``column`` the machine's $0025, and
-    ``in_plot`` says the halt is inside $295D rather than that row's own $27D7 scan.
-    Camera, view and window come from the image, where $1FC2/$1FE5 have set them.
-    """
-    mem = state.mem
-    obs = mem[CAMERA_OBJECT]
-    window = (mem[BUF_LEFT], mem[BUF_RIGHT], mem[BUF_FRAC])
-    h, v = state.obj_h_angle[obs], state.obj_v_angle[obs]
-    setup = _setup(state, h, v, obs, PLAY_MODE, window, mem[CAMERA_REF_LO])
-    schedule = []
-    _tiles, _n, _exam, fill, _walk = _project_scene_py(state, setup, obs, schedule)
-    at = len(schedule) - 1  # past every plotted row: only $27CE's own tile is left
-    if row >= _LAST:  # $26EF has not run once, so neither has one $295D
-        at = 0
-    else:
-        for i, e in enumerate(schedule):
-            if e["row"] is not None and e["row"] <= row:
-                at = i
-                break
-    owed = sum(_stage_cycles(e) for e in schedule[at:])
-    here = schedule[at]
-    done = here["n0"] if "n0" in here else (0 if at == 0 else len(fill))
-    if in_plot and "cols" in here:
-        cols = here["cols"]
-        spent = cols.index(column) if column in cols else len(cols)
-        owed -= here["scan"] + here["head"] + sum(here["per_col"][:spent])
-        done += spent
-    columns = _window_columns(window)
-    total, exact = fill_frames(state, setup, fill, PLAY_MODE, obs, columns)
-    ahead, _e = fill_frames(state, setup, fill[:done], PLAY_MODE, obs, columns)
-    if not exact:  # no game image: the object floor, split at the same tile
-        total += _object_base_cycles(state, fill[:, rendercost.T_BYTE])
-        ahead += _object_base_cycles(state, fill[:done, rendercost.T_BYTE])
-    return owed + total - ahead + _strip_line_owed(state, obs)
-
-
-def _strip_line_owed(state, obs):
-    """$1FFF..$1F9E: what $1F9F owes once the interrupted $2625 returns.
-
-    $2211 ran at $1FBA, before the chunk loop, so nothing of it is owed; the chunks
-    past this one, the $9730 flush over the whole $211B span and the exit all are."""
-    mem = state.mem
-    chunk = mem[STRIP_COLUMNS]
-    left = mem[STRIP_LEFT] + chunk
-    owed = passcost.REDRAW_CHUNK_TAIL
-    for nxt, cols in replot_chunks(left, mem[STRIP_REMAINING] - chunk):
-        owed += passcost.REDRAW_CHUNK_MORE + passcost.REDRAW_CHUNK_RESUME
-        owed += CHUNK_CYCLES + FRAME_CYCLES * render_cost(
-            state,
-            strip_view(mem[CAMERA_SAVED], state.obj_v_angle[obs], nxt),
-            obs,
-            window=strip_window(cols),
-        )
-    return owed + strip_flush_cycles(mem[STRIP_SPAN], mem[SCREEN_SCROLL])
-
-
-def _stage_cycles(entry):
-    """One :func:`_scan_visible` schedule entry's own $27D7 scan and $295D walk."""
-    if "cols" not in entry:
-        return entry["scan"]
-    return entry["scan"] + entry["head"] + sum(entry["per_col"]) + entry["tail"]
-
-
-# wait_for_end_of_tune ($35D5): #$19 tune ($1B82/$AB69) = FIXED 96 note-hold frames ($0CDF@$9630), == #$0 TUNE_FRAMES.  The transfer settle law lives in sentinel.settlecost.
-TUNE_TRANSFER_FRAMES = float(os.environ.get("TUNE_TRANSFER_FRAMES", "96"))

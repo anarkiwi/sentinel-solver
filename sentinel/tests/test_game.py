@@ -1,51 +1,34 @@
-"""The Game facade drives the whole simulator on one state, with no emulator."""
+"""The Game facade builds a board as the game enters it, with no emulator."""
 
-from sentinel.game import Game
 from sentinel import memmap as mm
+from sentinel.game import Game
 
 
-def test_new_builds_a_board():
+def test_new_builds_a_board_at_entry():
     g = Game.new(42)
-    assert g.player_xy() == (14, 27)
-    assert g.energy == 10
-    assert g.won() is False
+    assert g.player_xy() == (14, 27) and g.energy == 10
     assert len(g.enemy_slots()) >= 1
+    assert g.state.mem[mm.PLAYER_NOT_ACTED] == 0x80 and g.state.mem[mm.CURSOR] == 7
 
 
 def test_landscape_0_is_fixed():
-    g = Game.typed(0)
-    assert g.player_xy() == (8, 17)
+    assert Game.typed(0).player_xy() == (8, 17)
 
 
 def test_clone_is_independent():
     g = Game.new(42)
     h = g.clone()
-    h.step_enemies()
-    # advancing the clone must not touch the original board.
-    assert g.state.mem != h.state.mem
+    h.state.energy = 3
+    assert g.energy == 10 and g.state.mem != h.state.mem
 
 
-def test_objects_lists_occupied_slots():
-    g = Game.new(42)
-    objs = g.objects()
-    types = {t for _s, t, _x, _y in objs}
-    assert mm.T_SENTINEL in types
-    assert mm.T_PLATFORM in types
-    # the player robot is present
-    assert any(t == mm.T_ROBOT for _s, t, _x, _y in objs)
-
-
-def test_step_enemies_advances_cursor_and_rotates():
-    g = Game.new(42)
-    enemy = g.enemy_slots()[0]
-    before = g.state.obj_h_angle[enemy]
-    for _ in range(300):
-        g.step_enemies()
-    after = g.state.obj_h_angle[enemy]
-    assert after != before  # the enemy has rotated over 300 rounds
-
-
-def test_meanie_threat():
-    g = Game.new(42)
-    enemy = g.enemy_slots()[0]
-    assert g.meanie_threat(enemy) in (None, g.state.mem[mm.PLAYER_OBJECT])
+def test_enemy_slots_are_the_occupied_sentries_and_sentinel():
+    st = Game.typed(335).state
+    want = [
+        s
+        for s in range(mm.NUM_SLOTS)
+        if not st.obj_flags[s] & 0x80 and st.obj_type[s] in mm.ENEMY_TYPES
+    ]
+    assert st.enemy_slots() == want and mm.T_SENTINEL in {st.obj_type[s] for s in want}
+    st.obj_flags[want[0]] = 0x80
+    assert st.enemy_slots() == want[1:]

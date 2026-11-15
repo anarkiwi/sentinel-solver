@@ -8,7 +8,7 @@ from vagrant_moses.machine import Machine
 from vice_driver.binmon import TAP_MODE_FIXED, BinmonError
 
 from driver import emu
-from sentinel.badline import PAL_FRAME_CYCLES
+from sentinel.passcost import PAL_FRAME_CYCLES
 
 LOOP, INC, JMP = 0x1000, 0x1000, 0x1002  # INC $20 / JMP $1000
 COUNTER = 0x20

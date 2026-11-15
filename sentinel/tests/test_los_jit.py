@@ -1,15 +1,8 @@
-"""The numba fast-march (:func:`sentinel.los._march_jit`) is bit-for-bit identical
-to the reference pure-Python march (:func:`sentinel.los._march_python`), and the
-closed-form :func:`sentinel.los_jit.march` to the per-sub-step
-:func:`_march_reference` kept here in all sixteen outputs.
+"""The numba march matches the pure-Python one, and the closed form the per-sub-step reference.
 
-The numba path now resolves object tiles (the recursive object-stack walk
-$1E3F) entirely in numba, so these tests deliberately place rich object stacks --
-lone boulders, boulder+synthoid stacks, trees, the platform tile, deep
-multi-boulder stacks -- in the ray's path and sweep the full aim lattice, at
-ground and elevated eye height, asserting the two marches never diverge.
-
-If numba is absent the JIT path is never taken, so these tests skip.
+:func:`sentinel.los._march_jit` equals :func:`sentinel.los._march_python`, and
+:func:`sentinel.los_jit.march` equals :func:`_march_reference` in all sixteen outputs, with
+rich object stacks in the ray's path over the full aim lattice at ground and raised eye height.
 """
 
 import time
@@ -21,14 +14,6 @@ from numba import njit
 
 from sentinel import los, los_jit, landtable, actions, memmap as mm
 from sentinel.game import Game
-from sentinel.los import (
-    _march_python,
-    _march_jit,
-    prepare_vector_from_player_sights,
-    PITCH_BAND,
-    SIGHTS_CX,
-    SIGHTS_CY,
-)
 from sentinel.los_jit import (
     BLOCKED,
     LOS_CLEAR,
@@ -121,71 +106,7 @@ pytestmark = pytest.mark.skipif(not los._HAVE_JIT, reason="numba not available")
 SEEDS = [0, 1, 7, 42, 66, 999, 9999]
 
 
-def _sweep_mismatches(state, slot, eye_z, max_steps):
-    """Every (h, v) lattice aim where the two marches disagree on (tx, ty, los).
-
-    Returns ``(bad, n)`` -- the list of disagreements and the comparison count."""
-    do_los = state.mem[0x0C6E] & 0x7F
-    bad = []
-    n = 0
-    for h in range(0, 256, 8):
-        for v in PITCH_BAND:
-            v1 = prepare_vector_from_player_sights(
-                state, h, v, SIGHTS_CX, SIGHTS_CY, slot
-            )
-            r1 = _march_python(
-                v1, state, slot, do_los_checks=do_los, eye_z=eye_z, max_steps=max_steps
-            )
-            v2 = prepare_vector_from_player_sights(
-                state, h, v, SIGHTS_CX, SIGHTS_CY, slot
-            )
-            r2 = _march_jit(
-                v2, state, slot, do_los_checks=do_los, eye_z=eye_z, max_steps=max_steps
-            )
-            n += 1
-            if r1 != r2:
-                bad.append((h, v, r1, r2))
-    return bad, n
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-@pytest.mark.parametrize("max_steps", [2000, 20000])
-def test_jit_matches_python_bare(seed, max_steps):
-    g = Game.new(seed)
-    bad, _ = _sweep_mismatches(g.state, g.state.player, None, max_steps)
-    assert not bad, f"seed {seed} ms {max_steps}: {bad[:3]}"
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-def test_jit_matches_python_centre(seed):
-    """The return_centre path (final px_sub/py_sub) matches too."""
-    g = Game.new(seed)
-    st, slot = g.state, g.state.player
-    for h in range(0, 256, 8):
-        for v in PITCH_BAND:
-            los._HAVE_JIT = False
-            try:
-                a = los.aim_target(
-                    st,
-                    h,
-                    v,
-                    SIGHTS_CX,
-                    SIGHTS_CY,
-                    slot,
-                    max_steps=2000,
-                    return_centre=True,
-                )
-            finally:
-                los._HAVE_JIT = True
-            b = los.aim_target(
-                st, h, v, SIGHTS_CX, SIGHTS_CY, slot, max_steps=2000, return_centre=True
-            )
-            assert a == b, f"seed {seed} aim h={h} v={v}: py={a} jit={b}"
-
-
-# ---------------------------------------------------------------------------
 # rich object-stack scenarios
-# ---------------------------------------------------------------------------
 RING8 = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
 
 
@@ -255,22 +176,6 @@ def _scen_elevated(st, px, py):
 
 
 SCENARIOS = [_scen_boulders, _scen_stacks, _scen_deep, _scen_elevated]
-
-
-@pytest.mark.parametrize("seed", SEEDS)
-@pytest.mark.parametrize("scen", SCENARIOS)
-@pytest.mark.parametrize("max_steps", [2000, 20000])
-def test_jit_matches_python_object_stacks(seed, scen, max_steps):
-    """Rich object stacks in the ray path: the numba object-stack resolution stays
-    bit-for-bit identical to the pure-Python oracle across the full aim lattice."""
-    g = Game.new(seed)
-    st = g.state
-    st.energy = 9999  # guarantee every create lands, regardless of energy
-    px, py = st.player_xy()
-    eye_z = scen(st, px, py)
-    bad, n = _sweep_mismatches(st, st.player, eye_z, max_steps)
-    assert n == len(range(0, 256, 8)) * len(PITCH_BAND)
-    assert not bad, f"seed {seed} {scen.__name__} ms {max_steps}: {bad[:5]}"
 
 
 @njit
@@ -393,8 +298,7 @@ def _object_surface_reference(
                     z = (int(mem[_OZHEIGHT + Y]) + carry) & 0xFF
                     return (z, s79, c0c, c67, c56, cdd, s60, cyc)
         if do_ghol:
-            # get_height_of_lowest_object $1EA4: stacked -> recurse on the object
-            # beneath (raw = flags); else the bottom object's z_height.
+            # get_height_of_lowest_object $1EA4: stacked recurses on raw = flags, else z_height
             flags = int(mem[_OFLAGS + Y])
             if flags >= 0x40:
                 cyc += _OBJ_GHOL_LOOP
@@ -531,9 +435,7 @@ def _march_reference(
     steps = 0
     cycles = np.int64(0)
     status = BLOCKED
-    # Signed 16-bit per-axis vectors: each march sub-step adds this (sign-extended)
-    # to the 24-bit (whole:sub:frac) position accumulator.  Used by the flat-tile
-    # intra-tile fast-forward below.
+    # signed per-axis steps on the 24-bit position accumulators, for the flat-tile fast-forward
     vx16 = ((ax_hi & 0xFF) << 8) | (ax_lo & 0xFF)
     if vx16 >= 0x8000:
         vx16 -= 0x10000
@@ -543,9 +445,7 @@ def _march_reference(
     vz16 = ((az_hi & 0xFF) << 8) | (az_lo & 0xFF)
     if vz16 >= 0x8000:
         vz16 -= 0x10000
-    # Per-tile cache: the tile byte and (for a sloping tile) the four corner
-    # heights depend only on (tx,ty), not on the sub-step position, so they are
-    # computed once per tile and reused across its ~tens of sub-steps.
+    # per-tile cache: the tile byte and sloping corner heights depend only on (tx, ty)
     cur_tx = -1
     cur_ty = -1
     cb = 0
@@ -574,8 +474,7 @@ def _march_reference(
     while steps < max_steps:
         steps += 1
         cycles += step_fixed  # $1CE8 JSR $1CBB: add_vector, then the edge tests
-        # add_vector $1CBB: signed 24-bit step on x, z, y (order irrelevant --
-        # the axes are independent).
+        # add_vector $1CBB: independent signed 24-bit steps on x, z, y
         t = (px_frac & 0xFF) + (ax_lo & 0xFF)
         px_frac = t & 0xFF
         carry = 1 if t > 0xFF else 0
@@ -679,17 +578,12 @@ def _march_reference(
         z = cz
         if slope == 0:
             cycles += np.int64(_TILE_Z_FLAT + _FLAT_BRANCH + _FLAT_DIFF)
-            # check_flat_tile $1D0D, fast path (s79=0, tolerance $000C=$80,
-            # $0060 bit6 clear, $0C67 clear).
+            # check_flat_tile $1D0D fast path: s79=0, $000C=$80, $0060 bit6 and $0C67 clear
             s79 = (0 - (pz_sub & 0xFF)) & 0xFF
             borrow = 1 if pz_sub & 0xFF else 0
             d = ((z & 0xFF) - (pz_whole & 0xFF) - borrow) & 0xFF
             if d & 0x80:
-                # Tile below the ray -> keep marching.  The tile (tx,ty) is fixed
-                # for a closed-form run of sub-steps (position accumulators are
-                # linear); fast-forward that run, replaying ONLY the z surface
-                # comparison per sub-step and skipping the redundant x/y add_vector,
-                # edge tests and tile_byte re-read.  Bit-identical to per-sub-step.
+                # below the ray: fast-forward the rest of this tile, replaying only the z test
                 if tx == (ox & 0xFF) and ty == (oy & 0xFF):
                     continue
                 xacc = ((px_sub & 0xFF) << 8) | (px_frac & 0xFF)

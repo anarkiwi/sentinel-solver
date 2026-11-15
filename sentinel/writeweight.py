@@ -1,9 +1,8 @@
 """What a cost term's own writes refund, when the term is too long to place.
 
-A window ``d`` cycles into a term refunds the consecutive write cycles at ``d``, so
-over the term that is its instruction sequence alone: 1 per one-cycle write, 3 per two
-(an RMW's dummy-plus-real pair or a JSR's pushes), 0 otherwise.  The $1CDD march, the
-$8401 trig chain beneath it and the $95E9 raster-IRQ body each carry their own.
+A window ``d`` cycles into a term refunds the consecutive write cycles at ``d``: 1 per
+one-cycle write, 3 per two (an RMW's dummy-plus-real pair or a JSR's pushes), 0 otherwise.
+The $1CDD march, its $8401 trig chain and the $95E9 raster-IRQ body each carry their own.
 """
 
 import types
@@ -273,18 +272,3 @@ TRIG_TERMS = (
 )
 
 TRIG = namespace(TRIG_TERMS)
-
-# The flat sub-step: $1CE8 JSR $1CBB through the $1D18 BMI that closes the loop.
-FLAT_LAP = (
-    "ADD_VECTOR",
-    "STEP_EDGE",
-    "STEP_EDGE",
-    "STEP_SETUP",
-    "TILE_Z_CALL",
-    "TILE_ADDR",
-    "TILE_Z_READ",
-    "TILE_Z_FLAT",
-    "FLAT_BRANCH",
-    "FLAT_DIFF",
-    "FLAT_BELOW",
-)

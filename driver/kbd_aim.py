@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
-"""Precise KEYBOARD aim for the live VICE Sentinel replay, built on the EXPERIMENTALLY
-VERIFIED pan primitive:
+"""KEYBOARD aim on live VICE: drive the real keys to an exact (h, v, cursor) view.
 
-  * D (sight right): cursor_x cycles 80,89,98,...,143 then WRAPS to 80 and h_angle += 8.
-  * S (sight left) : cursor_x cycles down 80,71,...,17 then WRAPS to 79 and h_angle -= 8.
-  * L (sight down) : cursor_y cycles 95,104,...,158 then WRAPS to 96 and v_angle += 4.
-  * COMMA (up)     : cursor_y cycles 95,86,...,32  then WRAPS to 95 and v_angle -= 4.
-  * U (u-turn)     : h_angle EOR $80.
-
-So h_angle is a +-8 keyboard grid (reachable = h0 + 8k), v_angle a +-4 grid, and the
-cursor moves on a 9px grid (cx in {17..143}, cy in {32..158}). The aim that the action
-fires on is computed by the ROM's prepare_vector_from_player_sights ($1C10):
-h_eff = h + cur_x>>3, v_eff = v + (cur_y-5)>>4 -- which sentinel.los models exactly.
-
-The caller proposes a (h, v, cursor) view (``sentinel.aim.propose`` / ``sentinel.los``,
-bit-exact vs the ROM); this module drives the real keys to that exact view -- verified
-from memory reads -- and the caller probes the live ROM LOS to confirm before pressing
-the action key. No pixels, no angle pokes.
+D/S pan h_angle by +-8 and L/COMMA v_angle by +-4 (the cursor wrapping on a 9px grid), U is
+h_angle EOR $80; the ROM fires along h + cur_x>>3, v + (cur_y-5)>>4 ($1C10, modelled by
+:mod:`sentinel.los`). Every step is verified from memory reads: no pixels, no angle pokes.
 """
 
 import os
@@ -49,10 +36,8 @@ A_PLOT = 0x0CE4  # busy-plotting gate, bit7 (no memmap entry)
 K_RIGHT, K_LEFT, K_DOWN, K_UP, K_UTURN = "D", "S", "L", "COMMA", "U"
 PC_PASS = 0x363D  # update_game_and_continue: a main-loop pass begins
 PC_PAN_CALL = 0x365A  # JSR pan_viewpoint $10B7
-RASTER_LINES = 312  # PAL 6569
 
-# the game's action latch $0CE9 = action-table byte >> 2 (re-armed to $80 each pass at
-# check_for_player_input $1363); poll it to confirm an action key was consumed (C8).
+# action latch $0CE9 = action-table byte >> 2 (re-armed to $80 at $1363 each pass)
 ACTION_CODE = {
     "R": 0x00,
     "T": 0x02,
@@ -71,29 +56,17 @@ class KbdDriver:
     def __init__(self, bm, log, quantized=False):
         self.bm = bm
         self.log = log
-        # QUANTIZED live cadence: when True the CPU stays HALTED between primitives -- the
-        # emulator advances ONLY inside the explicit run_until_pc animation windows (pan,
-        # cursor, action settle), never during the auto-resuming socket reads of the
-        # bookkeeping between steps. That monitor free-run (game running at gameplay speed
-        # while Python does round-trips) inflated live per-step frames ~3x past the ROM
-        # animation the cost model prices ($1FA4 dither + $2625 replot), pushing the player
-        # past the ~450-frame drain onset that the model keeps it under. Off (default) keeps
-        # the legacy resume-between-primitives behaviour for boot/aim helpers.
+        # quantized: the CPU stays halted between primitives, so only run windows advance it
         self.quantized = quantized
-        # Committed view bearing (objects_h/v_angle for the CURRENT player slot), tracked
-        # so a follow-on same-bearing aim can keep sights ON and drive ONLY the cursor,
-        # skipping the sights OFF->ON toggle whose initialise_sights ($134C) recenters the
-        # cursor to ($50,$5F). None == unknown/stale.
+        # same-bearing aims skip the sights toggle whose $134C recenters the cursor; None=stale
         self._bearing = None
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
 
     def _resume(self):
-        """Resume the CPU at a halted primitive's tail. No-op in quantized mode: the CPU
-        stays HALTED so the game advances only during explicit run_until_pc windows, and
-        the auto-resuming reads of inter-step bookkeeping never free-run the emulator.
-        """
+        """Resume the CPU at a halted primitive's tail; a no-op in quantized mode, where
+        the game advances only during explicit run_until_pc windows."""
         if not self.quantized:
             self.bm.exit()
 
@@ -127,18 +100,9 @@ class KbdDriver:
     def clear_bearing(self):
         self._bearing = None
 
-    # ---- checkpoint-driven primitives (no wall-clock timing) ----
-    # PCs from the game's ROM routines.
-    # The one PC reached ONCE PER PAN ATTEMPT on EVERY outcome -- commit, undo, AND clamp --
-    # and for BOTH axes: the instruction right after `JSR pan_viewpoint` in the foreground
-    # loop ($365A). A pan-commit STA PC is reached only when plot_world returns carry-clear;
-    # when it returns carry-set (check_if_player_still_wants_to_pan aborts the plot) the pan
-    # is UNDONE and the commit PC is never hit -- which is why anchoring on a commit PC needs
-    # a wall-clock timeout to notice a stall. $365D needs none: the game always reaches it, so
-    # we step one attempt, read the settled angle, and decide from STATE, never from a clock.
+    # after JSR pan_viewpoint: reached once per pan attempt on commit, undo and clamp alike
     PC_PAN_DONE = 0x365D
-    # Cursor STA PCs (move_sights; no undo path) -- run_until_pc halts BEFORE the STA, so the
-    # value about to be stored is read from A.
+    # move_sights STA PCs (no undo path): run_until_pc halts before the STA, value in A
     PC_CX_INC = 0x997C  # STA $0CC6 (move_sights right, cx+1)
     PC_CX_DEC = 0x9990  # STA $0CC6 (move_sights left,  cx-1)
     PC_CY_INC = 0x99B8  # STA $0CC7 (move_sights down,  cy+1)
@@ -147,12 +111,11 @@ class KbdDriver:
     PC_IRQ_SCAN_DONE = 0x967B  # return address of that JSR: the scan has completed
 
     def _pan_angle(self, addr, want, dir_fn):
-        """Drive the view angle at `addr` to `want` with NO wall-clock control flow: HOLD
-        the pan key and step frame-by-frame at PC_PAN_DONE ($365D, reached every frame),
-        reading the SETTLED angle each frame until it equals `want`. Terminates only on a
-        real state -- reached want ("ok"); player_object ($0B) changed, i.e. teleported
-        mid-aim ("hyperspace"); or the angle stops advancing for a full notch-scroll while
-        not at want, i.e. clamped/off-lattice ("unreachable", an aim-proposer bug)."""
+        """Hold the pan key, stepping passes at PC_PAN_DONE, until the angle at `addr` is `want`.
+
+        Ends only on state: "ok" at want, "hyperspace" when player_object ($0B) changes, or
+        "unreachable" when a full notch-scroll passes with no change (clamped/off-lattice).
+        """
         want &= 0xFF
         slot0 = self.rd(A_SLOT)
         stalled = 0
@@ -209,22 +172,18 @@ class KbdDriver:
         return False
 
     def _run_to_scan(self, timeout=6.0):
-        """Run to the next GATED full input scan ($9678). The IRQ reaches it only with
-        the world NOT being plotted ($0CE4 bit7, set by set_busy_plotting $1214 and held
-        across a whole viewpoint redraw $3642->play_landscape_loop) and the $130B re-arm
-        expired ($966E), so a timeout while $0CE4 is set is a redraw still running, not a
-        stall: re-arm. Conceding there would leak the redraw's remaining frames into
-        whatever primitive runs next. A timeout with the gate OPEN is a real stall."""
+        """Run to the next GATED full input scan ($9678), reached only while the world is not
+        plotted ($0CE4 bit7, held across a whole redraw) and the $130B re-arm has expired.
+        A timeout with the gate set is a redraw still running, so re-arm rather than leak its
+        frames into the next primitive; a timeout with the gate open is a real stall."""
         return self._run_past_redraw(self.PC_IRQ_SCAN, timeout)
 
     def _one_scan_press(self):
-        """Hold SPACE for EXACTLY ONE gated full input scan ($9678->$967B), after ONE
-        IDLE scan with the key released. check_for_full_player_input latches an EDGE:
-        SPACE toggles only when the previous scan saw it up ($11B5 LDA $1236 / BNE
-        skip_sights_toggle; $11D4 clears $1236 only on a scan with SPACE not pressed).
-        Without the idle re-arm, two presses with no released-key scan between them --
-        sights OFF then ON across coarse pans that are both no-ops, so nothing runs
-        frames in between -- have the second swallowed and retried by `sights_set`."""
+        """Hold SPACE for EXACTLY ONE gated full input scan ($9678->$967B), after ONE idle scan.
+
+        The toggle is edge-latched: $11B5 tests $1236, which $11D4 clears only on a scan with
+        SPACE up, so back-to-back presses with no released-key scan swallow the second.
+        """
         r, c = _k("SPACE")
         with self.bm.halted():
             try:
@@ -251,15 +210,11 @@ class KbdDriver:
         return self.sights_set(True)
 
     def _uturn(self):
-        """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F,
-        objects_h_angle EOR $80) -- the fast way across half the compass.
+        """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F).
 
-        U is an ordinary action key (want-flag $23), so ``tap_action`` already presses it
-        correctly. The flip itself lands in update_game's $1B2F, NOT in the scan that
-        latched the press, so reading objects_h_angle straight after that scan sees the
-        OLD bearing; a retry loop keyed on that read presses again, and an even number of
-        EOR $80s cancels. Confirm only after tap_action has let the action be consumed.
-        """
+        The EOR $80 lands in update_game, not in the scan that latched the press, so the flip
+        is confirmed only after ``tap_action`` lets the action be consumed; retrying on an
+        earlier read would press again and an even number of flips cancels."""
         addr = A_H + self.slot()
         for _ in range(5):
             before = self.rd(addr)
@@ -270,20 +225,17 @@ class KbdDriver:
         return False
 
     def coarse_h(self, want):
-        """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256). D pans right
-        +8, S pans left -8; the shorter direction is chosen per attempt (self-correcting).
+        """SIGHTS OFF: rotate bearing h to `want` (±8 lattice, wraps mod 256), shorter way first.
 
-        When `want` is more than half a turn away, ONE U-turn (EOR $80) + a short +-8
-        correction is FEWER keystrokes -- and less pan-scroll time held exposed while the
-        Sentinel rotates -- than stepping most of the way round the circle.
-        aimcost.h_press_count picks the minimal plan; the +-8 loop below finishes the
-        residual whether or not the U-turn latched (so this only ever saves time)."""
+        ``aimcost.h_press_count`` decides whether a U-turn plus a short correction beats
+        panning round; the ±8 loop finishes the residual whether or not the U-turn latched.
+        """
         addr = A_H + self.slot()
         want &= 0xFF
         cur = self.rd(addr)
         n_uturn, n_step = ac.h_press_count(cur, want)
         if n_uturn and not self._uturn():
-            # Never silent: the residual pan is then the whole half-turn the u-turn was meant to skip, which the cost model charged one keystroke for.
+            # the residual pan is the half-turn the cost model priced as one keystroke
             self.log(
                 f"    uturn MISSED ${cur:02x}->${want:02x}: paying "
                 f"{ac.h_steps(cur, want)} notches instead of {n_step}"
@@ -313,13 +265,10 @@ class KbdDriver:
         return self._pan_angle(addr, want, dir_fn)
 
     def coarse_hv(self, view):
-        """SIGHTS OFF: pan bearing then pitch to `view`, with ONE retry when either did
-        not land (a pan can lose a notch to a redraw; the second pass is self-correcting).
-        Returns ``(okh, okv, status)``. A "hyperspace" result SHORT-CIRCUITS the retry:
-        the player teleported mid-aim, so the requested angles are for the wrong eye and
-        re-driving them would aim from the new tile. The single home of this ladder --
-        both :meth:`drive_to` and the plan runner's aim step drive it.
-        """
+        """SIGHTS OFF: pan bearing then pitch to `view`, retrying once when either missed.
+
+        Returns ``(okh, okv, status)``. "hyperspace" skips the retry: the player teleported
+        mid-aim, so the requested angles belong to the wrong eye."""
         okh = self.coarse_h(view["h_angle"])
         okv = self.coarse_v(view["v_angle"])
         if "hyperspace" not in (okh, okv) and (okh != "ok" or okv != "ok"):
@@ -333,12 +282,11 @@ class KbdDriver:
         return okh, okv, status
 
     def fine_cursor(self, cx, cy):
-        """SIGHTS ON: drive the sights cursor to (cx, cy) DIAGONALLY -- move_sights ($9958)
-        steps cx ($9965) and cy ($9994) in ONE call, so a held horizontal+vertical pair moves
-        both 1px/frame and travel is max(|dx|,|dy|), not the axis-by-axis sum.  The whole
-        drive runs in ONE halted section: the only CPU time is each pixel's run-to-commit
-        (the ROM-intrinsic frame per move) -- no auto-resume gaps between pixels, which
-        leaked free-running world frames on every interstitial read."""
+        """SIGHTS ON: drive the cursor to (cx, cy) DIAGONALLY in ONE halted section.
+
+        move_sights ($9958) steps cx and cy in one call, so travel is max(|dx|,|dy|); the only
+        CPU time is each pixel's run-to-commit, with no free-running gaps between pixels.
+        """
         cx &= 0xFF
         cy &= 0xFF
         ok = False
@@ -368,13 +316,11 @@ class KbdDriver:
         return ok or (self.rd(A_CX) == cx and self.rd(A_CY) == cy)
 
     def tap_action(self, name, settle=True):
-        """Fire an action key EXACTLY ONCE. One full IDLE scan first: update_game
-        zeroes $0C51 ($1281) and only an idle full scan re-arms $40 ($11EA); without it
-        a u-turn latch is DROPPED at $1B2F (ASL $0C51 / BPL). Anchor at the gated full-scan
-        call site $9678 (NOT $1363, which has three callers), press WHILE HALTED, run to
-        $967B, snapshot the want-flags, release before the next scan. The caller MUST verify
-        the action's memory effect and retry on a miss -- at-most-once by the single-scan
-        press, at-least-once by the verify-retry loop."""
+        """Fire an action key EXACTLY ONCE, pressed halted at $9678 and released at $967B.
+
+        An idle full scan first re-arms $0C51 ($11EA), without which a u-turn latch drops at
+        $1B2F. The caller verifies the memory effect and retries a miss (at-least-once).
+        """
         want = ACTION_CODE[name]
         r, c = _k(name)
         latched = False
@@ -391,10 +337,10 @@ class KbdDriver:
                     if want in flags:
                         latched = True
                         if not settle:
-                            break  # caller settles by its own condition (e.g. a
-                            # hyperspace: the play-loop scan PC may never recur)
-                        # Scans reopen only after $12D0 consumed the action, so this run spans the whole settle ($1FA4 dither + $2625 plot_world); _run_to_scan's $0CE4 re-arm keeps a transfer's redraw from being cut short and leaking into the next aim. Legacy free-run caps it short (there the settle runs at gameplay speed during bookkeeping).
+                            break  # caller settles itself (a hyperspace scan may never recur)
+                        # scans reopen after $12D0 consumes the action: this run spans the settle
                         try:
+
                             if self.quantized:
                                 self._run_to_scan()
                             else:

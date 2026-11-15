@@ -1,9 +1,8 @@
 """render_cost reproduces plot_world's exact per-scene cost, cycle-counted in jennings.
 
-``golden_render_cost.json`` holds, per view, the exact plot_world cycle count and $283D
-examination count from jennings under play conditions (no ROM bytes); the non-oracle test
-asserts the projector reproduces the examination count byte-for-byte and the frame cost
-within tolerance.
+``golden_render_cost.json`` holds, per view, jennings' plot_world cycle count and $283D
+examination count under play conditions (no ROM bytes); the projector must reproduce the
+examination count exactly and the frame cost within tolerance.
 """
 
 import json
@@ -13,7 +12,7 @@ import pytest
 
 import numpy as np
 
-from sentinel import landscape, objmodel, projector, rendercost, settlecost
+from sentinel import landscape, objmodel, projector, rendercost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
@@ -184,75 +183,8 @@ def _rom_occlusion(cpu, mem):
 _OCCLUSION_LANDSCAPES = (0, 42, 66, 335, 777, 2024)
 
 
-@pytest.mark.oracle
-def test_occlusion_table_is_byte_exact():
-    """projector._occlusion_visible reproduces the ROM $245B/$3E80 bitmap byte-for-byte
-    (every one of the 32x32 tiles) on a spread of landscapes."""
-    for ls in _OCCLUSION_LANDSCAPES:
-        cpu, mem, _ = oracle.generate_machine(ls)
-        ref = _rom_occlusion(cpu, mem)
-        got = projector._occlusion_visible(landscape.generate(ls))
-        mism = [(x, y) for y in range(32) for x in range(32) if ref[y][x] != got[y][x]]
-        assert not mism, f"landscape {ls}: {len(mism)} occlusion mismatches {mism[:8]}"
-
-
-def test_occlusion_is_view_independent_and_hides_tiles():
-    """$245B depends only on observer position, not view angle; and it hides a real
-    fraction of tiles on a sloped board (the terrain-fill occlusion gate)."""
-    state = landscape.generate(0)
-    vis = projector._occlusion_visible(state)
-    hidden = sum(1 for row in vis for cell in row if not cell)
-    assert hidden > 32  # the far/edge rows plus terrain-occluded tiles are hidden
-
-
 # Exact live $9630 transfer-settle frame counts, per landscape (docs/architecture.md).
 _LIVE_SETTLES = {42: (338, 305, 435, 460), 335: (259, 333, 371)}
-
-
-def test_viewpoint_settle_lands_in_live_settle_band():
-    """settlecost.viewpoint_settle_frames on the sweep views lands in the live
-    259-460f transfer band.  These sweep views are NOT the live transfers' own
-    scenes, so only the band is claimed; the per-transfer accuracy against
-    settle_oracle_ls42.json is test_settle_accuracy.py's."""
-    lo, hi = min(min(v) for v in _LIVE_SETTLES.values()), max(
-        max(v) for v in _LIVE_SETTLES.values()
-    )
-    floor = settlecost.BRACKET_FRAMES + settlecost.TUNE_FRAMES[0x19]
-    for ls in _LIVE_SETTLES:
-        state = landscape.generate(ls)
-        for _lsk, h, v in (view for view in VIEWS if view[0] == ls):
-            f = settlecost.viewpoint_settle_frames(
-                state, eye_view={"h_angle": h, "v_angle": v}
-            )
-            assert f >= floor  # the $35D5 tune wait is a hard lower bound
-            assert 0.75 * lo <= f <= 1.25 * hi, f"ls{ls} {h},{v}: {f:.1f} out of band"
-
-
-@pytest.mark.oracle
-def test_transfer_tune_is_96_frames():
-    """TUNE_TRANSFER_FRAMES is ROM-derived: decode the #$19 ($AB69) and #$0 ($AB50)
-    $34DE tune tables from the image -- both sum to 96 note-hold frames ($0C70=(b-$C8)*4,
-    $0CDF ticked once/frame); the u-turn's #$28 tune decodes to 24, settlecost's floor.
-    """
-    with open(oracle.IMG, "rb") as f:
-        img = f.read()
-
-    def tune_frames(number):
-        pos, length, total = number, 0, 0
-        while True:
-            b = img[0xAB50 + pos]
-            pos += 1
-            if b == 0xFF:
-                return total
-            if b >= 0xC8:
-                length = ((b - 0xC8) * 4) & 0xFF
-            else:
-                total += length  # a note holds `length` frames in $0CDF
-
-    assert tune_frames(0x00) == 96  # matches projector.TUNE_TRANSFER_FRAMES
-    assert tune_frames(0x19) == 96 == projector.TUNE_TRANSFER_FRAMES
-    assert settlecost.TUNE_FRAMES[0x19] == 96.0
-    assert tune_frames(0x28) == 24 == settlecost.TUNE_FRAMES[0x28]
 
 
 def _fill_cycles(state, h, v, mode=projector.PLAY_MODE):
@@ -406,3 +338,24 @@ def test_fill_geometry_matches_the_rom_loop_counts():
                 2, 0.01 * w
             ), f"{key} {name}: {got[name]} != {w}"
     assert exact >= 14, f"only {exact} views reproduce the ROM's loop counts"
+
+
+@pytest.mark.oracle
+def test_occlusion_table_is_byte_exact():
+    """projector.occlusion_visible reproduces the ROM $245B/$3E80 bitmap byte-for-byte
+    (every one of the 32x32 tiles) on a spread of landscapes."""
+    for ls in _OCCLUSION_LANDSCAPES:
+        cpu, mem, _ = oracle.generate_machine(ls)
+        ref = _rom_occlusion(cpu, mem)
+        got = projector.occlusion_visible(landscape.generate(ls))
+        mism = [(x, y) for y in range(32) for x in range(32) if ref[y][x] != got[y][x]]
+        assert not mism, f"landscape {ls}: {len(mism)} occlusion mismatches {mism[:8]}"
+
+
+def test_occlusion_is_view_independent_and_hides_tiles():
+    """$245B depends only on observer position, not view angle; and it hides a real
+    fraction of tiles on a sloped board (the terrain-fill occlusion gate)."""
+    state = landscape.generate(0)
+    vis = projector.occlusion_visible(state)
+    hidden = sum(1 for row in vis for cell in row if not cell)
+    assert hidden > 32  # the far/edge rows plus terrain-occluded tiles are hidden

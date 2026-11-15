@@ -6,12 +6,14 @@
 frames, so `driver.avi2apng` turns one into an APNG small enough to embed.
 
 ```bash
-python -m driver.avi2apng renders/player_ls1442_win.avi \
-    -o docs/media/ls1442_phase_win.png --fps 12 --speed 2
+python -m driver.play_player 9716             # live search player -> renders/player_ls9716_search.avi
+python -m driver.avi2apng renders/player_ls9716_search.avi \
+    -o docs/media/ls9716_search_win.png --fps 12 --speed 2
 ```
 
-`docs/media/ls9716_search_win.png` and `ls335_search_win.png` are the search player's
-live wins (`renders/player_lsN_search.avi`, same flags).
+`docs/media/ls9716_search_win.png` and `ls335_search_win.png` are the search player's live
+wins. `ls335_phase_win.png` and `ls1442_phase_win.png` were recorded by the retired phase
+player ([players](players.md#retired-players)).
 
 `--fps` decides which source frames survive; `--speed` only shortens the delays on the
 ones that did, so raising it costs no detail. The two compose: the run above samples at
@@ -35,14 +37,9 @@ The game blanks the 3D viewport for the whole of a **hyperspace** and a **transf
 information and dominate the running time.
 
 A frame is blank when its play area (the picture, less the top `--hud-rows`) is a
-**single colour**. That test needs no threshold. Measured over
-`renders/player_ls340_win.avi` (5321 frames), the play area is either one flat colour
-or carries at least 215 edge transitions, with nothing in between: 1393 frames
-(26.2%) are blank, in runs matching the driver's own frame audit — the 349-frame run
-at frame 582 is the transfer the log prices at 367 frames.
-
-Dominance fractions do *not* separate the two: gameplay reaches 0.9847 of one colour
-and blanks start at 0.9851. Uniformity does, exactly.
+**single colour**. That test needs no threshold: a drawn viewport always carries edges,
+and a blanked one carries none. A dominance fraction would not separate the two, since a
+drawn landscape can be almost entirely one colour; uniformity does, exactly.
 
 ## Staying small
 

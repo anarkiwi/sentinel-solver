@@ -1,13 +1,13 @@
 """Keyboard-aim pricing for many boards at once, over arrays.
 
-:func:`aim_parts` is :func:`playerbase.aim_table` for a batch of boards: every pan notch
+:func:`aim_parts` is :func:`views.aim_table` for a batch of boards: every pan notch
 and u-turn redraw is one pricing job, deduplicated on scene, observer and notch.
 """
 
 import numpy as np
 
 from sentinel import aimcost, memmap as mm, pancost, projector, settlecost
-from sentinel.playerbase import CURSOR_RAMP, SCROLL, TAP_FRAMES, _sum_step
+from sentinel.views import SCROLL, _sum_step
 
 _PAN_DELTA = np.array(pancost.PAN_DELTA, dtype=np.int64)
 UTURN_KIND = 4
@@ -103,7 +103,7 @@ def _notch_costs(mems, rows, job_row, job_obs, direction, plot_h, plot_v):
 
 def aim_parts(mems, row, lat, h0, v0, cells, grids):
     """``(pan, turn, uturn)`` per request ``q``: the pan frames and u-turn term
-    :func:`playerbase.aim_table` prices for ``cells[q]`` of lattice ``grids[lat[q]]`` from
+    :func:`views.aim_table` prices for ``cells[q]`` of lattice ``grids[lat[q]]`` from
     facing ``(h0[q], v0[q])`` on board image ``mems[row[q]]``, and that board's u-turn
     frames.  ``pan`` and ``turn`` are aligned with ``cells[q]``."""
     if len(row) == 0:
@@ -159,13 +159,3 @@ def aim_parts(mems, row, lat, h0, v0, cells, grids):
         np.split(turn, ends),
         uturn[at_row],
     )
-
-
-def aim_total_columns(toggle, turn, pan, cur):
-    """:func:`playerbase.aim_frames` over columns: the compensated sum of the toggle,
-    u-turn, pan and cursor-drive terms (``cur`` the drive distance, 0 when parked)."""
-    total, comp = np.zeros(len(pan)), np.zeros(len(pan))
-    drive = np.where(cur > 0, cur + CURSOR_RAMP, 0.0)
-    for term in (toggle, turn, pan, drive + TAP_FRAMES):
-        total, comp = _sum_step(total, comp, term)
-    return total + comp

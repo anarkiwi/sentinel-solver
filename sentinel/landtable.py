@@ -9,12 +9,11 @@ import math
 
 import numpy as np
 
-from sentinel import los, los_jit, memmap as mm, terrain
+from sentinel import los, los_jit, memmap as mm
 from sentinel import kern
 from sentinel.kern import spec
 
 try:
-    import numba
     from numba import njit, prange
 
     _HAVE_JIT = True
@@ -47,9 +46,6 @@ NEVER_LANDS = 1  # tile flag: sloping, check_sloping_tile $1D46 only loops or bl
 HAS_BOULDER = 2  # tile flag: the object stack holds a boulder
 BOARD_BOULDER = 4  # set on every tile when any tile has one
 BOULDER = 3  # object type of a boulder
-# Rays per numba thread below which another fork/join costs more than its share of a
-# crossing_mask call saves (:func:`sentinel.tests.bench_kernels.crossing_grain`).
-CROSS_GRAIN = 8192
 
 
 def lattice(v_primary=False, coarse=False):
@@ -91,42 +87,6 @@ def cached_components(grids):
     return got
 
 
-_ARC_CACHE = {}
-
-
-def heading_components(grids):
-    """``(head_sorted, order, vx, vy, vz)``: :func:`los._lattice_headings` plus the
-    :func:`components` permuted into that heading order (int16, their native width), so
-    a heading arc is a contiguous slice rather than a gather over the whole lattice."""
-    key = tuple(tuple(g) for g in grids)
-    got = _ARC_CACHE.get(key)
-    if got is None:
-        head, order = los._lattice_headings(*grids)
-        got = (head, order) + tuple(
-            c[order].astype(np.int16) for c in components(grids)
-        )
-        _ARC_CACHE[key] = got
-    return got
-
-
-@spec(inline=True)
-def _cell_span(v, d, max_steps):
-    """The sub-step interval ``[first, last]`` in which the ray's tile offset on one axis
-    equals ``d`` (empty when ``last < first``): ``d*65536 <= $8000 + i*v < (d+1)*65536``.
-
-    The float quotients round exactly: numerators stay far below 2**37 and ``|v|`` below
-    2**15, so a non-integer quotient lies >= 2**-15 from any integer while its rounding
-    error is under 2**-15, and an integer quotient is represented exactly.
-    """
-    if v == 0:
-        return 1, max_steps if d == 0 else 0
-    qa = (d * 65536 - 0x8000) / v
-    qb = (d * 65536 + 0x8000) / v
-    if v > 0:
-        return int(math.ceil(qa)), int(math.ceil(qb)) - 1
-    return int(math.floor(qb)) + 1, int(math.floor(qa))
-
-
 @spec(inline=True)
 def _cell_last(v, d, max_steps):
     """The last sub-step of :func:`_cell_span`'s interval."""
@@ -137,86 +97,6 @@ def _cell_last(v, d, max_steps):
     return int(math.floor((d * 65536 - 0x8000) / v))
 
 
-@spec(inline=True)
-def _crosses(ax, ay, az, dx, dy, tlo, thi, max_steps):
-    """Whether a ray ``(ax, ay, az)`` can land on cell ``(dx, dy)`` with surface z in
-    [tlo, thi].
-
-    Bounds are relative to the ray seed z, 1/256 units.  Landing needs ``surface-ray_z``
-    in ``[0, $80)`` inside the cell, so the ray must ENTER above ``surface - $80`` and
-    reach ``surface`` before leaving; 8-bit-alias risks are kept unconditionally.
-    """
-    fx, lx = _cell_span(ax, dx, max_steps)
-    fy, ly = _cell_span(ay, dy, max_steps)
-    i0 = max(fx, fy, 1)
-    i1 = min(lx, ly, max_steps)
-    if i0 > i1:
-        return False
-    zin = (i0 * az) >> 8
-    zout = (i1 * az) >> 8
-    if az > 0:  # climbing: z only leaves the band, so the entry must be inside it
-        return zout >= WRAP_D + tlo or (tlo - LAND_BAND < zin <= thi)
-    if az < 0:  # descending: enter above the band's floor, reach the surface
-        return zin >= WRAP_D + tlo or (zin > tlo - LAND_BAND and zout <= thi)
-    return tlo - LAND_BAND < 0 <= thi
-
-
-@njit(cache=True, parallel=True)
-def _crossing_par(vx, vy, vz, dx, dy, tlo, thi, max_steps):
-    out = np.empty(vx.shape[0], dtype=np.bool_)
-    for e in prange(vx.shape[0]):  # pylint: disable=not-an-iterable
-        out[e] = _crosses(vx[e], vy[e], vz[e], dx, dy, tlo, thi, max_steps)
-    return out
-
-
-@njit(cache=True)
-def _crossing_ser(vx, vy, vz, dx, dy, tlo, thi, max_steps):
-    out = np.empty(vx.shape[0], dtype=np.bool_)
-    for e in range(vx.shape[0]):
-        out[e] = _crosses(vx[e], vy[e], vz[e], dx, dy, tlo, thi, max_steps)
-    return out
-
-
-def crossing_mask(vx, vy, vz, dx, dy, tlo, thi, max_steps):
-    """:func:`_crosses` per ray, one thread per :data:`CROSS_GRAIN` rays."""
-    args = (vx, vy, vz, dx, dy, tlo, thi, max_steps)
-    if not _HAVE_JIT:  # pragma: no cover - numba absent
-        return _crossing_ser(*args)
-    prev = numba.get_num_threads()
-    threads = min(prev, vx.shape[0] // CROSS_GRAIN)
-    if threads <= 1:
-        return _crossing_ser(*args)
-    numba.set_num_threads(threads)
-    try:
-        return _crossing_par(*args)
-    finally:
-        numba.set_num_threads(prev)
-
-
-def surface_bounds(state, x, y):
-    """``(lo, hi)`` bracketing the ``surface16`` (``tile_z*256 + $0079``) the LOS compare
-    can see at ``(x, y)``: exact for bare terrain, else over the object stack -- the
-    platform form $1E30 (``+$20``) on top, the boulder form $1E5A (``-$60``) at the
-    bottom.  A wider bracket only widens the candidate set."""
-    b = terrain.tile_byte(state, x, y)
-    if b < 0xC0:
-        z = ((b >> 4) & 0x0F) * 256
-        return z, z
-    lo = 1 << 30
-    hi = 0
-    slot = b & 0x3F
-    for _ in range(64):
-        z = state.obj_z_height[slot] * 256
-        zf = state.obj_z_frac[slot]
-        lo = min(lo, z + min(0, zf - 0x60))
-        hi = max(hi, z + zf + 0x20)
-        flags = state.obj_flags[slot]
-        if flags < 0x40:
-            break
-        slot = flags & 0x3F
-    return lo, hi
-
-
 def seed_z(state, slot, eye_z=None):
     """The ray's starting 16-bit z, ``eye_z*256 + obj_z_frac`` (get_object_details
     $1ECC): the z fraction is a pure additive offset, never a table axis."""
@@ -224,19 +104,9 @@ def seed_z(state, slot, eye_z=None):
     return z * 256 + state.obj_z_frac[slot]
 
 
-def never_lands(state, tile, slot):
-    """Whether no keyboard aim can land on ``tile``: the observer's own tile ($1D32
-    keeps marching) or a sloping tile (check_sloping_tile $1D46 only loops or blocks).
-    """
-    if tile[0] == state.obj_x[slot] and tile[1] == state.obj_y[slot]:
-        return True
-    b = terrain.tile_byte(state, tile[0], tile[1])
-    return b < 0xC0 and (b & 0x0F) != 0
-
-
 @njit(cache=True)
 def _surface_maps_mem(mem):
-    """:func:`surface_maps` over a 64 KB memory image (:func:`surface_bounds` and the
+    """:func:`surface_maps` over a whole memory image (:func:`surface_bounds` and the
     per-tile flags, the object stack walked in place)."""
     lo = np.zeros(mm.N * mm.N, dtype=np.int32)
     hi = np.zeros(mm.N * mm.N, dtype=np.int32)
@@ -281,10 +151,9 @@ def surface_maps(state):
 def _stop_one(ax, ay, az, surf_lo, surf_hi, flags, ex, ey, zseed, max_steps, edge):
     """One ray's ``(first candidate tile, count)`` for :func:`stop_cells`.
 
-    A ray with ``az >= 0`` looks up, and the ROM rejects a look-up at every flat or object
-    tile unless the object walk set ``$0C67`` bit 7, which only a boulder does; the landing
-    sweeps keep ``$0C6E`` bit 7 clear and a sloping tile never ends CLEAR.  So a climbing
-    ray lands only on a :data:`HAS_BOULDER` tile, and on no tile of a boulder-free board.
+    The ROM rejects a look-up (``az >= 0``) at a flat or object tile unless the object walk
+    set ``$0C67`` bit 7 (only a boulder does; landing sweeps keep ``$0C6E`` bit 7 clear), so
+    a climbing ray lands only on a :data:`HAS_BOULDER` tile.
     """
     climb = az >= 0
     if climb and (flags[ex * 32 + ey] & BOARD_BOULDER) == 0:
@@ -332,10 +201,9 @@ def _stop_one(ax, ay, az, surf_lo, surf_hi, flags, ex, ey, zseed, max_steps, edg
 def stop_cells(vx, vy, vz, surf_lo, surf_hi, flags, ex, ey, zseed, max_steps, edge):
     """Per ray: its first candidate landing tile (packed ``x*32+y``, -1 none) and count.
 
-    Walking the track against the real surfaces partitions the lattice by landing tile, so
-    a whole-board sweep marches each ray once at most.  The count stops at a cell the ray
-    PROVABLY stops in; sloping tiles and the observer's own tile never land nor terminate.
-    ``flags`` are the :func:`surface_maps` tile flags.
+    The track walk partitions the lattice by landing tile, so a board sweep marches each ray
+    once at most; the count stops at a cell the ray PROVABLY stops in, and sloping tiles and
+    the observer's tile never land nor terminate (``flags`` as :func:`surface_maps`).
     """
     n = vx.shape[0]
     first = np.full(n, -1, dtype=np.int32)
@@ -345,26 +213,6 @@ def stop_cells(vx, vy, vz, surf_lo, surf_hi, flags, ex, ey, zseed, max_steps, ed
             vx[j], vy[j], vz[j], surf_lo, surf_hi, flags, ex, ey, zseed, max_steps, edge
         )
     return first, ncand
-
-
-def candidates(state, tile, slot, eye_z=None, grids=None, max_steps=MAX_STEPS):
-    """Ascending lattice indices that can land on ``tile`` -- a proven superset of the
-    rays the sweep finds: the heading arc (:func:`los._tile_arc_ranges`) over the
-    heading-ordered components, narrowed by :func:`crossing_mask` and mapped back to
-    lattice indices through ``order``."""
-    grids = lattice() if grids is None else grids
-    head, order, vx, vy, vz = heading_components(grids)
-    ex, ey = int(state.obj_x[slot]), int(state.obj_y[slot])
-    zs = seed_z(state, slot, eye_z)
-    lo, hi = surface_bounds(state, tile[0], tile[1])
-    dx, dy, tlo, thi = tile[0] - ex, tile[1] - ey, lo - zs, hi - zs
-    parts = [
-        order[a:b][
-            crossing_mask(vx[a:b], vy[a:b], vz[a:b], dx, dy, tlo, thi, max_steps)
-        ]
-        for a, b in los._tile_arc_ranges(head, ex, ey, tile[0], tile[1])
-    ]
-    return np.sort(np.concatenate(parts))
 
 
 def _march_params(state, slot, eye_z, max_steps):
@@ -403,13 +251,11 @@ def _gpu():
 
 @njit(cache=True, parallel=True)
 def _landing_states(mems, vecs, comps, params, zseed, max_steps, edge, order, group):
-    """Per image of ``mems`` (one thread each) and lattice ray, the packed landing tile
-    of a ray that ends LOS_CLEAR, else -1: the :func:`stop_cells` prefilter then the
-    march, both serial within a state.
+    """Per image (one thread each) and lattice ray, the LOS_CLEAR landing tile, else -1.
 
     Rays are visited in ``order``, claiming ``(tile, group[ray])`` on landing; a ray whose
-    only candidate tile is already claimed by its group is left -1 unmarched.  Groups must
-    be contiguous in ``order``; a ``group`` of -1 turns the pruning off."""
+    only candidate tile its group claimed is left -1 unmarched.  Groups are contiguous in
+    ``order``; a ``group`` of -1 turns the pruning off."""
     ax_lo, ax_hi, az_lo, az_hi, ay_lo, ay_hi, s30 = vecs
     vx, vy, vz = comps
     n = vx.shape[0]
@@ -448,8 +294,7 @@ KEEPS = ("all", "first", "cell")
 
 
 def claim_plan(grids, keep="all", drive=None):
-    """``(order, group)`` for :func:`_landing_states`: the order rays are visited in and
-    the claim group of each, so only the rays a consumer keeps are marched.
+    """``(order, group)`` for :func:`_landing_states`: ray visit order and claim groups.
 
     ``"first"`` claims per tile in ray order (the lowest ray per tile).  ``"cell"`` claims
     per (tile, cell) in ``(drive, ray)`` order, where lattice index ``i`` lies in cell
@@ -479,11 +324,11 @@ def _compact(dense):
 
 
 def landing_dense(mems, grids, params, zseed, max_steps, keep="all", drive=None):
-    """``(B, rays)`` int16 on the CPU, one image per thread: the packed landing tile of
-    each lattice ray of ``grids`` against image ``b`` (``params[b]`` as
-    :func:`_march_params`, ``zseed[b]`` as :func:`seed_z`), -1 where it does not land.
-    ``keep``/``drive`` as :func:`claim_plan` may also leave -1 a landing ray that is not
-    the minimum of its claim group.
+    """``(B, rays)`` int16 on the CPU, one image per thread: each lattice ray's landing tile.
+
+    Against image ``b`` (``params[b]`` as :func:`_march_params`, ``zseed[b]`` as
+    :func:`seed_z`), -1 where it does not land; ``keep``/``drive`` (:func:`claim_plan`) may
+    also leave -1 a landing ray that is not the minimum of its claim group.
     """
     return _landing_states(
         mems,
@@ -531,11 +376,11 @@ def landing_pairs_many(states, slots, eye_z, grids, max_steps, keep="all", drive
 
 
 def landing_pairs(state, slot, eye_z, grids, max_steps, keep="all", drive=None):
-    """``(rays, tiles)`` of every CLEAR ray of ``grids`` against ``state`` on the CPU:
-    ascending lattice indices and their packed ``x*32+y`` landing tiles -- only
-    :func:`landing_rays` is marched.  ``keep``/``drive`` as :func:`claim_plan` march the
-    candidate rays in claim order, in doubling chunks, and drop a ray whose only candidate
-    tile its group has claimed; every claim group's minimum ray is kept."""
+    """``(rays, tiles)`` of every CLEAR ray of ``grids`` against ``state`` on the CPU.
+
+    Ascending lattice indices and packed ``x*32+y`` tiles; only :func:`landing_rays` march.
+    ``keep``/``drive`` (:func:`claim_plan`) march candidates in claim order, in doubling
+    chunks, dropping a ray whose only candidate tile its group claimed."""
     if keep == "all" or _gpu() is not None:
         idx = landing_rays(state, slot, eye_z, grids, max_steps)
         status, tx, ty = _march(state, slot, eye_z, grids, idx, max_steps)
@@ -563,45 +408,6 @@ def landing_pairs(state, slot, eye_z, grids, max_steps, keep="all", drive=None):
     return rays[by_ray], tiles[by_ray]
 
 
-def landable_view(state, tile, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
-    """The build view for ``tile``, identical to that lattice's full sweep entry.
-
-    :func:`los.landable_view_targeted` delegates here.  Only :func:`candidates` is
-    marched -- a proven superset of the landing rays, so a set that lands nothing is a
-    proven "no view".  The answer is the LOWEST landing lattice index, so the ascending
-    candidates are marched in doubling chunks and the first chunk that lands ends it:
-    the same index, marching under 2x the prefix before it instead of the whole set.
-    """
-    if slot is None:
-        slot = state.player
-    grids = lattice() if grids is None else grids
-    if never_lands(state, tile, slot):
-        return None
-    gpu = _gpu()
-    if gpu is not None:
-        low = gpu.landing_table(state, slot, eye_z, grids, max_steps)[2][
-            tile[0] * mm.N + tile[1]
-        ]
-        if low < 0:
-            return None
-        h, v, cx, cy = los._meta_at(int(low), *grids)
-        return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-    idx = candidates(state, tile, slot, eye_z, grids, max_steps)
-    lo, step = 0, MARCH_CHUNK
-    while lo < idx.size:
-        sel = idx[lo : lo + step]
-        status, tx, ty = _march(state, slot, eye_z, grids, sel, max_steps)
-        hit = np.flatnonzero(
-            (status == los.los_jit.LOS_CLEAR) & (tx == tile[0]) & (ty == tile[1])
-        )
-        if hit.size:
-            h, v, cx, cy = los._meta_at(int(sel[hit[0]]), *grids)
-            return {"h_angle": h, "v_angle": v, "cursor": [cx, cy]}
-        lo += step
-        step += step
-    return None
-
-
 def _partition(state, slot, eye_z, grids, max_steps):
     """:func:`stop_cells` over a whole lattice: ``(first candidate tile, count)`` per ray."""
     lo, hi, slope = surface_maps(state)
@@ -624,7 +430,6 @@ def landing_rays(state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
 
     :func:`stop_cells` walks each ray's track closed-form against the real surfaces, so a
     ray naming no candidate landing tile provably never lands and is dropped unmarched.
-    ~15% of the band lattice survives, and marching the survivors is the full sweep.
     """
     if slot is None:
         slot = state.player
@@ -646,40 +451,3 @@ def landing_rays(state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS):
         return np.flatnonzero(mask)
     _first, ncand = _partition(state, slot, eye_z, grids, max_steps)
     return np.flatnonzero(ncand > 0)
-
-
-def landable_set(
-    state, slot=None, eye_z=None, grids=None, max_steps=MAX_STEPS, chunk=1 << 16
-):
-    """The whole-board landable tile set, as ``_coarse_landable`` returns it (ring incl).
-
-    :func:`stop_cells` partitions the rays by candidate landing tile, so each ray is
-    marched at most once and only while its tile is unresolved; rays with no candidate
-    tile are never marched.  The partition is a superset, so the set is exact.
-    """
-    if slot is None:
-        slot = state.player
-    grids = lattice(coarse=True) if grids is None else grids
-    if not los._HAVE_JIT:  # pragma: no cover - numba absent
-        return set(los.landable_views(state, slot, eye_z, max_steps))
-    gpu = _gpu()
-    if gpu is not None:
-        tiles = gpu.landing_table(state, slot, eye_z, grids, max_steps)[1]
-        return {(t // mm.N, t % mm.N) for t in np.unique(tiles).tolist()}
-    first, ncand = _partition(state, slot, eye_z, grids, max_steps)
-    todo = np.flatnonzero(ncand > 0)
-    cell = first[todo]
-    multi = ncand[todo] > 1
-    landed = np.zeros(mm.N * mm.N, dtype=bool)
-    out = set()
-    for s in range(0, todo.size, chunk):
-        sel = todo[s : s + chunk]
-        keep = sel[multi[s : s + chunk] | ~landed[cell[s : s + chunk]]]
-        if keep.size == 0:
-            continue
-        status, tx, ty = _march(state, slot, eye_z, grids, keep, max_steps)
-        clear = np.flatnonzero(status == los.los_jit.LOS_CLEAR)
-        if clear.size:
-            landed[tx[clear] * mm.N + ty[clear]] = True
-            out.update(zip(tx[clear].tolist(), ty[clear].tolist()))
-    return out

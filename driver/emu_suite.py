@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Play suite boards with ``play_player --emu`` in parallel processes and tabulate them
-against the committed offline results: ``python -m driver.emu_suite [boards...]``; other
-``play_player`` flags pass through in ``--flag=value`` form."""
+"""Play the suite boards with the search player on the emulator, in parallel processes,
+and tabulate them against the committed results: ``python -m driver.emu_suite
+[boards...]``; ``--out`` records them, ``--readme`` renders the README results block.
+
+Other ``play_player`` flags pass through in ``--flag=value`` form.
+"""
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import subprocess
@@ -13,13 +17,34 @@ import sys
 from tqdm import tqdm
 
 from driver.search_player import PRESETS
-from sentinel.tests import readme_results, trace_suite
+from sentinel.tests import readme_results
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SUITE = trace_suite.SUITE + (9716,)
+SUITE = (0, 42, 60, 110, 298, 321, 335, 373, 1442, 9716)
+MAX_ACTIONS = 120
 _THREADS = {
     k: "2" for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 }
+
+
+def digest(trace):
+    """Hex SHA-256 of the canonical JSON of an action trace."""
+    blob = json.dumps(trace, separators=(",", ":"), default=int).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def summary(result, preset):
+    """The committed record of one ``play_player`` result."""
+    return {
+        "landscape": result["landscape"],
+        "enemies": result.get("enemies"),
+        "actions": len(result["trace"]),
+        "energy": result.get("final_energy"),
+        "frames": result.get("frames"),
+        "won": bool(result.get("won")),
+        "preset": preset,
+        "digest": digest(result["trace"]),
+    }
 
 
 def play(board, out_dir, max_actions, extra=()):
@@ -40,18 +65,16 @@ def play(board, out_dir, max_actions, extra=()):
             check=False,
         )
     if not os.path.exists(out):
-        return {"won": "error", "trace": []}  # the run raised: its log says why
+        return {"landscape": board, "won": "error", "trace": []}
     with open(out) as fh:
         return json.load(fh)
 
 
-def rows(results, offline):
-    """One line per board: the emulated run beside the offline record."""
-    yield (
-        "board  won    actions  energy  wall_s  audit  cores | offline won actions energy"
-    )
+def rows(results, committed):
+    """One line per board: the emulated run beside its committed record."""
+    yield "board  won    actions  energy  wall_s  audit  cores | committed won actions energy"
     for board, res in sorted(results.items()):
-        off = offline.get(str(board), {})
+        rec = committed.get(str(board), {})
         audit = res.get("lookahead_audit", [])
         same = sum(a[3] == a[4] for a in audit)
         stats = res.get("search", {}).get("stats", {})
@@ -60,7 +83,7 @@ def rows(results, offline):
             f"{board:5d}  {str(res.get('won')):5s}  {len(res.get('trace', [])):7d}  "
             f"{res.get('final_energy')!s:6s}  {res.get('wall_seconds')!s:6s}  "
             f"{same}/{len(audit):<3d}  {'-' if cores is None else f'{cores:.1f}':5s} | "
-            f"{off.get('won')!s:5s} {off.get('actions')!s:7s} {off.get('energy')}"
+            f"{rec.get('won')!s:5s} {rec.get('actions')!s:7s} {rec.get('energy')}"
         )
 
 
@@ -68,15 +91,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("boards", type=int, nargs="*", default=list(SUITE))
     parser.add_argument("--jobs", type=int, default=len(SUITE))
-    parser.add_argument("--max-actions", type=int, default=trace_suite.ACTIONS["phase"])
+    parser.add_argument("--max-actions", type=int, default=MAX_ACTIONS)
     parser.add_argument("--out-dir", default=os.path.join(ROOT, "out", "logs", "emu"))
-    parser.add_argument("--player", choices=("phase", "search"), default="phase")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
     parser.add_argument(
         "--tabulate", action="store_true", help="tabulate --out-dir's results, no play"
     )
+    parser.add_argument("--out", help="write the boards' records here as JSON")
+    parser.add_argument(
+        "--readme", action="store_true", help="render the README results block"
+    )
     args, extra = parser.parse_known_args(argv)
-    extra = ["--player", args.player, "--preset", args.preset] + extra
+    extra = ["--preset", args.preset] + extra
     os.makedirs(args.out_dir, exist_ok=True)
     results = {}
     if args.tabulate:
@@ -93,10 +119,15 @@ def main(argv=None):
         }
         for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
             results[futures[fut]] = fut.result()
-    with open(readme_results.OFFLINE) as fh:
-        offline = json.load(fh)
-    for line in rows(results, offline):
+    for line in rows(results, readme_results.load(readme_results.SEARCH)):
         print(line)
+    if args.out:
+        records = {str(b): summary(r, args.preset) for b, r in results.items()}
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(records, fh, sort_keys=True, indent=1)
+            fh.write("\n")
+    if args.readme:
+        readme_results.rewrite()
     return 0
 
 
