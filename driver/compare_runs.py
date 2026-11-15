@@ -12,15 +12,7 @@ import os
 
 import numpy as np
 
-AUDITS = (
-    "trace",
-    "frame_audit",
-    "settle_audit",
-    "exact_audit",
-    "aim_subframes",
-    "wait_audit",
-    "pan_passes",
-)
+AUDITS = ("trace", "lookahead_audit", "live_audit")
 IO_PAGE = 0xD000  # the CPU view's I/O page and above read chip registers, not RAM
 
 

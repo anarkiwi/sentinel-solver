@@ -10,7 +10,7 @@ import numpy as np
 from sentinel import memmap as mm, passcost, rendercost
 from sentinel.kern import spec
 from sentinel.rendercost import T_BYTE, _plot_polygon, tile_cycles
-from sentinel.enemies_jit import (
+from sentinel.sight_jit import (
     ZP_HI,
     _calc_angle,
     _calc_hypotenuse,

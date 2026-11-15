@@ -2,7 +2,7 @@
 
 $2845 + $27D7 + $26DE + the $2A24 tile selection; :mod:`sentinel.projector` stays the
 bit-exact reference and the numba-absent fallback, as :mod:`sentinel.los_jit` does for
-:mod:`sentinel.los`.  The trig core is reused from :mod:`sentinel.enemies_jit`.
+:mod:`sentinel.los`.  The trig core is reused from :mod:`sentinel.sight_jit`.
 """
 
 import numpy as np
@@ -10,7 +10,7 @@ from numba import njit
 
 from sentinel import memmap as mm, passcost
 from sentinel.kern import spec
-from sentinel.enemies_jit import (
+from sentinel.sight_jit import (
     ZP_LO,
     ZP_HI,
     _calc_angle,
@@ -614,12 +614,10 @@ def scan_scene(
 ):
     """plot_world's tile selection: the $27D7/$26DE walk then the $2A24 plot range.
 
-    Fills the caller's scratch and returns ``(n, nfill)``: with ``want`` set ``out[:n]``
-    holds col, row, tx, ty, sx_lo, sx_hi, sy_lo, sy_hi, tile_byte, onscreen, h and
-    ``ws[:n]`` the unscaled corner x extent; ``fill[:nfill]`` is every plotted tile
-    for :mod:`rendercost`; ``cnt`` is n_examine, exam cycles and walk cycles.  ``vis`` is
-    the $245B table.  The projection cache spans 256 columns by 33 rows: the walk masks
-    col to $FF and steps y down through 0, and the plot range reaches row $20."""
+    Returns ``(n, nfill)``; with ``want`` set ``out[:n]`` holds col, row, tx, ty, sx_lo, sx_hi,
+    sy_lo, sy_hi, tile_byte, onscreen, h and ``ws[:n]`` the unscaled corner x extent.
+    ``fill[:nfill]`` is each plotted tile; ``cnt`` n_examine, exam, walk cycles; ``vis`` $245B.
+    """
     for i in range(ZP_HI):
         zp[i] = 0
     for c in range(256):

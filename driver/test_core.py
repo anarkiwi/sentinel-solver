@@ -1,5 +1,4 @@
-"""Unit tests for the foundation driver's pure live reads and code-digit parsing.
-No VICE/Docker: a fake monitor backs a 64KB byte image."""
+"""Unit tests for the driver's code-digit parsing; no VICE or Docker."""
 
 import os
 import sys
@@ -8,16 +7,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 from driver import core  # noqa: E402
-
-
-def test_energy_is_six_bit(fake_bm):
-    fake_bm.set_energy(0x4A)  # 0x4A & 0x3F == 0x0A
-    assert core.energy(fake_bm) == 0x0A
-
-
-def test_player_tile(fake_bm):
-    fake_bm.set_player(62, 8, 17)
-    assert core.player_tile(fake_bm) == (8, 17)
 
 
 def test_landscape_from_digits_inverts_enter_landscape():

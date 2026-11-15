@@ -1,85 +1,82 @@
 ***Claude - including Fable - was unable to solve this simple game from 1986 without my help. Is what it is.***
 
 
-# The Sentinel — ROM-faithful model + live driver
+# The Sentinel — ROM-faithful model + search player
 
 A ROM-faithful model of **The Sentinel** (Geoff Crammond, Firebird, 1986) on the
-Commodore 64, plus a live driver that plays the real game in
-[VICE](https://vice-emu.sourceforge.io/) (asid-vice) by keyboard and records an AVI.
-Transition primitives are validated byte-for-byte against the real 6502 code (golden
-fixtures, so CI proves them without the ROM); the enemy clock is gated frame-for-frame
-against the running game by the divergence instrument.
+Commodore 64, and a search player that plays the real game. Game time is the real ROM
+running on [vagrant-moses](https://github.com/anarkiwi/vagrant-moses), a cycle-exact
+emulated C64: the search plans on forks of the emulated game and plays its line either
+open loop there or move by move in [VICE](https://vice-emu.sourceforge.io/) (asid-vice),
+by keyboard, recording an AVI and auditing every move against the emulated session.
+Static primitives (landscape generation, line of sight, the sights lattice, object sight)
+are validated byte-for-byte against the real 6502 code.
 
-The phase player wins **live, on the real game**, verified by the ROM's own
-landscape-complete flag (`$0CDE` bit 6) — including landscape 1442, which carries the
-game's full complement of **eight enemies** (the Sentinel and seven sentries), as the results table records:
-
-![the phase player winning eight-enemy landscape 1442 live in VICE](docs/media/ls1442_phase_win.png)
+![the search player winning landscape 335 live in VICE](docs/media/ls335_search_win.png)
 
 ```bash
 pip install -r requirements.txt
 pytest -n auto
-# optional CUDA backend (SENTINEL_BACKEND=cpu|cuda|auto): see docs/architecture.md (also: batched multi-state queries, `sentinel/batch.py`)
+# optional CUDA backend for the landing and pricing kernels (SENTINEL_BACKEND=cpu|cuda|auto)
 pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 
-python -m sentinel.phase_player 335     # offline, prints the action trace
-python -m driver.play_player 335        # live in VICE, records an AVI
-python -m driver.play_player 335 --emu  # the same stack on the emulated release (vagrant-moses)
-python -m driver.play_player 335 --emu --player search  # beam search on the emulator, line played open loop
-python -m driver.play_player 335 --player search        # the same search, each move also played live in VICE
-python -m driver.instrument 42          # race the model against the ROM, frame for frame
-python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
+python -m driver.play_player 335 --emu     # search player on the emulated release, open loop
+python -m driver.play_player 335           # the same search, each move also played live in VICE (AVI)
+python -m driver.emu_suite                 # every suite board on the emulator, in parallel
+python -m driver.decision_audit 335        # every candidate at each decision, forced and played out
+python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embeddable APNG
 ```
 
 <!-- results:begin -->
-| landscape | enemies | offline actions | offline energy | beam actions | beam energy | live |
-|---|---|---|---|---|---|---|
-| 0 | 1 | 29 | 8 | 10 | 1 | — |
-| 42 | 2 | 32 | 2 | 19 | 2 | **36 actions** (enemies frozen)† |
-| 60 | 7 | 40 | 5 | 21 | 1 | — |
-| 110 | 3 | 49 | 9 | 19 | 2 | — |
-| 298 | 7 | 36 | 15 | 18 | 3 | — |
-| 321 | 7 | 28 | 2 | 21 | 2 | — |
-| 335 | 7 | 48 | 1 | 33 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions** (search player), energy 1](docs/media/ls335_search_win.png) |
-| 373 | 7 | 57 | 19 | 17 (not won) | 1 | — |
-| 1442 | 8 | 41 | 17 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| landscape | enemies | search actions | search energy | live |
+|---|---|---|---|---|
+| 0 | 1 | 10 | 0 | — |
+| 42 | 2 | 16 | 1 | **36 actions** (enemies frozen)† |
+| 60 | 7 | 21 | 3 | — |
+| 110 | 3 | 17 | 2 | — |
+| 298 | 7 | 18 | 6 | — |
+| 321 | 7 | 17 | 2 | — |
+| 335 | 7 | 26 | 1 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions**, energy 1](docs/media/ls335_search_win.png) |
+| 373 | 7 | 16 | 0 | — |
+| 1442 | 8 | 18 | 5 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| 9716 | 8 | 26 | 5 | — |
 
-† Live run recorded against an older model: its trace digest is unrecorded or differs from the current offline trace for that board.
+† Played by the phase player, since retired; its media are kept.
 
-Regenerate with `python -m sentinel.tests.trace_suite --out docs/results/offline.json --readme` and `python -m sentinel.tests.trace_suite --player beam --out docs/results/beam.json --readme`.
+Regenerate with `python -m driver.emu_suite --out docs/results/search.json --readme`.
 <!-- results:end -->
 
-Results are generated from [docs/results/](docs/results/) (offline records with a trace
-digest, live runs with their media); the staleness tests fail when the table or the data
-drifts from the solver. Enemy counts include the Sentinel, so eight is the game's maximum.
-Settle prices, the frozen-run mode and the ls1442 media are described in
-[players.md](docs/players.md#results) and [media.md](docs/media.md).
+Results are generated from [docs/results/](docs/results/) (`search.json`: the search
+player's emulated runs with a trace digest; `live.json`: live runs with their media); the
+staleness test fails when the table drifts from the data. Enemy counts include the
+Sentinel, so eight is the game's maximum. See [players.md](docs/players.md) and
+[media.md](docs/media.md).
 
 A landscape is identified by one number: the one a player types on the keypad. Every tool
-here — `driver.play_player`, `sentinel.phase_player`, `sentinel.player`, `sentinel.isoview`
-— takes exactly that number, and `Game.typed(335)` builds the same board offline.
+here — `driver.play_player`, `driver.emu_suite`, `driver.decision_audit`,
+`sentinel.isoview` — takes exactly that number, and `Game.typed(335)` builds the same board
+offline.
 
 ## Layout
 
 | Area | Path | Role |
 |------|------|------|
-| Model | `sentinel/` | standalone forward model — terrain, LOS/aim, actions, energy, enemies, landscape generation (no emulator). Transition primitives are byte-for-byte against the 6502; see [architecture.md](docs/architecture.md) for what is exact and what is not |
-| Phase player | `sentinel/phase_player.py` | the default player: freedom first, then convert. Wins every suite board |
-| Reactive player | `sentinel/player.py` | tick-by-tick greedy player over the same `BasePlayer` |
-| Landscape atlas | `sentinel/atlas.py`, `sentinel/statecache.py` | per-landscape metrics (enemies, energy, terrain shape) over a cache of generated boards; `--like` matches one board to another |
-| Driver | `driver/` | boot, enter a landscape, run memory-verified live keyboard operations (aim → fire → verify), record. Imports only `sentinel/` |
-| Instrument | `driver/instrument.py`, `sentinel/statecmp.py` | frame-locked sim-vs-emulator divergence: seed the sim from the live image, step both one frame at a time, report the first disagreement |
+| Model | `sentinel/` | landscape generation, terrain, line of sight, the sights lattice and landing sweeps, object sight, board queries; byte-for-byte against the 6502 (see [architecture.md](docs/architecture.md)) |
+| Moves | `sentinel/moves.py`, `sentinel/views.py` | candidate moves of many boards over numpy arrays, each aimed by its tile's frame-cheapest keyboard view |
+| Emulated game | `sentinel/emu.py`, `driver/emu.py` | the CSDb release on vagrant-moses, entered as a player types it, behind the same monitor API as VICE |
+| Search player | `driver/search_player.py`, `driver/prog.py`, `driver/kbd_prog.py` | beam search whose children are compiled keyboard programs run on emulator forks |
+| Driver | `driver/` | boot VICE, enter a landscape, play and record; imports only `sentinel/` |
+| Landscape atlas | `sentinel/atlas.py`, `sentinel/statecache.py` | per-landscape metrics over a cache of generated boards |
 
 ## Fixtures (not distributed)
 
 The game is copyrighted and is **not** included.
 
-`out/sentinel_stage2.bin`, the 64 KB memory image of the loaded game that the `oracle`-marked
-tests run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is
-downloaded once into `out/csdb/` (SHA-256 pinned) and RUN on a cycle-exact emulated C64
-([vagrant-moses](https://github.com/anarkiwi/vagrant-moses), real ROMs fetched and verified) to
-the title's keyboard wait. `pytest` builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
-without it (CI does).
+`out/sentinel_stage2.bin`, the memory image of the loaded game that the `oracle`-marked tests
+run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is downloaded
+once into `out/csdb/` (SHA-256 pinned) and RUN on vagrant-moses (real ROMs fetched and
+verified) to the title's keyboard wait. `pytest` builds it automatically when absent; set
+`SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip without it (CI does).
 
 ```bash
 python -m sentinel.tests.csdb                   # --out PATH, --force to rebuild
@@ -92,12 +89,10 @@ and the `anarkiwi/asid-vice:latest` image (build from https://github.com/anarkiw
 ## Docs
 
 - [gameplay.md](docs/gameplay.md) — the game's rules and mechanics, ROM-derived spec.
-- [architecture.md](docs/architecture.md) — the landscape's geometry and the constraints it
-  imposes, the game's state machines, one table mapping every ROM routine to its model
-  function and validation, then the subsystems: landability filter, render-cost model,
-  driver, instrument, measurement tooling.
-- [players.md](docs/players.md) — the phase player and the reactive greedy player: the rules
-  that decide a move, the phases, current results.
-- [media.md](docs/media.md) — turning a recorded run into an embeddable APNG, and the
-  blank test that drops the hyperspace and transfer frames.
-- [open_items.md](docs/open_items.md) — everything unsolved, and what was disproved.
+- [architecture.md](docs/architecture.md) — the landscape's geometry, the game's state
+  machines, the ROM routines and their model functions, the emulated game, driver programs,
+  view selection, landing sweeps and kernels.
+- [players.md](docs/players.md) — the search player: moves, objective, presets, live audit,
+  decision audit.
+- [media.md](docs/media.md) — turning a recorded run into an embeddable APNG.
+- [open_items.md](docs/open_items.md) — what is unsolved, and what was disproved.

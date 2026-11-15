@@ -1,14 +1,8 @@
-"""Planner-facing enemy exposure and forecasting helpers.
+"""Whether an observer can see a tile: the ROM's object visibility with the facing gate
+dropped, a phantom robot standing in on bare terrain.
 
-Built on the bit-exact object visibility of :mod:`sentinel.relative`, this module
-answers the geometric question a strategy search asks about standing/building on a
-tile: can an observer see a robot standing there (terrain LOS, facing gate dropped)?
-
-A visibility query places a phantom robot on the queried tile -- mirroring the
-placement math of :func:`sentinel.actions.create` without spending energy or
-drawing the PRNG -- runs the object-relative visibility, then restores the tile.
-Every query operates on a clone or places-then-restores, so the caller's state is
-never mutated.
+The phantom mirrors :func:`sentinel.actions.create`'s placement without spending energy
+or drawing the PRNG; every query runs on a clone, so the caller's state is untouched.
 """
 
 from sentinel import memmap as mm, relative, terrain
@@ -58,14 +52,11 @@ def _restore_tile(state, tile, old_tile_byte, slot):
 
 
 def player_sees_tile(state, tile, observer_slot, eye_z=None):
-    """True iff the observer at `observer_slot` can see `tile` (x, y) -- the ROM's
-    direct observer->object geometric line of sight (relative.can_see_object with the
-    facing gate dropped), the mirror of the planner's enemy->tile test
-    (:meth:`sentinel.playerbase.BasePlayer._exposing_enemies`). For an
-    occupied tile (platform/Sentinel/boulder/...) the real object in its slot is tested;
-    for bare terrain a phantom T_ROBOT is placed on the tile and tested. `eye_z`
-    overrides the observer's standing height. Runs on a clone; the caller's state is
-    never mutated."""
+    """Whether the observer at `observer_slot` sees `tile` (x, y) by the ROM's direct
+    line of sight (relative.can_see_object, facing gate dropped).
+
+    An occupied tile tests the object in its slot, bare terrain a phantom T_ROBOT;
+    `eye_z` overrides the observer's height.  Runs on a clone."""
     clone = state.clone()
     if eye_z is not None:
         clone.obj_z_height[observer_slot] = int(eye_z) & 0xFF

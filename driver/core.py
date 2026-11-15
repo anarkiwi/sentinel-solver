@@ -2,11 +2,10 @@
 """The foundation Sentinel game driver: boot/entry/recording plumbing and live reads.
 
 :func:`navigate` drives the real title menu into a landscape; :func:`boot_and_play` owns
-the container/AVI lifecycle and hands a :class:`GameSession` to a play loop. Actions are
-fired and verified by :mod:`driver.sentinel_execute`, keys by :mod:`driver.kbd_aim`.
+the container/AVI lifecycle and hands a :class:`GameSession` to a play loop, which plays
+:mod:`driver.kbd_prog` programs built on the :mod:`driver.kbd_aim` key primitives.
 """
 
-import contextlib
 import os
 import sys
 import time
@@ -16,8 +15,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
-from sentinel.state import State
-from sentinel import los
 from sentinel import memmap as mm
 from driver import boot, clock
 from driver import sentinel_state as gs
@@ -26,24 +23,17 @@ from driver import sentinel_state as gs
 A_SLOT = mm.PLAYER_OBJECT  # 0x000B
 A_X = mm.OBJECTS_X  # 0x0900 + slot
 A_Y = mm.OBJECTS_Y  # 0x0980 + slot
-A_H = mm.OBJECTS_H_ANGLE  # 0x09C0 + slot
-A_V = mm.OBJECTS_V_ANGLE  # 0x0140 + slot
-A_ZH = mm.OBJECTS_Z_HEIGHT  # 0x0940 + slot
 A_ENERGY = mm.PLAYER_ENERGY  # 0x0C0A, 6-bit
-A_CURSOR_X = 0x0CC6  # sights cursor column (no memmap entry)
-A_CURSOR_Y = 0x0CC7  # sights cursor row (no memmap entry)
 A_ACTION_LATCH = 0x0CE4  # bit7 set mid-pan / queued-wrap (reject transient probes)
 
 MONITOR_DROP = (TimeoutError, OSError, ConnectionError)  # dropped-socket signatures
 _ENTER_CHUNK = 25  # emulated frames per landscape-entry poll
-_ENTER_POLLS = 160  # generation polls (entry takes ~600 frames)
-_ENTER_PLAY_POLLS = 40  # post-SPACE polls (~250 frames)
+_ENTER_POLLS = 160  # generation polls
+_ENTER_PLAY_POLLS = 40  # post-SPACE polls
 _ENTER_TAPS = 6  # SPACE taps offered to dismiss the preview
 
 
-# ============================================================================
 # monitor resilience + full-image reads (shared by the entry nav and plan runner)
-# ============================================================================
 def reconnect(bm, log=print):
     """Re-open a dropped monitor socket (a warp/AVI stall can close it mid-op)."""
     try:
@@ -71,24 +61,10 @@ def robust(bm, log, fn):
     return fn()
 
 
-@contextlib.contextmanager
-def drop_guard(bm, log, on_drop):
-    """ONE attempt of a live monitor op inside a caller's retry loop: a dropped socket
-    is swallowed, ``on_drop(exc)`` runs (the caller's logging + state invalidation) and
-    the socket is reconnected, so the loop simply iterates. The caller ``break``s out on
-    success and decides what an exhausted loop means (:func:`robust` re-raises instead).
-    """
-    try:
-        yield
-    except MONITOR_DROP as e:
-        on_drop(e)
-        reconnect(bm, log)
-
-
 def live_image(bm):
     """The whole address space the simulator (``State``/``Game``) is defined over:
-    enemies.step reads ROM tables such as ROTATION_SPEED_TABLE ($9D37) above the play
-    region.  Read as two halted halves: mem_get's u16 response length makes a full
+    the ROM's enemy update reads tables such as ROTATION_SPEED_TABLE ($9D37) above the
+    play region.  Read as two halted halves: mem_get's u16 response length makes a full
     request come back empty, and an auto-resumed read would tear the image."""
     with bm.halted():
         return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(
@@ -96,15 +72,7 @@ def live_image(bm):
         )
 
 
-# ============================================================================
-# landscape entry -- drive the real title menu by keyboard (the proven live path)
-#
-# The ROM's "SECRET ENTRY CODE?" gate ($14DC-$14F2) computes the jump to play from the
-# code-validation result, so it can't simply be bypassed; instead patch the three
-# code-check sites to accept any code and navigate the menu as a player would. A
-# code-entry-screen snapshot (renders/vice_code_entry.vsf) is restored when present to
-# skip the ~50s tape load.
-# ============================================================================
+# landscape entry: the code gate ($14DC-$14F2) jumps on validation, so patch it (see navigate)
 CODE_ENTRY_SNAP = "vice_code_entry.vsf"  # under the mounted /renders volume
 
 # secret-code-check patches (accept any code)
@@ -116,23 +84,21 @@ CODE_PATCHES = [
 
 
 def landscape_from_digits(typed_digits):
-    """The player types a 4-digit landscape number; the game stores it as a packed-BCD
-    word and seeds the PRNG with both bytes (seed_prnd_from_landscape_number $33ED:
-    $0C7B <- seed & $FF, $0C7C <- seed >> 8, :meth:`sentinel.prng.Prnd.seeded`).
-    Decimal digits are numerically identical to hex nibbles, so the seed is the whole
-    code parsed as hex: "0042" -> 0x0042, "0335" -> 0x0335. Inverse of the
-    ``f"{landscape:04x}"`` in :meth:`SentinelDriver.enter_landscape`."""
+    """The packed-BCD landscape word the typed 4-digit number seeds the PRNG with.
+
+    seed_prnd_from_landscape_number ($33ED) stores $0C7B <- seed & $FF, $0C7C <- seed >> 8
+    (:meth:`sentinel.prng.Prnd.seeded`); decimal digits equal hex nibbles, so the seed is
+    the code parsed as hex: "0042" -> 0x0042. Inverse of ``f"{landscape:04x}"``."""
     return int(typed_digits, 16)
 
 
 def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host=None):
-    """Boot under WARP to LANDSCAPE NUMBER, patch the code-checks, type the digits +
-    dummy secret code, dismiss the preview, enter play -- the proven live-entry path.
+    """Boot to LANDSCAPE NUMBER, patch the code-checks, type digits and a dummy code, play.
 
-    If snapshot_host exists, RESTORE the machine state saved there (skipping the ~50s tape
-    boot) instead of booting; otherwise boot, then SAVE a snapshot at the code-entry screen
-    (after the code-check patches, before the landscape digits) so the NEXT run is fast.
-    The snapshot is landscape-agnostic -- the digits are always typed after restore."""
+    The secret-code gate cannot be bypassed, so its three check sites accept any code. An
+    existing snapshot_host is restored instead of the tape boot; otherwise one is saved at the
+    code-entry screen after the patches (landscape-agnostic: digits are typed after restore).
+    """
 
     def tap(name, hold=20, settle=40):
         """Tap a chord, then step hold+settle EMULATED frames: VICE releases a
@@ -162,9 +128,7 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
         try:
             log(f"restoring VICE snapshot {snapshot_host} (skipping tape boot)")
             robust(bm, log, lambda: boot.load_snapshot(bm, snapshot_container))
-            # No bare exit() here: resuming leaves the CPU free-running until the next
-            # command halts it, a host-timed number of frames later, so entry starts at
-            # a different phase under load. run_frames advances it deliberately instead.
+            # no bare exit(): a free-running resume lasts host-timed frames; run_frames is exact
             bm.auto_resume = False
             clock.run_frames(bm, 50)
             restored = True
@@ -186,9 +150,7 @@ def navigate(bm, typed_digits, log=print, snapshot_container=None, snapshot_host
                 robust(bm, log, lambda: boot.save_snapshot(bm, snapshot_container))
             except Exception as e:
                 log(f"  snapshot save failed ({e}); continuing without it")
-    # Tape/menu boot is over: from here every advance is an explicit run_frames, so
-    # stop resuming on each command -- a free-running key tap or poll advances the
-    # machine by a host-timed number of frames and entry lands at a different phase.
+    # from here every advance is an explicit run_frames: a free-running command is host-timed
     bm.auto_resume = False
     log(f"typing landscape digits {typed_digits!r}")
     tap_text(typed_digits)
@@ -259,13 +221,12 @@ class GameSession:
 
 
 def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, result):
-    """Boot asid-vice into ``typed_digits``' landscape in play, optionally record an
-    AVI, and hand a :class:`GameSession` to ``play_fn`` -- the emulator-side glue the
-    live runner should NOT own. Handles container lifecycle, boot retries, binmon
-    connect (bridge IP), title-menu navigation with the cached code-entry snapshot,
-    the in-play check, and video start/stop. ``play_fn(session)`` runs the actual plan
-    loop; ``result`` accumulates its output (and gates the retry: a mid-run drop after
-    real actions is returned, not retried). Returns ``result``."""
+    """Boot asid-vice into ``typed_digits``' landscape, optionally record, and run ``play_fn``.
+
+    Owns container lifecycle, boot retries, binmon connect (bridge IP), menu navigation with
+    the cached snapshot, the in-play check and video start/stop. ``result`` accumulates
+    ``play_fn(session)``'s output; a mid-run drop after real actions is returned, not retried.
+    """
     if not os.path.exists(tap):
         raise FileNotFoundError(
             f"{tap} missing: place the game tape image there (not distributed)"
@@ -297,8 +258,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
         t_start = time.time()
         try:
             with container:
-                # Host -p publishing is broken here (127.0.0.1:6502 unreachable); connect
-                # via the started container's docker bridge IP. BINMON_HOST env overrides.
+                # host -p publishing is unreachable: use the bridge IP (BINMON_HOST overrides)
                 time.sleep(2)  # sleep-ok: docker bridge IP assignment, no PC exists
                 bm_host = os.environ.get("BINMON_HOST") or bridge_ip(
                     container.container_id, log
@@ -322,10 +282,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                     raise
                 bm.exit()
 
-                # navigate auto-caches the code-entry snapshot on the mounted /renders
-                # volume: it restores renders/vice_code_entry.vsf when present (skipping
-                # the ~50s tape boot) and saves it after the code-check patches when
-                # absent -- landscape-agnostic (the digits are typed after restore).
+                # navigate restores or saves the code-entry snapshot on the /renders volume
                 navigate(
                     bm,
                     typed_digits,
@@ -354,12 +311,9 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                 session = GameSession(
                     bm, landscape, t_start, entry_match, st, video_host
                 )
-                # FINALIZE the AVI even when the plan loop raises (an aim-exact crash,
-                # a mid-run divergence): the recording of the ATTEMPT up to the failure
-                # is the deliverable, so stop+flush it in a finally before the exception
-                # propagates -- otherwise the container teardown kills VICE mid-write and
-                # the AVI has no frame index (frames=0, "not RIFF/AVI").
+                # finalize the AVI even on a raise: teardown mid-write leaves no frame index
                 try:
+
                     play_fn(session)
                     time.sleep(1.5)  # sleep-ok: VICE AVI muxer drain, not the CPU
                 finally:
@@ -412,125 +366,3 @@ def validate_avi(path):
             n += 1
         p += 8 + sz + (sz & 1)
     return n > 0, size, n, "ok" if n > 0 else "no frames"
-
-
-def energy(bm):
-    """Player energy (6-bit)."""
-    return bm.mem_get(A_ENERGY, A_ENERGY)[0] & 0x3F
-
-
-def player_tile(bm):
-    """The player object's (x, y) tile."""
-    ps = bm.mem_get(A_SLOT, A_SLOT)[0]
-    return bm.mem_get(A_X + ps, A_X + ps)[0], bm.mem_get(A_Y + ps, A_Y + ps)[0]
-
-
-def read_state(bm):
-    """A full :class:`GameState` from live memory."""
-    return gs.read_game_state(gs.ViceSource(bm))
-
-
-def _probe_once(bm):
-    """One live sights-ray read: (tile hit, LOS, centre) + the (latch, h, v, cursor)
-    signature used to reject a transient mid-pan snapshot."""
-    m = live_image(bm)
-    ps = m[A_SLOT]
-    st = State.from_mem(bytes(m))
-    rx, ry, hit, centre = los.aim_target(
-        st,
-        m[A_H + ps],
-        m[A_V + ps],
-        m[A_CURSOR_X],
-        m[A_CURSOR_Y],
-        ps,
-        eye_z=m[A_ZH + ps],
-        max_steps=4000,
-        return_centre=True,
-    )
-    sig = (
-        m[A_ACTION_LATCH] & 0x80,
-        m[A_H + ps],
-        m[A_V + ps],
-        m[A_CURSOR_X],
-        m[A_CURSOR_Y],
-    )
-    return (rx, ry, hit, centre), sig
-
-
-def probe_ray(bm):
-    """Where the sights ray lands on the memory as it stands: ``probe_tile``'s answer
-    once its settle has run (``driver.kbd_prog.Compiler.probe_settle``)."""
-    return _probe_once(bm)[0]
-
-
-def probe_tile(bm):
-    """Where the live sights ray lands now (sentinel.los on a cheap RAM snapshot).
-    Hardened: only accept a snapshot when $0CE4 bit7 is clear AND h/v/cursor are
-    identical across two consecutive reads (reject transient mid-pan / queued-wrap
-    state), else advance the machine two frames and retry. Returns (rx, ry, los,
-    centre). Frame-stepping is load-bearing, not a nicety: the live player leaves the
-    CPU halted, so a host sleep would never let the plot finish and clear $0CE4."""
-    res, prev = _probe_once(bm)
-    for _ in range(8):
-        if prev[0] == 0:
-            res2, sig2 = _probe_once(bm)
-            if sig2 == prev:
-                return res2
-            res, prev = res2, sig2
-        else:
-            clock.run_frames(bm, 2)
-            res, prev = _probe_once(bm)
-    return res
-
-
-# ============================================================================
-# the foundation driver
-# ============================================================================
-class SentinelDriver:
-    """Boot the game and enter a landscape over one connected VICE monitor. Construct
-    via :meth:`boot` (launch + connect + tape load) or from an already-connected ``bm``.
-    """
-
-    def __init__(self, bm, container=None, log=print, renders=None):
-        self.bm = bm
-        self.container = container
-        self.log = log
-        self.renders = renders or os.path.join(boot.ROOT, "renders")
-
-    @classmethod
-    def boot(cls, log=print, record_mount=None):
-        """Launch asid-vice and boot the tape to the title screen (saving a reusable
-        boot snapshot if none exists). Returns a ready driver; call :meth:`close`."""
-        container, bm = boot.boot_loaded(log=log, record_mount=record_mount)
-        return cls(bm, container=container, log=log, renders=record_mount)
-
-    def enter_landscape(self, landscape):
-        """Enter `landscape` (internal seed) by driving the real title menu (the proven
-        live path); leaves the CPU in the interactive play loop. A code-entry snapshot
-        under the renders dir skips the ~50s tape boot."""
-        snap_host = os.path.join(self.renders, CODE_ENTRY_SNAP)
-        navigate(
-            self.bm,
-            f"{landscape:04x}",
-            log=self.log,
-            snapshot_container="/renders/" + CODE_ENTRY_SNAP,
-            snapshot_host=snap_host,
-        )
-
-    # ---- reads -------------------------------------------------------------
-    def state(self):
-        return read_state(self.bm)
-
-    def energy(self):
-        return energy(self.bm)
-
-    def player_tile(self):
-        return player_tile(self.bm)
-
-    def close(self):
-        """Stop the container if this driver owns one."""
-        if self.container is not None:
-            try:
-                self.container.stop()
-            except Exception:
-                pass

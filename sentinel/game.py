@@ -1,20 +1,11 @@
-"""A small facade tying the simulator together: build a board, read it, take the
-player actions and advance the enemies -- all on one bit-exact state, with no
-emulator.  Line-of-sight questions go to :mod:`sentinel.threat`/:mod:`sentinel.los`.
+"""A board built the way the game enters it, as one bit-exact state, no emulator.
 
-    >>> from sentinel.game import Game
-    >>> g = Game.typed(42)        # the landscape number a player keys in
-    >>> g.player_xy(), g.energy
-    ((13, 29), 10)
-    >>> g.step_enemies()          # advance the world one round
-    >>> won = g.won()
-
-Every method delegates to the package modules (:mod:`sentinel.landscape`,
-:mod:`sentinel.actions`, :mod:`sentinel.enemies`); ``Game`` just holds the
-:class:`~sentinel.state.State` and offers them under one object.
+>>> from sentinel.game import Game
+>>> Game.typed(42).player_xy()        # the landscape number a player keys in
+(13, 29)
 """
 
-from sentinel import landscape, actions, enemies, memmap as mm
+from sentinel import landscape, memmap as mm
 
 
 class Game:
@@ -60,42 +51,5 @@ class Game:
     def platform_xy(self):
         return self.state.platform_xy
 
-    def objects(self):
-        """(slot, type, x, y) for every occupied slot."""
-        st = self.state
-        return [
-            (s, st.obj_type[s], st.obj_x[s], st.obj_y[s]) for s in st.occupied_slots()
-        ]
-
     def enemy_slots(self):
-        return enemies.enemy_slots(self.state)
-
-    # -- player actions ------------------------------------------------------
-    def can_create(self, otype, tile):
-        return actions.can_create(self.state, otype, tile)
-
-    def create(self, otype, tile):
-        return actions.create(self.state, otype, tile)
-
-    def can_absorb(self, slot):
-        return actions.can_absorb(self.state, slot)
-
-    def absorb(self, slot):
-        return actions.absorb(self.state, slot)
-
-    def transfer(self, slot):
-        return actions.transfer(self.state, slot)
-
-    def win(self, tile=None):
-        return actions.win(self.state, tile)
-
-    def won(self):
-        return actions.won(self.state)
-
-    # -- enemy dynamics ------------------------------------------------------
-    def step_enemies(self):
-        """Advance the world by one game round (cooldowns + one enemy update)."""
-        enemies.step(self.state)
-
-    def meanie_threat(self, enemy):
-        return enemies.meanie_threat(self.state, enemy)
+        return self.state.enemy_slots()

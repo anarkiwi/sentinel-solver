@@ -10,12 +10,11 @@ import pytest
 from vagrant_moses import Machine
 from vice_driver.binmon import OPCODE, BinmonError, BinmonResponse
 
-from driver import clock, kbd_prog, prog, sentinel_execute as sx
+from driver import clock, kbd_prog, prog
 from driver.emu import EmuMon
-from driver.kbd_prog import Compiler, ProgKbd
-from driver.live_player import MeasuringKbdDriver
+from driver.kbd_prog import Compiler
 from sentinel import memmap as mm
-from sentinel.playerbase import _Views
+from sentinel.views import _Views
 from sentinel.state import State
 
 R = prog.R
@@ -44,10 +43,9 @@ def _machine(bm):
     return hashlib.blake2b(bytes(m.ram)).digest(), m.cycle, regs, bytes(m.keymatrix)
 
 
-def _state(bm, kbd=None):
-    """Everything a later step depends on: machine, monitor and timing records."""
-    got = _machine(bm), bm._owed, bm._parked, clock.frames(bm)
-    return got if kbd is None else got + (dict(kbd.subframes), list(kbd.passes))
+def _state(bm):
+    """Everything a later step depends on: machine, monitor and frame count."""
+    return _machine(bm), bm._owed, bm._parked, clock.frames(bm)
 
 
 def _both(bm, p):
@@ -156,47 +154,8 @@ def session():
     return emu_session(0, _quiet)
 
 
-def _drivers(bm):
-    """``(interactive, compiled)`` measuring drivers on two clones of ``bm``."""
-    a, b = bm.clone(), bm.clone()
-    clock.frames(a)
-    clock.frames(b)
-    return (
-        MeasuringKbdDriver(a, _quiet, quantized=True, ex=sx.Executor(a, _quiet)),
-        ProgKbd(b, _quiet, sx.Executor(b, _quiet)),
-    )
-
-
-def _same(bm, act):
-    ka, kb = _drivers(bm)
-    ra, rb = act(ka), act(kb)
-    assert ra == rb
-    assert _state(ka.bm, ka) == _state(kb.bm, kb)
-    return ra, kb
-
-
-PRIMITIVES = {
-    "sights_toggle": lambda k: (k.sights_set(not k.sights_live_on()), k.sights_on()),
-    "coarse_h": lambda k: (k.sights_set(False), k.coarse_h(k.hang() + 0x28)),
-    "uturn": lambda k: (k.sights_set(False), k.coarse_h(k.hang() ^ 0x88)),
-    "coarse_v": lambda k: (k.sights_set(False), k.coarse_v(0xF1), k.coarse_v(0x80)),
-    "coarse_hv": lambda k: (
-        k.sights_set(False),
-        k.coarse_hv({"h_angle": k.hang() - 16, "v_angle": 0x05}),
-    ),
-    "fine_cursor": lambda k: (k.sights_on(), k.fine_cursor(100, 60)),
-    "tap_action": lambda k: (k.sights_on(), k.tap_action("A"), k.tap_action("U")),
-    "hyperspace_tap": lambda k: k.tap_action("H", settle=False),
-    "run_frames": lambda k: (
-        k.run_frames(7) if isinstance(k, ProgKbd) else clock.run_frames(k.bm, 7)
-    ),
-}
-
-
-@oracle
-@pytest.mark.parametrize("name", sorted(PRIMITIVES))
-def test_each_primitive_equals_the_interactive_driver(session, name):
-    _same(session.bm, PRIMITIVES[name])
+def _key(view):
+    return (view["h_angle"], view["v_angle"], *map(int, view["cursor"]))
 
 
 def _target(bm):
@@ -210,102 +169,10 @@ def _target(bm):
     raise AssertionError("no tree in view")
 
 
-def _interactive_step(kbd, view, key):
-    """perform_step's aim and fire as the interactive driver ran them."""
-    kbd.sights_set(False)
-    okh, okv, status = kbd.coarse_hv(view)
-    if status == "hyperspace":
-        return None
-    hv = kbd.hang(), kbd.vang()
-    kbd.sights_on()
-    okc = kbd.fine_cursor(*view["cursor"])
-    probe = (
-        kbd.probe_ray()
-        if isinstance(kbd, ProgKbd)
-        else __import__("driver.core").core.probe_tile(kbd.bm)
-    )
-    return okh, okv, hv, okc, probe, kbd.cur(), kbd.sights_on(), kbd.tap_action(key)
-
-
-@oracle
-def test_a_step_program_equals_the_interactive_primitives(session):
-    tile, view = _target(session.bm)
-    ka, kb = _drivers(session.bm)
-    want = _interactive_step(ka, view, "A")
-    got = kb.step(kbd_prog.view_key(view), ("A", None))
-    probe = kb.probe_ray()
-    assert got.halt == prog.HALT_OK and probe[:2] == tile == want[4][:2]
-    assert (
-        kbd_prog.STATUS[got[kbd_prog.V_OKH]],
-        kbd_prog.STATUS[got[kbd_prog.V_OKV]],
-        (got[kbd_prog.V_ACH_H], got[kbd_prog.V_ACH_V]),
-        bool(got[kbd_prog.V_OKC]),
-        (got[kbd_prog.V_CX], got[kbd_prog.V_CY]),
-        bool(got[kbd_prog.V_LATCHED]),
-    ) == (*want[:4], want[5], want[7])
-    assert _state(ka.bm, ka) == _state(kb.bm, kb)
-
-
-@oracle
-def test_split_and_merged_steps_and_the_interpreter_agree(session):
-    _tile, view = _target(session.bm)
-    key = kbd_prog.view_key(view)
-    whole = kbd_prog.compiled("step", key, ("A", None))
-    (no, ns), (io, is_) = _both(session.bm, whole)
-    assert no == io and ns == is_
-    bm = session.bm.clone()
-    aim, fire = (
-        kbd_prog.compiled("step", *a) for a in ((key, None), (None, ("A", None)))
-    )
-    first = prog.execute(bm, aim)
-    second = prog.execute(bm, fire)
-    assert _state(bm) == ns
-    assert (
-        first.outputs + second.outputs != no.outputs
-    )  # frame reads restart per program
-    assert first.frames + second.frames == no.frames
-
-
-@oracle
-def test_perform_step_reuses_the_aim_and_verifies(session):
-    tile, view = _target(session.bm)
-    bm = session.bm.clone()
-    ex = sx.Executor(bm, _quiet)
-    kbd = ProgKbd(bm, _quiet, ex)
-    result = {"actions": [], "energy_curve": []}
-    stp = {"verb": "absorb", "otype": mm.T_TREE, "target": list(tile), "view": view}
-    assert sx.perform_step(ex, kbd, "p1", stp, _quiet, result) == "ok"
-    assert result["actions"][-1]["aim"]["probe"][:2] == tile
-    assert kbd.committed_bearing() == (view["h_angle"], view["v_angle"])
-    stp = {"verb": "create", "otype": mm.T_ROBOT, "target": list(tile), "view": view}
-    stp["min_energy"] = 64
-    assert sx.perform_step(ex, kbd, "p2", stp, _quiet, result) == "drained"
-    kbd.advisory = False
-    stp["min_energy"] = 0
-    assert sx.perform_step(ex, kbd, "p3", stp, _quiet, result) == "ok"
-    assert [a[1] for a in result["settle_audit"]] == ["absorb", "create"]
-
-
-@oracle
-def test_forked_step_programs_equal_sequential_ones(session):
-    _tile, view = _target(session.bm)
-    key = kbd_prog.view_key(view)
-    progs = [
-        kbd_prog.compiled("step", key, ("A", None)),
-        kbd_prog.compiled("cursor_probe", *view["cursor"]),
-        kbd_prog.compiled("wait", 30),
-        kbd_prog.compile_move("absorb", key),
-    ]
-    outs, twins = prog.forks(session.bm, progs)
-    for p, o, twin in zip(progs, outs, twins):
-        solo = session.bm.clone()
-        assert prog.execute(solo, p) == o and _state(solo) == _state(twin)
-
-
 @oracle
 def test_a_move_program_reports_the_facts_a_search_needs(session):
     _tile, view = _target(session.bm)
-    key = kbd_prog.view_key(view)
+    key = _key(view)
     st0 = State.from_mem(bytes(session.bm.mem_get(0, 0xFFFF)))
     outs, twins = prog.forks(
         session.bm,
@@ -338,29 +205,11 @@ def test_a_move_program_reports_the_facts_a_search_needs(session):
 
 
 @oracle
-def test_drive_transfer_aim_probes_through_programs(session):
-    from driver.live_player import (
-        drive_transfer_aim,
-    )  # pylint: disable=import-outside-toplevel
-
-    tile, view = _target(session.bm)
-    kbd = ProgKbd(session.bm.clone(), _quiet, None)
-    kbd._ex = sx.Executor(kbd.bm, _quiet)
-    assert drive_transfer_aim(kbd, tile, view, _quiet)
-    assert drive_transfer_aim(kbd, tile, view, _quiet)  # the reused aim
-    assert not drive_transfer_aim(kbd, (tile[0] ^ 1, tile[1]), view, _quiet)
-    done, stopped = kbd.hyperspace_attempt()
-    assert not stopped and not done & 0x40
-
-
-@oracle
 def test_a_hop_move_lands_the_body_on_its_robot(session):
     st = State.from_mem(bytes(session.bm.mem_get(0, 0xFFFF)))
     taken = {tuple(st.tile_of(s)) for s in st.occupied_slots()}
     tile, view = next((t, v) for t, v in _Views(st).primary().items() if t not in taken)
-    (o,), (twin,) = prog.forks(
-        session.bm, [kbd_prog.compile_move("hop", kbd_prog.view_key(view))]
-    )
+    (o,), (twin,) = prog.forks(session.bm, [kbd_prog.compile_move("hop", _key(view))])
     facts = kbd_prog.move_facts(o)
     after = State.from_mem(bytes(twin.mem_get(0, 0xFFFF)))
     assert facts["status"] == prog.HALT_OK and facts["slot"] != st.player

@@ -5,141 +5,15 @@ what is left, so passes per frame = (FRAME_CYCLES - IRQ_CYCLES) / pass cost, and
 pass cost is a property of the state.  Per-term arithmetic: docs/architecture.md.
 """
 
-from sentinel import badline, memmap as mm
-
-# The VIC-II raster geometry and the split-IRQ length live in sentinel.badline.
-from sentinel.badline import (  # noqa: F401  pylint: disable=unused-import
-    BADLINE_STEAL,
-    BADLINES_PER_FRAME,
-    PAL_FRAME_CYCLES,
-    SHORT_IRQ,
-    SHORT_IRQ_WRAP,
-)
+LINE_CYCLES = 63  # PAL 6569 cycles per raster line
+PAL_FRAME_CYCLES = 312 * LINE_CYCLES  # PAL 6569: 312 raster lines
+SHORT_IRQ = 119  # $95E9 split chain at raster 53/93/133/173: 7 entry + 112 body
+SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split index to 4
 
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
 SHORT_IRQ_FRAME = SHORT_IRQS_PER_FRAME * SHORT_IRQ + SHORT_IRQ_WRAP  # 477, exact live
 IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted
-IRQ_GATE_SHUT = 7  # $9659 LDA $0CE5 4 + $965C BMI $9669 taken 3: no clock, no $1635
-IRQ_GATE_OPEN = 43  # ... nt 2 + $965E LDA/BMI 6 + JSR $130C 6 + the $1635 call 25
-IRQ_CYCLES = (
-    SHORT_IRQ_FRAME + IRQ_BODY
-)  # 2862; the badline steal is counted, not fitted
-IRQ_SPRITES = 1490  # $1635 past its $0C04 exit; live it took the 25-cycle one, 500/500
-FOREGROUND_CYCLES = PAL_FRAME_CYCLES - IRQ_CYCLES  # less the $9659 gate and the tick
 
-COOLDOWN_TICK_NO_CARRY = 21  # $130C LDA/CLC/ADC/STA 12 + $1315 BCC taken 3 + RTS 6
-COOLDOWN_TICK_GATE = 33  # + $1317 LDA 4 + BNE 3 + $1331 DEC 6 + RTS 6 - the taken BCC 1
-COOLDOWN_TICK_WALK = 33  # the $131C walk's own entry 22 + $132B reload 6 + RTS 6 - 1
-COOLDOWN_TICK_BYTE_STICK = 14  # $131E LDA 4 + CMP 2 + BCC taken 3 + DEX 2 + BPL 3
-COOLDOWN_TICK_BYTE_DEC = 20  # + $1325 DEC 7, less the taken BCC 1
-COOLDOWN_TICK_LAST = 1  # $0C20 leaves the walk by $1329 BPL not taken, one cycle short
-
-# $8ED1 note tick, one lap a voice, from its own branches ($8E86 then $8E92).
-SOUND_TICK_FIXED = 17  # $963D JSR 6 + the $FFC2 JMP 3 + $8ED1 LDX 2 + $8F0B RTS 6
-SOUND_VOICE_READ = 4  # $8ED3 LDA $8E86,X
-SOUND_VOICE_OFF = 6  # $8ED6 BEQ nt 2 + $8ED8 BMI $8F08 taken 4, page crossed
-SOUND_VOICE_SPENT = 3  # $8ED6 BEQ $8EEE taken: this note's timer is already out
-SOUND_VOICE_TICK = 11  # ... nt 2 + $8ED8 BMI nt 2 + $8EDA DEC $8E86,X 7
-SOUND_VOICE_MORE = 4  # $8EDD BNE $8F08 taken 4, page crossed: the note plays on
-SOUND_VOICE_NOTE = 24  # ... nt 2 + $8EDF..$8EEB: the $D404 write and the gate reload
-SOUND_GATE_READ = 4  # $8EEE LDA $8E92,X
-SOUND_GATE_OFF = 4  # $8EF1 BEQ $8F08 taken 4, page crossed
-SOUND_GATE_TICK = 9  # ... nt 2 + $8EF3 DEC $8E92,X 7
-SOUND_GATE_MORE = 4  # $8EF6 BNE $8F08 taken 4, page crossed
-SOUND_GATE_END = 25  # ... nt 2 + $8EF8..$8F05: silence the voice, $8E96,X = $80
-SOUND_VOICE_NEXT = 6  # $8F08 DEX 2 + $8F09 BPL $8ED3 taken 4, page crossed
-SOUND_VOICE_LAST = 4  # ... not taken 2: voice 0 leaves the lap
-SOUND_TICK_IDLE = 63  # all three voices idle -- what IRQ_BODY used to fold in
-
-PASS_HEAD = 25  # $1289..$129F: LDA 4 + BMI 2 + LSR 6 + LDA 4 + BPL 3 + the JSR 6
-PASS_TAIL = 117  # $12A2..$12C7 48 + the $34BA/$352C/$347D bodies 13 + 29 + 27
-LOOP_PASS = PASS_HEAD + PASS_TAIL  # 142: the whole straight line, for the idle rate
-
-EXPOSURE_FIXED = 50  # $191F prologue 7 + epilogue 37 + RTS 6
-EXPOSURE_EMPTY = 12  # $1925 LDA 4 + BMI 3 + DEX 2 + BPL 3
-EXPOSURE_OTHER = 24  # + LDA type 4 + CMP 2 + BEQ 2 + CMP 2 + BNE 3
-EXPOSURE_SENTRY = 30  # + LDA targeted 4 + CMP $0B 3 + BNE 3
-EXPOSURE_SENTINEL = 33  # type 5 takes the longer compare chain
-EXPOSURE_TARGETS_PLAYER = 6  # $193A falls through: LDA $0C20,X 4 + BEQ 3 - 1
-EXPOSURE_DRAINING = 10  # $193F falls through: LDY 2 + LDA 4 + STA 3 + BMI 2 - 1
-EXPOSURE_LAST = 1  # X == 0 leaves via BPL not taken
-
-UPDATE_NOT_ENEMY = 22  # $16B5 TSX 2 + STX 4 + LDX 3 + LDA 4 + CMP/BEQ/CMP/BNE 9
-UPDATE_DISPATCH_SENTRY = 29  # ... + BEQ 3 + STA 4 + LDA flags 4 + BPL 3
-UPDATE_DISPATCH_SENTINEL = 32  # ... with the longer type compare chain
-UPDATE_GATE_CLOSED = 9  # $16E6 LDA $0C30,X 4 + CMP 2 + BCS 3
-UPDATE_ABSORBED = 8  # $16CC BMI 2 for BPL 3 + JSR $1A5D 6 + BCS 3
-PRND = 427  # $31CA: 8 rounds of the 40-bit LFSR, 51 each
-UPDATE_PRND = 433  # $16D6 JSR 6 + prnd: spent BEFORE the stream advances
-UPDATE_CURSOR = 20  # $16D9 DEC 5 + BPL 3 + $16E1 LDA/STA 6 + RTS 6
-UPDATE_CURSOR_WRAP = 24  # cursor 0: BPL not taken 2 + LDA 2 + STA 3
-UPDATE_TAIL = UPDATE_PRND + UPDATE_CURSOR  # 453, the whole $16D6..$16E5
-UPDATE_TAIL_WRAP = UPDATE_PRND + UPDATE_CURSOR_WRAP  # 457
-CONSIDER_ENTRY = 21  # $16E6 gate open 8 + $16ED reload 7 + $16F2 FOV width 6
-ENTRY_UPDATE_CD = 15  # $16E6 LDA $0C30,X 4 + CMP 2 + BCS nt 2 + $16ED LDA 2 + STA 5
-ENTRY_FOV = 6  # $16F2 LDA #$14 2 + $16F4 STA $0C68 4
-CONSIDER_MEANIE = 7  # $16F7 LDA $0CA0,X 4 + $16FA BPL $16FF taken 3: owns a meanie
-CONSIDER_NO_MEANIE = 9  # ... BPL not taken 2 + $16FC JMP $1773 3
-DISCHARGE_CALL = 9  # $1773 STX $6E 3 + $1775 JSR $1A5D 6
-DISCHARGED = 5  # $1778 BCS not taken 2 + $177A JMP $1876 3: this update is spent
-NO_DISCHARGE = 10  # ... BCS taken 3 + $177D LDX $90 3 + $177F LDA $0CB8,X 4
-HUNT_CLEAR = 3  # $1782 BPL $1795 taken: not mid meanie-hunt
-HUNT_CALL = 8  # ... not taken 2 + $1784 JSR $1AB0 6
-HUNT_MISS = 13  # $1787 LDX 3 + $1789 BCS taken 3 + $1792 LSR $0CB8,X 7: flag decays
-HUNT_HIT = 15  # ... BCS nt 2 + $178B LDA 2 + STA $0C80,X 5 + $1790 BNE $17EA 3
-HELD_NONE = 7  # $1795 LDA $0C20,X 4 + $1798 BEQ $17AC taken 3: nothing held
-HELD_CALL = 18  # ... BEQ nt 2 + $179A LDY 4 + $179D LDA 2 + $179F JSR $1887 6
-HELD_LOST = 11  # $17A2 LDA $14 3 + $17A4 BEQ taken 3 + $17A9 STA $0C20,X 5
-HELD_KEPT = 8  # ... BEQ not taken 2 + $17A6 JMP $1825 3
-SCAN_INIT = 7  # $17AC LDA 2 + STA $0F 3 + $17B0 LDY #$3F 2
-
-REDUCE_HEAD = 7  # $1A08 LDX $0C58 4 + $1A0B CPX $0B 3, as its caller sees it
-REDUCE_KILL = 27  # $1A0D BNE nt 2 + LDA 4 + $1A12 BEQ $1A00 taken 3 + $1A00 9 + $1AF9 9
-REDUCE_PLAYER = 35  # ... BEQ nt 2 + $1A14 8 + JSR $9508 6 + LDA 2 + JSR $3470 6 + 5
-REDUCE_OBJECT = 46  # $1A0D BNE taken 3 + TXA 2 + JSR $1AF4 6 + $1AF4 31 + LDA type 4
-REDUCE_ROBOT = 24  # $1A2D BNE nt 2 + $1A2F..$1A38 15 + $1A4B STA 5 + $1A4E CLC 2
-REDUCE_TREE = 18  # ... BNE taken 3 + CMP 2 + BNE nt 2 + JSR $1EEF 6 + JMP 3 + CLC 2
-REDUCE_BOULDER = 23  # ... BNE $1A44 taken 3 + $1A44..$1A4B 13 + CLC 2
-REDUCE_BANK = 29  # $1A4F PHP 3 + LDY 3 + LDA 4 + CLC/ADC 4 + STA 5 + PLP 4 + RTS 6
-REMOVE_STACKED = 86  # $1EEF for an object standing on another: the flags go back
-REMOVE_GROUND = 94  # ... on bare ground: the tile byte is rebuilt from the z nibble
-TUNE_ROTATE = 323  # $3470 tune 0 (and the meanie's 1): $FFF1 is JMP $8D81, in RAM
-TUNE_DRAIN = 452  # $1A1D LDA #$05: the drain's tune walks a longer $AC28 descriptor
-
-# plot_status_bar $9508 pads to fixed columns, so its cost is a function of the energy.
-STATUS_CHAR = 38  # $9579 JSR 6 + PHA/LDX/CLC/ADC/STA/INC/PLA/RTS 32
-STATUS_HEAD = 51  # $9508 LDA/STA 6 + one character 38 + $9510 LDA/STA 7
-STATUS_BLOCK = 95  # one $9515/$952C lap: subtract, then plot two characters
-STATUS_BLOCK_DONE = 8  # its LDA/CMP and the BCC out of the lap
-STATUS_UNIT_NONE = 5  # $9543 CMP #$01 2 + BCC $9551 taken 3: nothing left over
-STATUS_UNIT = 86  # ... not taken 2 + $9547..$954E: the odd unit's two characters
-STATUS_PAD = 49  # $9551/$9562 one padding character; the last lap's BCC is 1 shorter
-STATUS_MID = 40  # $955D the bar's own separator character
-STATUS_TAIL = 86  # $956E..$9578 the last two characters and the RTS
-STATUS_PAD_END = 0x1D  # $9559: the first pad run fills up to column 29
-STATUS_PAD_LAPS = 8  # $956A: the second run fills $1E..$25 whatever the energy
-
-DISCHARGE_NONE = 18  # $1A5D LDX 3 + SEC 2 + LDA 4 + BEQ 3 + RTS 6
-DISCHARGE_CREATE = 19  # ... BEQ nt 2 + $1A65 LDA #$02 2 + JSR $211D 6, less the BEQ 1
-DISCHARGE_PLACE = 10  # $1A6A LDA $0C06 4 + $1A6D JSR $1238 6
-DISCHARGE_ABANDON = 9  # $1A70 BCS $1A80 taken 3 + RTS 6: no tile took the tree
-DISCHARGE_DONE = 48  # ... nt 2 + $1A72 TXA/JSR $1B00 8 + $1B00 15 + $1A76..$1A80 23
-CREATE_HEAD = 6  # $211D STA $0C61 4 + $2120 LDX #$3F 2
-CREATE_SLOT = 11  # per occupied slot: LDA 4 + BMI nt 2 + DEX 2 + BPL taken 3
-CREATE_LAST = 1  # slot 0 leaves by $2128 BPL not taken
-CREATE_HIT = 27  # LDA 4 + BMI taken 3 + $212C STX/LDA/STA 12 + CLC 2 + RTS 6
-CREATE_NONE = 8  # $212A SEC 2 + RTS 6, every slot full
-PLACE_HEAD = 8  # $1238 STA $06 3 + LDA #$00 2 + STA $15 3
-PLACE_LAP = 73  # $123E DEC/BNE 8 + the two $1272 calls 18 + $2BA8 40 + the read 7
-PLACE_WRAP = 11  # $1240 BNE nt 2 + $1242 INC $06 5 + LDA 3 + CMP 2, less the BNE 1
-PLACE_GIVE_UP = 28  # the wrap that lifts the ceiling past 12: $1270 SEC/RTS included
-PLACE_OCCUPIED = 3  # $125B BCS $123E taken: the tile already holds an object
-PLACE_NOT_FLAT = 7  # ... nt 2 + AND #$0F 2 + $125F BNE $123E taken 3
-PLACE_TOO_HIGH = 25  # ... BNE nt 2 + the z nibble 13 + $1269 BCS $123E taken 3
-PLACE_HIT = 38  # ... BCS nt 2 + $126B JSR $1F16 6 + $126E CLC 2 + RTS 6
-PUT_IN_TILE = 569  # $1F16 onto a bare flat tile, its $2BA8 and its facing draw included
-DRAW = 445  # $1272 JSR $31CA 6 + prnd 427 + AND/CMP/BCS 6 + RTS 6
-DRAW_REJECT = 440  # per draw masking to $1F: the $1279 BCS loops back
 
 SEE_SLOT_EMPTY = 40  # $1887 exit at $1893
 SEE_SLOT_WRONG_TYPE = 49  # $1887 exit at $189D
@@ -235,7 +109,6 @@ HYP_HEAD = 38  # $937F..$9395: the $3D02 coefficient read and the JSR $0F4A
 HYP_TAIL = 40  # $9398..$93AC: halve, add the max component, restore Y, RTS
 
 MUL8 = 102  # $0D03 JSR 6 + STA/LDA 5 + the 8 unrolled shift-add rounds 91
-MUL8_LOW = 99  # the $0D05 entry, $0074 already stored
 MUL8_BIT = 4  # per set bit of the multiplier: BCC not taken 2 + CLC 2 + ADC 3, less 3
 MUL_DBL_BYTE = 230  # $0F4A..$0F61 with both $0D03 calls, BCC taken
 MUL_DBL_BYTE_CARRY = 4  # $0F5D BCC not taken 2 + $0F5F INC $0075 5, less 3
@@ -339,133 +212,11 @@ OBJ_SKIP_OTHER = 13  # + $1EA0 LDA #$C0 2 + STA $0060 3, less 1
 OBJ_GHOL_LOOP = 9  # $1EA4 LDA 4 + CMP #$40 2 + BCS taken 3: another stack level
 OBJ_GHOL_RTS = 18  # + $1EAB LDA 4 + RTS 6, less 1
 
-# find_drainable_robot_loop $17B2 in the ROM's own pieces; $1887 runs between the first two.
-SCAN_SLOT_CALL = 8  # $17B2 LDA #0 2 + $17B4 JSR $1887 6
-SCAN_TEST_HIDDEN = 9  # $17B7 LDA $0C76 4 + AND #$40 2 + $17BC BNE taken 3
-SCAN_TEST_UNSEEN = 14  # ... BNE nt 2 + $17BE LDA $14 3 + $17C0 BEQ taken 3
-SCAN_TEST_FULL = 17  # ... BEQ nt 2 + $17C2 BMI $1825 taken 4, page crossed
-SCAN_TEST_OTHER = 21  # ... BMI nt 2 + $17C4 CPY $0B 3 + $17C6 BNE taken 3
-SCAN_TEST_PARTIAL = 23  # ... BNE nt 2 + $17C8 STY $0F 3
-SCAN_STEP = 5  # $17CA DEY 2 + $17CB BPL $17B2 taken 3
-SCAN_LAST = 1  # slot 0 leaves by $17CB BPL not taken, one cycle short
-SCAN_END = 6  # $17CD LDY $0F 3 + $17CF BMI $17E0 taken 3: no head-only player
-SCAN_END_PARTIAL = 11  # $17CD LDY 3 + BMI nt 2 + $17D1 TYA 2 + $17D2 CMP $0C90,X 4
-PARTIAL_KNOWN = 3  # $17D5 BEQ $17E0 taken: this player already failed a hunt
-PARTIAL_ARM = 49  # ... nt 2 + $17D7 JSR 6 + $1973 32 + LDA 2 + STA 3 + BNE 4
-PARTIAL_ARM_MEANIE = 15  # $17D5 BEQ nt 2 + $17D7 JSR 6 + $1973 LDA 2 + $1975 STA 5
-PARTIAL_ARM_TAIL = 9  # $17DA LDA #$40 2 + $17DC STA $14 3 + $17DE BNE $1825 4
-MEANIE_INIT = 32  # $1973..$1985: the four writes and the RTS
-TREE_CALL = 13  # $17E0 LDA 2 + $17E2 STA $0C20,X 5 + $17E5 JSR $1AB0 6
-TREE_CLEAR = 7  # $17E0 LDA #0 2 + $17E2 STA $0C20,X 5: the held target is dropped
-TREE_SCAN_CALL = 6  # $17E5 JSR $1AB0
-TREE_NONE = 3  # $17E8 BCS $17F9 taken: nothing on a stack to drain
-TREE_HIT = 2  # ... BCS not taken
 
-# find_drainable_boulder_or_tree $1AB0 walks its own loop, not $17B2's.
-TILE_SCAN_ENTRY = 2  # $1AB0 LDX #$3F
-TILE_SCAN_EXHAUSTED = 8  # $1AF2 SEC 2 + RTS 6
-TILE_SCAN_LAST = 1  # slot 0 leaves by $1AF0 BPL not taken, one cycle short
-TILE_SCAN_EMPTY = 12  # $1AB2 LDA 4 + BMI 3 + $1AEF DEX/BPL 5
-TILE_SCAN_OTHER = 24  # + the $1AB7 flag and $1ABB type compares 12
-TILE_SCAN_STACKED = 11  # flags >= $40 leaves at $1AB9 BCS
-TILE_SCAN_LOOSE = 18  # a lone boulder falls through the $1ABE type compare instead
-TILE_SCAN_TILE = 61  # $1AC2..$1AD1 the tile fetch, its $2BA8 lookup 34 included
-TILE_SCAN_NO_TILE = 8  # $1AD3 BCC taken + $1AEF DEX/BPL
-TILE_SCAN_TOP = 12  # $1AD3 BCC 2 + $1AD5..$1ADB the top object's type read 10
-TILE_SCAN_WRONG_TOP = 12  # $1ADD..$1AE1 the two compares 7 + $1AEF DEX/BPL 5
-TILE_SCAN_SEE = 9  # a tree top: $1ADD BEQ $1AE3 taken 3 + the $1AE3 JSR 6
-TILE_SCAN_SEE_BOULDER = 12  # ... BEQ nt 2 + $1ADF CMP #3 2 + $1AE1 BNE nt 2 + JSR 6
-TILE_SCAN_NEXT = 11  # $1AE6 LDA/BPL 6 + $1AEF DEX/BPL 5 when the see was not full
-TILE_SCAN_HIT = 17  # $1AE6 LDA $14 3 + BPL nt 2 + $1AEA STY/CLC 6 + RTS 6
-
-# consider_creating_meanie $197D walks the search counter, not a slot index.
-MEANIE_SCAN_SLOT = (
-    26  # $198F LDX 3 + LDY 4 + BNE 3 + $19A1 DEC 7 + DEY 2 + LDA 4 + BMI 3
-)
-MEANIE_SCAN_OTHER = 34  # + the $19AA tree-type compare 9 - the taken BMI 1
-MEANIE_SCAN_DX = 24  # $19B1..$19C5 the 10-tile x test, its $19BE sign fixup included
-MEANIE_SCAN_DY = 18  # $19C7..$19D7 the same in y, off the already-loaded index
-MEANIE_SCAN_SEE = 8  # $19D9 LDA 2 + the $19DB JSR 6
-MEANIE_SCAN_DONE = 33  # $198F..$1994 9 + $1996 INC/LDA/STA 16 + SEC/RTS 8
-
-DRAIN_CALL = 6  # $17EA JSR $1A08 reduce_object_energy
-DRAIN_TAIL = 15  # $17ED BCS nt 2 + $17EF LDY 3 + LDA 2 + STA $0C30,Y 5 + JMP 3
-DRAIN_TAIL_PLAYER = 7  # $17ED BCS $1802 taken 4, page crossed, + JMP $16D6 3
-BODY_TAIL = 24  # $1876..$1884: the $0C6D flag, the JSR $1F9F and the JMP $16D6
-
-# target_object $1825, entered from $17A6, $17C2, $17DE.
-TARGET_HEAD = 21  # $1825..$1831: record the target and its exposure, read the timer
-TARGET_SLOT = 7  # $1825 TYA 2 + $1826 STA $0CA8,X 5: the target itself
-TARGET_EXPOSURE = 8  # $1829 LDA $14 3 + $182B STA $0CB0,X 5
-TARGET_TIMER = 6  # $182E LDA $0C20,X 4 + $1831 CMP #1 2
-TARGET_FIRST = 12  # $1833 BCS nt 2 + $1835 LDA 2 + STA $0C20,X 5 + JMP 3: arm it
-TARGET_ARM = 9  # $1833 BCS nt 2 + $1835 LDA #$78 2 + $1837 STA $0C20,X 5
-TARGET_ARM_TAIL = 3  # $183A JMP $16D6
-TARGET_WAIT = 9  # $1833 BCS taken 3 + $183D BNE taken 3 + $183A JMP $16D6 3
-TARGET_DUE = 8  # ... $183D BNE not taken 2 + $183F LDA $14 3: the timer is up
-TARGET_MEANIE = 3  # $1841 BPL $1852 taken: a head-only player buys a meanie hunt
-TARGET_DRAIN = 18  # ... nt 2 + $1843 JSR $1A08 6 + $1846 LDY 3 + LDA 2 + STA 5
-TARGET_DRAIN_OBJ = 5  # $184D BCS not taken 2 + $184F JMP $1876 3
-TARGET_DRAIN_PLAYER = 6  # ... BCS $1884 taken 3 + JMP $16D6 3
-
-ROTATE_GATE = 12  # $17F9 LDX 3 + LDA $0C28,X 4 + CMP 2 + $1800 BCC $1805 taken 3
-ROTATE_GATE_HELD = 14  # ... BCC not taken 2 + $1802 JMP $16D6 3: too soon to turn
-ROTATE = 454  # $1805..$1884: $1AF4 31 + $1973 32 + $3470 323 + $187B 18 + 50 straight
-ROTATE_TURN = 54  # $1805 TXA 2 + JSR 6 + $1AF4 31 + $1809 LDA 4 + CLC 2 + ADC 4 + STA 5
-ROTATE_RELOAD = 7  # $1813 LDA #$C8 2 + $1815 STA $0C28,X 5
-ROTATE_ARM = 13  # $1818 JSR $1973 6 + $1973 LDA #$80 2 + $1975 STA $0CA0,X 5
-MEANIE_INIT_MEMORY = 5  # $1978 STA $0C90,X
-MEANIE_INIT_SCANS = 7  # $197B LDA #0 2 + $197D STA $0C98,X 5
-MEANIE_INIT_SEARCH = 7  # $1980 LDA #$40 2 + $1982 STA $0C80,X 5
-MEANIE_INIT_RTS = 6  # $1985 RTS
-ROTATE_TAIL = 355  # $181B LDA 2 + JSR $3470 329 + $1820 LDX/JMP 6 + $187B..$1884 18
 # $1F9F update_object_on_screen: no screen span, no replot -- see relative.py $209B.
 REDRAW_CALL = 6  # $1F9F JSR $209B
 REDRAW_NONE = 23  # $1FA2 BCS $1F93 taken 3 + the $1F93 flag reset and RTS 20
 REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is projector.strip_replot_frames
-# $1FA4..$1F9E, the replot's own line, with $0C6D/$0C4D clear ($1F95/$1F98 clear both on every exit) and $0C4E/$0C5F clear ($3588 rejects bit 7 of $0C4E, $359B zeroes $0C5F a frame).
-REDRAW_CLEAR_CALL = (
-    33  # $1FA4..$1FBF: $2099, the $0C6D BPL, LDX $211B, JSR $2211, $2119
-)
-REDRAW_CHUNK_HEAD = (
-    76  # $1FC2..$1FFC: the camera shift, JSR $29C7 and JSR $2625, callees apart
-)
-REDRAW_CHUNK_TAIL = (
-    44  # $1FFF..$201C: the $2003/$2008 camera restore and the $2015 width step
-)
-REDRAW_CHUNK_MORE = (
-    16  # $201C BEQ nt 2 + $201E..$2029 re-enter $1FC2 with the remainder
-)
-REDRAW_CHUNK_RESUME = (
-    2  # $1FEB BEQ nt 2 + $1FED STA $10 3, on each chunk after the first
-)
-REDRAW_TAIL = 106  # $202C..$206A: 68 straight + $992C 22 + $9A3C 16 ($204A BVC taken)
-REDRAW_FLUSH_LOOP = 32  # one flush: $207C LDY/JSR/DEC/BNE 17 + the $206F $96 step 15
-REDRAW_FLUSH_ENTRY = (
-    -13
-)  # $206C JMP $207C 3, less the first pass's step and the last BNE
-REDRAW_EXIT = 36  # $2085..$2092 6+4+3+3 + $1F93's flag reset and RTS 20
-BUF_WINDOW_CALL = (
-    79  # $29C7..$29F8, straight line: the strip's $0007/$0012/$0028 window
-)
-# clear_strip $2211, given 24 rows from $0019 ($1FB3/$1FB5) and $211B columns ($1FB7).
-CLEAR_ENTRY = 39  # $2211..$2231 with the column count under 32 ($2218 BCC taken)
-CLEAR_ENTRY_EXACT = 44  # ... exactly 32: $221E BNE not taken, back into $2220's A = $80
-CLEAR_ENTRY_WIDE = 43  # ... over 32: $1E holds count - 32 for a second pass per row
-CLEAR_ROWS = 24  # $1FB5 LDY #$18 -> $0057
-CLEAR_COLUMN = 93  # $2247's 8 bytes at 11 each (INY/LDA/STA) + DEX 2 + BNE 3
-CLEAR_ROW = 52  # $2233..$2283 around them, one pass ($2278 BMI taken)
-CLEAR_ROW_SPLIT = (
-    16  # ... two passes: $2278 BMI nt 2, $227A INC $71 5 + JMP 3, re-entry 6
-)
-CLEAR_TAIL = 5  # RTS 6, less the last row's untaken $2283 BNE
-# $9730, the buffer flush $207E runs once per $211B column, Y = $0008 = 0 from $1FE0.
-FLUSH = 4340  # $9730 prologue 63 + RTS 6 + 24 $975D rows at 178, less the last BNE
-FLUSH_SPLIT = 135  # a row whose $3A40 entry is nonzero: a second $9888 across the split
-FLUSH_WRAP = 1  # $9792 CPX #$19 rolls X over once when the first row is not row 0
-FLUSH_ROWS = 24  # $9759 LDA #$18 -> $0098
-FLUSH_BANKS = 25  # $9792 CPX #$19: $3A00/$3A20/$3A40 hold 25 screen rows
-FLUSH_SPLIT_ROWS = (4, 9, 14, 19, 24)  # the nonzero $3A40 entries
 SPAN_HEAD = 6  # $209B LDY $91 3 + CPY $0B 3
 SPAN_PLAYER = 12  # $209F BEQ $2110 taken 4, page crossed, + $2110 SEC/RTS 8
 SPAN_ANGLES = 8  # ... BEQ not taken 2 + $20A1 JSR $8401 6
@@ -487,7 +238,6 @@ SPAN_WIDTH = 21  # $20F2 BCC taken 3 + $20F6..$2100: right + 1 - left into $0C6A
 SPAN_ZERO_WIDTH = 11  # $2103 BEQ $2110 taken 3 + SEC/RTS 8
 SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RTS 8
 SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
-MEANIE_ROTATE = 444  # $1728..$1884, the meanie's own turn: $1AF4 31 + $3470 323 + 90
 
 # $283D picks the examine off $9AF6, the play-display flag: $3577 sets it $80 for the whole play loop and $117E (reset_game_state) clears it for generation and the preview; $9A51 is its only writer.
 EXAM_ENTRY_TRIG = 7  # $283D BIT $9AF6 4 + $2840 BPL $2845 taken 3
@@ -550,79 +300,6 @@ TAB_RIGHT = 5  # $389F ROR A 2 + CPY $0012 3
 TAB_OFF_RIGHT = 3  # $38A2 BCC leave taken
 TAB_ON_RIGHT = 4  # ... not taken 2 + $38A4 ADC #$00 2
 TAB_TAIL = 16  # $38A6 LDY $0F 3 + STA $7F 3 + TAX 2 + CLC 2 + RTS 6
-
-
-def status_bar_cycles(energy, clk=None):
-    """$9508 plot_status_bar: 15-blocks, 3-blocks, the odd unit, then the padding."""
-    clk = badline.frame_clock(armed=False) if clk is None else clk
-    fifteens, rest = divmod(energy, 15)
-    threes, unit = divmod(rest, 3)
-    total = badline.charge(clk, 0x9508, STATUS_HEAD)
-    total += badline.charge(
-        clk, 0x9515, (fifteens + threes) * STATUS_BLOCK + 2 * STATUS_BLOCK_DONE
-    )
-    if unit == 0:
-        total += badline.charge(clk, 0x9543, STATUS_UNIT_NONE)
-    else:
-        total += badline.charge(clk, 0x9547, STATUS_UNIT)
-    chars = 1 + 2 * (fifteens + threes + (1 if unit else 0))
-    total += badline.charge(
-        clk, 0x9551, STATUS_PAD * max(1, STATUS_PAD_END - chars) - 1
-    )
-    total += badline.charge(clk, 0x955D, STATUS_MID)
-    total += badline.charge(clk, 0x9551, STATUS_PAD * STATUS_PAD_LAPS - 1)
-    return total + badline.charge(clk, 0x956E, STATUS_TAIL)
-
-
-def exposure_cycles(mem, clk=None):
-    """$191F for the current board: the 8-slot walk plus prologue/epilogue.
-
-    X counts 7 down to 0 and stops early only when an enemy targeting the player has
-    exposure bit 7 set ($1948 BMI $194D)."""
-    clk = badline.frame_clock(armed=False) if clk is None else clk
-    player = mem[mm.PLAYER_OBJECT]
-    total = badline.charge(clk, 0x191F, EXPOSURE_FIXED)
-    for x in range(7, -1, -1):
-        last = EXPOSURE_LAST if x == 0 else 0
-        if mem[mm.OBJECTS_FLAGS + x] & 0x80:
-            total += badline.charge(clk, 0x1925, EXPOSURE_EMPTY - last)
-            continue
-        otype = mem[mm.OBJECTS_TYPE + x]
-        if otype == mm.T_SENTRY:
-            slot = EXPOSURE_SENTRY
-        elif otype == mm.T_SENTINEL:
-            slot = EXPOSURE_SENTINEL
-        else:
-            total += badline.charge(clk, 0x1925, EXPOSURE_OTHER - last)
-            continue
-        if mem[mm.ENEMIES_TARGETED_OBJECT + x] != player:
-            total += badline.charge(clk, 0x1925, slot - last)
-            continue
-        total += badline.charge(clk, 0x1925, slot)
-        if mem[mm.ENEMIES_DRAINING_COOLDOWN + x] == 0:
-            total += badline.charge(clk, 0x193A, EXPOSURE_TARGETS_PLAYER - last)
-            continue
-        total += badline.charge(clk, 0x193A, EXPOSURE_TARGETS_PLAYER)
-        if mem[mm.ENEMIES_TARGETED_OBJECT_EXPOSURE + x] & 0x80:
-            return total + badline.charge(clk, 0x193F, EXPOSURE_DRAINING + 1)
-        total += badline.charge(clk, 0x193F, EXPOSURE_DRAINING - last)
-    return total
-
-
-def idle_pass_cycles(mem):
-    """One pass with every enemy's $16E9 gate closed, averaged over the 8 cursor
-    positions: the loop's fastest cadence on this board."""
-    total = 0
-    for x in range(8):
-        otype = mem[mm.OBJECTS_TYPE + x]
-        if otype == mm.T_SENTINEL:
-            total += UPDATE_DISPATCH_SENTINEL + UPDATE_GATE_CLOSED
-        elif otype == mm.T_SENTRY:
-            total += UPDATE_DISPATCH_SENTRY + UPDATE_GATE_CLOSED
-        else:
-            total += UPDATE_NOT_ENEMY
-        total += UPDATE_TAIL_WRAP if x == 0 else UPDATE_TAIL
-    return total / 8.0 + LOOP_PASS + exposure_cycles(mem)
 
 
 # plot_world's fill sequence block by block off the disassembly: the $2A24 tile dispatch, $2D6C prepare_polygon, $2EE4 the edge DDA and $22AA span_fill (sentinel/rendercost.py).
@@ -918,7 +595,6 @@ SCAN_END_STOP = 3  # $27E9 BCS reached_end_of_row taken
 SCAN_GAP_LOOP = 5  # $27F6 BCS nt 2 + $27F8 BEQ find_first_visible_tile_at_end_loop 3
 SCAN_GAP_HIT = 4  # ... BEQ not taken
 SCAN_GAP_STOP = 3  # $27F6 BCS reached_end_of_row taken
-SCAN_END_TAIL = 12  # $27FA LDA $0024 3 + STA $0033 3 + RTS 6
 SCAN_CROP_HEAD = 6  # $27FF LDA $0024 3 + STA $0033 3
 SCAN_CROP_MORE = 4  # $2806 BCS nt 2 + $2808 CMP #$80 2
 SCAN_CROP_AGAIN = 3  # $280A BEQ tile_is_cropped_to_right taken
@@ -936,7 +612,6 @@ SCAN_LEFT_LOOP = (
 )
 SCAN_LEFT_HIT = 4  # ... BEQ not taken
 SCAN_LEFT_STOP = 3  # $2823 BCS reached_start_of_row taken
-SCAN_LEFT_TAIL = 12  # $2827 LDA $0024 3 + STA $0032 3 + RTS 6
 PLOT_ROW_HEAD = 6  # $295D LDA $0037 3 + STA $0025 3
 PLOT_ROW_FRONT = 27  # $2961 one ascending lap, both compares, the JSR and the $296C INC
 PLOT_ROW_TURN = 14  # $2961 CMP 3 + BCS nt 2 + CMP $0003 3 + BCS taken 3 + $2973 LDA 3

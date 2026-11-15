@@ -96,19 +96,6 @@ def test_jit_matches_python_with_object_tiles(ls):
         _assert_same(state, observer)
 
 
-def test_dispatcher_matches_reference_with_and_without_jit(monkeypatch):
-    """The dispatcher returns the reference answer on both paths, as a list-of-lists of
-    bools (consumers index it and compare it whole)."""
-    state = landscape.generate(42)
-    ref = projector._occlusion_visible_py(state)
-    jit = projector._occlusion_visible(state)
-    monkeypatch.setattr(projector, "_HAVE_JIT", False)
-    fallback = projector._occlusion_visible(state)
-    assert jit == ref
-    assert fallback == ref
-    assert isinstance(jit[0][0], bool)
-
-
 # Angles chosen so view_angle = (h+$20)&$FF lands in each of the four $2665 quadrants.
 QUADRANT_ANGLES = (0x00, 0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xC0, 0xD0, 0xF0)
 PITCHES = (0x00, 0x04, 0x08, 0xF0, 0xF8)

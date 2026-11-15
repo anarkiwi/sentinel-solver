@@ -10,11 +10,11 @@ import html
 import math
 import os
 
-from sentinel import aimcost, enemies, landscape, memmap as mm, terrain
+from sentinel import aimcost, landscape, memmap as mm, terrain
 from sentinel.game import Game
 from sentinel.los import _slope_corner_z
-from sentinel.playerbase import FOV_HALF
 
+FOV_HALF = 0x14 // 2  # $16F2: half the enemy scan cone's width
 TILE_W = 34.0
 TILE_H = 17.0
 Z_H = 12.0
@@ -272,11 +272,11 @@ def _enemy_labels(state):
     """Number each enemy and give its height, so the diagram can be talked about.
 
     The Sentinel is slot 0 ($1B8E locks it last); sentries are numbered by slot in
-    generation order, which is the numbering every measurement in the docs uses.
+    generation order, the numbering the docs use.
     """
     out = []
     n = 0
-    for e in enemies.enemy_slots(state):
+    for e in state.enemy_slots():
         x, y = state.tile_of(e)
         z = state.obj_z_height[e] + state.obj_z_frac[e] / 256.0
         if state.obj_type[e] == mm.T_SENTINEL:
@@ -317,8 +317,8 @@ def _tile_ring(state, x, y, color, label):
 
 def _objects_svg(state):
     """Cones behind everything, then glyphs back to front so near hides far."""
-    out = [_cone(state, e) for e in enemies.enemy_slots(state)]
-    out += [_sweep(state, e) for e in enemies.enemy_slots(state)]
+    out = [_cone(state, e) for e in state.enemy_slots()]
+    out += [_sweep(state, e) for e in state.enemy_slots()]
     out += _origin(state)
     px, py = state.platform_xy
     out += _tile_ring(state, px, py, TYPE_COLOR[mm.T_PLATFORM], f"PLATFORM {px},{py}")
@@ -378,7 +378,7 @@ def _panel(x, y, title, subtitle, state, acts, notes):
         y += 15
     y += 8
     px, py = state.player_xy()
-    foes = enemies.enemy_slots(state)
+    foes = state.enemy_slots()
     counts = {}
     for s in state.occupied_slots():
         counts[mm.TYPES[state.obj_type[s]]] = (

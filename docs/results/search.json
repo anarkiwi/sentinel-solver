@@ -1,0 +1,102 @@
+{
+ "0": {
+  "actions": 10,
+  "digest": "ad39087ff6f0afaafc0cf282628719449cf94e817c49069cb37d79af75900c4f",
+  "enemies": 1,
+  "energy": 0,
+  "frames": 4995,
+  "landscape": 0,
+  "preset": "wide",
+  "won": true
+ },
+ "110": {
+  "actions": 17,
+  "digest": "7ada6ce78380359c42410e9838c6acdc24d6dabc54bbc9f84f9ab6a81ea46818",
+  "enemies": 3,
+  "energy": 2,
+  "frames": 8608,
+  "landscape": 110,
+  "preset": "wide",
+  "won": true
+ },
+ "1442": {
+  "actions": 18,
+  "digest": "06dd1914e0416d83b63008e010660224f937d70aa693b81ec2583fae3113194c",
+  "enemies": 8,
+  "energy": 5,
+  "frames": 9604,
+  "landscape": 1442,
+  "preset": "wide",
+  "won": true
+ },
+ "298": {
+  "actions": 18,
+  "digest": "74993f7cf1e0337ad0cf517d4876433d24c5fcfe817b65a6edb9983d1317e83c",
+  "enemies": 7,
+  "energy": 6,
+  "frames": 10315,
+  "landscape": 298,
+  "preset": "wide",
+  "won": true
+ },
+ "321": {
+  "actions": 17,
+  "digest": "5748f3523eb5f4c8a02522aae6b2fed74a82255813a10332079cae851a90a2e6",
+  "enemies": 7,
+  "energy": 2,
+  "frames": 8868,
+  "landscape": 321,
+  "preset": "wide",
+  "won": true
+ },
+ "335": {
+  "actions": 26,
+  "digest": "fa510f5c48fb9d85b82b79f11322a686b5a7569b48f978317df3f1f9910a7418",
+  "enemies": 7,
+  "energy": 1,
+  "frames": 12645,
+  "landscape": 335,
+  "preset": "wide",
+  "won": true
+ },
+ "373": {
+  "actions": 16,
+  "digest": "8ead5e4c75ff7109a40b3889702580eb90832e1a7a75b33e9863bbc4d92df61c",
+  "enemies": 7,
+  "energy": 0,
+  "frames": 8108,
+  "landscape": 373,
+  "preset": "wide",
+  "won": true
+ },
+ "42": {
+  "actions": 16,
+  "digest": "14730d28f13267c24ee77115b0753dcd85d18a2808ba8f561655f160aeb5430e",
+  "enemies": 2,
+  "energy": 1,
+  "frames": 8247,
+  "landscape": 42,
+  "preset": "wide",
+  "won": true
+ },
+ "60": {
+  "actions": 21,
+  "digest": "8ff1bfaae59ce0fed2a3663ae5d970810c6343e43435282ec6169d8e211351e9",
+  "enemies": 7,
+  "energy": 3,
+  "frames": 9912,
+  "landscape": 60,
+  "preset": "wide",
+  "won": true
+ },
+ "9716": {
+  "actions": 26,
+  "digest": "b6ba6172d8a591d7ad32ca63fa009850fd2466b119b0399321013de8da8005b0",
+  "enemies": 8,
+  "energy": 5,
+  "frames": 12438,
+  "landscape": 9716,
+  "preset": "wide",
+  "won": true
+ }
+}

@@ -4,7 +4,7 @@ import numpy as np
 from numba import njit
 
 from sentinel import memmap as mm
-from sentinel.enemies_jit import ZP_HI, _can_see_object, _relative_angles
+from sentinel.sight_jit import ZP_HI, _can_see_object, _relative_angles
 from sentinel.kern import spec
 
 FOV_FULL = 0x100

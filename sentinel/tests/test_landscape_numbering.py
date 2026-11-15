@@ -5,7 +5,6 @@ digits read as hex. Mixing the two silently selects a different board; these pin
 conversion against the human-win fixtures, which record both names.
 """
 
-import json
 import os
 
 import pytest
@@ -32,21 +31,6 @@ def test_seed_for_agrees_with_the_live_driver_conversion():
     core = pytest.importorskip("driver.core")
     for typed in (0, 42, 335, 821, 2024):
         assert landscape.seed_for(typed) == core.landscape_from_digits(f"{typed:04d}")
-
-
-@pytest.mark.parametrize(
-    "fixture,typed,seed,player",
-    [("ls42.json", 42, 66, (13, 29)), ("ls335.json", 335, 821, (11, 17))],
-)
-def test_typed_reproduces_the_human_fixture_board(fixture, typed, seed, player):
-    """``Game.typed(n)`` builds what the human played: the fixtures carry the typed code
-    AND the seed the ROM derived, so they arbitrate."""
-    with open(os.path.join(FIXTURES, fixture), encoding="utf-8") as fh:
-        rec = json.load(fh)
-    assert (rec["entered_code"], rec["landscape"]) == (typed, seed)
-    game = Game.typed(typed)
-    first = rec["events"][0]["player"]
-    assert game.player_xy() == player == (first["x"], first["y"])
 
 
 def test_typed_and_raw_seed_are_different_boards():

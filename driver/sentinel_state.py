@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
 """Read the live game state of The Sentinel (C64) out of memory.
 
-The game keeps all its state in well-known memory locations. This module
-abstracts *where* memory comes from behind a ``MemorySource`` (callable
-``read(addr, length) -> bytes``) and turns a snapshot into a structured
-``GameState``:
-
-  * a 32x32 de-interleaved terrain height/slope grid (a VERTEX height field),
-  * the object list (Sentinel, sentries, trees, the player robot, ...), and
-  * the scalar play variables (player slot/energy, max enemies, vertical scale).
-
-Two concrete sources are provided:
-  * ``Py65Source``  — wraps a flat 64 KB memory image; ``from_landscape`` builds
-                      one from scratch via the standalone :mod:`sentinel`
-                      simulator (no emulator), so a driver can sanity-check the
-                      live board against the generator.
-  * ``ViceSource``  — reads from a live asid-vice binary monitor (``bm.mem_get``).
-
-``read_game_state`` returns the structured :class:`GameState` the live driver
-consumes.
+:func:`read_game_state` turns a ``MemorySource`` snapshot into a :class:`GameState`: the
+de-interleaved vertex height/slope grid, the object list and the scalar play variables.
+``Py65Source`` wraps a whole address-space image; ``ViceSource`` reads a live monitor.
 """
 
 import sys
@@ -73,7 +58,7 @@ class MemorySource:
 
 
 class Py65Source(MemorySource):
-    """Wrap a flat 64 KB memory image (bytes/bytearray)."""
+    """Wrap a flat whole-address-space memory image (bytes/bytearray)."""
 
     def __init__(self, mem):
         self.mem = mem
@@ -83,8 +68,7 @@ class Py65Source(MemorySource):
 
     @classmethod
     def from_landscape(cls, landscape: int):
-        """Generate a landscape from scratch with the standalone simulator and
-        wrap its 64 KB memory image (no emulator)."""
+        """Generate a landscape with the standalone simulator and wrap its memory image."""
         state = _landscape.generate(landscape)
         state.mem[mm.CURSOR] = 7
         state.mem[mm.COOLDOWN_GATE] = 0
@@ -94,11 +78,9 @@ class Py65Source(MemorySource):
 class ViceSource(MemorySource):
     """Read from a live asid-vice binary monitor via ``bm.mem_get(start, end)``.
 
-    ``bm`` is a connected vice_driver.BinMon. ``mem_get``'s ``end`` is INCLUSIVE
-    (see vice_driver/binmon.py), so a read of ``length`` bytes spans
-    ``[addr, addr + length - 1]``. The CPU is left stopped by the monitor; call
-    ``bm.exit()`` yourself to resume.
-    """
+    ``bm`` is a connected vice_driver.BinMon; ``mem_get``'s ``end`` is INCLUSIVE, so a
+    read of ``length`` bytes spans ``[addr, addr + length - 1]``. The CPU is left
+    stopped by the monitor; call ``bm.exit()`` yourself to resume."""
 
     def __init__(self, bm):
         self.bm = bm
@@ -273,19 +255,3 @@ def verify_entry(bm, landscape, log=print):
         f"(live has {len(live_objs)})"
     )
     return matched, len(ref_objs)
-
-
-def dump(state: GameState) -> str:
-    """A compact human-readable summary of a decoded ``GameState``."""
-    out = ["== scalars =="]
-    out.append(f"  player_slot     : {state.player_slot}")
-    out.append(f"  player_energy   : {state.player_energy}")
-    out.append(f"  max_enemies     : {state.max_enemies}")
-    out.append(f"  vertical_scale  : {state.vertical_scale}")
-    counts = {}
-    for o in state.objects:
-        key = "PLAYER" if o.is_player else o.type_name
-        counts[key] = counts.get(key, 0) + 1
-    out.append(f"== objects ({len(state.objects)}) ==")
-    out.append("  " + "  ".join(f"{k.lower()}:{v}" for k, v in sorted(counts.items())))
-    return "\n".join(out)

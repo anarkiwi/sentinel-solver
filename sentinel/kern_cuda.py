@@ -1,39 +1,31 @@
 """CUDA launch layer: one thread per (state, lattice ray) over the CUDA builds of the specs.
 
-Each thread writes its own cell of a dense per-ray result (the packed landing tile, -1 for
-a ray that does not end LOS_CLEAR), so results never depend on thread scheduling and need
-no sort: the host compacts them in lattice order.  The state-independent lattice vectors
-stay resident on the device between calls, and B board images march in one launch.
+Each thread writes its own cell of a dense per-ray result (packed landing tile, -1 when not
+LOS_CLEAR), so results are scheduling-independent and the host compacts them in lattice order.
+The lattice vectors stay resident on the device; B board images march in one launch.
 """
 
 # pylint: disable=no-value-for-parameter,too-many-function-args,comparison-with-callable
 
-import concurrent.futures
 import functools
 import hashlib
 import os
-import threading
 
 import numpy as np
 from numba import cuda
 
 from sentinel import (
-    enemies_jit,
     kern,
     landtable,
     los_jit,
     memmap as mm,
     pricing_jit,
-    rows_jit,
 )
 
 BLOCK = 128
 LOS_CLEAR = los_jit.LOS_CLEAR
 _march_one = kern.build(los_jit._march_one, "cuda")
 _stop_one = kern.build(landtable._stop_one, "cuda")
-_apply_ops = kern.build(rows_jit.apply_ops, "cuda")
-_fields = kern.build(rows_jit.fields, "cuda")
-_row_hash = kern.build(rows_jit.row_hash, "cuda")
 _MEMO = {}
 _MEMO_MAX = 8
 
@@ -115,9 +107,8 @@ def resident_threads():
 def landing_dense(mems, vecs, params):
     """``(B, rays)`` int16 on the device for the ``(B, 65536)`` image stack ``mems`` and
     ``params`` rows (seed then observer, as :func:`landtable._march_params`): the packed
-    landing tile of every ray of ``vecs`` against each image, -1 where it does not land.
-    One launch; the result is a view of a persistent device buffer, valid until the next
-    call."""
+    landing tile of every ray of ``vecs`` against each image, -1 where it does not land;
+    a view of a persistent device buffer, valid until the next call."""
     n = vecs[0].shape[0]
     rows = np.asarray(params, dtype=np.int64)
     dense = scratch("landing_out", (len(mems), n), np.int16)
@@ -144,11 +135,6 @@ def landing_many(mems, vecs, params):
             landing_dense(images, vecs, params[part]).copy_to_host()
         )
     return out
-
-
-def landing(mem, vecs, params):
-    """:func:`landing_many` for one image."""
-    return landing_many([mem], vecs, [params])[0]
 
 
 def stop_mask(comps, lo, hi, slope, ex, ey, zseed, max_steps, edge):
@@ -186,9 +172,8 @@ def _tile_first(idx, tile):
 def landing_tables(states, slots, eye_z, grids, max_steps):
     """``(index, tile, first)`` per state: ``grids``' whole-lattice sweep against each
     ``states[i]`` from ``slots[i]`` -- ascending CLEAR ray indices, their packed tiles,
-    and per tile the lowest index (-1 none).  Memoized on the board bytes, which
-    determine the march; boards repeated within the call march once, the rest in one
-    launch."""
+    and per tile the lowest index (-1 none).  Memoized on the board bytes; the rest march
+    in one launch."""
     key = tuple(tuple(g) for g in grids)
     memos = [
         (
@@ -220,244 +205,6 @@ def landing_tables(states, slots, eye_z, grids, max_steps):
                 _MEMO.pop(next(iter(_MEMO)))
             have[memo] = _MEMO[memo] = (idx, tile, _tile_first(idx, tile))
     return [have[memo] for memo in memos]
-
-
-def landing_table(state, slot, eye_z, grids, max_steps):
-    """:func:`landing_tables` for one state."""
-    return landing_tables([state], [slot], eye_z, grids, max_steps)[0]
-
-
-@cuda.jit(cache=True)
-def _copy_kernel(mut, src, dst):
-    """Row ``dst[b]`` of ``mut`` <- row ``src[b]``."""
-    j, b = cuda.grid(2)
-    if b < src.shape[0] and j < mut.shape[1]:
-        mut[dst[b], j] = mut[src[b], j]
-
-
-@cuda.jit(cache=True)
-def _fill_kernel(static, out):
-    """Every row of ``out`` <- the shared static image."""
-    i, b = cuda.grid(2)
-    if b < out.shape[0] and i < out.shape[1]:
-        out[b, i] = static[i]
-
-
-@cuda.jit(cache=True)
-def _overlay_kernel(addrs, mut, idx, out):
-    """``out[b, addrs[j]]`` <- the mutable byte ``j`` of row ``idx[b]``."""
-    j, b = cuda.grid(2)
-    if b < idx.shape[0] and j < addrs.shape[0]:
-        out[b, addrs[j]] = mut[idx[b], j]
-
-
-@cuda.jit(cache=True)
-def _store_kernel(addrs, imgs, idx, mut):
-    """The mutable bytes of row ``idx[b]`` <- ``imgs[b, addrs[j]]``."""
-    j, b = cuda.grid(2)
-    if b < idx.shape[0] and j < addrs.shape[0]:
-        mut[idx[b], j] = imgs[b, addrs[j]]
-
-
-def grid2(width, rows):
-    """Launch geometry covering ``width`` columns by ``rows`` rows."""
-    return (_blocks(width), rows), BLOCK
-
-
-@cuda.jit(cache=True)
-def _ops_kernel(imgs, ops, ok):
-    b = cuda.grid(1)
-    if b < imgs.shape[0]:
-        ok[b] = _apply_ops(imgs[b], ops[b])
-
-
-@cuda.jit(cache=True)
-def _fields_kernel(imgs, out):
-    b = cuda.grid(1)
-    if b < imgs.shape[0]:
-        _fields(imgs[b], out[b])
-
-
-@cuda.jit(cache=True)
-def _hash_kernel(mut, clock, idx, out, keep):
-    b = cuda.grid(1)
-    if b < idx.shape[0]:
-        out[b] = _row_hash(mut[idx[b]], clock[idx[b]], keep)
-
-
-@cuda.jit(cache=True)
-def _copy_clock_kernel(clock, src, dst):
-    """Clock row ``dst[b]`` <- row ``src[b]``."""
-    j, b = cuda.grid(2)
-    if b < src.shape[0] and j < clock.shape[1]:
-        clock[dst[b], j] = clock[src[b], j]
-
-
-@cuda.jit(cache=True)
-def _put_clock_kernel(clock, rows, vals):
-    """Clock row ``rows[b]`` <- ``vals[b]``."""
-    j, b = cuda.grid(2)
-    if b < rows.shape[0] and j < clock.shape[1]:
-        clock[rows[b], j] = vals[b, j]
-
-
-@cuda.jit(cache=True)
-def _get_clock_kernel(clock, rows, out):
-    """``out[b]`` <- clock row ``rows[b]``."""
-    j, b = cuda.grid(2)
-    if b < rows.shape[0] and j < clock.shape[1]:
-        out[b, j] = clock[rows[b], j]
-
-
-@cuda.jit(cache=True)
-def _gather_kernel(mut, idx, out):
-    """``out[b]`` <- the mutable bytes of row ``idx[b]``."""
-    j, b = cuda.grid(2)
-    if b < idx.shape[0] and j < mut.shape[1]:
-        out[b, j] = mut[idx[b], j]
-
-
-def gather_rows(mut, idx):
-    """The host ``(len(idx), M)`` copy of device rows ``idx`` of ``mut``."""
-    out = scratch("gather_out", (len(idx), mut.shape[1]), np.uint8)
-    grid, block = grid2(mut.shape[1], len(idx))
-    _gather_kernel[grid, block](mut, stage("gather_idx", idx), out)
-    return out.copy_to_host()
-
-
-def copy_clock(clock, src, dst):
-    """Device clock rows ``dst`` <- rows ``src`` (host index arrays)."""
-    grid, block = grid2(clock.shape[1], len(src))
-    _copy_clock_kernel[grid, block](
-        clock, stage("clock_src", src), stage("clock_dst", dst)
-    )
-
-
-def put_clock(clock, rows, vals):
-    """Device clock rows ``rows`` <- the host ``(len(rows), 12)`` ``vals``."""
-    grid, block = grid2(clock.shape[1], len(rows))
-    _put_clock_kernel[grid, block](
-        clock, stage("clock_rows", rows), stage("clock_vals", vals)
-    )
-
-
-def get_clock(clock, rows):
-    """The host ``(len(rows), 12)`` copy of device clock rows ``rows``."""
-    out = scratch("clock_out", (len(rows), clock.shape[1]), np.int64)
-    grid, block = grid2(clock.shape[1], len(rows))
-    _get_clock_kernel[grid, block](clock, stage("clock_rows", rows), out)
-    return out.copy_to_host()
-
-
-@cuda.jit(cache=True)
-def _peek_kernel(imgs, pos, addrs, out):
-    """``out[b, j]`` <- byte ``addrs[j]`` of image ``imgs[pos[b]]``."""
-    j, b = cuda.grid(2)
-    if b < pos.shape[0] and j < addrs.shape[0]:
-        out[b, j] = imgs[pos[b], addrs[j]]
-
-
-@cuda.jit(cache=True)
-def _patch_kernel(imgs, clock, pos, rows, at, val, fresh):
-    """Image ``imgs[pos[b]]`` byte ``at[b, j]`` <- ``val[b, j]`` and clock row ``rows[b]``
-    <- ``fresh[b]``."""
-    j, b = cuda.grid(2)
-    if b < pos.shape[0]:
-        if j < at.shape[1]:
-            imgs[pos[b], at[b, j]] = val[b, j]
-        if j < clock.shape[1]:
-            clock[rows[b], j] = fresh[b, j]
-
-
-_THREADS = threading.local()
-_PINNED = []
-
-
-@functools.cache
-def _cpu_pool():
-    """The host threads that run the enemy clock: one per CPU."""
-    return concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1)
-
-
-def _pinned(n, width):
-    """A persistent page-locked ``(n, width)`` uint8 host array: the staging rows of the
-    images being advanced, grown geometrically."""
-    if not _PINNED or _PINNED[0].shape[0] < n:
-        have = _PINNED[0].shape[0] if _PINNED else 0
-        _PINNED[:] = [cuda.pinned_array((max(n, 2 * have), width), dtype=np.uint8)]
-    return _PINNED[0]
-
-
-def _run_row(b, imgs, clock, pos, rows, left, host, plotting):
-    """Row ``b`` of the round on a host thread: image and clock fields down, the frames
-    run by :func:`enemies_jit.advance_one`, both back up.  Returns the status row
-    ``(frames left, replot request, clock fields)``."""
-    if not hasattr(_THREADS, "stream"):
-        _THREADS.stream = cuda.stream()
-    stream = _THREADS.stream
-    mem = host[b]
-    imgs[pos[b]].copy_to_host(mem, stream=stream)
-    carry = clock[rows[b]].copy_to_host(stream=stream)
-    stream.synchronize()
-    new, rest, replot = enemies_jit.advance_one(
-        mem, left[b], plotting, carry, enemies_jit.MAPS
-    )
-    imgs[pos[b]].copy_to_device(mem, stream=stream)
-    clock[rows[b]].copy_to_device(new, stream=stream)
-    stream.synchronize()
-    return np.concatenate(([rest], replot, new))
-
-
-def advance_rows(imgs, clock, rows, n_frames, plotting, reads, price):
-    """Advance row ``i`` of the device stack ``imgs`` by ``n_frames[i]`` frames in place, from
-    and into the device ``clock`` row ``rows[i]``.  Each round copies the live rows down to
-    the pinned staging buffer and runs them on the host threads, longest first, with
-    :func:`enemies_jit.advance_one`; the rows go back up when they stop.
-    The rows a round stopped at a strip replot are priced together: ``price(seen, clock,
-    request)`` takes the image bytes at the addresses ``reads`` of those rows, their clock
-    rows and their requests, and returns the new clock rows and the ``(at, val)`` byte
-    patches (``(k, m)`` each), which one launch writes back before the rows re-enter the
-    next round."""
-    left = np.array(n_frames, dtype=np.int64)
-    want = stage("replot_reads", np.asarray(reads, dtype=np.int64))
-    while True:
-        live = np.flatnonzero(left > 0)
-        if not live.size:
-            return
-        host = _pinned(live.size, imgs.shape[1])
-        owned, todo = rows[live], left[live]
-        longest_first = np.argsort(todo, kind="stable")[::-1].tolist()
-        done = list(
-            _cpu_pool().map(
-                lambda b: _run_row(
-                    b, imgs, clock, live, owned, todo, host, bool(plotting)
-                ),
-                longest_first,
-            )
-        )
-        out = np.empty((live.size, 17), dtype=np.int64)
-        out[longest_first] = done
-        stopped = out[:, 1] >= 0
-        at = live[stopped]
-        if at.size:
-            pos = stage("replot_pos", at)
-            seen = scratch("replot_seen", (at.size, len(reads)), np.uint8)
-            grid, block = grid2(len(reads), at.size)
-            _peek_kernel[grid, block](imgs, pos, want, seen)
-            fresh, where, val = price(
-                seen.copy_to_host(), out[stopped, 5:], out[stopped, 1:5]
-            )
-            grid, block = grid2(max(where.shape[1], clock.shape[1]), at.size)
-            _patch_kernel[grid, block](
-                imgs,
-                clock,
-                pos,
-                stage("replot_rows", rows[at]),
-                stage("replot_at", where),
-                stage("replot_val", val),
-                stage("replot_clock", fresh),
-            )
-        left[live] = np.where(stopped, np.maximum(out[:, 0], 0), 0)
 
 
 @functools.cache

@@ -1,12 +1,8 @@
-"""The one game state: a 64 KB memory image plus live, O(1) views over the
-object arrays.
+"""The one game state: the whole address-space image plus live views over the object arrays.
 
-Everything -- terrain, line-of-sight, actions, enemies -- reads and writes this
-single ``bytearray`` at the game's own addresses, so a mutation made by one
-mechanic (e.g. a create placing a boulder) is immediately visible to another
-(e.g. the line-of-sight that must now occlude on it).  The object-array views
-are thin proxies into ``mem`` rather than snapshots, which is what keeps them
-consistent as the state changes.
+Terrain, line-of-sight, actions and pricing all read and write this one ``bytearray`` at
+the game's own addresses, so one mechanic's mutation is visible to the next; the object
+views are proxies into ``mem``, not snapshots.
 """
 
 from sentinel import memmap as mm
@@ -29,7 +25,7 @@ class _ObjArray:
 
 
 class State:
-    """A mutable game state backed by a 64 KB ``bytearray``.
+    """A mutable game state backed by an address-space ``bytearray``.
 
     The object arrays (``obj_x``, ``obj_type``, ...) are live views over ``mem``;
     the scalars (``player``, ``energy``) are read straight from their addresses.
@@ -45,51 +41,10 @@ class State:
         "obj_v_angle",
         "obj_flags",
         "obj_type",
-        "cycle_residual",
-        "pass_phase",
-        "body_stage",
-        "body_index",
-        "body_partial",
-        "body_paid",
-        "camera_shift",
-        "camera_clear",
-        "steal_residue",
-        "clock_overhang",
-        "entry_b",
-        "carry_step",
     )
 
-    def __init__(
-        self,
-        mem,
-        cycle_residual=0,
-        pass_phase=0,
-        body_stage=0,
-        body_index=0,
-        body_partial=-1,
-        body_paid=0,
-        camera_shift=0,
-        camera_clear=0,
-        steal_residue=0,
-        clock_overhang=0,
-        entry_b=0,
-        carry_step=0,
-    ):
+    def __init__(self, mem):
         self.mem = mem
-        self.cycle_residual = cycle_residual  # cycles owed at the sub-pass resume point
-        self.pass_phase = pass_phase  # WHICH resume point: enemies.PHASE_*
-        self.body_stage = body_stage  # resume point INSIDE $16E6: enemies.BODY_*
-        self.body_index = body_index  # its scan slot; ~slot == charged, commit pending
-        self.body_partial = body_partial  # $17B2's held partially-visible player
-        self.body_paid = body_paid  # cycles that stage has paid: its committed writes
-        self.camera_shift = camera_shift  # $1FC2's outstanding strip $0C62, 0 for none
-        self.camera_clear = (
-            camera_clear  # the residual $1FC2 waits for: the $2211 clear
-        )
-        self.steal_residue = steal_residue  # badline.WEIGHT_SHIFT refund carried over
-        self.clock_overhang = clock_overhang  # clock past the raster: the caught term
-        self.entry_b = entry_b  # of which the caught INSTRUCTION owes, before the IRQ
-        self.carry_step = carry_step  # that term's per-window refund, for its own tail
         self._bind()
 
     def _bind(self):
@@ -105,27 +60,13 @@ class State:
 
     @classmethod
     def from_mem(cls, mem):
-        """Wrap a raw 64 KB memory image (bytes or bytearray)."""
+        """Wrap a raw address-space image (bytes or bytearray)."""
         return cls(bytearray(mem))
 
     def clone(self):
         """A deep copy for branching search: duplicate ``mem`` and rebind the
         views onto it."""
-        return State(
-            bytearray(self.mem),
-            self.cycle_residual,
-            self.pass_phase,
-            self.body_stage,
-            self.body_index,
-            self.body_partial,
-            self.body_paid,
-            self.camera_shift,
-            self.camera_clear,
-            self.steal_residue,
-            self.clock_overhang,
-            self.entry_b,
-            self.carry_step,
-        )
+        return State(bytearray(self.mem))
 
     # ---- scalars --------------------------------------------------------
     @property
@@ -164,6 +105,10 @@ class State:
             if not self.is_empty(s) and self.obj_type[s] == otype:
                 return s
         return None
+
+    def enemy_slots(self):
+        """The occupied sentry/Sentinel slots."""
+        return [s for s in self.occupied_slots() if self.obj_type[s] in mm.ENEMY_TYPES]
 
     def tile_of(self, slot):
         return (self.obj_x[slot], self.obj_y[slot])

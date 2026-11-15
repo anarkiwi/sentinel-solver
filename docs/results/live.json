@@ -1,34 +1,34 @@
 [
  {
   "landscape": 42,
+  "player": "phase",
   "mode": "frozen",
   "actions": 36,
   "energy": null,
-  "media": null,
-  "digest": null
+  "media": null
  },
  {
   "landscape": 335,
+  "player": "phase",
   "mode": "live",
   "actions": 66,
   "energy": 25,
-  "media": "docs/media/ls335_phase_win.png",
-  "digest": null
+  "media": "docs/media/ls335_phase_win.png"
  },
  {
   "landscape": 1442,
+  "player": "phase",
   "mode": "live",
   "actions": 29,
   "energy": 5,
-  "media": "docs/media/ls1442_phase_win.png",
-  "digest": null
+  "media": "docs/media/ls1442_phase_win.png"
  },
  {
   "landscape": 335,
-  "mode": "search",
+  "player": "search",
+  "mode": "live",
   "actions": 26,
   "energy": 1,
-  "media": "docs/media/ls335_search_win.png",
-  "digest": null
+  "media": "docs/media/ls335_search_win.png"
  }
 ]

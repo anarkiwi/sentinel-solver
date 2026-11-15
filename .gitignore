@@ -6,6 +6,7 @@
 # run products
 /renders/
 .coverage
+.coverage.*
 # VICE machine snapshots (boot.vsf and friends) — regenerated, never committed
 *.vsf
 __pycache__/

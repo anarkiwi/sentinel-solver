@@ -29,50 +29,6 @@ def cold_caches():
     yield
 
 
-def _requests(st, count, seed):
-    """Random notch, play, strip-window and odd-column requests on ``st``."""
-    rng = np.random.default_rng(seed)
-    out = []
-    for i in range(count):
-        view = {
-            "h_angle": int(rng.integers(256)),
-            "v_angle": int(rng.integers(256)),
-            "ref_lo": 0x80 if i % 7 == 3 else 0,
-        }
-        d = int(rng.integers(4))
-        kind = i % 4
-        if kind == 0:
-            out.append(
-                (view, st.player, pancost.PAN_MODE[d], None, pancost.PAN_ROWS[d])
-            )
-        elif kind == 1:
-            out.append((view, None, projector.PLAY_MODE, None, None))
-        elif kind == 2:
-            cols = int(rng.integers(1, 21))
-            win = projector.strip_window(cols)
-            out.append((view, st.player, projector.PLAY_MODE, win, None))
-        else:
-            out.append((view, st.player, 2, None, pancost.PAN_ROWS[0]))
-    return out
-
-
-def _wants(st, count, seed):
-    """:func:`_requests` as the ``(h, v, observer, mode, window, rows, ref_lo)`` tuples
-    the job builder takes."""
-    return [
-        (
-            r[0]["h_angle"],
-            r[0]["v_angle"],
-            st.player if r[1] is None else r[1],
-            r[2],
-            r[3],
-            r[4],
-            r[0]["ref_lo"],
-        )
-        for r in _requests(st, count, seed)
-    ]
-
-
 def _scalar_job(state, h, v, obs, mode, window, rows, ref_lo):
     """One job row from the scalar setup, the reference the column-wise builder equals."""
     setup = projector._setup(state, h, v, obs, mode, window, ref_lo)
@@ -115,53 +71,6 @@ def test_scenes_price_in_one_launch(new_game):
     assert together == apart and min(together) > 0
 
 
-@pytest.mark.parametrize("board", BOARDS)
-def test_prime_costs_equal_scalar(board, new_game):
-    st = new_game(board).state
-    reqs = _requests(st, 40 if not SIM else 6, board)
-    projector.prime_costs(st, reqs)
-    primed = len(projector._COST_CACHE)
-    got = [projector.render_cost(st, *r) for r in reqs]
-    assert len(projector._COST_CACHE) == primed
-    projector._COST_CACHE.clear()
-    assert got == [projector.render_cost(st, *r) for r in reqs]
-    assert primed > 1
-
-
-def test_prefetch_matches_scalar_and_stops_on_scalar_paths(new_game, monkeypatch):
-    st = new_game(335).state
-    plots = pancost.notch_plots(0x10, 0x00, 0x90, 0x20)
-    calls = [
-        lambda d=d, h=h, v=v: pancost.notch_frames(st, d, h, v) for d, h, v in plots
-    ]
-    projector.prefetch(calls)
-    assert projector._COST_CACHE
-    got = [c() for c in calls]
-    projector._COST_CACHE.clear()
-    pancost._NOTCH_CACHE.clear()
-    assert got == [c() for c in calls]
-    monkeypatch.setattr(projector, "_exact_selected", lambda: True)
-    projector._COST_CACHE.clear()
-    projector.prefetch(calls)
-    assert not projector._COST_CACHE
-
-
-def test_deferred_passes_through_broad_handlers(new_game):
-    st = new_game(335).state
-    view = {"h_angle": 3, "v_angle": 5}
-
-    def swallow():
-        try:
-            projector.render_cost(st, view)
-        except Exception:  # pylint: disable=broad-except
-            return "swallowed"
-        return "done"
-
-    projector.prefetch([swallow])
-    assert projector._COST_CACHE
-    assert swallow() == "done"
-
-
 def test_serial_and_parallel_launch_agree(new_game):
     st = new_game(42).state
     jobs, observers = projector._cost_jobs(st, _wants(st, 8, 1))
@@ -196,3 +105,56 @@ def test_cuda_pricing_matches_cpu(board, new_game):
     assert (kern_cuda.render_cycles_many(mems, jobs, vis, model) == want).all()
     assert (kern_cuda.render_cycles_many(mems, jobs[:5], vis, model) == want[:5]).all()
     assert want.min() > 0
+
+
+def _requests(st, count, seed):
+    """Random notch, play and odd-column requests on ``st``."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for i in range(count):
+        view = {
+            "h_angle": int(rng.integers(256)),
+            "v_angle": int(rng.integers(256)),
+            "ref_lo": 0x80 if i % 7 == 3 else 0,
+        }
+        d = int(rng.integers(4))
+        kind = i % 3
+        if kind == 0:
+            out.append(
+                (view, st.player, pancost.PAN_MODE[d], None, pancost.PAN_ROWS[d])
+            )
+        elif kind == 1:
+            out.append((view, None, projector.PLAY_MODE, None, None))
+        else:
+            out.append((view, st.player, 2, None, pancost.PAN_ROWS[0]))
+    return out
+
+
+def _wants(st, count, seed):
+    """:func:`_requests` as the ``(h, v, observer, mode, window, rows, ref_lo)`` tuples
+    the job builder takes."""
+    return [
+        (
+            r[0]["h_angle"],
+            r[0]["v_angle"],
+            st.player if r[1] is None else r[1],
+            r[2],
+            r[3],
+            r[4],
+            r[0]["ref_lo"],
+        )
+        for r in _requests(st, count, seed)
+    ]
+
+
+@pytest.mark.parametrize("board", BOARDS)
+def test_prime_costs_equal_scalar(board, new_game):
+    st = new_game(board).state
+    reqs = _requests(st, 40 if not SIM else 6, board)
+    projector.prime_costs(st, reqs)
+    primed = len(projector._COST_CACHE)
+    got = [projector.render_cost(st, *r) for r in reqs]
+    assert len(projector._COST_CACHE) == primed
+    projector._COST_CACHE.clear()
+    assert got == [projector.render_cost(st, *r) for r in reqs]
+    assert primed > 1

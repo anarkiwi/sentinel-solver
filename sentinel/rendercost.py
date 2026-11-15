@@ -26,17 +26,14 @@ DEVICE_TABLES = True  # kern._cuda_module binds this module's tables as device a
 TRI_THIRD = np.array(((2, 3), (0, 1)), dtype=np.int64)
 # $2D39, the $0045 flag a one-point-different slope nibble sets.
 SLOPE_FLAG = np.array((0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1), dtype=np.int64)
-# $29BB/$29BE/$29C1 per vertical buffer: ($0011 angle offset, $0035 left, $0061 width,
-# $0029 the angle offset's own low byte, which $29B8 zeroes for every $2993 mode).
+# $29BB/$29BE/$29C1 per buffer: $0011 angle offset, $0035 left, $0061 width, $0029 ($29B8 zeroes).
 PLAY_BUFFERS = np.array(
     ((0x0A, 0x50, 0x70, 0x00), (0x02, 0x40, 0x70, 0x00)), dtype=np.int64
 )
 PAN_BUFFER = np.array(((0x0C, 0x60, 0x40, 0x00),), dtype=np.int64)  # $2993 mode 2
-# $994B/$994D, the raster window the caller of $2993 sets: a vertical pan plots into a
-# 64-row strip, the play view and a horizontal pan into the whole 192.
+# $994B/$994D, the raster window $2993's caller sets: a vertical pan's strip, else the full view.
 SCREEN_TOP = 0xF0
 SCREEN_BOTTOM = 0x30
-STRIP_BOTTOM = 0xB0
 
 
 def buffers(mode, window_columns=None):
@@ -66,8 +63,7 @@ LINES_LEAVE_FLAG = 6 + passcost.LINES_NOTHING  # $2EBE LDA/BNE taken + $2ECA SEC
 LINES_LEAVE_ROWS = 14 + passcost.LINES_NOTHING  # ... the $2EC2 row compare instead
 LINES_OK = passcost.LINES_DONE + passcost.LINES_RTS  # carry clear: something to fill
 
-# rows[] carries $0004/$0006/$007F and then the counts the ROM's own loops make, so a
-# scene's geometry can be pinned against $2377/$23DC/$2F58/$2FA1/$3113/$316D hit counts.
+# rows[]: $0004/$0006/$007F then the ROM loop counts ($2377/$23DC/$2F58/$2FA1/$3113/$316D).
 R_BOTTOM, R_TOP, R_NOTHING = 0, 1, 2
 R_STEEP, R_SHALLOW, R_WIDE_STEEP, R_WIDE_SHALLOW = 3, 4, 5, 6
 R_N_STEEP, R_N_SHALLOW, R_N_WSTEEP, R_N_WSHALLOW, R_N_EDGE, R_N_SECT = (

@@ -4,13 +4,12 @@ keys reach the game's own scan."""
 
 import json
 
-import numpy as np
 import pytest
 
 from driver import clock, emu as demu, kbd_aim, play_player, sentinel_state as gs
 from driver.core import landscape_from_digits
 from sentinel import emu
-from sentinel.badline import LINE_CYCLES, PAL_FRAME_CYCLES
+from sentinel.passcost import LINE_CYCLES, PAL_FRAME_CYCLES
 from sentinel.prng import Prng
 
 pytestmark = pytest.mark.oracle
@@ -80,14 +79,12 @@ def test_keys_reach_the_games_scan():
 
 def test_play_player_runs_the_live_stack_on_the_emulator(tmp_path):
     out = tmp_path / "run.json"
-    ticks = tmp_path / "ticks"
-    argv = ["0", "--emu", "--max-actions", "1", "--out", str(out), "--ticks"]
-    play_player.main(argv + [str(ticks)])
+    argv = ["0", "--emu", "--preset", "narrow", "--max-actions", "1", "--out"]
+    play_player.main(argv + [str(out)])
     result = json.loads(out.read_text())
-    assert result["avi"]["msg"] == "emu" and result["trace"]
-    assert len(result["frame_audit"]) == len(result["trace"])
-    first = np.load(ticks / "t0000.npz")["mem"]
-    assert first.tobytes() == demu.EmuMon(emu.enter(0)).mem_get(0, 0xFFFF)
+    assert result["avi"]["msg"] == "emu" and len(result["trace"]) == 1
+    assert result["enemies"] == 1 and result["frames"] == result["trace"][0][0]
+    assert result["lookahead_audit"][0][3] == result["lookahead_audit"][0][4]
 
 
 def test_peeking_the_io_page_leaves_the_machine_alone():

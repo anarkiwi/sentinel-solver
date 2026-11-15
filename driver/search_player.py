@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One search core over the emulated game: a beam whose children are driver programs.
 
-Moves are :func:`sentinel.beam_player.views`, children :func:`kbd_prog.compile_move`
+Moves are :func:`sentinel.moves.views`, children :func:`kbd_prog.compile_move`
 programs expanded by one :func:`prog.forks` per parent, kept by ``keep_best`` per machine
 state; a found line is played open loop on the session (receding horizon) and checked.
 """
@@ -18,8 +18,8 @@ from tqdm import tqdm
 
 from driver import core, kbd_prog, prog
 from driver.kbd_aim import A_SFLAG
-from sentinel import beam_player as bp, memmap as mm
-from sentinel.phase_player import WAIT_QUANTUM
+from sentinel import memmap as mm, moves as bp
+from sentinel.moves import WAIT_QUANTUM
 from sentinel.state import State
 
 PRESETS = {
@@ -143,18 +143,18 @@ def run_batches(parents, work):
 
 
 class SearchPlayer:
-    """The search core on an ``EmuMon`` session; ``run`` plays by receding-horizon beam
-    search.  ``trace`` rows are ``[frames, move, tile, energy, eye]``, ``audit`` rows
-    ``[move no, move, tile, planned facts, executed facts]``.
+    """The search core on an ``EmuMon`` session; ``run`` plays by receding-horizon beam search.
 
-    With ``live`` (a BinMon on the same game, VICE) every move is also interpreted
-    there; ``live_audit`` rows are ``[move no, move, session facts, live facts]``,
-    move 0 the entry, and the first disagreement (``diverged``) ends the run."""
+    ``trace`` rows are ``[frames, move, tile, energy, eye]``, ``audit`` rows ``[move no, move,
+    tile, planned facts, executed facts]``. With ``live`` (a BinMon on the same game) each
+    move also plays there into ``live_audit``; the first disagreement (``diverged``) ends it.
+    """
 
     def __init__(
         self, bm, width=16, depth=30, branch=3, commit=1, log=print, live=None
     ):
         self.bm, self.log, self.live = bm, log, live
+        self.progress = True
         self.width, self.depth, self.branch, self.commit = width, depth, branch, commit
         self.trace, self.audit, self.live_audit = [], [], []
         self.diverged = None
@@ -208,7 +208,14 @@ class SearchPlayer:
         """The best node ``depth`` plies (or a win) below ``root``."""
         beam, best, cache = [root], root, {}
         t0, c0, f0 = time.time(), self.stats["children"], self.stats["frames"]
-        with tqdm(range(self.depth), desc=desc, unit="ply", leave=False) as progress:
+        pbar = tqdm(
+            range(self.depth),
+            desc=desc,
+            unit="ply",
+            leave=False,
+            disable=not self.progress,
+        )
+        with pbar as progress:
             for _ in progress:
                 beam = self._select(self._expand(beam, cache))
                 if not beam:
@@ -232,7 +239,10 @@ class SearchPlayer:
         if self.live is not None:
             facts = kbd_prog.move_facts(prog.execute(self.bm.clone(), ENTRY))
             self._mirror("entry", ENTRY, facts)
-        with tqdm(total=max_actions, desc="moves", unit="move") as progress:
+        pbar = tqdm(
+            total=max_actions, desc="moves", unit="move", disable=not self.progress
+        )
+        with pbar as progress:
             while len(self.trace) < max_actions and not self.won and not self.diverged:
                 line = self.search(root, f"move {len(self.trace) + 1}").line()
                 if not line:
