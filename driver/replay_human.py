@@ -12,7 +12,8 @@ import os
 import time
 
 from driver import core, sentinel_execute as sx
-from driver.live_player import MeasuringKbdDriver, drive_transfer_aim
+from driver.kbd_prog import ProgKbd
+from driver.live_player import drive_transfer_aim
 from sentinel import enemies, los, memmap as mm
 from sentinel.state import State
 
@@ -26,7 +27,8 @@ def _signed(b):
 
 def _enemy_truth(mem):
     """Per living enemy: facing + rotation/drain/update cooldowns, read from a live
-    64 KB image (ROTATION_SPEED_TABLE $9D37 lives above the 4 KB play region)."""
+    image of the whole address space (ROTATION_SPEED_TABLE $9D37 lies above the play
+    region)."""
     st = State.from_mem(mem)
     out = []
     for e in enemies.enemy_slots(st):
@@ -83,7 +85,7 @@ def replay(session, events, log, result):
     bm = session.bm
     bm.auto_resume = False
     ex = sx.Executor(bm, log)
-    kbd = MeasuringKbdDriver(bm, log, quantized=True, ex=ex)
+    kbd = ProgKbd(bm, log, ex)
     steps = []
     reproduced = 0
     diverged_since = False

@@ -10,14 +10,11 @@ import os
 
 import numpy as np
 
-from driver import clock, core, kbd_aim, sentinel_execute as sx
+from driver import core, kbd_aim, kbd_prog, sentinel_execute as sx
+from driver.kbd_aim import PC_PAN_CALL, PC_PASS, RASTER_LINES
 from sentinel import phase_player, memmap as mm, player as sim_player, playerbase
 from sentinel.game import Game
 from sentinel.state import State
-
-PC_PASS = 0x363D  # update_game_and_continue: a main-loop pass begins
-PC_PAN_CALL = 0x365A  # JSR pan_viewpoint $10B7
-RASTER_LINES = 312  # PAL 6569
 
 
 class MeasuringKbdDriver(kbd_aim.KbdDriver):
@@ -85,22 +82,20 @@ def drive_transfer_aim(kbd, tile, view, log):
     want = (view["h_angle"], view["v_angle"])
     reused = kbd.sights_live_on() and kbd.committed_bearing() == want
     if reused:
-        kbd.fine_cursor(*view["cursor"])
+        kbd.cursor_probe(*view["cursor"])
     else:
-        ach = kbd.drive_to(view)
-        if not ach["ok"]:
+        if not kbd.drive_probe(view):
             kbd.clear_bearing()
             return False
         kbd.set_bearing(*want)
-    rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+    rx, ry, los_hit, _ = kbd.probe_ray()
     if (rx, ry) == tuple(tile) and los_hit:
         return True
     log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
     if reused:  # the parked sights drifted: full re-drive, then re-probe
-        ach = kbd.drive_to(view)
-        if ach["ok"]:
+        if kbd.drive_probe(view):
             kbd.set_bearing(*want)
-            rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+            rx, ry, los_hit, _ = kbd.probe_ray()
             if (rx, ry) == tuple(tile) and los_hit:
                 return True
         log(f"    transfer re-aim probe ({rx},{ry}) los={los_hit}; not firing")
@@ -151,7 +146,7 @@ class LiveMixin:
         self.live_log = log
         self.result = result
         self.ex = sx.Executor(session.bm, log)
-        self.kbd = MeasuringKbdDriver(session.bm, log, quantized=True, ex=self.ex)
+        self.kbd = kbd_prog.ProgKbd(session.bm, log, self.ex)
         self.step_no = 0
         self.acted = False
         self.life_lost = None
@@ -210,10 +205,9 @@ class LiveMixin:
     def _wait(self, frames=playerbase.WAIT_FRAMES):
         """A deliberate wait spends REAL world time, FRAME-EXACT: step the $9630
         per-frame marker ``frames`` times, leaving the CPU halted, and re-read the
-        world.  charged == measured holds by construction whatever the warp state, so
-        ``wait_audit`` is a regression pin; a stalled marker raises instead of being
-        waited out."""
-        got = clock.run_frames(self.bm, frames)
+        world.  The charged frames are the frames run whatever the warp state, so
+        ``wait_audit`` is a regression pin; a stalled marker raises."""
+        got = self.kbd.run_frames(frames)
         if self.audits:
             self.result.setdefault("wait_audit", []).append([self.step_no, frames, got])
             self.live_log(

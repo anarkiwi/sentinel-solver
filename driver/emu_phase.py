@@ -65,7 +65,7 @@ class EmuPhase(LivePhase):
             horizon=self.horizon,
             rollout=True,
         )
-        twin.verbose = twin.audits = False
+        twin.verbose = twin.audits = twin.kbd.advisory = False
         twin.kbd._bearing = self.kbd.committed_bearing()
         twin.acted, twin.life_lost = self.acted, self.life_lost
         twin.step_no, twin.frames = self.step_no, self.frames

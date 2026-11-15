@@ -657,7 +657,7 @@ committed bearing, so a forked action takes the game's own time and effects:
 
 Every fork goes through `_fork_jobs`, run in input order; rehearsals, idles and landings are
 memoized on a digest of the RAM, CPU registers, cycle, monitor state and committed bearing.
-Waits are `_wait`: `clock.run_frames` on the session's machine (real time on VICE). View
+Waits are `_wait`: the `run_frames` driver program on the session's machine (real time on VICE). View
 selection still ranks aims on the model, which advances no clock on this path. Each real step
 records its rehearsal beside what the machine then did in `lookahead_audit`; `python -m
 driver.emu_suite` plays the suite boards in parallel processes and tabulates the two.
@@ -690,6 +690,54 @@ primitive.
 `sentinel_execute.perform_step` wraps that in aim → fire → verify. Its outcomes are `ok`,
 `best_effort_miss`, `drained`, `aim_miss`, `aim_hyperspace`, `diverge` (resync + replan) and
 `fail`; `classify_outcome` checks the primary effect **before** the best-effort shortcut.
+
+### Driver programs (`driver/prog.py`, `driver/kbd_prog.py`)
+
+Every primitive above, and a whole step, is compiled to one vagrant-moses driver program
+(`vagrant_moses.program`, sixteen registers, run natively with the GIL released) with the
+interactive driver's exact semantics: the same keys, PCs, retry bounds, stop points and
+frames, and `MeasuringKbdDriver`'s timing records (`aim_subframes`, `pan_passes`) as tagged
+outputs. `ProgKbd` is the live and emulated players' driver; `MeasuringKbdDriver` stays as the
+interactive reference the tests hold it to.
+
+A `Prog` is the vagrant-moses op set plus one extension, the timed wait `run(pc, seconds,
+on_timeout)` (`run_until_pc` with its timeout), with `catch` blocks standing for the driver's
+`try/except`. Two backends execute the same `Prog`:
+
+| backend | how | timeouts |
+|---|---|---|
+| `prog.interpret(bm, p)` | call by call over any BinMon: VICE, or `EmuMon` | exact: a raise branches to the op's handler |
+| `prog.execute(emumon, p)` | `machine.run_program` on the native lowering | each wait checks its elapsed cycles; past its timeout the program is replayed by `interpret` from a clone taken before it |
+| `prog.forks(emumon, ps)` | one `vagrant_moses.run_forks` batch, `keep=True`: one `EmuMon` per fork | as `execute`, per fork |
+
+The lowering reproduces `EmuMon`'s monitor state: a wait for the pc the CPU stands at is skipped
+before any run op (after one, the native parked state is that test), the frame checkpoint gains
+the marker arrivals, and a program ending on a step leaves the boundary test owed.
+
+| primitive | program |
+|---|---|
+| `sights_set` / `_one_scan_press` | idle scan, step, scan, SPACE, run to `$967B`, release; ≤ 6 presses on `$0C5F` bit7 |
+| `_uturn` | `tap_action U` until `(h − h₀) & $FF == $80`, 5 tries |
+| `coarse_h` / `coarse_v` | u-turn when `h_press_count` takes one; per pass the key chosen by `(want − cur) & $FF ≤ $80` (pitch: `_pitch_lin`), compiled as range tests over all 256 angles; stall, slot-change and 400-pass bails |
+| `_run_pass` | `$363D`, step, `$365A`, step, `$365D`, each a `_run_past_redraw` (re-arm while `$0CE4` bit7) with raster stamps |
+| `fine_cursor` | per pass x and y keys, the last axis's store PC, step; 160 passes, a timeout skips the pass |
+| `tap_action` | idle scan, press at the scan, run to `$967B`, want-flags `$0CE8..$0CEB`, settle to the next gated scan; 45 tries |
+| `run_frames` | step + `$9630` wait, `n` times |
+| `probe_tile`'s settle | 2 frames while `$0CE4` bit7, ≤ 8 times |
+| step (`Compiler.aim` + `fire`) | the full aim with sights-off h/v reads, the settle, the drove-ok gate (`H_AIM_MISS`), the budget gate (`H_DRAINED`), sights on and the tap between frame reads |
+
+Python runs between programs only where the step needs what a program cannot compute: the
+`sentinel.los` ray (`core.probe_ray`). A reused aim's ray gates the fire, so `perform_step` runs
+cursor + settle, the ray, then the fire (or the full aim); `drive_transfer_aim` likewise splits at
+its ray. The full aim's ray is advisory, logged into `actions[].aim.probe`: the top level splits
+there (`ProgKbd.advisory`), a fork runs aim and fire as one program.
+
+`kbd_prog.compile_move(kind, view, k, frames)` compiles a macro move for a search to expand by
+`prog.forks`: `"absorb"`, `"mount"` (a transfer), `"hop"` (`k` boulders, the robot, the
+transfer) or `"wait"`. The first action takes the full aim, later ones on the same view the
+cursor only (the ray is assumed to land; the facts tell whether it did); a refusal ends the
+move. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
+Sentinel left), `alive` (`$0C4E` and `$0CE5` bit7 clear), `won` (`$0CDE` bit6) and `frames`.
 
 ---
 

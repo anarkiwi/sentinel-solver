@@ -86,14 +86,10 @@ def drop_guard(bm, log, on_drop):
 
 
 def live_image(bm):
-    """The full 64 KB live memory image the simulator (``State``/``Game``) is defined
-    over. It reads ROM tables such as ROTATION_SPEED_TABLE ($9D37) during enemy stepping
-    (enemies.step), so a 4 KB slice throws IndexError.
-
-    Read in two 32 KB halves: mem_get's response length is a u16, so a single
-    0x0000-0xFFFF request is 65536 bytes == 0 mod 2^16 and comes back empty.  Both
-    halves are read HALTED: under auto_resume each half would resume the CPU, tearing
-    the image across a host-timing-dependent number of frames."""
+    """The whole address space the simulator (``State``/``Game``) is defined over:
+    enemies.step reads ROM tables such as ROTATION_SPEED_TABLE ($9D37) above the play
+    region.  Read as two halted halves: mem_get's u16 response length makes a full
+    request come back empty, and an auto-resumed read would tear the image."""
     with bm.halted():
         return bytearray(bm.mem_get(0x0000, 0x7FFF)) + bytearray(
             bm.mem_get(0x8000, 0xFFFF)
@@ -225,7 +221,7 @@ def _enter_play(bm, tap, log):
     """Land in the play loop after the secret-code RETURN, one leg per REAL predicate:
     generation installs the player object, then SPACE dismisses the isometric preview
     and the busy-plotting gate opens. Both legs are polled in EMULATED frames, so their
-    length cannot depend on warp (measured: ~600 frames, then ~250 after SPACE)."""
+    length cannot depend on warp."""
     for _ in range(_ENTER_POLLS):
         if _generated(bm):
             break
@@ -459,6 +455,12 @@ def _probe_once(bm):
         m[A_CURSOR_Y],
     )
     return (rx, ry, hit, centre), sig
+
+
+def probe_ray(bm):
+    """Where the sights ray lands on the memory as it stands: ``probe_tile``'s answer
+    once its settle has run (``driver.kbd_prog.Compiler.probe_settle``)."""
+    return _probe_once(bm)[0]
 
 
 def probe_tile(bm):

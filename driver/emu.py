@@ -14,6 +14,7 @@ import numpy as np
 from vagrant_moses import memmap as vmm
 from vice_driver.binmon import CHECK_EXEC, TAP_MODE_FIXED, BinmonError, Checkpoint
 
+from driver.clock import FRAME_PC
 from sentinel.badline import PAL_FRAME_CYCLES
 
 _CPU_BANKS = (0, "default", "cpu")
@@ -39,22 +40,53 @@ class EmuMon:
         self._run_cp = {}  # run_until_pc's stop checkpoint per target
         self._steps = 0
         self._owed = False  # a step stopped here before this boundary's test
+        self._parked = False  # stopped at a decode, by a step or a checkpoint
         self._hits = set()
         self._tap = None  # (release cycle, keys) of a TAP_MODE_FIXED chord
         machine.set_trap(self._trap, set())
 
-    def clone(self):
-        """An independent monitor on ``machine.clone()`` carrying every checkpoint and
-        count, the owed boundary test and a held tap, so both run identically from here.
-        """
+    def clone(self, machine=None):
+        """An independent monitor on ``machine`` (default ``self.m.clone()``) carrying
+        every checkpoint and count, the owed boundary test and a held tap, so both run
+        identically from here."""
         twin = copy.copy(self)
-        twin.m = self.m.clone()
+        twin.m = self.m.clone() if machine is None else machine
         twin._cps = {n: dataclasses.replace(cp) for n, cp in self._cps.items()}
         twin._run_cp = dict(self._run_cp)
         twin._hits = set(self._hits)
         twin.m.set_trap(twin._trap, set())
         twin._watch()
         return twin
+
+    def adopt(self, machine):
+        """Run on ``machine`` from here (a clone of this one's), under this trap."""
+        self.m = machine
+        machine.set_trap(self._trap, set())
+        self._watch()
+
+    def native_ready(self):
+        """Whether a driver program can run natively here: no held tap, and the only
+        enabled checkpoints count the frame marker without stopping."""
+        return self._tap is None and all(
+            cp.start == cp.end == FRAME_PC and not cp.stop_when_hit
+            for cp in self._cps.values()
+            if cp.enabled
+        )
+
+    def owes_marker(self):
+        """Whether a step stopped on the frame marker before its test, which the next
+        resume counts (a native run's marker count has it already decoded)."""
+        return self._owed and self.m.mpu.pc == FRAME_PC
+
+    def ran(self, frames, owed):
+        """Account a native driver program: ``frames`` marker arrivals counted, and
+        (unless ``owed`` is None, no run op) parked owing the test when a step ended it.
+        """
+        for cp in self._cps.values():
+            if cp.enabled:
+                cp.hit_count += frames
+        if owed is not None:
+            self._owed, self._parked = owed, True
 
     def connect(self, *_a, **_kw):
         """No socket to open."""
@@ -106,7 +138,7 @@ class EmuMon:
 
     def _now(self):
         """VICE's clock at this stop: the boundary before the decode cycle."""
-        return self.m.cycle - (self._owed or bool(self._hits))
+        return self.m.cycle - self._parked
 
     def _resume(self, budget):
         """Run until a step ends or a stop checkpoint hits; returns the hits. A spent
@@ -117,12 +149,14 @@ class EmuMon:
             self._test(self.m.mpu.pc)
             if self._hits:
                 return self._hits
+        self._parked = False
         end = self.m.cycle + budget
         while True:
             self.m.run(end if self._tap is None else min(end, self._tap[0]))
             if self._tap is not None and self.m.cycle >= self._tap[0]:
                 self._release_tap()
             if self._hits or self._owed:
+                self._parked = True
                 return self._hits
             if self.m.jammed:
                 raise BinmonError(f"CPU JAM at ${self.m.mpu.pc:04X}")

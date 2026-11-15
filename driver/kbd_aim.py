@@ -47,6 +47,9 @@ A_SFLAG = 0x0C5F  # sights-on flag, bit7 (no memmap entry)
 A_PLOT = 0x0CE4  # busy-plotting gate, bit7 (no memmap entry)
 
 K_RIGHT, K_LEFT, K_DOWN, K_UP, K_UTURN = "D", "S", "L", "COMMA", "U"
+PC_PASS = 0x363D  # update_game_and_continue: a main-loop pass begins
+PC_PAN_CALL = 0x365A  # JSR pan_viewpoint $10B7
+RASTER_LINES = 312  # PAL 6569
 
 # the game's action latch $0CE9 = action-table byte >> 2 (re-armed to $80 each pass at
 # check_for_player_input $1363); poll it to confirm an action key was consumed (C8).
@@ -271,8 +274,8 @@ class KbdDriver:
         +8, S pans left -8; the shorter direction is chosen per attempt (self-correcting).
 
         When `want` is more than half a turn away, ONE U-turn (EOR $80) + a short +-8
-        correction is FEWER keystrokes -- and far less pan-scroll time, so less time held
-        exposed while the Sentinel rotates -- than stepping up to 16 times round the circle.
+        correction is FEWER keystrokes -- and less pan-scroll time held exposed while the
+        Sentinel rotates -- than stepping most of the way round the circle.
         aimcost.h_press_count picks the minimal plan; the +-8 loop below finishes the
         residual whether or not the U-turn latched (so this only ever saves time)."""
         addr = A_H + self.slot()
