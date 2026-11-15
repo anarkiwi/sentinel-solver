@@ -82,7 +82,11 @@ program is also `prog.interpret`ed on VICE and its `move_facts` compared with th
 * `python -m driver.visibility_audit N... [--preset wide]` plays each board's search game,
   caching the RAM after every move, and on every tile whose object stack is entry's compares
   the ROM's enemy and player sight checks on that RAM against the entry RAM with the
-  observers moved to where they stand ([open items](open_items.md#5-sight-is-priced-by-forks-not-by-a-table)).
+  observers moved to where they stand.
+* `python -m driver.prune_audit N [--preset wide]` records every fork of a board's search
+  game with what the entry-time sight table (`sentinel.sight_table`) says of a hop's landing
+  and whether a beam kept it, and scores pruning rules on forks and frames saved against
+  kept forks lost.
 * `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork
   batches from the entry to landscape `N` (`ply_batches`) and times each `prog.forks`, a
   reproducible workload for profiling.

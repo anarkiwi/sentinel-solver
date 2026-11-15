@@ -16,11 +16,11 @@ from tqdm import tqdm
 from driver.emu import EmuMon
 from driver.search_player import PRESETS, SearchPlayer
 from sentinel import emu, exposure_jit, memmap as mm, terrain, threat
+from sentinel.sight_table import enemies, stack
 from sentinel.state import State
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TILES = 31
-ENEMIES = (mm.T_SENTRY, mm.T_SENTINEL)
 OBSERVER_ROWS = (
     mm.OBJECTS_X,
     mm.OBJECTS_Y,
@@ -49,23 +49,6 @@ def snapshots(landscape, max_actions=120, **knobs):
     player._execute = keep  # pylint: disable=protected-access
     won = player.run(max_actions=max_actions)
     return entry, rams, won
-
-
-def stack(st, x, y):
-    """The tile's bare terrain byte, or its object stack top down as (type, z, frac)."""
-    b = terrain.tile_byte(st, x, y)
-    out = []
-    while b >= mm.OBJECT_TILE:
-        s = b & 0x3F
-        out.append((st.obj_type[s], st.obj_z_height[s], st.obj_z_frac[s]))
-        flags = st.obj_flags[s]
-        b = mm.OBJECT_TILE | (flags & 0x3F) if flags & 0x40 else 0
-    return tuple(out) or b
-
-
-def enemies(st):
-    """Occupied sentry and Sentinel slots."""
-    return {s for s in st.occupied_slots() if st.obj_type[s] in ENEMIES}
 
 
 def seen_by(st, tile, slot, watchers):
