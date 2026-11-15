@@ -199,6 +199,9 @@ def test_a_move_program_reports_the_facts_a_search_needs(session):
             ),
             "won": 0,
             "frames": o.frames,
+            "seen": st.mem[mm.EXPOSURE_BAR] >> 6,
+            "away": (st.player_xy()[0] ^ st.platform_xy[0])
+            | (st.player_xy()[1] ^ st.platform_xy[1]),
         }
     assert kbd_prog.move_facts(outs[0])["energy"] == st0.energy + 1
     assert kbd_prog.move_facts(outs[1])["frames"] == 50

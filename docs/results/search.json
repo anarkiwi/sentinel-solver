@@ -1,20 +1,20 @@
 {
  "0": {
-  "actions": 10,
-  "digest": "ad39087ff6f0afaafc0cf282628719449cf94e817c49069cb37d79af75900c4f",
+  "actions": 11,
+  "digest": "080945cb768978bb40bc88bfd0782a0ebd4c2c9ed337e4e3c133ae87655f1182",
   "enemies": 1,
   "energy": 0,
-  "frames": 4995,
+  "frames": 5996,
   "landscape": 0,
   "preset": "wide",
   "won": true
  },
  "110": {
   "actions": 17,
-  "digest": "7ada6ce78380359c42410e9838c6acdc24d6dabc54bbc9f84f9ab6a81ea46818",
+  "digest": "63575c8c780eab229f5744c5c28726c0d935ad0dc34589f4e9e9acae70c26620",
   "enemies": 3,
   "energy": 2,
-  "frames": 8608,
+  "frames": 9927,
   "landscape": 110,
   "preset": "wide",
   "won": true
@@ -31,20 +31,20 @@
  },
  "298": {
   "actions": 18,
-  "digest": "74993f7cf1e0337ad0cf517d4876433d24c5fcfe817b65a6edb9983d1317e83c",
+  "digest": "30b2575b16b02bd990fc0b9e502540df1195220f6d088a04c7d2c59e17c27847",
   "enemies": 7,
   "energy": 6,
-  "frames": 10315,
+  "frames": 10183,
   "landscape": 298,
   "preset": "wide",
   "won": true
  },
  "321": {
   "actions": 17,
-  "digest": "5748f3523eb5f4c8a02522aae6b2fed74a82255813a10332079cae851a90a2e6",
+  "digest": "a09b7f129f70f04cc2a13d59a27e687b1141f9853383b6dc7a98940ca931e397",
   "enemies": 7,
   "energy": 2,
-  "frames": 8868,
+  "frames": 9011,
   "landscape": 321,
   "preset": "wide",
   "won": true
@@ -80,11 +80,11 @@
   "won": true
  },
  "60": {
-  "actions": 21,
-  "digest": "8ff1bfaae59ce0fed2a3663ae5d970810c6343e43435282ec6169d8e211351e9",
+  "actions": 20,
+  "digest": "6b35d9fdddaa62b3e1e118694fd30baf9a4d04b131d9b564c73df5aa89b00da2",
   "enemies": 7,
   "energy": 3,
-  "frames": 9912,
+  "frames": 9414,
   "landscape": 60,
   "preset": "wide",
   "won": true

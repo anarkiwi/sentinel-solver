@@ -70,17 +70,17 @@ argument, so a caller marching further must re-query with the same cap.
 
 **Resolves.** A reachability proof for the alias distance on a real board.
 
-## 4. Landscape 9795 is lost
+## 4. A meanie's hyperspace leaves the driver's loop
 
-**Wrong.** Of the eight hardest boards in `out/hardest_128.txt` (9795 9716 9950 9760 9831
-9717 9329 9159) the wide search wins seven; on 9795 it climbs but spends its energy before
-the Sentinel is in reach and stops with no surviving move.
+**Wrong.** After a meanie hyperspaces the player during a move, the machine does not reach
+the main-loop pass `$363D` again in thousands of frames, though the CPU runs and later plots;
+the move's wait times out, and the search refuses the move rather than following it.
 
-**Shown by.** `python -m driver.emu_suite 9795 9716 9950 9760 9831 9717 9329 9159 --player
-search --out-dir out/logs/emu_hard8`.
+**Shown by.** Landscape 9831 under the wide search, on an absorb of (28,20) from (10,6) with
+the Sentinel's meanie out: `driver.search_player.outcome_facts` sees the stalled outcome.
 
-**Resolves.** Read 9795 move by move with `driver.decision_audit 9795`, and the rest of the
-128 with `driver.emu_suite`.
+**Resolves.** Disassemble the path from `$1720` (the meanie's return from `do_hyperspace`)
+until play resumes, and the input or state it waits on.
 
 ## 5. Half the children are still forked
 

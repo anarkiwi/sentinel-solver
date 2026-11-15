@@ -77,7 +77,9 @@ TAPS = tuple(ACTION_CODE) + ("SPACE",)
     V_ALIVE,
     V_WON,
     V_FRAMES,
-) = range(21)
+    V_SEEN,
+    V_AWAY,
+) = range(23)
 MOVE_FACTS = {
     "status": V_STATUS,
     "energy": V_ENERGY,
@@ -88,6 +90,8 @@ MOVE_FACTS = {
     "alive": V_ALIVE,
     "won": V_WON,
     "frames": V_FRAMES,
+    "seen": V_SEEN,
+    "away": V_AWAY,
 }
 MOVE_KEYS = {"absorb": ("A",), "mount": ("Q",)}
 KILL_PC = 0x1A05  # kill_player $1A00, past its STA $0C4E
@@ -489,7 +493,8 @@ def compile_move(kind, view=None, k=0, frames=0, reuse=False):
 
 def _facts(c):
     """Output the post-move facts: energy, player slot and its z, enemies left, alive
-    (no drain death, no reset to unacted), won, frames run."""
+    (no drain death, no reset to unacted), won, frames run, the exposure bar (bit1
+    fully seen, bit0 partly), the tile's difference from the platform's (0: home)."""
     p = c.p
     loop, skip = p.new(2)
     with p.regs(2) as (a, n):
@@ -516,6 +521,12 @@ def _facts(c):
         c.val(V_WON, a)
         p.frames(a)
         c.val(V_FRAMES, a)
+        p.ld(a, mm.EXPOSURE_BAR).shr(a, 6)
+        c.val(V_SEEN, a)
+        p.ld(a, mm.PLAYER_OBJECT).ld(n, mm.OBJECTS_X, a).ld(a, mm.OBJECTS_Y, a)
+        p.ld(SCRATCH, mm.PLATFORM_X).xor(n, SCRATCH).ld(SCRATCH, mm.PLATFORM_Y)
+        p.xor(a, SCRATCH).or_(a, n)
+        c.val(V_AWAY, a)
 
 
 def move_facts(outcome):

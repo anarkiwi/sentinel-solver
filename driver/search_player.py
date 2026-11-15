@@ -27,7 +27,7 @@ PRESETS = {
     "narrow": {"width": 4, "depth": 12, "branch": 2, "commit": 1},
 }
 CPUS = len(os.sched_getaffinity(0))
-FIELDS = ("alive", "won", "enemies", "eye", "energy")
+FIELDS = ("alive", "won", "enemies", "home", "seen", "eye", "energy")
 ENTRY = kbd_prog.compile_move("wait")  # no wait: the facts as the machine stands
 
 
@@ -78,9 +78,28 @@ class Node:
             "alive": int(f["alive"] or f["won"]),
             "won": f["won"],
             "enemies": f["enemies"],
+            "home": int(f["away"] == 0),
+            "seen": int(f["seen"] != 0),
             "eye": f["z"] * 256 + f["z_frac"],
             "energy": f["energy"],
         }
+
+
+def meanie_out(bm):
+    """Whether any enemy has a meanie out (``$0CA0`` top bit clear)."""
+    at = mm.ENEMIES_MEANIE_OBJECT
+    return any(b < 0x80 for b in bm.m.ram[at : at + 8])
+
+
+def outcome_facts(parent, outcome, twin):
+    """:func:`kbd_prog.move_facts` of a forked move; a wait that timed out with a meanie
+    out is the move a meanie's hyperspace cut short, any other is a driver fault."""
+    facts = kbd_prog.move_facts(outcome)
+    if "status" not in facts:
+        if not (meanie_out(parent) or meanie_out(twin)):
+            raise RuntimeError(f"move program stalled: {outcome[:3]}")
+        facts["status"] = kbd_prog.H_HYPERSPACE
+    return facts
 
 
 def _state(bm):
@@ -151,7 +170,7 @@ def _named(move):
 def key_of(node):
     """:func:`bp.lexicographic`'s keys of ``node`` as a tuple, larger better."""
     f = node.fields()
-    return f["won"], -f["enemies"], f["eye"], f["energy"]
+    return f["won"], -f["enemies"], f["home"], -f["seen"], f["eye"], f["energy"]
 
 
 def kid_bound(node):
@@ -234,11 +253,12 @@ class SearchPlayer:
         groups = list(by_node.values())
         t0, c0 = time.time(), time.process_time()
         work = [[exp.programs[j] for j in js] for _n, exp, js in groups]
-        for (_node, exp, js), (outs, twins) in zip(
+        for (node, exp, js), (outs, twins) in zip(
             groups, run_batches([g[0] for g in groups], work)
         ):
             for j, o, twin in zip(js, outs, twins):
-                exp.done[j] = (kbd_prog.move_facts(o), twin, machine_key(twin))
+                facts = outcome_facts(node.bm, o, twin)
+                exp.done[j] = (facts, twin, machine_key(twin))
             self.stats["children"] += len(outs)
             self.stats["frames"] += sum(o.frames for o in outs)
         self.stats["seconds"] += time.time() - t0
