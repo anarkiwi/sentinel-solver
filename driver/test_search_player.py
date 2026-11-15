@@ -2,11 +2,13 @@
 expansion against sequential execution, and a played line against its plan."""
 
 import json
+import types
 
 import pytest
 
 from driver import kbd_prog, prog, search_player as sp
 from driver.kbd_aim import A_SFLAG
+from driver.search_player import WAIT_QUANTUM
 from sentinel import actions, memmap as mm, moves as bp
 from sentinel.game import Game
 
@@ -369,3 +371,21 @@ def test_a_stalled_move_is_a_driver_fault():
     stalled = prog.Outcome("halt", prog.HALT_RAISE, 1000, ())
     with pytest.raises(RuntimeError):
         sp.outcome_facts(stalled)
+
+
+def _job(bound, parent_frames, move="hop"):
+    parent = sp.Node(None, "p")
+    parent.frames = parent_frames
+    exp = types.SimpleNamespace(bounds=[bound], programs=[((move, (0, 0), 0), None)])
+    return parent, exp, 0
+
+
+def test_a_pending_child_may_displace_the_cut_only_above_it_or_tied_and_no_slower():
+    cut = ((0, -1, 0, 0, 2048, 5), 300)
+    assert sp.may_displace(_job(None, 900), cut)
+    assert sp.may_displace(_job((0, -1, 0, 0, 2048, 6), 900), cut)
+    assert not sp.may_displace(_job((0, -1, 0, 0, 2048, 4), 0), cut)
+    assert sp.may_displace(_job(cut[0], 299), cut)
+    assert not sp.may_displace(_job(cut[0], 300), cut)
+    assert sp.may_displace(_job(cut[0], 300 - WAIT_QUANTUM, "wait"), cut)
+    assert not sp.may_displace(_job(cut[0], 301 - WAIT_QUANTUM, "wait"), cut)

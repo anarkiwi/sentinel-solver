@@ -56,17 +56,28 @@ argument, so a caller marching further must re-query with the same cap.
 
 **Resolves.** A reachability proof for the alias distance on a real board.
 
-## 3. Half the children are still forked
+## 3. The forked children are bounded by loose keys and frame ties
 
-**Wrong.** Bound-first expansion forks about half of all children (`stats["children"]`
-against `stats["bounded"]` in `driver.emu_suite` results). A child must be forked while its
-bound reaches the beam's last kept key, and where they tie only frames decide, for which
-there is no bound; how much each accounts for is unmeasured.
+**Wrong.** Bound-first expansion still forks children it does not keep. Each batch now forks
+only children that could still displace the `width`-th survivor (`search_player.may_displace`:
+the bound beats its key, or ties it with no more frames than it, a move costing at least one
+frame and a wait exactly `WAIT_QUANTUM`), so nothing the cut already excludes is forked.
 
-**Shown by.** The stats above; nothing yet splits the forked children by why.
+**Shown by.** Against each step's final cut, the forks of eight moves of 335 and 9716 split:
 
-**Resolves.** Count forked children whose bound ties the cut; if ties dominate, a proven
-lower bound on a move's frames compared where bounds tie.
+| forked because | share | kept |
+|---|---|---|
+| bound above the cut | 43% | 39% |
+| bound ties the cut, frames no more | 42% | 51% |
+| the cut rose after the batch, or the beam was not yet full | 12% | 0 |
+| no bound | 1% | all |
+
+A tied child that loses has a slack (the cut's frames less its parent's) of a median 71% of its
+move's frames, so a frame bound prunes it only within that of the true cost; the bounds above
+the cut are loose in energy (a drain) and in `seen` (bounded 0).
+
+**Resolves.** A move frame bound that close (the cycle-exact pan and render cost of its aim),
+or bounds on a move's drain and end exposure; the rest is forking before the cut is known.
 
 ## Disproved — do not resurrect
 
