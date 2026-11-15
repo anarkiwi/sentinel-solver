@@ -172,6 +172,20 @@ def kid_bound(node):
     return bp.best_case(st, *_named(node.move))
 
 
+def may_displace(job, cut):
+    """Whether pending ``job`` (``(parent, expansion, index)``) could rank above ``cut``,
+    the ``(key, frames)`` of the last survivor kept: its bound beats the key, or ties it
+    with its frames, at least the parent's plus the move's least, no more than the cut's.
+    The kept set only improves as children arrive, so a job this rejects stays rejected.
+    """
+    parent, exp, j = job
+    bound = exp.bounds[j]
+    if bound is None or bound > cut[0]:
+        return True
+    least = WAIT_QUANTUM if exp.programs[j][0][0] == "wait" else 1
+    return bound == cut[0] and parent.frames + least <= cut[1]
+
+
 def _order(bound):
     """Sort key putting unbounded moves first, then the best bound."""
     return (0,) if bound is None else (1,) + tuple(-v for v in bound)
@@ -283,8 +297,8 @@ class SearchPlayer:
         return kids
 
     def _step(self, beam, cache):
-        """The next beam: children forked best bound first until ``width`` distinct
-        survivors beat every unforked child's bound, then selected as from all."""
+        """The next beam: children forked best bound first, each batch only of those that
+        could still displace the ``width``-th survivor, then selected as from all."""
         if self.check:
             return self._select(self._expand(beam, cache))
         expansions = self._expansions(beam, cache)
@@ -294,11 +308,11 @@ class SearchPlayer:
         )
         while True:
             picked = self._select(self._kids(expansions))
-            if len(picked) == self.width and pending:
-                top = pending[0][1].bounds[pending[0][2]]
-                if top is not None and top < key_of(picked[-1]):
-                    self.stats["bounded"] += len(pending)
-                    return picked
+            if len(picked) == self.width:
+                cut = (key_of(picked[-1]), picked[-1].frames)
+                live = [job for job in pending if may_displace(job, cut)]
+                self.stats["bounded"] += len(pending) - len(live)
+                pending = live
             if not pending:
                 return picked
             chunk, pending = pending[:CPUS], pending[CPUS:]
