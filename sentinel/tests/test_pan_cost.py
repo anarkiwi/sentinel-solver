@@ -9,13 +9,13 @@ import json
 import math
 import os
 import statistics
-import tempfile
 
 import numpy as np
 import pytest
 
 from sentinel import landscape, objmodel, pancost, projector, settlecost
 from sentinel.tests import oracle
+from sentinel.tests import golden
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_pan_cost.json")
 
@@ -88,17 +88,8 @@ def _rows():
 
 @pytest.mark.oracle
 def test_regenerate_pan_cost_golden():
-    """Cycle-count pan_viewpoint across the sweep on the oracle and dump the golden.
-    Writes via rename so a concurrent xdist worker never reads a half-written file;
-    the temp name is unlinked on any failure so an abort leaves nothing behind."""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(GOLDEN), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(_build_golden(), fh, separators=(",", ":"), sort_keys=True)
-        os.replace(tmp, GOLDEN)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    """Cycle-count pan_viewpoint across the sweep on the oracle and dump the golden."""
+    golden.dump(GOLDEN, _build_golden())
     test_pan_notch_selects_the_same_tiles_as_the_rom()
 
 

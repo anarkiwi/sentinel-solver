@@ -12,6 +12,7 @@ import pytest
 
 from sentinel import landscape, projector
 from sentinel.tests import oracle
+from sentinel.tests import golden
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_projector.json")
 
@@ -107,8 +108,7 @@ def test_regenerate_and_match_rom_live():
     """Drive the real $2845 across VIEWS, dump the golden, and confirm the pure
     Python projector matches the ROM live, byte for byte."""
     data = _build_golden()
-    with open(GOLDEN, "w") as f:
-        json.dump(data, f, separators=(",", ":"), sort_keys=True)
+    golden.dump(GOLDEN, data)
     for key, rec in data.items():
         ls, h, v = (int(x) for x in key.split(","))
         state = landscape.generate(ls)

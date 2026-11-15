@@ -13,6 +13,7 @@ import pytest
 
 from sentinel import landscape, objmodel, projector, rendercost
 from sentinel.tests import oracle
+from sentinel.tests import golden
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_object_cost.json")
 VIEWS = [(0, 0x00, 0x00), (42, 0xC0, 0x00), (335, 0x00, 0x00), (2024, 0x10, 0x00)]
@@ -119,8 +120,7 @@ def test_regenerate_object_cost_golden():
     """Drive the real $8533 across VIEWS, dump the golden, and confirm the emulation
     reproduces every transformed vertex byte for byte."""
     data = _build_golden()
-    with open(GOLDEN, "w") as handle:
-        json.dump(data, handle, separators=(",", ":"), sort_keys=True)
+    golden.dump(GOLDEN, data)
     _check(data)
 
 
