@@ -3,7 +3,8 @@
 GameState over BinMon) used by the plan runner."""
 
 from driver import sentinel_state as gs
-from driver import clock, core
+from driver import clock, core, kbd_prog
+from driver.kbd_prog import V_OKH, V_OKV
 from sentinel import memmap as mm
 from sentinel import aim
 from sentinel.state import State
@@ -25,6 +26,7 @@ CREATE_KEY = {
     T_TREE: K_CREATE_TREE,
     T_BOULDER: K_CREATE_BOULDER,
 }
+_VERB_KEY = {"transfer": K_TRANSFER, "absorb": K_ABSORB}
 
 
 def otype_cost(otype):
@@ -194,6 +196,10 @@ def perform_step(ex, drv, label, stp, log, result):
     # --- KEYBOARD AIM: DRIVE the given view. Create/absorb steps carry a keyboard-
     # lattice view (h%8==0, v%4==1 in the pan band); drive the real keys to those
     # angles sights-off, then the cursor sights-on, and CONFIRM the live LOS ray. ---
+    key = CREATE_KEY[otype] if verb == "create" else _VERB_KEY.get(verb)
+    min_energy = stp.get("min_energy") if verb == "create" else None
+    fire = None if key is None else (key, min_energy)
+    fired = None
     aim_info = None
     if verb in ("create", "absorb") and plan_view is not None:
         view = plan_view
@@ -203,8 +209,7 @@ def perform_step(ex, drv, label, stp, log, result):
         # the raw driver calls do not catch that -- an unhandled socket TimeoutError would
         # otherwise crash the whole run into the boot-retry. Reconnect + re-aim instead.
         okh = okv = okc = False
-        rx = ry = centre = 0
-        los_hit = False
+        probe = (0, 0, False, 0)
         ach = {"h": 0, "v": 0, "cur": (0, 0)}
         want_bearing = (view["h_angle"], view["v_angle"])
         # REUSE the live aim across consecutive same-bearing steps (e.g. a stacked build).
@@ -230,9 +235,9 @@ def perform_step(ex, drv, label, stp, log, result):
         for _aim_try in range(3):
             with core.drop_guard(ex.bm, log, _aim_dropped):
                 if reuse:
-                    okc = drv.fine_cursor(*view["cursor"])
-                    rx, ry, los_hit, centre = core.probe_tile(ex.bm)
-                    if okc and (rx, ry) == tile and los_hit:
+                    okc = drv.cursor_probe(*view["cursor"])
+                    probe = drv.probe_ray()
+                    if okc and probe[:2] == tile and probe[2]:
                         okh = okv = True
                         ach = {
                             "h": want_bearing[0],
@@ -241,30 +246,27 @@ def perform_step(ex, drv, label, stp, log, result):
                         }
                         break
                     reuse = False  # cursor-only did not land -> full re-aim this pass
-                if not drv.sights_set(False):
+                # Compiler.aim reads h/v sights-OFF ($10B7 leaves them off-lattice on).
+                merged = None if drv.advisory else fire
+                got = drv.step(kbd_prog.view_key(view), merged)
+                if got.halt == kbd_prog.H_FAIL_OFF:
                     log(f"[{label}] {verb} {tile}: sights would not turn OFF")
                     return "fail"
-                okh, okv, status = drv.coarse_hv(view)
-                if status == "hyperspace":
+                okh, okv = (kbd_prog.STATUS[got[k]] for k in (V_OKH, V_OKV))
+                if got.halt == kbd_prog.H_HYPERSPACE:
                     log(f"[{label}] {verb} {tile}: HYPERSPACED mid-aim; aborting aim")
                     return "aim_hyperspace"
-                # Read the h/v angles WHILE SIGHTS ARE STILL OFF. objects_h_angle
-                # ($09C0+slot) is only settled at the $365D pan checkpoint; once sights
-                # are ON the per-frame pan_viewpoint dance ($10B7: +$14 -> plot -> -$0C)
-                # leaves it transiently off-lattice, so a sights-ON read of hang() can
-                # catch garbage (e.g. $73 for a committed $60) and fire a FALSE aim miss
-                # (re-sentinel disasm INPUT.md sec.3-4). coarse_h/coarse_v already land
-                # via the $365D-synced pan, so read them here, sights-off and stable.
-                ach_h, ach_v = drv.hang(), drv.vang()
-                if not drv.sights_on():
+                if got.halt == kbd_prog.H_FAIL_ON:
                     log(f"[{label}] {verb} {tile}: sights would not turn ON")
                     return "fail"
-                okc = drv.fine_cursor(
-                    *view["cursor"]
-                )  # sights-on re-centred it; drive persisted
-                rx, ry, los_hit, centre = core.probe_tile(ex.bm)
-                # cursor is stable sights-on; h/v come from the sights-OFF read above.
-                ach = {"h": ach_h, "v": ach_v, "cur": drv.cur()}
+                okc = bool(got[kbd_prog.V_OKC])
+                probe = drv.probe_ray() if drv.advisory else None
+                ach = {
+                    "h": got[kbd_prog.V_ACH_H],
+                    "v": got[kbd_prog.V_ACH_V],
+                    "cur": (got[kbd_prog.V_CX], got[kbd_prog.V_CY]),
+                }
+                fired = got if merged else None
                 break
         else:
             log(f"[{label}] {verb} {tile}: aim never stabilised; skipping step")
@@ -272,15 +274,16 @@ def perform_step(ex, drv, label, stp, log, result):
         aim_info = {
             "ach": ach,
             "want": view,
-            "probe": (rx, ry, los_hit, centre),
+            "probe": probe,
             "ok": {"h": okh, "v": okv, "cur": okc},
         }
-        log(
-            f"[{label}] {verb} {tile}: drove view h=${view['h_angle']:02x} "
-            f"v=${view['v_angle']:02x} cur={view['cursor']} -> ach h=${ach['h']:02x} "
-            f"v=${ach['v']:02x} cur={ach['cur']} probe=({rx},{ry}) los={los_hit} "
-            f"centre=${centre:02x}"
-        )
+        if probe is not None:
+            log(
+                f"[{label}] {verb} {tile}: drove view h=${view['h_angle']:02x} "
+                f"v=${view['v_angle']:02x} cur={view['cursor']} -> ach h=${ach['h']:02x} "
+                f"v=${ach['v']:02x} cur={ach['cur']} probe=({probe[0]},{probe[1]}) "
+                f"los={probe[2]} centre=${probe[3]:02x}"
+            )
         # The sentinel.los probe is ADVISORY only: the arbiter is the real ROM's
         # object-count/energy delta (verify() below). Drive the view and let the game
         # decide; only note a probe miss. drove_ok comes from the already-read ach (no
@@ -309,51 +312,35 @@ def perform_step(ex, drv, label, stp, log, result):
         drv.set_bearing(
             ach["h"], ach["v"]
         )  # committed: a same-bearing next step can reuse
-        if (rx, ry) != tile or not los_hit:
+        if probe is not None and (probe[:2] != tile or not probe[2]):
             log(
-                f"[{label}] {verb} {tile}: (advisory) probe ({rx},{ry}) los={los_hit} but angles "
-                f"reached; firing, verify() decides"
+                f"[{label}] {verb} {tile}: (advisory) probe ({probe[0]},{probe[1]}) "
+                f"los={probe[2]} but angles reached; firing, verify() decides"
             )
 
-    # post-aim budget gate: a mid-aim drain must not push a create below the floor
-    if verb == "create" and stp.get("min_energy") is not None:
-        e_now = ex.rd(mm.PLAYER_ENERGY) & 0x3F
-        if e_now < stp["min_energy"]:
-            log(
-                f"[{label}] create {tile}: DRAINED mid-aim -- energy {e_now} < "
-                f"floor {stp['min_energy']}; not firing"
-            )
-            return "drained"
-
-    # --- ACTION KEY (deterministic, scan-consumed) ---
-    if verb == "create":
-        key = CREATE_KEY[otype]
-    elif verb == "transfer":
-        key = K_TRANSFER
-    elif verb == "absorb":
-        key = K_ABSORB
-    else:
+    if key is None:
         log(f"[{label}] unknown verb {verb}; abort")
         return "fail"
-    # consider_player_action ($12D9) requires sights active for create/absorb AND
-    # transfer. Fire the key EXACTLY ONCE (tap_action is single-fire; NEVER re-fire on a
-    # false-negative latch -- a second create/absorb would stack an extra object). The
-    # object-count/energy/slot delta in verify() is the real arbiter of success.
-    settle_f0 = ex.frames()  # exact (wrap-free) settle bracket; aim excluded
-    if verb in ("create", "absorb", "transfer"):
+    # Compiler.fire: budget gate, sights on ($12D9), ONE tap; verify() arbitrates.
+    if fired is None:
 
-        def _sights_dropped(e):
-            log(
-                f"[{label}] {verb} {tile}: sights-on monitor drop "
-                f"({type(e).__name__}); reconnecting"
-            )
+        def _fire_dropped(e):
+            log(f"[{label}] {verb} {tile}: fire monitor drop ({type(e).__name__})")
 
         for _s_try in range(3):
-            with core.drop_guard(ex.bm, log, _sights_dropped):
-                drv.sights_on()
+            with core.drop_guard(ex.bm, log, _fire_dropped):
+                fired = drv.step(None, fire)
                 break
-    latched = drv.tap_action(key)
-    settle_frames = ex.frames() - settle_f0  # exact, no 256-alias
+        else:
+            return "fail"
+    if fired.halt == kbd_prog.H_DRAINED:
+        log(
+            f"[{label}] create {tile}: DRAINED mid-aim -- energy "
+            f"{fired[kbd_prog.V_ENERGY]} < floor {min_energy}; not firing"
+        )
+        return "drained"
+    settle_frames = fired[kbd_prog.V_F1] - fired[kbd_prog.V_F0]
+    latched = bool(fired[kbd_prog.V_LATCHED])
     result.setdefault("settle_audit", []).append([label, verb, settle_frames])
     if not latched:
         log(
@@ -428,16 +415,9 @@ def fire_hyperspace(ex, drv, plat, log, result):
         log(f"   WARNING: player tile {pcur} != platform {plat}")
     won = False
     for attempt in range(4):
-        drv.tap_action(K_HYPERSPACE, settle=False)
-        for _ in range(120):  # poll in FRAMES; a win can leave the $9630 marker behind
-            if ex.landscape_done() & 0x40:
-                break
-            try:
-                clock.run_frames(ex.bm, 3)
-            except Exception as e:
-                log(f"   H {attempt}: frame marker stopped ({type(e).__name__})")
-                break
-        done1 = ex.landscape_done()
+        done1, stopped = drv.hyperspace_attempt()
+        if stopped:
+            log(f"   H {attempt}: frame marker stopped (BinmonError)")
         log(
             f"   H attempt {attempt}: $0CDE=${done1:02x} "
             f"bit6={'SET' if done1 & 0x40 else 'clear'}"

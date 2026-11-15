@@ -24,6 +24,9 @@ pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 
 python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
+python -m driver.play_player 335 --emu  # the same stack on the emulated release (vagrant-moses)
+python -m driver.play_player 335 --emu --player search  # beam search on the emulator, line played open loop
+python -m driver.play_player 335 --player search        # the same search, each move also played live in VICE
 python -m driver.instrument 42          # race the model against the ROM, frame for frame
 python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```
@@ -31,15 +34,15 @@ python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embedda
 <!-- results:begin -->
 | landscape | enemies | offline actions | offline energy | beam actions | beam energy | live |
 |---|---|---|---|---|---|---|
-| 0 | 1 | 29 | 9 | 11 | 2 | — |
+| 0 | 1 | 29 | 8 | 10 | 1 | — |
 | 42 | 2 | 32 | 2 | 19 | 2 | **36 actions** (enemies frozen)† |
-| 60 | 7 | 43 | 0 | 21 | 3 | — |
-| 110 | 3 | 51 | 11 | 19 | 0 | — |
-| 298 | 7 | 36 | 13 | 18 | 7 | — |
-| 321 | 7 | 28 | 2 | 18 | 1 | — |
-| 335 | 7 | 60 | 23 | 34 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
-| 373 | 7 | 32 | 2 | 12 (not won) | 1 | — |
-| 1442 | 8 | 45 | 18 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| 60 | 7 | 40 | 5 | 21 | 1 | — |
+| 110 | 3 | 49 | 9 | 19 | 2 | — |
+| 298 | 7 | 36 | 15 | 18 | 3 | — |
+| 321 | 7 | 28 | 2 | 21 | 2 | — |
+| 335 | 7 | 48 | 1 | 33 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions** (search player), energy 1](docs/media/ls335_search_win.png) |
+| 373 | 7 | 57 | 19 | 17 (not won) | 1 | — |
+| 1442 | 8 | 41 | 17 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
 
 † Live run recorded against an older model: its trace digest is unrecorded or differs from the current offline trace for that board.
 
@@ -73,9 +76,9 @@ The game is copyrighted and is **not** included.
 
 `out/sentinel_stage2.bin`, the 64 KB memory image of the loaded game that the `oracle`-marked
 tests run, is built from the [CSDb release](https://csdb.dk/release/?id=233853): the D64 is
-downloaded once into `out/csdb/` (SHA-256 pinned) and booted headless in jennings, running the
-game's own setup and title screen under a PAL raster interrupt to its keyboard wait. `pytest`
-builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
+downloaded once into `out/csdb/` (SHA-256 pinned) and RUN on a cycle-exact emulated C64
+([vagrant-moses](https://github.com/anarkiwi/vagrant-moses), real ROMs fetched and verified) to
+the title's keyboard wait. `pytest` builds it automatically when absent; set `SENTINEL_REQUIRE_ORACLE=1` to fail rather than skip
 without it (CI does).
 
 ```bash

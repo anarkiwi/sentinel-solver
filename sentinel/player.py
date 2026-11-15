@@ -73,10 +73,6 @@ class Player(BasePlayer):
             return  # waiting cannot change a frozen world: take the least-bad hop
         self._wait()
 
-    def _wait(self):
-        """Idle one beat and re-observe; the live driver overrides with real time."""
-        self._advance(WAIT_FRAMES)
-
     def _endgame(self, views):
         """Sentinel absorbed: robot on the platform, transfer in, hyperspace.
         The platform strike obeys the placement invariant too: wait for the

@@ -99,7 +99,7 @@ UNIT = 3 * 256.0 / mm.COOLDOWN_BRESENHAM_STEP  # 1-in-3 gate x 205/256 Bresenham
         (
             "CLEAR_FRAMES[h]",
             pancost.CLEAR_FRAMES[0],
-            pancost._CLEAR_CYCLES_H / projector.FRAME_CYCLES,
+            pancost._CLEAR_CYCLES_H / settlecost.SETTLE_FG,
         ),
         # The jit twin inlines these as njit-visible globals; they cannot drift.
         ("_COOLDOWN_STICK", enemies_jit._COOLDOWN_STICK, enemies.COOLDOWN_STICK),

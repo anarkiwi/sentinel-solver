@@ -618,6 +618,61 @@ a memory or PC predicate rather than a host clock.
 
 `vice_code_entry.vsf` is restored when present, skipping the tape boot entirely.
 
+### The emulated game (`sentinel/emu.py`, `driver/emu.py`)
+
+The same stack plays the CSDb release offline on vagrant-moses, a cycle-exact PAL C64
+(VIC-II badlines and raster IRQ, both CIAs, the 6510; native, GIL released).
+`emu.boot()` powers on with the real KERNAL/BASIC/CHARGEN, RUNs the release's PRG from
+BASIC's keyboard buffer, holds SPACE through its intro until the loader jumps to
+`$3F00`, and stops at the title's first keyboard read `$8D17`; `emu.enter(n)` drives
+`core.navigate` from there (three SPACE taps, `CODE_PATCHES`, digits, code, preview) and
+checks `verify_entry` object for object. Both are cached templates handed out as
+`clone()`s. `python -m driver.play_player 335 --emu` builds the `GameSession` from
+`emu.enter` and runs `LivePhase` unchanged; `sentinel.tests.csdb` builds the oracle
+image from `emu.boot()`.
+
+`EmuMon` answers exactly the BinMon calls the live path makes. Its rules are VICE's
+(`6510dtvcore.c` `DO_INTERRUPT`, `mon_breakpoint.c`, asid-vice's keymatrix core):
+
+| call | semantics |
+|---|---|
+| `run_until_pc(pc, timeout)` | returns at once when already at `pc`; else a stop-on-hit checkpoint, so the CPU stops **before** executing `pc` |
+| `advance_instructions(n)` | `n` decodes; the step test precedes the checkpoint test, so a step ending on a checkpointed pc counts and stops there only on the next resume |
+| `checkpoint_set/get/toggle/delete`, `wait_for_checkpoint` | exec checkpoints with `hit_count`; a silent one only counts (`clock.FRAME_PC`) |
+| `mem_get(…, bank)` | bank 0: the CPU view through `$01`; `"io"`: RAM with the I/O page peeked side-effect free; `"ram"` |
+| `keymatrix_set/release_all/tap` | the CIA 1 matrix, row = PA line, col = PB line; a fixed tap releases `frames · 19656` cycles after the press |
+| timeouts | `timeout` seconds of PAL cycles, then `BinmonError`; a stop at another checkpoint also raises |
+
+**The lookahead runs on the emulator** (`driver/emu_phase.py`). `play_player --emu` plays
+`EmuPhase`, a `LivePhase` whose forks are machine clones (`EmuMon.clone()`: `Machine.clone()`
+plus every checkpoint, count, owed boundary test and held tap) carrying the keyboard driver's
+committed bearing, so a forked action takes the game's own time and effects:
+
+| question | answered by |
+|---|---|
+| is there a gap for this action (`_gap`, `_cap_gap`) | `_rehearse`: the same `_fire`s on a fork; drained when energy differs from the steps' own costs and refunds, or the body is lost |
+| is the body under fire (`_drained_over`) | the sightline gate, then a fork idling the frames on its machine |
+| does a hop or a mount land (`_probe_verdicts`, `_mount_holds`) | a fork plays the hop's creates and transfer, then the first absorb `_refuel` would take (else one quantum), and must be alive |
+| which option or tied climb (`_arbitrate`, `_settle_tie`) | forks playing the fixed ladder, a rollout adopting each rehearsed fork instead of replaying it |
+
+Every fork goes through `_fork_jobs`, run in input order; rehearsals, idles and landings are
+memoized on a digest of the RAM, CPU registers, cycle, monitor state and committed bearing.
+Waits are `_wait`: the `run_frames` driver program on the session's machine (real time on VICE). View
+selection still ranks aims on the model, which advances no clock on this path. Each real step
+records its rehearsal beside what the machine then did in `lookahead_audit`; `python -m
+driver.emu_suite` plays the suite boards in parallel processes and tabulates the two.
+
+`play_player --emu --player search` plays `driver/search_player.py` instead: a beam whose
+children are driver programs expanded by `prog.forks`, its line played open loop and audited
+([players](players.md#the-search-player)). Without `--emu` the search still plans on an
+emulated session while every committed move is also interpreted on VICE, each move's facts
+compared (`live_audit`) and the first disagreement ending the run.
+
+A VICE run and an emulated run of the same command agree row for row in the action trace
+and every audit; only a wait that expires can split them, since VICE times waits in host
+seconds and the emulator in PAL cycles. `python -m driver.compare_runs A.json
+B.json --ticks A B` reports the first divergent audit row and tick image.
+
 ### The keyboard aim primitive
 
 `driver/kbd_aim.py` drives one aim as three sub-machines, each ending on state and never on
@@ -641,6 +696,63 @@ primitive.
 `sentinel_execute.perform_step` wraps that in aim → fire → verify. Its outcomes are `ok`,
 `best_effort_miss`, `drained`, `aim_miss`, `aim_hyperspace`, `diverge` (resync + replan) and
 `fail`; `classify_outcome` checks the primary effect **before** the best-effort shortcut.
+
+### Driver programs (`driver/prog.py`, `driver/kbd_prog.py`)
+
+Every primitive above, and a whole step, is compiled to one vagrant-moses driver program
+(`vagrant_moses.program`, sixteen registers, run natively with the GIL released) with the
+interactive driver's exact semantics: the same keys, PCs, retry bounds, stop points and
+frames, and `MeasuringKbdDriver`'s timing records (`aim_subframes`, `pan_passes`) as tagged
+outputs. `ProgKbd` is the live and emulated players' driver; `MeasuringKbdDriver` stays as the
+interactive reference the tests hold it to.
+
+A `Prog` is the vagrant-moses op set plus one extension, the timed wait `run(pc, seconds,
+on_timeout)` (`run_until_pc` with its timeout), with `catch` blocks standing for the driver's
+`try/except`. Two backends execute the same `Prog`:
+
+| backend | how | timeouts |
+|---|---|---|
+| `prog.interpret(bm, p)` | call by call over any BinMon: VICE, or `EmuMon` | exact: a raise branches to the op's handler |
+| `prog.execute(emumon, p)` | `machine.run_program` on the native lowering | each wait checks its elapsed cycles; past its timeout the program is replayed by `interpret` from a clone taken before it |
+| `prog.forks(emumon, ps)` | one `vagrant_moses.run_forks` batch, `keep=True`: one `EmuMon` per fork | as `execute`, per fork |
+
+The lowering reproduces `EmuMon`'s monitor state: a wait for the pc the CPU stands at is skipped
+before any run op (after one, the native parked state is that test), the frame checkpoint gains
+the marker arrivals, and a program ending on a step leaves the boundary test owed.
+
+| primitive | program |
+|---|---|
+| `sights_set` / `_one_scan_press` | idle scan, step, scan, SPACE, run to `$967B`, release; ≤ 6 presses on `$0C5F` bit7 |
+| `_uturn` | `tap_action U` until `(h − h₀) & $FF == $80`, 5 tries |
+| `coarse_h` / `coarse_v` | u-turn when `h_press_count` takes one; per pass the key chosen by `(want − cur) & $FF ≤ $80` (pitch: `_pitch_lin`), compiled as range tests over all 256 angles; stall, slot-change and 400-pass bails |
+| `_run_pass` | `$363D`, step, `$365A`, step, `$365D`, each a `_run_past_redraw` (re-arm while `$0CE4` bit7) with raster stamps |
+| `fine_cursor` | per pass x and y keys, the last axis's store PC, step; 160 passes, a timeout skips the pass |
+| `tap_action` | idle scan, press at the scan, run to `$967B`, want-flags `$0CE8..$0CEB`, settle to the next gated scan; 45 tries |
+| `run_frames` | step + `$9630` wait, `n` times |
+| `probe_tile`'s settle | 2 frames while `$0CE4` bit7, ≤ 8 times |
+| step (`Compiler.aim` + `fire`) | the full aim with sights-off h/v reads, the settle, the drove-ok gate (`H_AIM_MISS`), the budget gate (`H_DRAINED`), sights on and the tap between frame reads |
+
+Python runs between programs only where the step needs what a program cannot compute: the
+`sentinel.los` ray (`core.probe_ray`). A reused aim's ray gates the fire, so `perform_step` runs
+cursor + settle, the ray, then the fire (or the full aim); `drive_transfer_aim` likewise splits at
+its ray. The full aim's ray is advisory, logged into `actions[].aim.probe`: the top level splits
+there (`ProgKbd.advisory`), a fork runs aim and fire as one program.
+
+`kbd_prog.compile_move(kind, view, k, frames, reuse)` compiles a macro move for a search to
+expand by `prog.forks`: `"absorb"`, `"mount"` (a transfer), `"hop"` (`k` boulders, the robot,
+the transfer), `"wait"`, `"relocate"` (one H tap, settled) or `"finish"` (the platform
+hyperspace attempt). `view` is one view key or one per action; an action whose bearing is the
+previous action's (or, with `reuse`, the sights') drives the cursor only, any other takes the
+full aim (the ray is assumed to land; the facts tell whether it did); a refusal ends the move.
+`Prog.guard(pcs, check)` makes every wait in its block also stop before `pcs` and runs
+`check`'s ops after each wait, on both backends: a move's waits stop at `$1A05` (past
+`kill_player`'s `STA $0C4E`), `$217D` (past the toll underflow's `STA $0CDE`) and `$219B`
+(past the win's `STA $0CDE`) and end the move (`H_DIED`, or the win), so a death never
+runs a wait into its hang guard. Interpreted, a guarded wait is one resume over the wait's
+own stop checkpoint and the guard pcs' (`prog.wait_any`: `EmuMon.wait_for_checkpoints`, or
+the binmon event stream on VICE), so on VICE too a guard stop returns at once instead of
+waiting out the host timeout. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
+Sentinel left), `alive` (`$0C4E` and `$0CE5` bit7 clear), `won` (`$0CDE` bit6) and `frames`.
 
 ---
 

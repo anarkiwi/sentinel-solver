@@ -47,6 +47,9 @@ A_SFLAG = 0x0C5F  # sights-on flag, bit7 (no memmap entry)
 A_PLOT = 0x0CE4  # busy-plotting gate, bit7 (no memmap entry)
 
 K_RIGHT, K_LEFT, K_DOWN, K_UP, K_UTURN = "D", "S", "L", "COMMA", "U"
+PC_PASS = 0x363D  # update_game_and_continue: a main-loop pass begins
+PC_PAN_CALL = 0x365A  # JSR pan_viewpoint $10B7
+RASTER_LINES = 312  # PAL 6569
 
 # the game's action latch $0CE9 = action-table byte >> 2 (re-armed to $80 each pass at
 # check_for_player_input $1363); poll it to confirm an action key was consumed (C8).
@@ -174,7 +177,7 @@ class KbdDriver:
                         r, c = _k(key)
                         self.bm.keymatrix_set([(r, c, 1)])
                         held = key
-                    self.bm.run_until_pc(self.PC_PAN_DONE, timeout=_RU_COMMIT)
+                    self._run_pass()
                     new = self.rd(addr)
                     self.bm.advance_instructions(1)  # step off $365D
                     if new == cur:
@@ -188,6 +191,23 @@ class KbdDriver:
         self._resume()
         return result
 
+    def _run_pass(self):
+        """Run one main-loop pass to PC_PAN_DONE ($365D): the previous notch's scroll
+        loop, update_game $127C and this pass's pan_viewpoint $10B7."""
+        self._run_past_redraw(self.PC_PAN_DONE, _RU_COMMIT)
+
+    def _run_past_redraw(self, pc, timeout):
+        """``run_until_pc(pc)``, re-armed while a timeout finds the world being plotted
+        ($0CE4 bit7): a redraw still running delays ``pc``, it does not stall it."""
+        for _ in range(_SCAN_WAIT_PASSES):
+            try:
+                self.bm.run_until_pc(pc, timeout=timeout)
+                return True
+            except Exception:
+                if not self.rd(A_PLOT) & 0x80:
+                    raise
+        return False
+
     def _run_to_scan(self, timeout=6.0):
         """Run to the next GATED full input scan ($9678). The IRQ reaches it only with
         the world NOT being plotted ($0CE4 bit7, set by set_busy_plotting $1214 and held
@@ -195,14 +215,7 @@ class KbdDriver:
         expired ($966E), so a timeout while $0CE4 is set is a redraw still running, not a
         stall: re-arm. Conceding there would leak the redraw's remaining frames into
         whatever primitive runs next. A timeout with the gate OPEN is a real stall."""
-        for _ in range(_SCAN_WAIT_PASSES):
-            try:
-                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=timeout)
-                return True
-            except Exception:
-                if not self.rd(A_PLOT) & 0x80:
-                    raise
-        return False
+        return self._run_past_redraw(self.PC_IRQ_SCAN, timeout)
 
     def _one_scan_press(self):
         """Hold SPACE for EXACTLY ONE gated full input scan ($9678->$967B), after ONE
@@ -261,8 +274,8 @@ class KbdDriver:
         +8, S pans left -8; the shorter direction is chosen per attempt (self-correcting).
 
         When `want` is more than half a turn away, ONE U-turn (EOR $80) + a short +-8
-        correction is FEWER keystrokes -- and far less pan-scroll time, so less time held
-        exposed while the Sentinel rotates -- than stepping up to 16 times round the circle.
+        correction is FEWER keystrokes -- and less pan-scroll time held exposed while the
+        Sentinel rotates -- than stepping most of the way round the circle.
         aimcost.h_press_count picks the minimal plan; the +-8 loop below finishes the
         residual whether or not the U-turn latched (so this only ever saves time)."""
         addr = A_H + self.slot()

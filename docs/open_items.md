@@ -48,12 +48,11 @@ aim side, not the settle:
 - **`TAB_3700`'s scene band is not walked per tile.** `$35BD..$35C0` spans 1.631–1.666 M
   cycles over ls42 scenes (±1 f at the settle rate); `settlecost.TAB_3700` charges the
   1.648 M centre.
-- **`render_cost` carries an internal compensating pair.** The pan law itself is verified
-  serial from the ROM (the `$363D..$3694` loop: the `$0CC1` queue, the `$0CD8` once-per-frame
-  drain, the `$130B` accept gate) and empirically unbiased (24 rows, mean resid −0.5 f,
-  RMS 13.5 f) — but only because a notch divides raw proxy cycles by 19656 while the proxy's
-  cycles are ~20% low. Switching `pancost` to a foreground divisor or to the exact backend
-  **alone** breaks it ~25%, in opposite directions. Move both sides or neither.
+- **Pan notches are charged at the foreground rate.** A notch's cycles match `$10B7`'s own
+  count in `golden_pan_cost.json` to a fraction of a frame, and a notch runs in the foreground,
+  so `pancost.notch_frames` (and `aimbatch`) convert them at `settlecost.SETTLE_FG` cycles a
+  frame, as a settle does, not at the 19656-cycle frame — the x1.125 the emulated pan passes
+  show between the two divisors.
 - **Live bracket attribution.** The sd-71 residual sits in how the live `$9630` bracket
   splits an action between aim and settle, not in either law's own bias — the settle's
   per-verb bias is ≤ 1.3 f offline.

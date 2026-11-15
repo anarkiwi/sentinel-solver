@@ -2,7 +2,8 @@
 
 Three players share the world model: the **phase player** (`sentinel/phase_player.py`), the
 default, which wins all eight measured boards, the **beam player** (`sentinel/beam_player.py`),
-a wide search on the GPU substrate, and the **reactive greedy player** (`sentinel/player.py`),
+a wide search on the GPU substrate (and, on the emulated game, the [search
+player](#the-search-player) built on its move generator), and the **reactive greedy player** (`sentinel/player.py`),
 which wins landscape 0 and is what the live-determinism gate drives. The phase and greedy
 players share `BasePlayer` (`sentinel/playerbase.py`). Neither reads the PRNG. Every tile-targeted action resolves
 through the ROM aim oracle (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path), and each
@@ -26,7 +27,10 @@ that cannot help while you ARE being drained.
 
 **A gap does not need forecasting.** `enemies.step` is byte-exact, so instead of predicting
 when a cone arrives, clone the state, run it forward over the action's real duration and
-look (`_drained_over`).
+look (`_drained_over`). On the emulated game (`play_player --emu`, `driver.emu_phase`) the
+clone is the machine itself: the action is done on a fork through the real keyboard driver and
+its outcome read off, so the lookahead takes exactly the game's time
+([architecture](architecture.md#the-emulated-game-sentinelemupy-driveremupy)).
 
 **Height buys freedom, and nothing else does.** Measured over every stance on ls335:
 
@@ -206,6 +210,75 @@ enemy clock (a hop is one macro priced as its verbs' sum and advanced after its 
 phase player's own landing probe). `python -m sentinel.tests.trace_suite --player beam --out
 docs/results/beam.json --readme` records the suite; the README table shows the beam columns
 beside the phase player's.
+
+## The search player
+
+`driver/search_player.py` is one search core over the emulated game
+(`python -m driver.play_player N [--emu] --player search [--preset wide|narrow] [--width W
+--depth D --branch B --commit M]`; without `--emu` the line is also played live in VICE). The emulator reproduces the game cycle for cycle, so a
+child's outcome is the game's own and needs no model clock:
+
+| part | what it is |
+|---|---|
+| moves | `beam_player.views`: `moves(..., exact=True)` over `Board` (absorb, hop with `k` boulders, mount, wait, relocation), each view the frame-cheapest lattice view of the model's pricing; `action_views` re-aims each later action of a hop at the stack its creates leave |
+| expansion | each move one `kbd_prog.compile_move` program; one `prog.forks` (`run_forks`, `keep=True`) per parent, the parents concurrently with the cores shared by program count; `move_facts` read off each child |
+| selection | `keep_best(width)` under `lexicographic` (alive, won, fewer enemies, higher eye, more energy), ties to fewer frames; identity is the machine state (RAM digest, cycle, registers, monitor state), so transpositions merge; a refused move (`status` not `HALT_OK`) is no child |
+| live | without `--emu`, VICE boots and records as for any live run and the search plans on an emulated session of the same landscape; each committed move's program is also `prog.interpret`ed on VICE and its `move_facts` compared (`live_audit`, the entry as move 0); the first disagreement is logged, recorded as `divergence` and ends the run, and a win counts only with VICE's `$0CDE` bit 6 (`landscape_done`) |
+| execution | receding horizon: search `depth` plies (or to a win), play the first `commit` moves of the best line on the session with the same programs (`prog.execute`; `prog.interpret` over a BinMon), each move's facts and machine key checked against the child that predicted it (`audit`) |
+
+On an exact world `moves` offers the relocation wherever the toll is in hand: its
+PRNG-driven landing is whatever the machine does. With the Sentinel gone the platform tile
+takes a hop (no boulders, toll kept, ranked first) or a mount whatever its height, and the
+relocation from the platform is the terminal hyperspace (`compile_move("finish")`). Each
+parent's expansion is memoized on its machine key and carried into the next search, so a
+replan re-expands only what the new root's beam adds. A move's waits stop past the flag
+stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the win (`$219B`), so
+a death or the win ends the move there (`Prog.guard`).
+
+### Results
+
+The ten suite boards with `python -m driver.emu_suite --player search --preset P --jobs 3`
+(`--tabulate --out-dir DIR` re-reads a run): won, actions, final energy and wall seconds per
+board; `audit` is executed moves whose facts equal the planned child's; `cores` is CPU over
+wall time during expansions. `EmuPhase` is `python -m driver.emu_suite` (the phase player
+on the emulator, ten jobs).
+
+| board | wide (16/30/3, commit 10) | narrow (4/12/2, commit 1) | EmuPhase |
+|---|---|---|---|
+| 0 | won 10, E0, 37 s | won 10, E0, 23 s | won 17, E1, 177 s |
+| 42 | won 16, E1, 61 s | won 16, E1, 37 s | lost 18, E0 |
+| 60 | won 21, E3, 89 s | won 21, E3, 69 s | won 34, E0, 321 s |
+| 110 | won 17, E2, 71 s | won 18, E2, 34 s | won 93, E6, 974 s |
+| 298 | won 18, E6, 129 s | won 18, E5, 102 s | won 30, E1, 346 s |
+| 321 | won 17, E2, 108 s | won 17, E1, 61 s | won 52, E4, 302 s |
+| 335 | won 26, E1, 174 s | won 26, E1, 83 s | lost 25, E0 |
+| 373 | won 16, E0, 85 s | lost 73, E0 | lost 11, E0 |
+| 1442 | won 18, E5, 126 s | won 18, E5, 77 s | won 29, E3, 402 s |
+| 9716 | won 26, E5, 78 s | won 26, E5, 64 s | lost 15, E2 |
+| suite | **10/10**, 6:02 wall, 1897 % CPU | 9/10, 3:40 wall, 938 % CPU | 6/10 |
+
+Every executed move's facts and machine state equal its planned child's (audit 100 % on
+every board), and a repeated run reproduces each trace and audit exactly. The narrow
+preset's ls373 line stays at eye 7.875 (absorbs, waits, one relocation) until every child
+dies.
+
+Live in VICE (`python -m driver.play_player N --player search`, wide preset, AVI
+recording, `out/play_player_NNNN_search.json`), VICE agrees with the emulated session on
+every move's facts:
+
+| board | result | live_audit | wall | media |
+|---|---|---|---|---|
+| 9716 | won 26, E5 | 27/27 | 328 s | [ls9716_search_win.png](media/ls9716_search_win.png) |
+| 335 | won 26, E1 | 27/27 | 354 s | [ls335_search_win.png](media/ls335_search_win.png) |
+
+Both traces equal the emulated runs above move for move, and both end with `$0CDE` =
+`$C0` read from VICE.
+
+`python -m driver.search_player N PLY [--preset P]` builds search ply `PLY`'s fork batches
+from the entry to landscape `N` (`ply_batches`: `[(base EmuMon, [programs])]`) and times
+each `prog.forks`, a reproducible workload for profiling. `python -m driver.emu_suite
+--player search [--preset P ...]` plays the suite; the audit column is plan against
+execution.
 
 ## The reactive greedy player
 

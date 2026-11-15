@@ -36,6 +36,7 @@ from sentinel.playerbase import (
     SIGHTS_CENTRE,
     TOGGLE_FRAMES,
     _Landings,
+    _Views,
     _view_at,
     settle_frames,
 )
@@ -150,14 +151,20 @@ def _top_ranked(mask, keys, branch):
     return row[keep], at[keep]
 
 
-def moves(board, landed, branch):
+def moves(board, landed, branch, exact=False):
     """The candidate moves of every board, as int64 columns ``parent``, ``kind``, ``tile``,
     ``k`` and ``slot``: absorbs, hops, mounts, one wait per board and, where the board is
     barren, one relocation, each class capped at ``branch`` and gated as the phase player
     gates it, a board's moves together and in that order.  A board is barren when no
     absorb, hop or mount reaches it; the relocation also needs the toll in hand and the
-    Sentinel still standing (:meth:`PhasePlayer._relocate`).  ``landed`` is ``(n, N, N)``: the tiles a keyboard view reaches; ``tile``
-    is packed x * N + y."""
+    Sentinel still standing (:meth:`PhasePlayer._relocate`).  ``landed`` is ``(n, N, N)``:
+    the tiles a keyboard view reaches; ``tile`` is packed x * N + y.
+
+    ``exact``: the world is the machine itself, so a relocation's PRNG landing is an
+    outcome like any other and it is offered wherever the toll is in hand, and the
+    endgame is searched (:meth:`PhasePlayer._finish`): with the Sentinel gone the
+    platform tile takes a hop or a mount whatever its height, a hop there keeps the toll,
+    and the relocation from the platform is the terminal hyperspace."""
     me, ar = board.player[:, None], board.rows[:, None]
     energy = board.energy[:, None]
     reach = landed[ar, board.xs, board.ys]
@@ -191,32 +198,46 @@ def moves(board, landed, branch):
     )
     stack = ~covered | (utype == mm.T_BOULDER) | (utype == mm.T_PLATFORM)
     eye = board.eye[:, None, None]
+    plat = np.zeros_like(landed)
+    end = exact & gone
+    if end.any():
+        pslot = board.occupied & (board.otype == mm.T_PLATFORM)
+        prow, pat = np.nonzero(pslot & end[:, None])
+        plat[prow, board.x[prow, pat], board.y[prow, pat]] = True
     need = np.maximum(0, np.ceil((eye + EYE_EPS - base) / BOULDER_H)).astype(np.int64)
+    need = np.where(plat, 0, need)
     gain = base + BOULDER_H * need - eye
     cost = 2 * need + ROBOT_E
-    fuel = board.fuel()
+    fuel = np.where(end[:, None, None], 0, board.fuel())
     purse = energy[:, :, None]
-    hop = landed & stack & (gain > 0) & (need <= MAX_BOULDERS) & (cost <= purse)
+    hop = (
+        landed & stack & ((gain > 0) | plat) & (need <= MAX_BOULDERS) & (cost <= purse)
+    )
     hop &= (purse - cost > 0) & ((purse - cost >= ROBOT_E) | (fuel > 0))
     flat = (board.n, -1)
+    rank = (~plat, -(gain / cost), -fuel)
     hop_row, hop_at = _top_ranked(
-        hop.reshape(flat), (-(gain / cost).reshape(flat), -fuel.reshape(flat)), branch
+        hop.reshape(flat), [r.reshape(flat) for r in rank], branch
     )
 
+    on_plat = plat[ar, board.xs, board.ys]
     ours = (
         board.tops
         & reach
         & notme
         & (kind == mm.T_ROBOT)
-        & (board.z > board.eye[:, None] + EYE_EPS)
+        & ((board.z > board.eye[:, None] + EYE_EPS) | on_plat)
     )
     near = fuel[ar, board.xs, board.ys]
     ours &= (energy >= ROBOT_E) | (near > 0)
     mount_row, mount_at = _top_ranked(ours, (-board.z,), branch)
 
     own = board.rows
-    barren = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1))
-    away = np.flatnonzero(barren & ~gone & (board.energy >= ROBOT_E))
+    if exact:
+        leave = ~gone | plat[board.rows, at_me[0][:, 0], at_me[1][:, 0]]
+    else:
+        leave = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1) | gone)
+    away = np.flatnonzero(leave & (board.energy >= ROBOT_E))
     sizes = [eat_row.size, hop_row.size, mount_row.size, own.size, away.size]
     parent = np.concatenate([eat_row, hop_row, mount_row, own, away])
     cls = np.repeat([ABSORB, HOP, MOUNT, WAIT, RELOCATE], sizes)
@@ -327,14 +348,10 @@ def _landings(states, grids, aim_from):
     ]
 
 
-def plan(states, imgs, board, beam, branch):
-    """The priced moves of every board as a dict of columns: :func:`moves`' ``parent``,
-    ``kind``, ``tile``, ``k`` and ``slot`` for the moves some view reaches, with ``span``
-    (frames, int64) and ``view`` (bearing, pitch, cursor x, y; -1 where a move has no aim).
-
-    Both lattices are swept for every board in one launch each, the (bearing, pitch) cells
-    of the aimed tiles are priced together and their aims summed over arrays; only the
-    settles run on the scalar models, sharing one pricing pass."""
+def _aimed(states, imgs, board, branch, exact):
+    """``(moves, aim)``: :func:`moves` with ``view`` (bearing, pitch, cursor x, y; -1
+    where a move has no aim) the frame-cheapest lattice view of each move's tile, and the
+    pricing terms :func:`plan` sums into spans."""
     n, tiles = len(states), mm.N * mm.N
     aim_from = board.aim_from()
     grids = [landtable.lattice(v_primary=p) for p in (True, False)]
@@ -344,7 +361,7 @@ def plan(states, imgs, board, beam, branch):
         for r, land in enumerate(lands[lat]):
             tid_of[lat, r, land.tiles] = np.arange(land.tiles.size)
     reach = (tid_of >= 0).any(axis=0).reshape(n, mm.N, mm.N)
-    mv = moves(board, reach, branch)
+    mv = moves(board, reach, branch, exact)
     parent, kind, tile = mv["parent"], mv["kind"], mv["tile"]
     in_primary, in_band = (tid_of[g, parent, tile] >= 0 for g in range(2))
     lat = np.where(in_primary, 0, np.where(in_band, 1, -1))
@@ -379,6 +396,71 @@ def plan(states, imgs, board, beam, branch):
         pick = aimed & (lat == g)
         *axes, cell[pick] = lattice_axes(ray[pick], grids[g])
         view[pick] = np.stack(axes, 1)
+    mv["view"] = view
+    live = (kind == WAIT) | (kind == RELOCATE) | aimed
+    priced = {
+        "aimed": aimed,
+        "lat": lat,
+        "ray": ray,
+        "cell": cell,
+        "grids": grids,
+        "aim_from": aim_from,
+        "pan_of": pan_of,
+        "ut_of": ut_of,
+        "live": live,
+    }
+    return mv, priced
+
+
+def views(states, imgs, board, branch):
+    """:func:`moves` of every board on an exact world, as columns with ``view``, for the
+    moves some view reaches (waits and relocations need none)."""
+    mv, priced = _aimed(states, imgs, board, branch, True)
+    return {name: col[priced["live"]] for name, col in mv.items()}
+
+
+def action_views(states, cols):
+    """Per move of ``cols`` (:func:`views`, ``parent`` indexing ``states``), the view
+    ``(h, v, cx, cy)`` of each of its actions, or None where one has no landing view:
+    a hop's later actions aim fresh (:meth:`PhasePlayer._build_and_mount`) at the stack
+    its earlier creates leave, from the facing the previous aim left; every other move
+    is its one view."""
+    out = []
+    for parent, kind, tile, k, view in zip(
+        cols["parent"], cols["kind"], cols["tile"], cols["k"], cols["view"]
+    ):
+        first = tuple(map(int, view))
+        if kind != HOP:
+            out.append((first,))
+            continue
+        xy = (int(tile) // mm.N, int(tile) % mm.N)
+        st, got = states[parent].clone(), [first]
+        for otype in (mm.T_BOULDER,) * int(k) + (mm.T_ROBOT,):
+            if actions.create(st, otype, xy) is None:
+                got = None
+                break
+            st.obj_h_angle[st.player], st.obj_v_angle[st.player] = got[-1][:2]
+            nxt = _Views(st).get(xy, band=True)
+            if nxt is None:
+                got = None
+                break
+            got.append((nxt["h_angle"], nxt["v_angle"], *map(int, nxt["cursor"])))
+        out.append(None if got is None else tuple(got))
+    return out
+
+
+def plan(states, imgs, board, beam, branch):
+    """The priced moves of every board as a dict of columns: :func:`moves`' ``parent``,
+    ``kind``, ``tile``, ``k`` and ``slot`` for the moves some view reaches, with ``span``
+    (frames, int64) and ``view`` (bearing, pitch, cursor x, y; -1 where a move has no aim).
+
+    Both lattices are swept for every board in one launch each, the (bearing, pitch) cells
+    of the aimed tiles are priced together and their aims summed over arrays; only the
+    settles run on the scalar models, sharing one pricing pass."""
+    mv, priced = _aimed(states, imgs, board, branch, False)
+    parent, kind, tile, view = mv["parent"], mv["kind"], mv["tile"], mv["view"]
+    aimed, lat, ray, cell = (priced[k] for k in ("aimed", "lat", "ray", "cell"))
+    grids, aim_from, ut_of = (priced[k] for k in ("grids", "aim_from", "ut_of"))
     bear = beam["bearing"][parent]
     reuse = (bear[:, 0] == view[:, 0]) & (bear[:, 1] == view[:, 1])
     cursor = np.where(reuse[:, None], beam["cursor"][parent], SIGHTS_CENTRE)
@@ -389,7 +471,7 @@ def plan(states, imgs, board, beam, branch):
     aim = aimbatch.aim_total_columns(
         np.where(reuse, 0.0, TOGGLE_FRAMES),
         np.where(turns > 0, ut_of[parent], 0.0),
-        pan_of[np.maximum(lat, 0), parent, cell],
+        priced["pan_of"][np.maximum(lat, 0), parent, cell],
         drive,
     )
 
@@ -409,12 +491,12 @@ def plan(states, imgs, board, beam, branch):
         same = key[2] == "transfer" and reuse[i]
         span[key] = (0.0 if same else aim[i]) + call()
     frames = np.zeros(len(kind), dtype=np.int64)
-    live = (kind == WAIT) | (kind == RELOCATE) | aimed
+    live = priced["live"]
     for i in np.flatnonzero(live & (kind != RELOCATE)):
         k = int(mv["k"][i])
         per = {v: span[(int(parent[i]), int(tile[i]), v)] for v in _verbs(kind[i], k)}
         frames[i] = int(round(float(_span_of(kind[i], k, per))))
-    mv["span"], mv["view"] = frames, view
+    mv["span"] = frames
     return {name: col[live] for name, col in mv.items()}
 
 

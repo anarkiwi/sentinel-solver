@@ -22,11 +22,13 @@ def _build_image():
     controller (xdist workers start after it); offline it stays absent and skips."""
     if os.path.exists(IMG) or os.environ.get("PYTEST_XDIST_WORKER"):
         return
+    from vagrant_moses.roms import RomFetchError
+
     try:
         from sentinel.tests import csdb
 
         csdb.build(IMG)
-    except OSError as exc:
+    except (OSError, RomFetchError) as exc:
         print(f"oracle image unavailable ({exc}); oracle tests skip")
 
 

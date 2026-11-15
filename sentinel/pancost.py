@@ -8,6 +8,7 @@ queues the notch's scroll steps. See docs/architecture.md for the derivation.
 import os
 
 from sentinel import aimcost, projector
+from sentinel.settlecost import SETTLE_FG
 
 # $9925 delta added before the plot, indexed by the $0008 direction ($10E9/$1130 fix the residue after it): 0 = bearing +8, 1 = bearing -8, 2 = pitch +4, 3 = pitch -4.
 PAN_DELTA = (0x14, 0xF8, 0x04, 0xF4)
@@ -20,10 +21,8 @@ PAN_ROWS = ((0xF0, 0x30), (0xF0, 0x30), (0xF0, 0xB0), (0xF0, 0xB0))
 # Strip clears: $3912 stores 24 bytes/iteration over 64 iterations, $38AD 32 over 40, each called twice (odd then even X), at 5 cycles a store plus 7 for the loop tail.
 _CLEAR_CYCLES_H = 2 * 64 * (24 * 5 + 7)
 _CLEAR_CYCLES_V = 2 * 40 * (32 * 5 + 7)
-CLEAR_FRAMES = (
-    _CLEAR_CYCLES_H / projector.FRAME_CYCLES,
-    _CLEAR_CYCLES_V / projector.FRAME_CYCLES,
-)
+# A notch runs in the foreground, so its cycles pass at SETTLE_FG a frame, as a settle's do.
+CLEAR_FRAMES = (_CLEAR_CYCLES_H / SETTLE_FG, _CLEAR_CYCLES_V / SETTLE_FG)
 
 _CACHE_MAX = int(os.environ.get("PAN_CACHE_MAX", "20000"))
 _NOTCH_CACHE = {}
@@ -53,8 +52,8 @@ def notch_plots(h0, v0, h1, v1):
 
 def notch_frames(state, direction, plot_h, plot_v, observer=None, skey=None):
     """Frames one pan notch costs: the strip clear plus the ONE plot_world it runs at
-    the intermediate angle, through that direction's $2993 buffer mode. Excludes the
-    queued scroll steps, which the caller charges as H_SCROLL/V_SCROLL."""
+    the intermediate angle, through that direction's $2993 buffer mode, at foreground
+    cycles a frame. Excludes the queued scroll steps (H_SCROLL/V_SCROLL)."""
     obs = state.player if observer is None else observer
     key = (
         projector.scene_key(state) if skey is None else skey,
@@ -74,7 +73,9 @@ def notch_frames(state, direction, plot_h, plot_v, observer=None, skey=None):
             None,
             PAN_ROWS[direction],
         )
-        return cost + CLEAR_FRAMES[0 if mode else 1]
+        return (
+            cost * projector.FRAME_CYCLES / SETTLE_FG + CLEAR_FRAMES[0 if mode else 1]
+        )
 
     return projector.memo(_NOTCH_CACHE, key, _CACHE_MAX, make)
 

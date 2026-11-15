@@ -6,7 +6,12 @@ logic (``_tick``) comes from the composed sim player via MRO.
 It goes first in the bases so its execution overrides win over ``BasePlayer``'s.
 """
 
-from driver import clock, core, kbd_aim, sentinel_execute as sx
+import os
+
+import numpy as np
+
+from driver import core, kbd_aim, kbd_prog, sentinel_execute as sx
+from driver.kbd_aim import PC_PAN_CALL, PC_PASS, RASTER_LINES
 from sentinel import phase_player, memmap as mm, player as sim_player, playerbase
 from sentinel.game import Game
 from sentinel.state import State
@@ -21,6 +26,8 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         super().__init__(bm, log, quantized=quantized)
         self._ex = ex
         self.subframes = {}
+        self.passes = []  # (step, frozen, scroll, update, pan) per pan pass
+        self._label = None
 
     def _timed(self, name, fn, *args):
         f0 = self._ex.frames()
@@ -28,6 +35,27 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         df = self._ex.frames() - f0
         self.subframes[name] = self.subframes.get(name, 0) + df
         return r
+
+    def _run_pass(self):
+        """Run one pan pass split at its ROM boundaries, appending ``(scroll, update,
+        pan)`` frames (raster-resolved) to ``passes``: $365D->$363D is the previous
+        notch's scroll loop, $363D->$365A update_game $127C, $365A->$365D $10B7."""
+        t = [self._now()]
+        for pc in (PC_PASS, PC_PAN_CALL, self.PC_PAN_DONE):
+            self._run_past_redraw(pc, kbd_aim._RU_COMMIT)
+            t.append(self._now())
+            if pc != self.PC_PAN_DONE:
+                self.bm.advance_instructions(1)
+        self.passes.append(
+            (self._label, self._ex.rd(mm.PLAYER_NOT_ACTED) >> 7)
+            + tuple(round(b - a, 3) for a, b in zip(t, t[1:]))
+        )
+
+    def _now(self):
+        """Frames since record start at raster resolution: the $9630 count plus the
+        raster line ($D011 bit7:$D012) over the PAL frame's 312 lines."""
+        ctrl, line = self.bm.mem_get(0xD011, 0xD012, bank="io")
+        return self._ex.frames() + (((ctrl & 0x80) << 1) | line) / RASTER_LINES
 
     def coarse_h(self, want):
         return self._timed("pan_h", super().coarse_h, want)
@@ -54,27 +82,51 @@ def drive_transfer_aim(kbd, tile, view, log):
     want = (view["h_angle"], view["v_angle"])
     reused = kbd.sights_live_on() and kbd.committed_bearing() == want
     if reused:
-        kbd.fine_cursor(*view["cursor"])
+        kbd.cursor_probe(*view["cursor"])
     else:
-        ach = kbd.drive_to(view)
-        if not ach["ok"]:
+        if not kbd.drive_probe(view):
             kbd.clear_bearing()
             return False
         kbd.set_bearing(*want)
-    rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+    rx, ry, los_hit, _ = kbd.probe_ray()
     if (rx, ry) == tuple(tile) and los_hit:
         return True
     log(f"    transfer aim probe ({rx},{ry}) los={los_hit} != {tuple(tile)}")
     if reused:  # the parked sights drifted: full re-drive, then re-probe
-        ach = kbd.drive_to(view)
-        if ach["ok"]:
+        if kbd.drive_probe(view):
             kbd.set_bearing(*want)
-            rx, ry, los_hit, _ = core.probe_tile(kbd.bm)
+            rx, ry, los_hit, _ = kbd.probe_ray()
             if (rx, ry) == tuple(tile) and los_hit:
                 return True
         log(f"    transfer re-aim probe ({rx},{ry}) los={los_hit}; not firing")
     kbd.clear_bearing()
     return False
+
+
+def save_tick(ticks_dir, n, player):
+    """Write the observed live image and the aim state the player decides from to
+    ``ticks_dir/tNNNN.npz``: everything :func:`load_tick` needs to replay that tick's
+    decision on the simulator."""
+    os.makedirs(ticks_dir, exist_ok=True)
+    bearing = player.last_bearing
+    np.savez_compressed(
+        os.path.join(ticks_dir, f"t{n:04d}.npz"),
+        mem=np.frombuffer(bytes(player.st.mem), dtype=np.uint8),
+        cursor=np.array(player.cursor, dtype=np.int64),
+        bearing=np.array((-1, -1) if bearing is None else bearing, dtype=np.int64),
+        trace_len=np.int64(len(player.trace)),
+    )
+
+
+def load_tick(path, cls=phase_player.PhasePlayer, **kwargs):
+    """A simulator player ``cls`` standing exactly where :func:`save_tick` saw the live
+    one: the same memory image, cursor and committed bearing."""
+    with np.load(path) as z:
+        mem, cursor, bearing = (np.asarray(z[k]) for k in ("mem", "cursor", "bearing"))
+    player = cls(Game(State.from_mem(mem.tobytes())), **kwargs)
+    player.cursor = cursor.tolist()
+    player.last_bearing = None if bearing[0] < 0 else tuple(bearing.tolist())
+    return player
 
 
 class LiveMixin:
@@ -84,24 +136,34 @@ class LiveMixin:
     player-specific kwargs to the composed sim player's constructor via
     ``super().__init__``."""
 
-    def __init__(self, session, log, result, **kwargs):
+    def __init__(self, session, log, result, ticks_dir=None, **kwargs):
         game = Game(State.from_mem(core.live_image(session.bm)))
+        self.ticks_dir = ticks_dir
+        self.tick_no = 0
         super().__init__(game, verbose=True, **kwargs)
         self.bm = session.bm
         self.bm.auto_resume = False  # world runs ONLY in deliberate run windows
         self.live_log = log
         self.result = result
         self.ex = sx.Executor(session.bm, log)
-        self.kbd = MeasuringKbdDriver(session.bm, log, quantized=True, ex=self.ex)
+        self.kbd = kbd_prog.ProgKbd(session.bm, log, self.ex)
         self.step_no = 0
         self.acted = False
         self.life_lost = None
+        self.audits = True  # price and record every step's charged-vs-measured frames
 
     def _observe(self):
+        """:meth:`_refresh` at a decision tick, saving the tick when ``ticks_dir``."""
+        self._refresh()
+        if self.ticks_dir:
+            save_tick(self.ticks_dir, self.tick_no, self)
+            self.tick_no += 1
+
+    def _refresh(self):
         """Snapshot live memory and LEAVE THE CPU HALTED: think time is a tooling
-        artifact, so the world advances only under real input (pans/actions),
-        already priced by the cost model.  Death is the drain flag or a silent
-        landscape auto-reset ($0CE5 re-frozen after we acted), NOT $0CDE bit7."""
+        artifact, so the world advances only under real input (pans/actions) and
+        deliberate waits.  Death is the drain flag or a silent landscape auto-reset
+        ($0CE5 re-frozen after we acted), NOT $0CDE bit7."""
         with self.bm.halted():
             mem = core.live_image(self.bm)
         self.st = State.from_mem(mem)
@@ -123,6 +185,9 @@ class LiveMixin:
         self.last_bearing = self.kbd.committed_bearing() if on else None
         self.cursor = [int(mem[kbd_aim.A_CX]), int(mem[kbd_aim.A_CY])]
 
+    def _lost(self):
+        return bool(self.life_lost) or super()._lost()
+
     def _dead(self):
         if self.st.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80:
             self.life_lost = "drained at zero energy"
@@ -137,15 +202,18 @@ class LiveMixin:
         the player's think time out of the live world -- the real world moves only
         when ``_fire``/``_wait`` drive the keyboard."""
 
-    def _wait(self):
+    def _wait(self, frames=playerbase.WAIT_FRAMES):
         """A deliberate wait spends REAL world time, FRAME-EXACT: step the $9630
-        per-frame marker ``WAIT_FRAMES`` times, leaving the CPU halted.  charged ==
-        measured now holds by construction whatever the warp state, so ``wait_audit``
-        is a regression pin; a stalled marker raises instead of being waited out."""
-        want = playerbase.WAIT_FRAMES
-        got = clock.run_frames(self.bm, want)
-        self.result.setdefault("wait_audit", []).append([self.step_no, want, got])
-        self.live_log(f"    [clock] wait: charged={want} measured={got} (exact frames)")
+        per-frame marker ``frames`` times, leaving the CPU halted, and re-read the
+        world.  The charged frames are the frames run whatever the warp state, so
+        ``wait_audit`` is a regression pin; a stalled marker raises."""
+        got = self.kbd.run_frames(frames)
+        if self.audits:
+            self.result.setdefault("wait_audit", []).append([self.step_no, frames, got])
+            self.live_log(
+                f"    [clock] wait: charged={frames} measured={got} (exact frames)"
+            )
+        self._refresh()
 
     def _drive_transfer_aim(self, tile, view):
         return drive_transfer_aim(self.kbd, tile, view, self.live_log)
@@ -163,6 +231,7 @@ class LiveMixin:
             otype = st.obj_type[top]
         whole_f0 = self.ex.frames()  # exact whole-action bracket (incl. transfer aim)
         self.kbd.subframes = {}  # per-step aim sub-term (pan/cursor/toggle) accumulator
+        self.kbd._label = f"p{self.step_no + 1}"
         if pverb == "transfer" and not self._drive_transfer_aim(tile, view):
             self._observe()
             return False
@@ -178,13 +247,25 @@ class LiveMixin:
             return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
+        out = sx.perform_step(
+            self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
+        )
+        if self.audits:
+            self._audit_step(pverb, tile, view, whole_f0)
+        self.acted = True
+        self._observe()
+        ok = out in ("ok", "diverge")  # diverge: primary effect landed, world moved
+        if ok:
+            self._log(verb, tile)
+        return ok
+
+    def _audit_step(self, pverb, tile, view, whole_f0):
+        """Record the step just performed: its charged aim and settle (the model's
+        prices) against the exact frames the machine spent."""
         aim_charged = self._step_aim_frames(pverb, view)
         # View-aware transfer settle: scene-dependent projector replot, not flat 47.
         settle_charged = self._settle(pverb, view, self._settle_eye(pverb, tile))
         charged = aim_charged + settle_charged
-        out = sx.perform_step(
-            self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
-        )
         whole_exact = self.ex.frames() - whole_f0  # exact, wrap-free aim+settle
         sa = self.result.get("settle_audit") or []
         lbl = f"p{self.step_no}"
@@ -220,12 +301,6 @@ class LiveMixin:
             f"    [clock] p{self.step_no} {pverb}: charged={round(charged)} "
             f"measured={whole_exact} (exact frames)"
         )
-        self.acted = True
-        self._observe()
-        ok = out in ("ok", "diverge")  # diverge: primary effect landed, world moved
-        if ok:
-            self._log(verb, tile)
-        return ok
 
     def _hyperspace(self):
         """Platform win: the verified multi-attempt primitive. Escape: ONE tap,

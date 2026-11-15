@@ -96,7 +96,8 @@ def _notch_costs(mems, rows, job_row, job_obs, direction, plot_h, plot_v):
         _PLANS[uniq[:, 2]],
     )
     cost = projector._cost_of(cycles)[back.reshape(-1)]  # pylint: disable=W0212
-    notch = (cost[: len(job_row)] + _CLEAR[direction]) + _SCROLL[direction]
+    fg = cost[: len(job_row)] * projector.FRAME_CYCLES / settlecost.SETTLE_FG
+    notch = (fg + _CLEAR[direction]) + _SCROLL[direction]
     return notch, settlecost.uturn_from_cost(cost[len(job_row) :])
 
 

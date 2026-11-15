@@ -242,3 +242,45 @@ def test_cpu_and_cuda_play_the_same_line(monkeypatch):
 def test_main_prints_the_line(capsys):
     assert bp.main(["0", "--width", "2", "--depth", "1", "--branch", "1"]) == 1
     assert "landscape 0: lost" in capsys.readouterr().out
+
+
+def _exact(st):
+    landed = _Views(st).landed()[None]
+    return bp.moves(bp.Board.of_states([st]), landed, 2, exact=True)
+
+
+def test_an_exact_world_searches_the_relocation_wherever_the_toll_is_in_hand():
+    st = Game.typed(42).state
+    assert not _relocations(42)[0] and (_exact(st)["kind"] == bp.RELOCATE).sum() == 1
+    st.energy = bp.ROBOT_E - 1
+    assert not (_exact(st)["kind"] == bp.RELOCATE).any()
+
+
+def _finished(code):
+    st = Game.typed(code).state
+    actions.remove_object(st, actions.SENTINEL_SLOT)
+    st.energy = 2 * bp.ROBOT_E
+    return st
+
+
+def test_an_exact_endgame_hops_down_onto_the_platform_ahead_of_any_climb():
+    st = _finished(0)
+    st.obj_z_height[st.player] = 15
+    plat = st.platform_xy[0] * mm.N + st.platform_xy[1]
+    landed = np.ones((1, mm.N, mm.N), dtype=bool)
+    board = bp.Board.of_states([st])
+
+    def hops(exact):
+        got = bp.moves(board, landed, 1, exact)
+        hop = got["kind"] == bp.HOP
+        return list(zip(got["tile"][hop].tolist(), got["k"][hop].tolist()))
+
+    assert hops(True) == [(plat, 0)] and (plat, 0) not in hops(False)
+    assert not (_exact(_finished(0))["kind"] == bp.RELOCATE).any()
+
+
+def test_an_exact_endgame_relocates_only_from_the_platform():
+    st = _finished(0)
+    me = st.player
+    st.obj_x[me], st.obj_y[me] = st.platform_xy
+    assert (_exact(st)["kind"] == bp.RELOCATE).sum() == 1

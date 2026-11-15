@@ -25,7 +25,7 @@ BEAM_COMMAND = (
     "python -m sentinel.tests.trace_suite --player beam --out docs/results/beam.json "
     "--readme"
 )
-MODES = {"live": "", "frozen": " (enemies frozen)"}
+MODES = {"live": "", "frozen": " (enemies frozen)", "search": " (search player)"}
 
 
 def load(path):
@@ -35,7 +35,10 @@ def load(path):
 
 
 def stale(run, offline):
-    """Whether ``run`` was played with a model other than the current offline one."""
+    """Whether ``run`` was played with a model other than the current offline one; a
+    search run plans on the emulated game, not the model."""
+    if run["mode"] == "search":
+        return False
     board = offline.get(str(run["landscape"]))
     return run["digest"] is None or board is None or run["digest"] != board["digest"]
 

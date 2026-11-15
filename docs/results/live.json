@@ -22,5 +22,13 @@
   "energy": 5,
   "media": "docs/media/ls1442_phase_win.png",
   "digest": null
+ },
+ {
+  "landscape": 335,
+  "mode": "search",
+  "actions": 26,
+  "energy": 1,
+  "media": "docs/media/ls335_search_win.png",
+  "digest": null
  }
 ]

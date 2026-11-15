@@ -39,6 +39,7 @@ def main(argv=None):
     p.add_argument("--player", choices=("greedy", "phase"), default="phase")
     p.add_argument("--max-actions", type=int, default=120)
     p.add_argument("--no-freeze", action="store_true")
+    p.add_argument("--ticks", default=None, help="save each observed tick image here")
     args = p.parse_args(argv)
 
     digits = f"{args.landscape:04d}"
