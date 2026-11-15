@@ -43,9 +43,9 @@ def test_image_diff_lists_exactly_the_changed_bytes(tmp_path):
 
 def test_first_action_matches_a_replayed_tick(tmp_path):
     _player, path = _saved(tmp_path, bearing=None, cursor=(80, 95))
-    _p, offset, act = replay_tick.first_action((path, 0))
+    _p, offset, act = replay_tick.first_action((path, 0, 8))
     assert offset == 0 and act is not None
-    played = replay_tick.replay(path, ticks=replay_tick.DECIDE_TICKS, verbose=False)
+    played = replay_tick.replay(path, ticks=8, verbose=False)
     _f, verb, tile, *_ = played.trace[0]
     assert act == (verb, tuple(tile))
 

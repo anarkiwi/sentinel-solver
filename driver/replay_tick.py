@@ -18,8 +18,6 @@ from driver.live_player import load_tick
 from sentinel import enemies
 from sentinel.game import Game
 
-DECIDE_TICKS = 8  # decision ticks a jittered replay may idle before it is called None
-
 
 def image_diff(mem, landscape):
     """``[(addr, live, typed)]`` for every byte where ``mem`` differs from
@@ -43,10 +41,10 @@ def replay(path, ticks=1, offset=0, verbose=True):
 
 def first_action(job):
     """``(path, offset, (verb, tile) or None)``: the first action taken from ``path``
-    after an ``offset``-frame clock shift, within :data:`DECIDE_TICKS` ticks."""
-    path, offset = job
+    after an ``offset``-frame clock shift, within ``ticks`` decision ticks."""
+    path, offset, ticks = job
     player = replay(path, 0, offset, verbose=False)
-    for _ in range(DECIDE_TICKS):
+    for _ in range(ticks):
         player._tick()  # pylint: disable=protected-access
         if player.trace:
             _f, verb, tile, *_ = player.trace[0]
@@ -54,10 +52,11 @@ def first_action(job):
     return path, offset, None
 
 
-def jitter(paths, offsets, workers):
-    """``{path: [first action per offset]}`` over a process pool."""
+def jitter(paths, offsets, workers, ticks):
+    """``{path: [first action per offset]}`` over a process pool, each replay allowed
+    ``ticks`` decision ticks to act."""
     out = {p: [None] * len(offsets) for p in paths}
-    jobs = [(p, k) for p in paths for k in offsets]
+    jobs = [(p, k, ticks) for p in paths for k in offsets]
     with ProcessPoolExecutor(workers) as pool:
         for path, k, act in tqdm(
             pool.map(first_action, jobs), total=len(jobs), desc="jitter"
@@ -70,7 +69,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("ticks_dir")
     parser.add_argument("--only", type=int, nargs="*", help="tick numbers to replay")
-    parser.add_argument("--ticks", type=int, default=1)
+    parser.add_argument("--ticks", type=int, default=1, help="decision ticks to play")
     parser.add_argument("--diff", type=int, default=None, metavar="LANDSCAPE")
     parser.add_argument("--jitter", type=int, nargs="+", default=None, metavar="F")
     parser.add_argument("--workers", type=int, default=max(1, os.cpu_count() // 2))
@@ -79,7 +78,7 @@ def main(argv=None):
     if args.only is not None:
         paths = [p for p in paths if int(os.path.basename(p)[1:5]) in args.only]
     if args.jitter is not None:
-        for path, acts in jitter(paths, args.jitter, args.workers).items():
+        for path, acts in jitter(paths, args.jitter, args.workers, args.ticks).items():
             stable = "STABLE" if len(set(acts)) == 1 else "FLIPS"
             print(os.path.basename(path), stable, acts)
         return 0
