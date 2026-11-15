@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from numba import njit
 
-from sentinel import los, los_jit, landtable, actions, memmap as mm
+from sentinel import los, los_jit, landtable
 from sentinel.game import Game
 from sentinel.los_jit import (
     BLOCKED,
@@ -103,79 +103,8 @@ from sentinel.los_jit import (
 
 pytestmark = pytest.mark.skipif(not los._HAVE_JIT, reason="numba not available")
 
-SEEDS = [0, 1, 7, 42, 66, 999, 9999]
-
 
 # rich object-stack scenarios
-RING8 = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
-
-
-def _ring(typ, r):
-    return [(dx * r, dy * r, typ) for dx, dy in RING8]
-
-
-def _place(st, px, py, specs):
-    """create each (dx, dy, type) around (px, py); creates silently no-op if the
-    tile is off-board or the stack can't take it."""
-    for dx, dy, typ in specs:
-        x, y = px + dx, py + dy
-        if 0 <= x < mm.N and 0 <= y < mm.N:
-            actions.create(st, typ, (x, y))
-
-
-def _scen_boulders(st, px, py):
-    """Lone boulders in concentric rings."""
-    _place(
-        st,
-        px,
-        py,
-        _ring(mm.T_BOULDER, 1) + _ring(mm.T_BOULDER, 2) + _ring(mm.T_BOULDER, 3),
-    )
-
-
-def _scen_stacks(st, px, py):
-    """Boulder + synthoid stacks, plus trees and a platform tile."""
-    for dx, dy in RING8:
-        x, y = px + dx, py + dy
-        if 0 <= x < mm.N and 0 <= y < mm.N:
-            actions.create(st, mm.T_BOULDER, (x, y))
-            actions.create(st, mm.T_ROBOT, (x, y))  # stacks on the boulder
-    _place(
-        st,
-        px,
-        py,
-        [
-            (2, 0, mm.T_TREE),
-            (0, 2, mm.T_TREE),
-            (2, 2, mm.T_PLATFORM),
-            (3, 0, mm.T_TREE),
-        ],
-    )
-
-
-def _scen_deep(st, px, py):
-    """Deep multi-boulder stacks with a synthoid on top."""
-    for dx, dy in [(1, 0), (0, 1), (2, 0), (0, 2), (1, 1), (-1, 0), (0, -1)]:
-        x, y = px + dx, py + dy
-        if 0 <= x < mm.N and 0 <= y < mm.N:
-            actions.create(st, mm.T_BOULDER, (x, y))
-            actions.create(st, mm.T_BOULDER, (x, y))
-            actions.create(st, mm.T_BOULDER, (x, y))
-            actions.create(st, mm.T_ROBOT, (x, y))
-
-
-def _scen_elevated(st, px, py):
-    """Objects all around, viewed from an elevated eye (as after a transfer up)."""
-    _place(
-        st,
-        px,
-        py,
-        _ring(mm.T_BOULDER, 1) + _ring(mm.T_TREE, 2) + _ring(mm.T_BOULDER, 3),
-    )
-    return (st.obj_z_height[st.player] + 2) & 0xFF
-
-
-SCENARIOS = [_scen_boulders, _scen_stacks, _scen_deep, _scen_elevated]
 
 
 @njit

@@ -22,10 +22,6 @@ def test_first_of_maps_each_key_to_its_first_position():
     assert batch.first_of([]) == ([], [])
 
 
-class _Enough(BaseException):
-    """Stops the play once enough replot advances are recorded."""
-
-
 @pytest.mark.parametrize("threads", (1, 99))
 def test_landings_match_single_and_share_duplicates(new_game, monkeypatch, threads):
     monkeypatch.setattr(batch, "width", lambda: threads)

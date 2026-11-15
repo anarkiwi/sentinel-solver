@@ -21,8 +21,6 @@ from driver import sentinel_state as gs
 
 # ---- live RAM addresses (the ROM's object-array + sights layout) -------------
 A_SLOT = mm.PLAYER_OBJECT  # 0x000B
-A_X = mm.OBJECTS_X  # 0x0900 + slot
-A_Y = mm.OBJECTS_Y  # 0x0980 + slot
 A_ENERGY = mm.PLAYER_ENERGY  # 0x0C0A, 6-bit
 A_ACTION_LATCH = 0x0CE4  # bit7 set mid-pan / queued-wrap (reject transient probes)
 

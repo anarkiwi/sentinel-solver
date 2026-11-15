@@ -7,10 +7,9 @@ import inspect
 import os
 import textwrap
 
-import numpy as np
 import pytest
 
-from sentinel import kern, landtable, los
+from sentinel import kern
 
 FLOAT_OK = {"_cell_span", "_cell_last"}
 CASTS = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
@@ -136,18 +135,4 @@ def gpu(fn):
 
 
 SIM = os.environ.get("NUMBA_ENABLE_CUDASIM") == "1"
-SLICE = 32 if SIM else 20000
 BOARDS = (335, 42) if SIM else (0, 42, 335, 1442)
-
-
-def _params(st, slot):
-    return landtable._march_params(st, slot, None, landtable.MAX_STEPS)
-
-
-def _rays(st, slot, grids, rng):
-    """Random lattice indices, half of them from the landing candidates."""
-    n = los._lattice_vectors(*grids)[0].shape[0]
-    cand = landtable.landing_rays(st, slot, None, grids)
-    return np.unique(
-        np.concatenate([rng.integers(0, n, SLICE // 2), rng.choice(cand, SLICE // 2)])
-    )

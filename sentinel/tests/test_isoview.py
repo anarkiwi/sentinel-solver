@@ -75,22 +75,6 @@ def test_annotations_render_arrows_and_panel():
         assert token in text
 
 
-def test_cost_layer_loops_cleanly():
-    """Every animation track is a well-formed loop: values and keyTimes agree, and
-    keyTimes run monotonically from 0 to at most 1 (SMIL drops a track otherwise)."""
-    st = Game.typed(335).state
-    measured = {"captions": [("a", "b", "c")] * len(isoview.BEATS)}
-    root = _svg(overlay=isoview.cost_layer(st, measured, [(3, 4), (9, 9)]))
-    tracks = root.findall(f".//{NS}animate")
-    assert len(tracks) > 50
-    for a in tracks:
-        vals = a.get("values").split(";")
-        keys = [float(k) for k in a.get("keyTimes").split(";")]
-        assert len(vals) == len(keys) and keys == sorted(keys)
-        assert keys[0] == 0.0 and keys[-1] <= 1.0
-        assert a.get("dur") == f"{isoview.LOOP}s"
-
-
 def test_cli_writes_svg(tmp_path):
     out = tmp_path / "ls0.svg"
     assert isoview.main(["0", "--out", str(out)]) == 0

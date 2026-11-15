@@ -111,17 +111,6 @@ def _views(state):
                 yield setup, (h, v, mode, setup["quadrant"])
 
 
-def _scene_cases():
-    """(state, label) over the golden VIEWS boards, plain and with object stacks."""
-    for ls in LANDSCAPES:
-        yield landscape.generate(ls), f"ls{ls}"
-    for ls in LANDSCAPES[:3]:
-        state = landscape.generate(ls)
-        tiles = _stacked(state)
-        assert tiles, f"ls{ls}: fixture produced no object tile"
-        yield state, f"ls{ls}+objects"
-
-
 def _same(a, b):
     """Compare two project_scene results: tiles/counts by value, ``fill`` elementwise."""
     return a[:3] == b[:3] and np.array_equal(a[3], b[3]) and a[4] == b[4]

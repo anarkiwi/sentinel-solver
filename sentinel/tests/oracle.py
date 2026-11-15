@@ -128,7 +128,7 @@ def machine_from_image(src):
     board lives in low RAM outside the ROM ``LOADED`` regions, so it survives.
 
     Per-enemy state INSIDE a LOADED region does not: ``ROTATION_SPEED_TABLE`` (`$9D37`)
-    and ``COOLDOWN_BRESENHAM`` (`$1335`) are overwritten by the image, so a caller seeding
+    and the `$1335` cooldown accumulator are overwritten by the image, so a caller seeding
     a recorded clock must rewrite them after this returns or the ROM rotates by the
     wrong step and every comparison is silently invalid.  ``PLAY_DISPLAY_FLAG`` is one
     of those, and is restored here because the image was dumped before play began.
@@ -211,14 +211,6 @@ class Trace(NamedTuple):
     end: int
 
     @property
-    def sp_before(self):
-        return np.concatenate(([self.sp0], self.sp[:-1])).astype(np.uint8)
-
-    @property
-    def x_before(self):
-        return np.concatenate(([0], self.x[:-1])).astype(np.uint8)
-
-    @property
     def cycles_after(self):
         return np.append(self.cycles[1:], np.uint64(self.end))
 
@@ -285,7 +277,6 @@ def run_traced(cpu, probes=None, stops=(RET,)):
 
 
 PLOT_WORLD = 0x2625  # plot_world
-FRAME_CYCLES = 19656.0  # PAL frame
 
 
 def prepare_render_context(cpu, mem, buffer_mode=0):
@@ -306,94 +297,6 @@ def prepare_render_context(cpu, mem, buffer_mode=0):
     tables = cycles(cpu, mem, 0x3700)
     cycles(cpu, mem, 0x2993, a=buffer_mode)
     return occlusion, tables
-
-
-class Prepared(NamedTuple):
-    """A board after the $357D prologue, with the CPU cycles of its $245B and $3700."""
-
-    image: bytes
-    occlusion_cycles: int
-    table_cycles: int
-
-
-def render_frame_cost(cpu, mem, h_angle, v_angle):
-    """Run the real plot_world ($2625) once headless with the raytraced occlusion
-    table ($245B) active, from the player at (h_angle, v_angle); return the exact
-    frame cost = plot_world CPU-cycle delta / 19656. Mirrors the golden setup."""
-    player = mem[0x000B]
-    mem[0x006E] = player
-    mem[0x09C0 + player] = h_angle & 0xFF  # objects_h_angle
-    mem[0x0140 + player] = v_angle & 0xFF  # objects_v_angle
-    prepare_render_context(cpu, mem)
-    return cycles(cpu, mem, PLOT_WORLD) / FRAME_CYCLES
-
-
-def prepared_image(src, buffer_mode=0):
-    """``src`` (a live sim image) after the $357D render prologue, as a :class:`Prepared`.
-
-    $245B, $3700 and $2993 read no view angle, so one prepare serves every view of
-    the board through :func:`plot_world_frames` and every strip through
-    :func:`strip_frames`."""
-    cpu, mem, _ = machine_from_image(src)
-    mem[0x006E] = mem[0x000B]
-    occlusion, tables = prepare_render_context(cpu, mem, buffer_mode)
-    return Prepared(bytes(mem), occlusion, tables)
-
-
-def plot_world_frames(prepared, h_angle, v_angle):
-    """Exact plot_world frame cost on a :func:`prepared_image` at (h_angle, v_angle)."""
-    cpu, mem, _ = wrap_image(prepared.image)
-    player = mem[0x000B]
-    mem[0x09C0 + player] = h_angle & 0xFF
-    mem[0x0140 + player] = v_angle & 0xFF
-    return cycles(cpu, mem, PLOT_WORLD) / FRAME_CYCLES
-
-
-UPDATE_OBJECT_ON_SCREEN = 0x1F9F
-
-
-REPLOT_LINE = 0x1FA4  # $1FA2 BCS not taken: the strip replot proper, past $209B
-
-
-def strip_frames(prepared, target, from_pc=REPLOT_LINE):
-    """Exact $1F9F frame cost of ``target`` on a :func:`prepared_image`, counted from
-    the first arrival at ``from_pc``."""
-    cpu, mem, _ = wrap_image(prepared.image)
-    return _update_object(cpu, mem, target, from_pc)
-
-
-def _update_object(cpu, mem, target, from_pc=None, trace=False):
-    mem[0x0091] = target
-    enter(cpu, mem, UPDATE_OBJECT_ON_SCREEN)
-    c0 = cpu.processorCycles
-    starts = {}
-
-    def start(c):
-        starts.setdefault(from_pc, c.processorCycles)
-
-    probes = None if from_pc is None else {from_pc: start}
-    tr = run_traced(cpu, probes) if trace else None
-    if not trace:
-        stops = [RET] if from_pc is None else [RET, from_pc]
-        cpu.run_until(max_cycles=MAX_CYCLES, stop_pcs=stops)
-        if cpu.pc != RET:
-            start(cpu)
-            cpu.run_until(max_cycles=MAX_CYCLES, stop_pcs=[RET])
-    assert cpu.pc == RET, "$1F9F did not return"
-    frames = (cpu.processorCycles - starts.get(from_pc, c0)) / FRAME_CYCLES
-    return (frames, tr) if trace else frames
-
-
-def update_object_cost(cpu, mem, target, trace=False, from_pc=None):
-    """Run the real $1F9F once headless on ``target`` and return its frame cost.
-
-    Same render context as :func:`render_frame_cost`; $1FC2 re-points the camera at
-    the object's strip, so the view is the ROM's. ``from_pc`` starts counting there
-    (``REPLOT_LINE`` drops $209B). With ``trace``, returns ``(frames, Trace)`` of the
-    whole run."""
-    mem[0x006E] = mem[0x000B]
-    prepare_render_context(cpu, mem)
-    return _update_object(cpu, mem, target, from_pc, trace)
 
 
 def generate_machine(landscape):
@@ -419,9 +322,6 @@ def generate(landscape):
     return generate_machine(landscape)[1]
 
 
-# --- round-by-round enemy driver -------------------------------------------
-TICK_COOLDOWNS = 0x1317  # update_enemy_cooldowns
-UPDATE_ENEMIES = 0x16B5  # update_enemies
 # Rendering/sound entry points reached from update_enemies -- stubbed with RTS so
 # the enemy dynamics run headless (they don't change the modelled game state):
 # update_object_on_screen, play_sound, plot_status_bar, start_tune,
@@ -434,18 +334,10 @@ WORLD_BUSY_PLOTTING = (
 
 def prime_enemy_driver(cpu, mem, state):
     """Stub rendering/sound and prime the cursor/gate so update_enemies can be
-    stepped one game round at a time, matching the pure-sim ``enemies.step``."""
+    stepped one game round at a time."""
     for addr in RENDER_STUBS:
         mem[addr] = 0x60  # RTS
     mem[WORLD_BUSY_PLOTTING] = 0x00
     mem[0x0090] = 7  # cursor
     mem[0x0C50] = 0  # cooldown gate
     del cpu, state
-
-
-def step_enemy_round(cpu, mem, state):
-    """One game round on the real 6502: update_enemy_cooldowns + update_enemies."""
-    state["stop"] = False
-    call(cpu, mem, TICK_COOLDOWNS, state=state)
-    state["stop"] = False
-    call(cpu, mem, UPDATE_ENEMIES, state=state)

@@ -61,8 +61,3 @@ class Prng:
         for i in range(5):
             mem[PRND_STATE + i] = self.s[i]
         return self
-
-
-def seed_state(landscape):
-    """The 5-byte LFSR state for a landscape number, as a list."""
-    return Prng.seeded(landscape).s

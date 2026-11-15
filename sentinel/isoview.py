@@ -439,7 +439,7 @@ def _panel(x, y, title, subtitle, state, acts, notes):
     return out
 
 
-def diagram(state, title="landscape", subtitle=(), acts=(), notes=(), overlay=()):
+def diagram(state, title="landscape", subtitle=(), acts=(), notes=()):
     """The full annotated isometric SVG for ``state`` as a string."""
     w, h = _canvas()
     defs = "".join(
@@ -464,175 +464,12 @@ def diagram(state, title="landscape", subtitle=(), acts=(), notes=(), overlay=()
         ez = terrain.resolve_ground(state, GRID - 1, t)[0]
         bx, by = project(GRID + 0.9, t + 0.5, ez)
         body.append(_text(bx, by, f"y{t}", 9.5, DIM, "middle"))
-    body += list(overlay)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.0f}" height="{h:.0f}" '
         f'viewBox="0 0 {w:.0f} {h:.0f}">'
         f'<rect width="{w:.0f}" height="{h:.0f}" fill="{BG}"/>'
         f"<defs>{defs}</defs>" + "".join(body) + "</svg>"
     )
-
-
-LOOP = 24.0  # animation period, seconds
-BEATS = ((0.5, 3.5), (3.5, 10.0), (10.0, 14.0), (14.0, 18.0), (18.0, 23.5))
-
-
-def _kf(attr, pairs, calc="discrete"):
-    """One looping keyframe track: ``pairs`` is [(seconds, value), ...] over ``LOOP``."""
-    times = ";".join(f"{min(1.0, t / LOOP):.5f}" for t, _ in pairs)
-    vals = ";".join(str(v) for _, v in pairs)
-    return (
-        f'<animate attributeName="{attr}" values="{vals}" keyTimes="{times}" '
-        f'dur="{LOOP}s" calcMode="{calc}" repeatCount="indefinite"/>'
-    )
-
-
-def _window(t0, t1, hold="0"):
-    """Opacity keyframes that show an element only between ``t0`` and ``t1``."""
-    return _kf("opacity", [(0, hold), (t0, 1), (t1, hold), (LOOP, hold)])
-
-
-def _steps(t0, t1, values, pad=False):
-    """(seconds, value) pairs stepping through ``values`` between ``t0`` and ``t1``;
-    ``pad`` holds the first/last value out to the whole loop."""
-    n = max(1, len(values) - 1)
-    out = [(t0 + (t1 - t0) * i / n, v) for i, v in enumerate(values)]
-    return [(0, values[0])] + out + [(LOOP, values[-1])] if pad else out
-
-
-def _ray(eye, tip, color, width=1.0, extra=""):
-    return (
-        f'<line x1="{eye[0]:.1f}" y1="{eye[1]:.1f}" x2="{tip[0]:.1f}" '
-        f'y2="{tip[1]:.1f}" stroke="{color}" stroke-width="{width}" '
-        f'stroke-linecap="round"{extra}>'
-    )
-
-
-def _fan(ex, ey, ez, reach, bearings, pitches):
-    """Ray tips for each bearing at the mid pitch, and for each pitch on one bearing."""
-    tips_b, tips_p = [], []
-    for b in bearings:
-        a = b / 256.0 * 2 * math.pi
-        tips_b.append(
-            project(ex + reach * math.cos(a), ey + reach * math.sin(a), ez - 3.0)
-        )
-    a = bearings[len(bearings) // 3] / 256.0 * 2 * math.pi
-    for (
-        p
-    ) in pitches:  # constant ground reach, varying rise: a fan in the vertical plane
-        tips_p.append(
-            project(ex + reach * math.cos(a), ey + reach * math.sin(a), ez + reach * p)
-        )
-    return tips_b, tips_p
-
-
-def cost_layer(state, measured, candidates=()):
-    """An animated overlay explaining where one decision tick's time goes.
-
-    Five beats over :data:`LOOP` seconds: one aim is one ROM LOS march; the bearing
-    lattice; the pitch band; the 64x64 sights window; and the multiplication by hop
-    prices and search nodes that never terminates."""
-    px, py = state.player_xy()
-    ez = state.eye_z()
-    ex, ey = px + 0.5, py + 0.5
-    eye = project(ex, ey, ez)
-    bearings = list(range(0, 256, 8))
-    pitches = [0.30 - 0.042 * i for i in range(27)]  # rise per unit reach
-    tips_b, tips_p = _fan(ex, ey, ez, 11.0, bearings, pitches)
-    out = []
-
-    for i, tip in enumerate(tips_b):  # the lattice fan, filling in bearing by bearing
-        t = BEATS[1][0] + (BEATS[1][1] - BEATS[1][0]) * i / len(tips_b)
-        out.append(
-            _ray(eye, tip, "#59b8ff", 0.8, ' opacity="0"')
-            + _kf("opacity", [(0, 0), (t, 0.32), (BEATS[3][1], 0.32), (LOOP, 0)])
-            + "</line>"
-        )
-
-    for i, tip in enumerate(tips_p):  # the pitch band on one bearing, filling in
-        t = BEATS[2][0] + (BEATS[2][1] - BEATS[2][0]) * i / len(tips_p)
-        out.append(
-            _ray(eye, tip, "#ffd166", 0.7, ' opacity="0"')
-            + _kf("opacity", [(0, 0), (t, 0.5), (BEATS[3][1], 0.5), (LOOP, 0)])
-            + "</line>"
-        )
-
-    probe = [(0, tips_b[0])] + _steps(*BEATS[1], tips_b) + _steps(*BEATS[2], tips_p)
-    probe += [(BEATS[3][1], tips_p[-1]), (LOOP, tips_b[0])]
-    out.append(
-        _ray(eye, tips_b[0], "#ffd166", 2.4)
-        + _kf("x2", [(t, f"{p[0]:.1f}") for t, p in probe])
-        + _kf("y2", [(t, f"{p[1]:.1f}") for t, p in probe])
-        + _window(0.0, BEATS[3][1], hold="0.15")
-        + "</line>"
-    )
-
-    for i, tile in enumerate(candidates):  # beat 5: every candidate wants its own sweep
-        t0 = BEATS[4][0] + 0.22 * i
-        cx, cy = _tile_top(state, *tile)
-        out.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="none" '
-            f'stroke="#ff9f45" stroke-width="2" opacity="0">'
-            f'{_kf("r", [(0, 4), (t0, 4), (t0 + 1.4, 26), (LOOP, 26)], calc="linear")}'
-            f"{_window(t0, BEATS[4][1], hold='0')}</circle>"
-        )
-        out.append(
-            _ray(eye, (cx, cy), "#ff9f45", 1.2, ' opacity="0"')
-            + _window(t0, BEATS[4][1])
-            + "</line>"
-        )
-
-    px0, py0 = PAD + 16, PAD + HEAD_H + 300  # the sights window inset
-    out.append(
-        f'<g opacity="0">{_window(*BEATS[3])}'
-        f'<rect x="{px0}" y="{py0}" width="120" height="120" fill="#0b0e13" '
-        f'stroke="#59b8ff" stroke-width="1"/>'
-        + "".join(
-            f'<line x1="{px0}" y1="{py0 + 15 * k}" x2="{px0 + 120}" y2="{py0 + 15 * k}" '
-            f'stroke="#59b8ff" stroke-width="0.3"/>'
-            f'<line x1="{px0 + 15 * k}" y1="{py0}" x2="{px0 + 15 * k}" y2="{py0 + 120}" '
-            f'stroke="#59b8ff" stroke-width="0.3"/>'
-            for k in range(9)
-        )
-        + f'<circle cx="{px0}" cy="{py0}" r="3.5" fill="#ffd166">'
-        + _kf(
-            "cx",
-            _steps(
-                *BEATS[3],
-                [f"{px0 + 15 * (i % 8) + 7:.0f}" for i in range(24)],
-                pad=True,
-            ),
-        )
-        + _kf(
-            "cy",
-            _steps(
-                *BEATS[3],
-                [f"{py0 + 15 * (i // 8) + 7:.0f}" for i in range(24)],
-                pad=True,
-            ),
-        )
-        + "</circle>"
-        + _text(px0, py0 - 8, "sights cursor 64 x 64 px", 10, "#59b8ff")
-        + "</g>"
-    )
-
-    cap_x, cap_y = PAD + 16, PAD + 34
-    for (t0, t1), line in zip(BEATS, measured["captions"]):
-        for k, part in enumerate(line):
-            out.append(
-                f'<g opacity="0">{_window(t0, t1)}'
-                + _text(
-                    cap_x,
-                    cap_y + 20 * k,
-                    part,
-                    15 if not k else 12.5,
-                    INK if not k else "#ffd166",
-                    "start",
-                    "bold" if not k else "normal",
-                )
-                + "</g>"
-            )
-    return out
 
 
 def write(svg, path):

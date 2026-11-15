@@ -5,16 +5,10 @@ digits read as hex. Mixing the two silently selects a different board; these pin
 conversion against the human-win fixtures, which record both names.
 """
 
-import os
-
 import pytest
 
 from sentinel import landscape
 from sentinel.game import Game
-
-FIXTURES = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "fixtures", "human_wins"
-)
 
 
 @pytest.mark.parametrize(

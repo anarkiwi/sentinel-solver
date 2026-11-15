@@ -254,7 +254,7 @@ def test_the_live_search_records_its_mirror_audit_and_the_rom_win_flag(
 
     monkeypatch.setattr(core, "boot_and_play", boot_and_play)
     out = tmp_path / "run.json"
-    args = "0 --player search --width 2 --depth 2 --branch 1 --max-actions 2 --out"
+    args = "0 --width 2 --depth 2 --branch 1 --max-actions 2 --out"
     assert play_player.main(args.split() + [str(out)]) == 1
     run = json.loads(out.read_text())
     assert [r[0] for r in run["live_audit"]] == [0, 1, 2] and run["divergence"] is None

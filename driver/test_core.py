@@ -21,4 +21,4 @@ def test_landscape_from_digits_matches_prng_seed_bytes():
     from sentinel import prng
 
     seed = core.landscape_from_digits("0335")
-    assert prng.seed_state(seed)[:2] == [0x35, 0x03]
+    assert prng.Prng.seeded(seed).s[:2] == [0x35, 0x03]

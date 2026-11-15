@@ -70,16 +70,14 @@ class Prog:
     """A driver program under construction, ``budget`` cycles at most natively: the
     vagrant-moses builder ops by name
     (``p.ld(R[0], addr)``, ``p.beq(R[0], 5, "done")``) plus timed :meth:`run`,
-    :meth:`step`, fresh labels, scratch registers and catch handlers."""
+    :meth:`step`, fresh labels and scratch registers."""
 
     def __init__(self, budget):
         self.budget = budget  # cycles: a native run's hang guard
         self.ops = []
-        self.handlers = []
         self.pcs = set()
         self._labels = 0
         self._free = list(range(SCRATCH.n))[::-1]
-        self._catch = []
         self._guard = None
         self._lowered = {}
         self._resolved = None
@@ -91,7 +89,6 @@ class Prog:
 
     def _emit(self, *op):
         self.ops.append(op)
-        self.handlers.append(self.thrower)
         self._lowered, self._resolved = {}, None
         return self
 
@@ -115,20 +112,6 @@ class Prog:
             self._free.extend(reversed(got))
 
     @contextlib.contextmanager
-    def catch(self, label):
-        """Timeouts inside the block branch to ``label``, as ``except`` would."""
-        self._catch.append(label)
-        try:
-            yield
-        finally:
-            self._catch.pop()
-
-    @property
-    def thrower(self):
-        """Where a timeout here goes: the innermost handler, else the raise."""
-        return self._catch[-1] if self._catch else _RAISE
-
-    @contextlib.contextmanager
     def guard(self, pcs, check):
         """Every wait in the block also stops before any of ``pcs``, and ``check(self)``
         emits the ops run after each wait (in :data:`GUARD`)."""
@@ -138,15 +121,13 @@ class Prog:
         finally:
             self._guard = None
 
-    def run(self, pc, seconds, on_timeout=None, stops=()):
+    def run(self, pc, seconds, stops=()):
         """``run_until_pc(pc, timeout=seconds)``, ending early before any of ``stops``:
-        nothing when the CPU is about to execute ``pc`` already; a timeout branches to
-        ``on_timeout``."""
+        nothing when the CPU is about to execute ``pc`` already; a timeout halts with
+        ``HALT_RAISE``."""
         self.pcs.add(pc)
         guards, check = self._guard or ((), None)
-        self._emit(
-            "run", pc, seconds, on_timeout or self.thrower, tuple(stops) + guards
-        )
+        self._emit("run", pc, seconds, tuple(stops) + guards)
         if check is not None:
             self._guard = None
             check(self)
@@ -180,12 +161,11 @@ class Prog:
         ]
 
     def resolved(self):
-        """``(ops, each op's handler, label -> op index)``."""
+        """``(ops, label -> op index)``."""
         if self._resolved is None:
             ops = self.code
-            handlers = self.handlers + [_RAISE] * (len(ops) - len(self.ops))
             at = {op[1]: i for i, op in enumerate(ops) if op[0] == "label"}
-            self._resolved = ops, handlers, at
+            self._resolved = ops, at
         return self._resolved
 
     def native(self, start_pc):
@@ -205,7 +185,7 @@ class Prog:
                 skip = f"__skip{n}"
                 if args[0] == key:
                     out.beq(_LAST, 0, skip)
-                out.cyc(_T0).run_to((args[0],) + args[3]).cyc(_T1).sub(_T1, _T0)
+                out.cyc(_T0).run_to((args[0],) + args[2]).cyc(_T1).sub(_T1, _T0)
                 out.bge(_T1, cycles(args[1]) + 1, _FALLBACK).beq(_T1, 0, skip)
                 out.mov(_LAST, _LAST_RUN)
                 out.label(skip)
@@ -313,23 +293,17 @@ def _stop_checkpoint(bm, pc):
 
 
 def interpret(bm, prog):
-    """``prog`` executed call by call over the BinMon ``bm``; a call that raises
-    branches to its op's handler as ``except`` would, and to the raise outside one."""
+    """``prog`` executed call by call over the BinMon ``bm``; a wait that times out
+    halts with ``HALT_RAISE``."""
     STATS["interpreted"] += 1
-    ops, handlers, at = prog.resolved()
+    ops, at = prog.resolved()
     st = {"reg": [0] * len(R), "out": [], "i": 0}
     with bm.halted():
         st["f0"] = clock.frames(bm)
         while st["i"] < len(ops):
             i = st["i"]
             st["i"] += 1
-            try:
-                code = _call(bm, ops[i], st, at)
-            except Exception:  # pylint: disable=broad-except
-                if handlers[i] == _RAISE:
-                    raise
-                st["i"] = at[handlers[i]]
-                continue
+            code = _call(bm, ops[i], st, at)
             if code is not None:
                 return Outcome("halt", code, clock.frames(bm) - st["f0"], st["out"])
         return Outcome("halt", HALT_OK, clock.frames(bm) - st["f0"], st["out"])
@@ -346,9 +320,9 @@ def _call(bm, op, st, at):
 
     if name == "run":
         try:
-            _wait(bm, args[0], args[1], args[3])
+            _wait(bm, args[0], args[1], args[2])
         except Exception:  # pylint: disable=broad-except
-            st["i"] = at[args[2]]
+            st["i"] = at[_RAISE]
     elif name == "step":
         bm.advance_instructions(1)
     elif name == "key":

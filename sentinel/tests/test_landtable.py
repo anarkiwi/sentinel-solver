@@ -92,38 +92,6 @@ def test_closed_form_track_matches_add_vector():
                 assert z16 == (eye_z * 256 + zf + ((i * int(vz[j])) >> 8)) & 0xFFFF
 
 
-def _arc_ref(head, order, ex, ey, tx, ty):
-    """Lattice indices whose heading lies within cell ``(tx, ty)``'s angular span."""
-    dx = np.array([tx - ex - 0.5, tx - ex + 0.5])
-    dy = np.array([ty - ey - 0.5, ty - ey + 0.5])
-    if dx[0] <= 0 <= dx[1] and dy[0] <= 0 <= dy[1]:
-        return order
-    angs = np.arctan2(*np.meshgrid(dy, dx)).ravel()
-    rel = (angs - angs[0] + np.pi) % (2 * np.pi) - np.pi
-    a_lo = (angs[0] + rel.min() + np.pi) % (2 * np.pi) - np.pi - 1e-9
-    a_hi = a_lo + np.ptp(rel) + 2e-9
-    lo = np.searchsorted(head, a_lo, side="left")
-    if a_hi <= np.pi:
-        return order[lo : np.searchsorted(head, a_hi, side="right")]
-    return np.concatenate(
-        (order[lo:], order[: np.searchsorted(head, a_hi - 2 * np.pi, side="right")])
-    )
-
-
-def _span_ref(v, d):
-    """Vectorised ``[first, last]`` sub-steps with tile offset ``d`` on one axis."""
-    q = np.where(v == 0, 1, np.abs(v))
-    pos = (-((0x8000 - d * 65536) // q), -((0x8000 - (d + 1) * 65536) // q) - 1)
-    neg = (
-        -((-(0x8001 - (d + 1) * 65536)) // q),
-        -((-(0x8001 - d * 65536)) // q) - 1,
-    )
-    zero = (1, lt.MAX_STEPS) if d == 0 else (1, 0)
-    return tuple(
-        np.where(v > 0, p, np.where(v < 0, n, z)) for p, n, z in zip(pos, neg, zero)
-    )
-
-
 def _stack_and_transfer(st):
     """Build boulder+boulder+robot on a bare neighbour and take the robot as the body:
     object tiles, a raised eye, a different observer slot."""

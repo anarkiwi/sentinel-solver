@@ -40,7 +40,6 @@ def main(argv=None):
         default=0,
         help="the landscape number you TYPE",
     )
-    parser.add_argument("--player", choices=("search",), default="search")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
     for knob in ("width", "depth", "branch", "commit"):
         parser.add_argument(f"--{knob}", type=int, help=f"search {knob} (--preset)")
@@ -57,7 +56,7 @@ def main(argv=None):
     video = args.video or f"player_ls{args.landscape}_search.avi"
     tap = os.path.join(ROOT, "sentinel-gold.tap")
     renders = os.path.join(ROOT, "renders")
-    result = {"landscape": args.landscape, "player": args.player}
+    result = {"landscape": args.landscape}
 
     def log(msg):
         print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)

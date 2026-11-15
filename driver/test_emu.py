@@ -74,7 +74,7 @@ def test_a_wait_stopped_by_another_checkpoint_raises(bm):
     with pytest.raises(BinmonError):
         bm.run_until_pc(0x2000, timeout=0.01)
     assert bm.m.mpu.pc == JMP
-    bm.checkpoint_delete(other)
+    bm.checkpoint_toggle(other, False)
     assert bm.m.watch == frozenset()
 
 

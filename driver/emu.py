@@ -229,10 +229,6 @@ class EmuMon:
         self._cps[checknum].enabled = bool(enabled)
         self._watch()
 
-    def checkpoint_delete(self, checknum):
-        del self._cps[checknum]
-        self._watch()
-
     # ---- memory and registers --------------------------------------------------
     def _io(self):
         """The I/O page as VICE's monitor peeks it, without read side effects: the

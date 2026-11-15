@@ -75,21 +75,13 @@ def test_ops_agree_between_native_and_interpreter():
 
 def test_a_wait_past_its_timeout_replays_on_the_monitor():
     """The native run overshoots the timeout; the replay times out where the monitor
-    does, takes the handler and clears the keys."""
+    does, clears the keys and halts with ``HALT_RAISE``."""
     p = prog.Prog(BUDGET)
-    caught = p.new()
-    with p.regs(1) as (a,):
-        with p.catch(caught):
-            p.key(0, 1).run(0x1234, 0.001)
-        p.halt(5).label(caught).frames(a).out(a)
+    p.key(0, 1).run(0x1234, 0.001).halt(5)
     before = dict(prog.STATS)
     (no, ns), (io, is_) = _both(_toy(), p)
     assert prog.STATS["fallback"] == before["fallback"] + 1
-    assert no == io and ns == is_ and no.code == prog.HALT_OK and no.frames > 0
-    p = prog.Prog(BUDGET)
-    p.run(0x1234, 0.001)
-    (no, _), (io, _) = _both(_toy(), p)
-    assert no.code == io.code == prog.HALT_RAISE
+    assert no == io and ns == is_ and no.code == prog.HALT_RAISE and no.frames > 0
 
 
 def test_a_wait_already_at_its_pc_is_skipped_until_the_machine_runs():
@@ -385,6 +377,6 @@ def test_every_wait_in_a_guard_keeps_its_guard_pcs_beside_its_own_stops():
         p.run(0x9630, 1.0, stops=(0x4321,))
         p.mov(R[0], 1).run(0x1234, 1.0, stops=(0x4321,))
     p.jmp(done).label(hit).halt(6).label(done).halt(5)
-    assert all(op[4] == (0x4321, 0x9633) for op in p.code if op[0] == "run")
+    assert all(op[3] == (0x4321, 0x9633) for op in p.code if op[0] == "run")
     (no, ns), (io, is_) = _both(_toy(), p)
     assert no == io and ns == is_ and no.code == 6

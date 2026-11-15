@@ -59,8 +59,6 @@ class KbdDriver:
         self.log = log
         # quantized: the CPU stays halted between primitives, so only run windows advance it
         self.quantized = quantized
-        # same-bearing aims skip the sights toggle whose $134C recenters the cursor; None=stale
-        self._bearing = None
 
     def rd(self, a):
         return self.bm.mem_get(a, a)[0]
@@ -77,9 +75,6 @@ class KbdDriver:
     def hang(self):
         return self.rd(A_H + self.slot())
 
-    def vang(self):
-        return self.rd(A_V + self.slot())
-
     def cur(self):
         return self.rd(A_CX), self.rd(A_CY)
 
@@ -88,18 +83,6 @@ class KbdDriver:
         ($11B3), so this flag is stable regardless of panning -- safe to read any time.
         """
         return bool(self.rd(A_SFLAG) & 0x80)
-
-    def committed_bearing(self):
-        """The last committed (h_angle, v_angle) for the current player slot, or None when
-        unknown/stale (never aimed, an aim did not converge, a monitor drop, a slot change).
-        """
-        return self._bearing
-
-    def set_bearing(self, h, v):
-        self._bearing = (h & 0xFF, v & 0xFF)
-
-    def clear_bearing(self):
-        self._bearing = None
 
     # after JSR pan_viewpoint: reached once per pan attempt on commit, undo and clamp alike
     PC_PAN_DONE = 0x365D
@@ -203,9 +186,6 @@ class KbdDriver:
                 return True
             self._one_scan_press()
         return bool(self.rd(A_SFLAG) & 0x80) == on
-
-    def sights_on(self):
-        return self.sights_set(True)
 
     def _uturn(self):
         """SIGHTS OFF: flip the bearing 180 degrees in ONE keystroke (handle_uturn $1B2F).
@@ -344,32 +324,6 @@ class KbdDriver:
                 self.bm.keymatrix_release_all()
         self._resume()
         return latched
-
-    def drive_to(self, view):
-        """Drive to the snapped (h, v, cursor). COARSE with sights OFF, then FINE with
-        sights ON (cursor). Every sub-step result is checked; returns the achieved dict.
-        """
-        if not self.sights_set(False):  # coarse: fast rotate
-            return {"h": self.hang(), "v": self.vang(), "cur": self.cur(), "ok": False}
-        okh, okv, status = self.coarse_hv(view)
-        if status == "hyperspace":  # teleported mid-aim: abort, do not re-drive
-            return {
-                "h": self.hang(),
-                "v": self.vang(),
-                "cur": self.cur(),
-                "ok": False,
-                "status": "hyperspace",
-            }
-        oks = self.sights_set(True)  # fine: cursor selection
-        cx, cy = view["cursor"]
-        okc = self.fine_cursor(cx, cy)
-        return {
-            "h": self.hang(),
-            "v": self.vang(),
-            "cur": self.cur(),
-            "ok": bool(okh == "ok" and okv == "ok" and oks and okc),
-            "status": status,
-        }
 
 
 def _k(name):
