@@ -82,22 +82,28 @@ search --out-dir out/logs/emu_hard8`.
 **Resolves.** Read 9795 move by move with `driver.decision_audit 9795`, and the rest of the
 128 with `driver.emu_suite`.
 
-## 5. Sight is priced by forks, not by a table
+## 5. Most forks are children the beam ranks out
 
-**Wrong.** Every candidate's danger is learnt by emulating it, though an entry-time sight
-table answers nearly every query of a solved game: `driver.visibility_audit` on the ten suite
-games finds at most 28 of 961 tiles ever change their object stack, and on the unchanged
-tiles 332 of 171,921 enemy-sight and 78 of 175,946 player-sight answers differ from entry's.
+**Wrong.** About four in five of the search's forks are never kept by any beam, though
+nearly all of them survive: they lose on the objective (eye, energy), not on danger.
 
-**Shown by.** `python -m driver.visibility_audit 0 42 60 110 298 321 335 373 1442 9716`.
+**Shown by.** `python -m driver.prune_audit N` for the ten suite boards: 19,307 forks, of
+which the beam kept 3,704; 99% of all forks end alive.
 
-**Resolves.** Prune candidates the table rules out before forking, re-asking the ROM check
-only for rays through changed tiles, and show the chosen moves unchanged.
+**Resolves.** Bound each child's objective from above before forking (eye and energy follow
+from the move; a drain only lowers energy), fork best bound first, and stop once `width`
+distinct survivors beat every unforked bound; the beams, so the game, are unchanged.
 
 ## Disproved — do not resurrect
 
 Each is a hypothesis and the reason it fails.
 
+- **Pruning forks by an entry-time sight table.** The table is right (on unchanged tiles
+  0.19% of enemy-sight answers differ from entry's, `driver.visibility_audit`), but it does
+  not separate good forks from bad: 80% of hop forks land where an enemy sees the body fully,
+  the beam keeps 26% of those against 11% of unseen landings, and any rule pruning on sight
+  prunes forks the beam kept (`driver.prune_audit`). A landing's danger is when a scan
+  arrives, which the table cannot say.
 - **A K-pruned landability table.** The first landing hit sits deep inside a candidate row, so
   a stored-first-`K` row decides almost no landing query at any affordable `K`, and a `K`
   large enough to decide the row would be terabytes. The closed-form walk needs no storage.
