@@ -288,3 +288,65 @@ def test_the_workload_cli_times_each_program_of_a_ply(capsys):
     assert sp.main(["0", "0", "--preset", "narrow", "--each"]) == 0
     rows = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert rows and all(len(r["moves"]) == 1 and r["frames"] > 0 for r in rows)
+
+
+@oracle
+def test_every_root_childs_outcome_is_within_its_best_case(session):
+    root = sp.Node(session.bm)
+    st = sp._state(session.bm)
+    (work,) = sp.batches([root], 3)
+    ((outs, _twins),) = sp.run_batches([root], [work])
+    seen = set()
+    for (move, _program), out in zip(work, outs):
+        facts = kbd_prog.move_facts(out)
+        bound = bp.best_case(st, *move)
+        if facts["status"] != prog.HALT_OK or bound is None:
+            continue
+        got = sp.key_of(sp.Node(None, "k", facts=facts))
+        assert got <= bound, (move, got, bound)
+        if move[0] in ("hop", "mount", "absorb", "wait"):
+            assert got[2] == bound[2], move
+        seen.add(move[0])
+    assert {"hop", "absorb", "wait", "relocate"} <= seen
+
+
+def test_a_best_case_reads_the_move():
+    game = Game.typed(0)
+    st = game.state
+    me, eye = st.player, st.obj_z_height[st.player] * 256 + st.obj_z_frac[st.player]
+    foes = -sum(st.obj_type[s] in mm.ENEMY_TYPES for s in st.occupied_slots())
+    assert bp.best_case(st, "wait", None) == (0, foes, eye, st.energy)
+    relocated = bp.best_case(st, "relocate", None)
+    assert relocated[3] == st.energy - 3
+    assert relocated[2] == (st.obj_z_height[me] + 1) * 256 + 0xE0
+    assert bp.best_case(st, "finish", None) is None
+    sentinel = st.slot_of_type(mm.T_SENTINEL)
+    took = bp.best_case(st, "absorb", st.tile_of(sentinel))
+    assert took[1] == foes + 1 and took[3] == min(63, st.energy + 4)
+    assert bp.best_case(st, "mount", st.tile_of(sentinel)) is None
+    assert bp.best_case(st, "absorb", (0, 0)) is None or st.tile_of(me) == (0, 0)
+    poor = st.clone()
+    poor.energy = 2
+    assert bp.best_case(poor, "relocate", None) is None
+    assert bp.best_case(poor, "hop", (1, 1), 0) is None
+
+
+@oracle
+def test_bound_first_beams_equal_the_beams_of_forking_every_child():
+    from driver.play_player import emu_session
+
+    beams = []
+    for check in (True, False):
+        player = sp.SearchPlayer(
+            emu_session(0, lambda _msg: None).bm, 4, 3, 3, check=check, log=print
+        )
+        beam, cache = [sp.Node(player.bm)], {}
+        rows = []
+        for _ in range(3):
+            beam = player._step(beam, cache)
+            rows.append([(n.key, n.move) for n in beam])
+        beams.append((rows, player.stats))
+    (full, every), (lazy, bounded) = beams
+    assert full == lazy and every["violations"] == []
+    assert bounded["children"] + bounded["bounded"] == every["children"]
+    assert bounded["bounded"] > 0
