@@ -57,7 +57,8 @@ TAPS = tuple(ACTION_CODE) + ("SPACE",)
     H_AIM_MISS,
     H_DRAINED,
     H_NOT_OK,
-) = range(2, 8)
+    H_DIED,
+) = range(2, 9)
 (
     V_RES,
     V_OKH,
@@ -93,6 +94,8 @@ MOVE_FACTS = {
     "frames": V_FRAMES,
 }
 MOVE_KEYS = {"absorb": ("A",), "mount": ("Q",)}
+KILL_PC = 0x1A05  # kill_player $1A00, past its STA $0C4E
+WIN_PC = 0x219B  # player_survived_hyperspace, past its STA $0CDE
 
 
 def budget(steps, frames):
@@ -478,25 +481,43 @@ def compiled(kind, *args):
 @functools.lru_cache(maxsize=1 << 12)
 def compile_move(kind, view=None, k=0, frames=0, reuse=False):
     """One :class:`driver.prog.Prog` playing a macro move: ``"absorb"`` or ``"mount"``
-    (transfer) on ``view``'s tile, ``"hop"`` (``k`` boulders, a robot, the transfer) or
-    ``"wait"`` ``frames``; outputs :func:`move_facts`.  See ``docs/architecture.md``."""
+    (transfer) on ``view``'s tile, ``"hop"`` (``k`` boulders, a robot, the transfer),
+    ``"wait"`` ``frames``, ``"relocate"`` (the escape hyperspace, one tap) or
+    ``"finish"`` (the platform hyperspace attempt); outputs :func:`move_facts`.
+    ``view`` is one view key, or one per action; an action on the bearing the previous
+    one (or, with ``reuse``, the sights) stands on drives the cursor only; a wait
+    ends early on a drain death (``H_DIED``) or the win, and so does the move."""
+    keys = {"wait": (), "relocate": (), "finish": ()}.get(kind)
+    keys = MOVE_KEYS.get(kind, ("B",) * k + ("R", "Q")) if keys is None else keys
+    steps = view if keys and isinstance(view[0], tuple) else (view,) * len(keys)
     c = Compiler(k + 2, frames)
     p = c.p
-    facts = p.new()
-    with p.regs(1) as (status,):
+    facts, died, done = p.new(3)
+
+    def check(p):
+        p.ld(prog.GUARD, mm.PLAYER_DIED_BY_DRAINING).bmi8(prog.GUARD, died)
+        p.ld(prog.GUARD, mm.LANDSCAPE_COMPLETE).and_(prog.GUARD, 0x40)
+        p.bne(prog.GUARD, 0, done)
+
+    with p.regs(1) as (status,), p.guard((KILL_PC, WIN_PC), check):
         p.mov(status, prog.HALT_OK)
         c.exits = (status, facts)
         if kind == "wait":
             c.run_frames(frames)
-        keys = MOVE_KEYS.get(kind) or ("B",) * k + ("R", "Q")
-        for i, key in enumerate(keys if kind != "wait" else ()):
-            if i or reuse:
+        elif kind == "relocate":
+            with p.regs(1) as (a,):
+                c.tap_action("H", True, a)
+        elif kind == "finish":
+            _hyperspace_attempt(c)
+        for i, (key, step) in enumerate(zip(keys, steps)):
+            if (steps[i - 1][:2] == step[:2]) if i else reuse:
                 with p.regs(1) as (a,):
-                    c.fine_cursor(*view[2:], a)
+                    c.fine_cursor(*step[2:], a)
                     c.probe_settle()
             else:
-                c.aim(_view(view))
+                c.aim(_view(step))
             c.fire(key, None)
+        p.jmp(facts).label(died).mov(status, H_DIED).label(done).clear()
         p.label(facts)
         c.val(V_STATUS, status)
         _facts(c)

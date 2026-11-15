@@ -25,6 +25,7 @@ pip install -r <(grep -v '^numpy' requirements.txt) -r requirements-gpu.txt
 python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
 python -m driver.play_player 335 --emu  # the same stack on the emulated release (vagrant-moses)
+python -m driver.play_player 335 --emu --player search  # beam search on the emulator, line played open loop
 python -m driver.instrument 42          # race the model against the ROM, frame for frame
 python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```

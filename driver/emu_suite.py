@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Play suite boards with ``play_player --emu`` in parallel processes and tabulate them
-against the committed offline results: ``python -m driver.emu_suite [boards...]``."""
+against the committed offline results: ``python -m driver.emu_suite [boards...]``; other
+``play_player`` flags pass through in ``--flag=value`` form."""
 
 import argparse
 import concurrent.futures
@@ -11,6 +12,7 @@ import sys
 
 from tqdm import tqdm
 
+from driver.search_player import PRESETS
 from sentinel.tests import readme_results, trace_suite
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,15 +22,17 @@ _THREADS = {
 }
 
 
-def play(board, out_dir, max_actions):
-    """Run one board in its own process; its result JSON (and log beside it)."""
+def play(board, out_dir, max_actions, extra=()):
+    """Run one board in its own process (``extra``: more ``play_player`` flags); its
+    result JSON (and log beside it)."""
     out = os.path.join(out_dir, f"emu_{board:04d}.json")
     if os.path.exists(out):
         os.unlink(out)
     with open(out[:-5] + ".log", "w") as log:
         subprocess.run(
             [sys.executable, "-m", "driver.play_player", str(board), "--emu"]
-            + ["--max-actions", str(max_actions), "--out", out],
+            + ["--max-actions", str(max_actions), "--out", out]
+            + list(extra),
             cwd=ROOT,
             env={**os.environ, **_THREADS},
             stdout=log,
@@ -62,12 +66,16 @@ def main(argv=None):
     parser.add_argument("--jobs", type=int, default=len(SUITE))
     parser.add_argument("--max-actions", type=int, default=trace_suite.ACTIONS["phase"])
     parser.add_argument("--out-dir", default=os.path.join(ROOT, "out", "logs", "emu"))
-    args = parser.parse_args(argv)
+    parser.add_argument("--player", choices=("phase", "search"), default="phase")
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
+    args, extra = parser.parse_known_args(argv)
+    extra = ["--player", args.player, "--preset", args.preset] + extra
     os.makedirs(args.out_dir, exist_ok=True)
     results = {}
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         futures = {
-            pool.submit(play, b, args.out_dir, args.max_actions): b for b in args.boards
+            pool.submit(play, b, args.out_dir, args.max_actions, extra): b
+            for b in args.boards
         }
         for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
             results[futures[fut]] = fut.result()

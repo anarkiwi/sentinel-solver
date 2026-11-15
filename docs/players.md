@@ -2,7 +2,8 @@
 
 Three players share the world model: the **phase player** (`sentinel/phase_player.py`), the
 default, which wins all eight measured boards, the **beam player** (`sentinel/beam_player.py`),
-a wide search on the GPU substrate, and the **reactive greedy player** (`sentinel/player.py`),
+a wide search on the GPU substrate (and, on the emulated game, the [search
+player](#the-search-player) built on its move generator), and the **reactive greedy player** (`sentinel/player.py`),
 which wins landscape 0 and is what the live-determinism gate drives. The phase and greedy
 players share `BasePlayer` (`sentinel/playerbase.py`). Neither reads the PRNG. Every tile-targeted action resolves
 through the ROM aim oracle (`aim.propose`/`aim.gate`, the `$1B40-$1B46` path), and each
@@ -209,6 +210,35 @@ enemy clock (a hop is one macro priced as its verbs' sum and advanced after its 
 phase player's own landing probe). `python -m sentinel.tests.trace_suite --player beam --out
 docs/results/beam.json --readme` records the suite; the README table shows the beam columns
 beside the phase player's.
+
+## The search player
+
+`driver/search_player.py` is one search core over the emulated game
+(`python -m driver.play_player N --emu --player search [--preset wide|narrow] [--width W
+--depth D --branch B --commit M]`). The emulator reproduces the game cycle for cycle, so a
+child's outcome is the game's own and needs no model clock:
+
+| part | what it is |
+|---|---|
+| moves | `beam_player.views`: `moves(..., exact=True)` over `Board` (absorb, hop with `k` boulders, mount, wait, relocation), each view the frame-cheapest lattice view of the model's pricing; `action_views` re-aims each later action of a hop at the stack its creates leave |
+| expansion | each move one `kbd_prog.compile_move` program; one `prog.forks` (`run_forks`, `keep=True`) per parent, the parents concurrently with the cores shared by program count; `move_facts` read off each child |
+| selection | `keep_best(width)` under `lexicographic` (alive, won, fewer enemies, higher eye, more energy), ties to fewer frames; identity is the machine state (RAM digest, cycle, registers, monitor state), so transpositions merge; a refused move (`status` not `HALT_OK`) is no child |
+| execution | receding horizon: search `depth` plies (or to a win), play the first `commit` moves of the best line on the session with the same programs (`prog.execute`; `prog.interpret` over a BinMon), each move's facts and machine key checked against the child that predicted it (`audit`) |
+
+On an exact world `moves` offers the relocation wherever the toll is in hand: its
+PRNG-driven landing is whatever the machine does. With the Sentinel gone the platform tile
+takes a hop (no boulders, toll kept, ranked first) or a mount whatever its height, and the
+relocation from the platform is the terminal hyperspace (`compile_move("finish")`). Each
+parent's expansion is memoized on its machine key and carried into the next search, so a
+replan re-expands only what the new root's beam adds. A move's waits stop at
+`kill_player`'s flag store (`$1A05`) and at the win's (`$219B`), so a death or the win
+ends the move there (`Prog.guard`).
+
+`python -m driver.search_player N PLY [--preset P]` builds search ply `PLY`'s fork batches
+from the entry to landscape `N` (`ply_batches`: `[(base EmuMon, [programs])]`) and times
+each `prog.forks`, a reproducible workload for profiling. `python -m driver.emu_suite
+--player search [--preset P ...]` plays the suite; the audit column is plan against
+execution.
 
 ## The reactive greedy player
 

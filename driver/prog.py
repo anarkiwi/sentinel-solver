@@ -9,12 +9,14 @@ call by call over any BinMon, :func:`execute` natively on an ``EmuMon``'s machin
 import contextlib
 
 from vagrant_moses.program import Program, R, Reg, run_forks
+from vice_driver.binmon import BinmonError
 
 from driver import clock
 from driver.emu import EmuMon, cycles
 
 HALT_OK, HALT_RAISE, HALT_FALLBACK = 0, 1, 0xFFFF
 SCRATCH = R[11]  # immediate staging for :meth:`Prog.rec`; R0-R10 are allocatable
+GUARD = R[14]  # :meth:`Prog.guard`'s checks
 _T0, _T1, _LAST = R[12], R[13], R[15]  # lowering only: wait start/elapsed, last run op
 _LAST_STEP, _LAST_RUN = 1, 2
 _RAISE = "__raise__"
@@ -73,6 +75,7 @@ class Prog:
         self._labels = 0
         self._free = list(range(SCRATCH.n))[::-1]
         self._catch = []
+        self._guard = None
         self._lowered = {}
         self._resolved = None
 
@@ -120,11 +123,27 @@ class Prog:
         """Where a timeout here goes: the innermost handler, else the raise."""
         return self._catch[-1] if self._catch else _RAISE
 
+    @contextlib.contextmanager
+    def guard(self, pcs, check):
+        """Every wait in the block also stops before any of ``pcs``, and ``check(self)``
+        emits the ops run after each wait (in :data:`GUARD`)."""
+        self._guard = (tuple(pcs), check)
+        try:
+            yield
+        finally:
+            self._guard = None
+
     def run(self, pc, seconds, on_timeout=None):
         """``run_until_pc(pc, timeout=seconds)``: nothing when the CPU is about to
         execute ``pc`` already; a timeout branches to ``on_timeout``."""
         self.pcs.add(pc)
-        return self._emit("run", pc, seconds, on_timeout or self.thrower)
+        stops, check = self._guard or ((), None)
+        self._emit("run", pc, seconds, on_timeout or self.thrower, stops)
+        if check is not None:
+            self._guard = None
+            check(self)
+            self._guard = (stops, check)
+        return self
 
     def step(self):
         """``advance_instructions(1)``."""
@@ -178,7 +197,7 @@ class Prog:
                 skip = f"__skip{n}"
                 if args[0] == key:
                     out.beq(_LAST, 0, skip)
-                out.cyc(_T0).run_to(args[0]).cyc(_T1).sub(_T1, _T0)
+                out.cyc(_T0).run_to((args[0],) + args[3]).cyc(_T1).sub(_T1, _T0)
                 out.bge(_T1, cycles(args[1]) + 1, _FALLBACK).beq(_T1, 0, skip)
                 out.mov(_LAST, _LAST_RUN)
                 out.label(skip)
@@ -193,9 +212,23 @@ class Prog:
         return out
 
 
-def _wait(bm, pc, seconds):
-    """One timed wait over BinMon (``run_until_pc``); the frame marker through the
-    persistent stop checkpoint, as :func:`clock.run_frames` waits for it."""
+def _wait(bm, pc, seconds, stops=()):
+    """One timed wait over BinMon (``run_until_pc``), ending early before any of
+    ``stops``; the frame marker through the persistent stop checkpoint, as
+    :func:`clock.run_frames` waits for it."""
+    if stops:
+        cps = [_stop_checkpoint(bm, at) for at in stops]
+        for cp in cps:
+            bm.checkpoint_toggle(cp, True)
+        try:
+            _wait(bm, pc, seconds)
+        except BinmonError:
+            if bm.registers_get()[3] not in stops:
+                raise
+        finally:
+            for cp in cps:
+                bm.checkpoint_toggle(cp, False)
+        return
     if pc != clock.FRAME_PC:
         bm.run_until_pc(pc, timeout=seconds)
         return
@@ -207,6 +240,14 @@ def _wait(bm, pc, seconds):
         bm.wait_for_checkpoint(cp, timeout=seconds)
     finally:
         bm.checkpoint_toggle(cp, False)
+
+
+def _stop_checkpoint(bm, pc):
+    """checknum of a persistent, disabled stop-on-hit checkpoint at ``pc`` on ``bm``."""
+    cps = bm.__dict__.setdefault("_prog_stops", {})
+    if pc not in cps:
+        cps[pc] = bm.checkpoint_set(pc, stop_when_hit=True, enabled=False).checknum
+    return cps[pc]
 
 
 def interpret(bm, prog):
@@ -243,7 +284,7 @@ def _call(bm, op, st, at):
 
     if name == "run":
         try:
-            _wait(bm, args[0], args[1])
+            _wait(bm, args[0], args[1], args[3])
         except Exception:  # pylint: disable=broad-except
             st["i"] = at[args[2]]
     elif name == "step":
@@ -284,7 +325,8 @@ def _call(bm, op, st, at):
 def _settle(bm, prog, outcome, backup, owed):
     """``outcome`` of ``prog`` run natively on ``bm``'s machine, accounted on ``bm``
     (``owed``: the marker test a step left there, which the first run op counts); a
-    timed-out wait replays the program interpreted from ``backup``."""
+    timed-out wait replays the program interpreted from ``backup()``, the machine it
+    started on."""
     if outcome.status == "halt" and outcome.code != HALT_FALLBACK:
         STATS["native"] += 1
         last = outcome.outputs[-1]
@@ -292,7 +334,7 @@ def _settle(bm, prog, outcome, backup, owed):
         bm.ran(frames, None if last == 0 else last == _LAST_STEP)
         return Outcome("halt", outcome.code, frames, outcome.outputs[:-1])
     STATS["fallback"] += 1
-    bm.adopt(backup)
+    bm.adopt(backup())
     return interpret(bm, prog)
 
 
@@ -307,7 +349,7 @@ def execute(bm, prog):
         return interpret(bm, prog)
     backup, owed = bm.m.clone(), bm.owes_marker()
     outcome = bm.m.run_program(prog.native(bm.m.mpu.pc))
-    return _settle(bm, prog, outcome, backup, owed)
+    return _settle(bm, prog, outcome, lambda: backup, owed)
 
 
 def forks(bm, progs, threads=None):
@@ -324,5 +366,5 @@ def forks(bm, progs, threads=None):
     )
     twins, owed = [bm.clone(machine) for machine in machines], bm.owes_marker()
     return [
-        _settle(t, p, o, bm.m.clone(), owed) for t, p, o in zip(twins, progs, outs)
+        _settle(t, p, o, bm.m.clone, owed) for t, p, o in zip(twins, progs, outs)
     ], twins

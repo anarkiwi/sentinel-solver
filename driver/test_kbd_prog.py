@@ -363,3 +363,24 @@ def test_a_hop_move_lands_the_body_on_its_robot(session):
     assert facts["status"] == prog.HALT_OK and facts["slot"] != st.player
     assert tuple(after.tile_of(facts["slot"])) == tile and facts["alive"]
     assert facts["energy"] == st.energy - mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
+
+
+def test_a_guarded_wait_stops_before_a_guard_pc_on_both_backends():
+    """A wait for a pc that never comes ends at the guard pc instead of timing out."""
+    p = prog.Prog(BUDGET)
+    hit = p.new()
+
+    def check(q):
+        q.ld(prog.GUARD, 0xC000).out(prog.GUARD).jmp(hit)
+
+    with p.guard((0x9633,), check):
+        p.run(0x1234, 1.0)
+    p.halt(5).label(hit).halt(6)
+    before = dict(prog.STATS)
+    (no, ns), (io, is_) = _both(_toy(), p)
+    assert no == io and ns == is_ and no.code == 6
+    assert prog.STATS["fallback"] == before["fallback"]
+    stopped = _toy()
+    before = stopped.m.ram[0xC000]
+    assert prog.execute(stopped, p).outputs == ((before + 1) & 0xFF,)
+    assert stopped.m.mpu.pc == 0x9633

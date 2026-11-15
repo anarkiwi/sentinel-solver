@@ -3,8 +3,8 @@
 against the CSDb release on vagrant-moses (no AVI).
 
 The live-execution machinery lives in :mod:`driver.live_player`; this is the
-shared runner.  ``--player {greedy,phase}`` selects ``LiveGreedy``/``LivePhase``
-(``python -m driver.play_player 335`` or ``... 0 --player greedy``).
+shared runner.  ``--player {greedy,phase,search}`` selects ``LiveGreedy``/``LivePhase``
+or, on the emulator, :class:`driver.search_player.SearchPlayer`.
 """
 
 import argparse
@@ -16,6 +16,7 @@ from driver import core, sentinel_state as gs
 from driver.emu import EmuMon
 from driver.emu_phase import EmuPhase
 from driver.live_player import LiveGreedy, LivePhase
+from driver.search_player import PRESETS, SearchPlayer
 from sentinel import emu
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +49,12 @@ def main(argv=None):
         default=0,
         help="the landscape number you TYPE",
     )
-    parser.add_argument("--player", choices=("greedy", "phase"), default="phase")
+    parser.add_argument(
+        "--player", choices=("greedy", "phase", "search"), default="phase"
+    )
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
+    for knob in ("width", "depth", "branch", "commit"):
+        parser.add_argument(f"--{knob}", type=int, help=f"search {knob} (--preset)")
     parser.add_argument("--max-actions", type=int, default=120)
     parser.add_argument("--video", default=None)
     parser.add_argument(
@@ -63,6 +69,8 @@ def main(argv=None):
         help="directory to save every observed tick's live image (driver.replay_tick)",
     )
     args = parser.parse_args(argv)
+    if args.player == "search" and not args.emu:
+        parser.error("--player search plans on the emulator: add --emu")
     digits = f"{args.landscape:04d}"
     video = args.video or f"player_ls{args.landscape}_win.avi"
     tap = os.path.join(ROOT, "sentinel-gold.tap")
@@ -77,7 +85,20 @@ def main(argv=None):
     def log(msg):
         print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
+    def search_fn(session):
+        knobs = {k: getattr(args, k) or v for k, v in PRESETS[args.preset].items()}
+        sp = SearchPlayer(session.bm, log=log, **knobs)
+        result["search"] = dict(knobs)
+        result["won"] = sp.run(args.max_actions)
+        result["trace"], result["lookahead_audit"] = sp.trace, sp.audit
+        result["final_energy"] = sp.trace[-1][3] if sp.trace else None
+        result["search"]["stats"] = sp.stats
+        log(f"play loop done: won={result['won']} actions={len(sp.trace)}")
+
     def play_fn(session):
+        if args.player == "search":
+            search_fn(session)
+            return
         lp = _make_player(args, session, log, result)
         won = lp.run(max_actions=args.max_actions, progress=True)
         result["won"] = bool(won and lp.ex.won())

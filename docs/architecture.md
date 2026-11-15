@@ -662,6 +662,10 @@ selection still ranks aims on the model, which advances no clock on this path. E
 records its rehearsal beside what the machine then did in `lookahead_audit`; `python -m
 driver.emu_suite` plays the suite boards in parallel processes and tabulates the two.
 
+`play_player --emu --player search` plays `driver/search_player.py` instead: a beam whose
+children are driver programs expanded by `prog.forks`, its line played open loop and audited
+([players](players.md#the-search-player)).
+
 A VICE run and an emulated run of the same command agree row for row in the action trace
 and every audit; only a wait that expires can split them, since VICE times waits in host
 seconds and the emulator in PAL cycles. `python -m driver.compare_runs A.json
@@ -732,11 +736,16 @@ cursor + settle, the ray, then the fire (or the full aim); `drive_transfer_aim` 
 its ray. The full aim's ray is advisory, logged into `actions[].aim.probe`: the top level splits
 there (`ProgKbd.advisory`), a fork runs aim and fire as one program.
 
-`kbd_prog.compile_move(kind, view, k, frames)` compiles a macro move for a search to expand by
-`prog.forks`: `"absorb"`, `"mount"` (a transfer), `"hop"` (`k` boulders, the robot, the
-transfer) or `"wait"`. The first action takes the full aim, later ones on the same view the
-cursor only (the ray is assumed to land; the facts tell whether it did); a refusal ends the
-move. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
+`kbd_prog.compile_move(kind, view, k, frames, reuse)` compiles a macro move for a search to
+expand by `prog.forks`: `"absorb"`, `"mount"` (a transfer), `"hop"` (`k` boulders, the robot,
+the transfer), `"wait"`, `"relocate"` (one H tap, settled) or `"finish"` (the platform
+hyperspace attempt). `view` is one view key or one per action; an action whose bearing is the
+previous action's (or, with `reuse`, the sights') drives the cursor only, any other takes the
+full aim (the ray is assumed to land; the facts tell whether it did); a refusal ends the move.
+`Prog.guard(pcs, check)` makes every wait in its block also stop before `pcs` and runs
+`check`'s ops after each wait, on both backends: a move's waits stop at `$1A05` (past
+`kill_player`'s `STA $0C4E`) and `$219B` (past the win's `STA $0CDE`) and end the move
+(`H_DIED`, or the win), so a death never runs a wait into its hang guard. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
 Sentinel left), `alive` (`$0C4E` and `$0CE5` bit7 clear), `won` (`$0CDE` bit6) and `frames`.
 
 ---
