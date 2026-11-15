@@ -161,14 +161,18 @@ class KbdDriver:
 
     def _run_past_redraw(self, pc, timeout):
         """``run_until_pc(pc)``, re-armed while a timeout finds the world being plotted
-        ($0CE4 bit7): a redraw still running delays ``pc``, it does not stall it."""
+        ($0CE4 bit7) or found it so at the previous timeout: a redraw delays ``pc``, and
+        one ending late in a window leaves ``pc`` to the next."""
+        plotted = False
         for _ in range(_SCAN_WAIT_PASSES):
             try:
                 self.bm.run_until_pc(pc, timeout=timeout)
                 return True
             except Exception:
-                if not self.rd(A_PLOT) & 0x80:
+                now = bool(self.rd(A_PLOT) & 0x80)
+                if not (now or plotted):
                     raise
+                plotted = now
         return False
 
     def _run_to_scan(self, timeout=6.0):

@@ -2,7 +2,6 @@
 expansion against sequential execution, and a played line against its plan."""
 
 import json
-import types
 
 import pytest
 
@@ -359,17 +358,7 @@ def test_bound_first_beams_equal_the_beams_of_forking_every_child():
     assert bounded["bounded"] > 0
 
 
-def _machine(meanie=0x80):
-    ram = bytearray(0x10000)
-    ram[mm.ENEMIES_MEANIE_OBJECT : mm.ENEMIES_MEANIE_OBJECT + 8] = [0x80] * 8
-    ram[mm.ENEMIES_MEANIE_OBJECT + 3] = meanie
-    return types.SimpleNamespace(m=types.SimpleNamespace(ram=ram))
-
-
-def test_a_stalled_move_is_refused_only_with_a_meanie_out():
+def test_a_stalled_move_is_a_driver_fault():
     stalled = prog.Outcome("halt", prog.HALT_RAISE, 1000, ())
-    calm, hunted = _machine(), _machine(0x22)
-    assert sp.outcome_facts(hunted, stalled, calm)["status"] == kbd_prog.H_HYPERSPACE
-    assert sp.outcome_facts(calm, stalled, hunted)["status"] == kbd_prog.H_HYPERSPACE
     with pytest.raises(RuntimeError):
-        sp.outcome_facts(calm, stalled, calm)
+        sp.outcome_facts(stalled)

@@ -67,9 +67,10 @@ is total. Both new keys are ROM facts read at the end of the move:
 | home | the player's tile equals the platform's (`$0C19`/`$0C1A`), `do_hyperspace`'s own win test at `$2184` | with the Sentinel gone the platform is a hyperspace from the win, wherever it stands against the eye |
 | unseen | the exposure bar `$0C4F` (`set_bar_state $194D`): bit 7 fully seen, drained; bit 6 partly seen, where an enemy spawns a meanie | a line under drain loses energy however high it stands, and a meanie's hyperspace lands where the PRNG puts it |
 
-A move a meanie hyperspaces mid-way stops in a wait that times out (`HALT_RAISE`, no facts);
-`search_player.outcome_facts` refuses it (`H_HYPERSPACE`) when a meanie is out (`$0CA0` top bit
-clear) before or after the move, and raises otherwise.
+A move a meanie hyperspaces mid-way ends as the pan loop sees the body change
+(`H_HYPERSPACE`), a refused move; the redraw it waits out can end late in a wait's window,
+so `run_past_redraw` re-arms on a window that began plotting. A program that still halts
+without facts stalled in a wait, and `search_player.outcome_facts` raises.
 
 ## Live in VICE
 
@@ -96,6 +97,8 @@ program is also `prog.interpret`ed on VICE and its `move_facts` compared with th
   game with what the entry-time sight table (`sentinel.sight_table`) says of a hop's landing
   and whether a beam kept it, and scores pruning rules on forks and frames saved against
   kept forks lost.
+* `python -m driver.disasm START END... [--landscape N]` lists each hex address range of the
+  in-play image through jennings' NMOS disassembler.
 * `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork
   batches from the entry to landscape `N` (`ply_batches`) and times each `prog.forks`, a
   reproducible workload for profiling.
