@@ -27,27 +27,22 @@ def test_search_data_covers_the_suite():
 
 def test_live_data_schema():
     for run in LIVE:
+        assert set(run) == {"landscape", "actions", "energy", "media"}
         assert str(run["landscape"]) in SEARCH
-        assert run["mode"] in rr.MODES and run["player"] in rr.PLAYERS
-        assert run["energy"] is None or isinstance(run["energy"], int)
-        assert isinstance(run["actions"], int)
+        assert isinstance(run["actions"], int) and isinstance(run["energy"], int)
         assert run["media"] is None or os.path.exists(
             os.path.join(rr.ROOT, run["media"])
         )
 
 
-def test_render_marks_only_retired_players_runs():
+def test_render_lists_each_live_run_linking_its_media():
     runs = [
-        {"landscape": 7, "player": "phase", "mode": "frozen", "actions": 6},
-        {"landscape": 7, "player": "search", "mode": "live", "actions": 5},
+        {"landscape": 7, "actions": 6, "energy": 1, "media": None},
+        {"landscape": 7, "actions": 5, "energy": 4, "media": "m.png"},
     ]
-    runs[0].update(energy=None, media=None)
-    runs[1].update(energy=4, media="m.png")
     out = rr.render({"7": REC}, runs)
-    assert "| 7 | 3 | 5 | 2 | **6 actions** (enemies frozen)†<br>" in out
-    assert "[**5 actions**, energy 4](m.png) |" in out
-    assert rr.RETIRED in out and f"`{rr.COMMAND}`" in out
-    assert rr.RETIRED not in rr.render({"7": REC}, runs[1:])
+    assert "| 7 | 3 | 5 | 2 | **6 actions**, energy 1<br>" in out
+    assert "[**5 actions**, energy 4](m.png) |" in out and f"`{rr.COMMAND}`" in out
 
 
 def test_render_unwon_and_no_live():

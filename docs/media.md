@@ -11,9 +11,8 @@ python -m driver.avi2apng renders/player_ls9716_search.avi \
     -o docs/media/ls9716_search_win.png --fps 12 --speed 2
 ```
 
-`docs/media/ls9716_search_win.png` and `ls335_search_win.png` are the search player's live
-wins. `ls335_phase_win.png` and `ls1442_phase_win.png` were recorded by the retired phase
-player ([players](players.md#retired-players)).
+`docs/media/lsN_search_win.png` are the search player's live wins, one per row of
+`docs/results/live.json`.
 
 `--fps` decides which source frames survive; `--speed` only shortens the delays on the
 ones that did, so raising it costs no detail. The two compose: the run above samples at

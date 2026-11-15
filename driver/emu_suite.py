@@ -20,7 +20,7 @@ from driver.search_player import PRESETS
 from sentinel.tests import readme_results
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SUITE = (0, 42, 60, 110, 298, 321, 335, 373, 1442, 9716)
+SUITE = (0, 42, 60, 110, 298, 321, 335, 373, 1442, 9716, 9795, 9950)
 MAX_ACTIONS = 120
 _THREADS = {
     k: "2" for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")

@@ -98,5 +98,25 @@
   "landscape": 9716,
   "preset": "wide",
   "won": true
+ },
+ "9795": {
+  "actions": 48,
+  "digest": "14680eefe67133b50587232d9f637d7581786866beb78f06ca328d75b5f9647b",
+  "enemies": 8,
+  "energy": 2,
+  "frames": 21790,
+  "landscape": 9795,
+  "preset": "wide",
+  "won": true
+ },
+ "9950": {
+  "actions": 25,
+  "digest": "b8728010a7a5f00549deae6f5456e72a070c7d0dd628beef4b3f393ca2674710",
+  "enemies": 8,
+  "energy": 6,
+  "frames": 10990,
+  "landscape": 9950,
+  "preset": "wide",
+  "won": true
  }
 }
