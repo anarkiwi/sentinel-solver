@@ -70,18 +70,29 @@ argument, so a caller marching further must re-query with the same cap.
 
 **Resolves.** A reachability proof for the alias distance on a real board.
 
-## 4. The hardest boards are unmeasured
+## 4. Landscape 9795 is lost
 
-**Wrong.** The search player's record is the ten suite boards; how it does on the hardest
-landscapes of the 10000 is not known.
+**Wrong.** Of the eight hardest boards in `out/hardest_128.txt` (9795 9716 9950 9760 9831
+9717 9329 9159) the wide search wins seven; on 9795 it climbs but spends its energy before
+the Sentinel is in reach and stops with no surviving move.
 
-**Shown by.** `sentinel.atlas` measures per-landscape metrics (enemy count, roughness, climb
-from the start eye to the highest enemy) over cached boards, which is enough to rank the
-10000, but no search-player run over the top of that ranking has been recorded.
+**Shown by.** `python -m driver.emu_suite 9795 9716 9950 9760 9831 9717 9329 9159 --player
+search --out-dir out/logs/emu_hard8`.
 
-**Resolves.** Rank the boards from the atlas, play the top of the ranking with
-`python -m driver.emu_suite <codes...>`, and record which are won, lost, or stopped by the
-action cap, so the losses can be read move by move with `driver.decision_audit`.
+**Resolves.** Read 9795 move by move with `driver.decision_audit 9795`, and the rest of the
+128 with `driver.emu_suite`.
+
+## 5. Sight is priced by forks, not by a table
+
+**Wrong.** Every candidate's danger is learnt by emulating it, though an entry-time sight
+table answers nearly every query of a solved game: `driver.visibility_audit` on the ten suite
+games finds at most 28 of 961 tiles ever change their object stack, and on the unchanged
+tiles 332 of 171,921 enemy-sight and 78 of 175,946 player-sight answers differ from entry's.
+
+**Shown by.** `python -m driver.visibility_audit 0 42 60 110 298 321 335 373 1442 9716`.
+
+**Resolves.** Prune candidates the table rules out before forking, re-asking the ROM check
+only for rays through changed tiles, and show the chosen moves unchanged.
 
 ## Disproved — do not resurrect
 

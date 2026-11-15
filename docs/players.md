@@ -79,6 +79,10 @@ program is also `prog.interpret`ed on VICE and its `move_facts` compared with th
   each decision forces every candidate the search generates there on a fork and continues it
   with a fresh `--preset` search to the end. It reports won, alive, energy, eye and actions
   per candidate, the chosen one starred (`--out` writes the rows as JSON).
+* `python -m driver.visibility_audit N... [--preset wide]` plays each board's search game,
+  caching the RAM after every move, and on every tile whose object stack is entry's compares
+  the ROM's enemy and player sight checks on that RAM against the entry RAM with the
+  observers moved to where they stand ([open items](open_items.md#5-sight-is-priced-by-forks-not-by-a-table)).
 * `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork
   batches from the entry to landscape `N` (`ply_batches`) and times each `prog.forks`, a
   reproducible workload for profiling.

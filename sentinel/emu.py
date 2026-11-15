@@ -1,16 +1,18 @@
 """The Sentinel's CSDb release running on vagrant-moses, a cycle-exact C64.
 
 :func:`boot` RUNs the release on a PAL machine with the real ROMs to the title's
-keyboard wait; :func:`enter` types a landscape with :func:`driver.core.navigate` as
-the live VICE run does. Both return clones of a cached template.
+keyboard wait (its RAM becomes the oracle image when absent); :func:`enter` types a
+landscape with :func:`driver.core.navigate` as the live VICE run does. Both return
+clones of a cached template.
 """
 
 import functools
+import os
 
 from vagrant_moses import roms
 from vagrant_moses.machine import Machine
 
-from sentinel.tests import csdb
+from sentinel.tests import csdb, oracle
 
 ROMS = ("kernal", "basic", "chargen")
 READY = 0xA480  # BASIC's main loop: READY. printed, a line about to be input
@@ -49,6 +51,8 @@ def _title():
     bm.run_until_pc(TITLE_SCAN, timeout=BOOT_TIMEOUT)
     if bytes(m.ram[csdb.SIG_ADDR : csdb.SIG_ADDR + 3]) != csdb.SIG_BYTES:
         raise RuntimeError("title reached without the game resident")
+    if not os.path.exists(oracle.IMG):
+        csdb.write(bytes(m.ram), log=_quiet)
     return m
 
 

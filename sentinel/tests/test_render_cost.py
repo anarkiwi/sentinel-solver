@@ -14,6 +14,7 @@ import numpy as np
 
 from sentinel import landscape, objmodel, projector, rendercost
 from sentinel.tests import oracle
+from sentinel.tests import golden
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_render_cost.json")
 
@@ -128,8 +129,7 @@ def test_regenerate_render_cost_golden():
     """Cycle-count plot_world across VIEWS on the oracle, dump the golden, and confirm the
     projector matches the exact examination count and frame cost."""
     data = _build_golden()
-    with open(GOLDEN, "w") as f:
-        json.dump(data, f, separators=(",", ":"), sort_keys=True)
+    golden.dump(GOLDEN, data)
     _check(data)
 
 
