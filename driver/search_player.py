@@ -126,6 +126,45 @@ def batches(parents, branch):
     return out
 
 
+class Expansion:
+    """One parent's candidate ``programs`` (``(move, program)``), each move's
+    :func:`bp.best_case` ``bounds``, and ``done[j]``: ``(facts, twin, key)`` once forked.
+    """
+
+    __slots__ = ("programs", "bounds", "done")
+
+    def __init__(self, st, programs):
+        self.programs = programs
+        self.bounds = [bp.best_case(st, *_named(m)) for m, _p in programs]
+        self.done = [None] * len(programs)
+
+    def pending(self):
+        """Indices of the moves not yet forked."""
+        return [j for j, d in enumerate(self.done) if d is None]
+
+
+def _named(move):
+    name, tile, k = move
+    return {"hyperspace": "relocate"}.get(name, name), tile, k
+
+
+def key_of(node):
+    """:func:`bp.lexicographic`'s keys of ``node`` as a tuple, larger better."""
+    f = node.fields()
+    return f["won"], -f["enemies"], f["eye"], f["energy"]
+
+
+def kid_bound(node):
+    """The bound its parent's expansion priced ``node``'s move at."""
+    st = _state(node.parent.bm)
+    return bp.best_case(st, *_named(node.move))
+
+
+def _order(bound):
+    """Sort key putting unbounded moves first, then the best bound."""
+    return (0,) if bound is None else (1,) + tuple(-v for v in bound)
+
+
 def run_batches(parents, work):
     """``[(outcomes, monitors)]``: one :func:`prog.forks` per parent, the parents
     concurrently, the cores shared out by program count."""
@@ -151,45 +190,106 @@ class SearchPlayer:
     """
 
     def __init__(
-        self, bm, width=16, depth=30, branch=3, commit=1, log=print, live=None
+        self,
+        bm,
+        width=16,
+        depth=30,
+        branch=3,
+        commit=1,
+        log=print,
+        live=None,
+        check=False,
     ):
-        self.bm, self.log, self.live = bm, log, live
+        self.bm, self.log, self.live, self.check = bm, log, live, check
         self.progress = True
         self.width, self.depth, self.branch, self.commit = width, depth, branch, commit
         self.trace, self.audit, self.live_audit = [], [], []
         self.diverged = None
         self.won, self.frames = False, 0
-        self.stats = {"children": 0, "frames": 0, "seconds": 0.0, "cpu_seconds": 0.0}
+        self.stats = {
+            "children": 0,
+            "bounded": 0,
+            "frames": 0,
+            "seconds": 0.0,
+            "cpu_seconds": 0.0,
+            "violations": [],
+        }
         self._cache = {}
 
-    def _expand(self, parents, cache):
-        """The children of ``parents``; each parent's expansion is memoized on its
-        machine key in ``cache``, seeded from the previous search's."""
-        fresh = [n for n in parents if n.key not in cache and n.key not in self._cache]
-        fresh = list({n.key: n for n in fresh}.values())
+    def _expansions(self, parents, cache):
+        """Per distinct parent, its :class:`Expansion`, built on first sight and kept in
+        ``cache`` (seeded from the previous search's) on the parent's machine key."""
+        nodes = list({n.key: n for n in parents}.values())
+        fresh = [n for n in nodes if n.key not in cache and n.key not in self._cache]
         if fresh:
-            t0, c0 = time.time(), time.process_time()
-            work = batches(fresh, self.branch)
-            for node, programs, (outs, twins) in zip(
-                fresh, work, run_batches(fresh, work)
-            ):
-                cache[node.key] = [
-                    (move, kbd_prog.move_facts(o), twin, machine_key(twin))
-                    for move, o, twin in zip(programs, outs, twins)
-                ]
-                self.stats["children"] += len(outs)
-                self.stats["frames"] += sum(o.frames for o in outs)
-            self.stats["seconds"] += time.time() - t0
-            self.stats["cpu_seconds"] += time.process_time() - c0
-        kids = []
-        for node in parents:
-            got = cache.setdefault(node.key, self._cache.get(node.key))
-            kids += [
-                Node(twin, key, node, move, facts)
-                for move, facts, twin, key in got
-                if facts["status"] == prog.HALT_OK
-            ]
+            for node, programs in zip(fresh, batches(fresh, self.branch)):
+                cache[node.key] = Expansion(_state(node.bm), programs)
+        return [(n, cache.setdefault(n.key, self._cache.get(n.key))) for n in nodes]
+
+    def _evaluate(self, jobs):
+        """Fork ``jobs`` (``(node, expansion, index)``), one batch per parent."""
+        by_node = {}
+        for node, exp, j in jobs:
+            by_node.setdefault(node.key, (node, exp, []))[2].append(j)
+        groups = list(by_node.values())
+        t0, c0 = time.time(), time.process_time()
+        work = [[exp.programs[j] for j in js] for _n, exp, js in groups]
+        for (_node, exp, js), (outs, twins) in zip(
+            groups, run_batches([g[0] for g in groups], work)
+        ):
+            for j, o, twin in zip(js, outs, twins):
+                exp.done[j] = (kbd_prog.move_facts(o), twin, machine_key(twin))
+            self.stats["children"] += len(outs)
+            self.stats["frames"] += sum(o.frames for o in outs)
+        self.stats["seconds"] += time.time() - t0
+        self.stats["cpu_seconds"] += time.process_time() - c0
+
+    def _kids(self, expansions):
+        """The forked, completed children of ``expansions``, parent then move order."""
+        return [
+            Node(twin, key, node, exp.programs[j], facts)
+            for node, exp in expansions
+            for j, done in enumerate(exp.done)
+            if done is not None
+            for facts, twin, key in (done,)
+            if facts["status"] == prog.HALT_OK
+        ]
+
+    def _expand(self, parents, cache):
+        """Every child of ``parents``, each forked once (``check``: against its bound)."""
+        expansions = self._expansions(parents, cache)
+        pending = [(n, e, j) for n, e in expansions for j in e.pending()]
+        if pending:
+            self._evaluate(pending)
+        kids = self._kids(expansions)
+        if self.check:
+            for kid in kids:
+                bound = kid_bound(kid)
+                if bound is not None and kid.fields()["alive"] and key_of(kid) > bound:
+                    self.stats["violations"].append([kid.move, bound, key_of(kid)])
         return kids
+
+    def _step(self, beam, cache):
+        """The next beam: children forked best bound first until ``width`` distinct
+        survivors beat every unforked child's bound, then selected as from all."""
+        if self.check:
+            return self._select(self._expand(beam, cache))
+        expansions = self._expansions(beam, cache)
+        pending = sorted(
+            ((n, e, j) for n, e in expansions for j in e.pending()),
+            key=lambda job: _order(job[1].bounds[job[2]]),
+        )
+        while True:
+            picked = self._select(self._kids(expansions))
+            if len(picked) == self.width and pending:
+                top = pending[0][1].bounds[pending[0][2]]
+                if top is not None and top < key_of(picked[-1]):
+                    self.stats["bounded"] += len(pending)
+                    return picked
+            if not pending:
+                return picked
+            chunk, pending = pending[:CPUS], pending[CPUS:]
+            self._evaluate(chunk)
 
     def _select(self, kids):
         """The best ``width`` living ``kids``, best first, one per machine state."""
@@ -217,7 +317,7 @@ class SearchPlayer:
         )
         with pbar as progress:
             for _ in progress:
-                beam = self._select(self._expand(beam, cache))
+                beam = self._step(beam, cache)
                 if not beam:
                     break
                 best = beam[0]

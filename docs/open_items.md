@@ -82,17 +82,17 @@ search --out-dir out/logs/emu_hard8`.
 **Resolves.** Read 9795 move by move with `driver.decision_audit 9795`, and the rest of the
 128 with `driver.emu_suite`.
 
-## 5. Most forks are children the beam ranks out
+## 5. Half the children are still forked
 
-**Wrong.** About four in five of the search's forks are never kept by any beam, though
-nearly all of them survive: they lose on the objective (eye, energy), not on danger.
+**Wrong.** Bound-first expansion forks about half of all children (`stats["children"]`
+against `stats["bounded"]` in `driver.emu_suite` results). A child must be forked while its
+bound reaches the beam's last kept key, and where they tie only frames decide, for which
+there is no bound; how much each accounts for is unmeasured.
 
-**Shown by.** `python -m driver.prune_audit N` for the ten suite boards: 19,307 forks, of
-which the beam kept 3,704; 99% of all forks end alive.
+**Shown by.** The stats above; nothing yet splits the forked children by why.
 
-**Resolves.** Bound each child's objective from above before forking (eye and energy follow
-from the move; a drain only lowers energy), fork best bound first, and stop once `width`
-distinct survivors beat every unforked bound; the beams, so the game, are unchanged.
+**Resolves.** Count forked children whose bound ties the cut; if ties dominate, a proven
+lower bound on a move's frames compared where bounds tie.
 
 ## Disproved — do not resurrect
 
