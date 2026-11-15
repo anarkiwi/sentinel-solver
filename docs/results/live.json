@@ -30,5 +30,13 @@
   "actions": 26,
   "energy": 1,
   "media": "docs/media/ls335_search_win.png"
+ },
+ {
+  "landscape": 9716,
+  "player": "search",
+  "mode": "live",
+  "actions": 26,
+  "energy": 5,
+  "media": "docs/media/ls9716_search_win.png"
  }
 ]

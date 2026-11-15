@@ -39,7 +39,7 @@ python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embe
 | 335 | 7 | 26 | 1 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions**, energy 1](docs/media/ls335_search_win.png) |
 | 373 | 7 | 16 | 0 | — |
 | 1442 | 8 | 18 | 5 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
-| 9716 | 8 | 26 | 5 | — |
+| 9716 | 8 | 26 | 5 | [**26 actions**, energy 5](docs/media/ls9716_search_win.png) |
 
 † Played by the phase player, since retired; its media are kept.
 
