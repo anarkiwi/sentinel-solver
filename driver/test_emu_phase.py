@@ -3,7 +3,7 @@ the real action exactly, leaves the real machine alone, and waits spend machine 
 
 import pytest
 
-from driver import core
+from driver import core, emu_phase, emu_suite
 from driver.emu_phase import EmuPhase, Rehearsal, _futile, _hop_steps
 from driver.play_player import emu_session
 from sentinel import memmap as mm, phase_player
@@ -14,6 +14,13 @@ oracle = pytest.mark.oracle
 
 def _quiet(_msg):
     pass
+
+
+@pytest.fixture(autouse=True)
+def _fresh_memos():
+    """An identical machine in another test would answer from the shared memos."""
+    emu_phase._REHEARSALS.clear()
+    phase_player._LANDING_CACHE.clear()
 
 
 def _player(number=0):
@@ -132,3 +139,24 @@ def test_a_refused_or_fatal_rehearsal_is_not_fired():
     assert not _futile(Rehearsal(False, 4, False, 300, True))  # landed, then drained
     assert _futile(Rehearsal(False, 5, False, 300, False))  # refused outright
     assert _futile(Rehearsal(True, 10, True, 9000, True))  # the body was lost
+
+
+def test_the_suite_table_sets_each_run_beside_its_offline_record(tmp_path, monkeypatch):
+    run = {"won": True, "trace": [[0]] * 3, "final_energy": 4, "wall_seconds": 9.5}
+    run["lookahead_audit"] = [
+        [1, "absorb", [0, 0], [1], [1]],
+        [2, "robot", [0, 0], [1], [2]],
+    ]
+    lines = list(
+        emu_suite.rows({7: run}, {"7": {"won": True, "actions": 5, "energy": 2}})
+    )
+    assert lines[1].split() == "7 True 3 4 9.5 1/2 | True 5 2".split()
+
+    def fake_run(cmd, **_kw):
+        if cmd[3] == "1":
+            with open(cmd[-1], "w") as fh:
+                fh.write('{"won": false, "trace": []}')
+
+    monkeypatch.setattr(emu_suite.subprocess, "run", fake_run)
+    assert emu_suite.play(1, str(tmp_path), 5) == {"won": False, "trace": []}
+    assert emu_suite.play(2, str(tmp_path), 5)["won"] == "error"

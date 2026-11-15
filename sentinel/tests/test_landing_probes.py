@@ -11,7 +11,7 @@ from sentinel.phase_player import CLOCK_FIELDS, LOS_TRACKERS, PhasePlayer
 from sentinel.playerbase import _Views
 from sentinel.state import State
 
-MID_GAME = ((335, 0), (335, 1), (335, 2), (335, 8), (42, 5), (42, 7))
+MID_GAME = ((335, 0), (335, 1), (335, 3), (335, 8), (42, 4), (42, 5), (42, 7))
 
 
 @functools.lru_cache(maxsize=None)
@@ -57,12 +57,12 @@ def test_lazy_probing_returns_what_eager_probing_does(where):
 
 
 def test_the_positions_exercise_the_lazy_walk():
-    """ls335 tick 1 has candidates and no landing; at tick 2 the best-scoring
+    """ls42 tick 4 has candidates and no landing; at ls335 tick 1 the best-scoring
     candidate fails its landing, so the walk goes past it to a tie."""
-    stuck = _position(335, 1)
+    stuck = _position(42, 4)
     assert stuck._climb_candidates(_Views(stuck.st), True)
     assert not _eager(stuck, _Views(stuck.st))
-    player = _position(335, 2)
+    player = _position(335, 1)
     views = _Views(player.st)
     want = _eager(player, views)
     assert want[0][0] < max(c[0] for c in player._climb_candidates(views, True))
@@ -75,7 +75,7 @@ def test_a_lazy_ask_probes_no_more_than_the_backend_walks(monkeypatch, backend):
     exactly the candidates the serial walk visits; the cuda backend probes whole
     windows, and a re-ask on the same state, or on a fork of it, runs nothing."""
     monkeypatch.setattr(batch, "width", lambda: 4)
-    player = _position(335, 2)
+    player = _position(335, 1)
     views = _Views(player.st)
     cands = player._climb_candidates(views, True)
     first = next(i for i, c in enumerate(cands) if player._probe_landing(c[1], c[2]))
@@ -113,7 +113,7 @@ def test_batched_probes_fill_the_cache_with_the_serial_verdicts(where):
     assert [phase_player._LANDING_CACHE[k] for k in got] == want
 
 
-@pytest.mark.parametrize("where", ((335, 2), (42, 5)))
+@pytest.mark.parametrize("where", ((335, 1), (42, 5)))
 def test_no_landing_depends_on_the_los_trackers(where):
     """The memo key leaves out the bytes pricing rewrites on the live state, so the
     probe's verdict must be the same whatever they hold."""
