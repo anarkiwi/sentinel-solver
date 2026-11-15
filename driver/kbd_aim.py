@@ -8,6 +8,7 @@ h_angle EOR $80; the ROM fires along h + cur_x>>3, v + (cur_y-5)>>4 ($1C10, mode
 
 import os
 
+from driver import prog
 from sentinel import aimcost as ac
 from sentinel import memmap as mm
 
@@ -107,6 +108,10 @@ class KbdDriver:
     PC_CX_DEC = 0x9990  # STA $0CC6 (move_sights left,  cx-1)
     PC_CY_INC = 0x99B8  # STA $0CC7 (move_sights down,  cy+1)
     PC_CY_DEC = 0x99D2  # STA $0CC7 (move_sights up,    cy-1)
+    PC_CY_CLAMP = 0x99D6  # move_sights: a vertical edge at the pitch limit, no store
+    PC_REDRAW = (
+        0x359E  # main loop's full redraw ($3642 > $357D), past $359B: sights off
+    )
     PC_IRQ_SCAN = 0x9678  # IRQ: JSR check_for_full_player_input (gated full scan)
     PC_IRQ_SCAN_DONE = 0x967B  # return address of that JSR: the scan has completed
 
@@ -160,26 +165,15 @@ class KbdDriver:
         self._run_past_redraw(self.PC_PAN_DONE, _RU_COMMIT)
 
     def _run_past_redraw(self, pc, timeout):
-        """``run_until_pc(pc)``, re-armed while a timeout finds the world being plotted
-        ($0CE4 bit7) or found it so at the previous timeout: a redraw delays ``pc``, and
-        one ending late in a window leaves ``pc`` to the next."""
-        plotted = False
-        for _ in range(_SCAN_WAIT_PASSES):
-            try:
-                self.bm.run_until_pc(pc, timeout=timeout)
-                return True
-            except Exception:
-                now = bool(self.rd(A_PLOT) & 0x80)
-                if not (now or plotted):
-                    raise
-                plotted = now
-        return False
+        """``run_until_pc(pc)`` through any redraw: a redraw delays ``pc``, it does not
+        stall it, so the bound is ``_SCAN_WAIT_PASSES`` windows of ``timeout``."""
+        self.bm.run_until_pc(pc, timeout=timeout * _SCAN_WAIT_PASSES)
+        return True
 
     def _run_to_scan(self, timeout=6.0):
         """Run to the next GATED full input scan ($9678), reached only while the world is not
         plotted ($0CE4 bit7, held across a whole redraw) and the $130B re-arm has expired.
-        A timeout with the gate set is a redraw still running, so re-arm rather than leak its
-        frames into the next primitive; a timeout with the gate open is a real stall."""
+        """
         return self._run_past_redraw(self.PC_IRQ_SCAN, timeout)
 
     def _one_scan_press(self):
@@ -293,10 +287,13 @@ class KbdDriver:
         """
         cx &= 0xFF
         cy &= 0xFF
-        ok = False
+        ok = blind = False
         with self.bm.halted():
             for _ in range(160):
                 curx, cury = self.rd(A_CX), self.rd(A_CY)
+                if not self.rd(A_SFLAG) & 0x80:
+                    blind = True
+                    break
                 if curx == cx and cury == cy:
                     ok = True
                     break
@@ -310,14 +307,14 @@ class KbdDriver:
                 presses = [(*_k(key), 1) for key in keys]
                 try:
                     self.bm.keymatrix_set(presses)
-                    self.bm.run_until_pc(commit_pc, timeout=1.5)
+                    prog._wait(
+                        self.bm, commit_pc, 1.5, (self.PC_CY_CLAMP, self.PC_REDRAW)
+                    )
                     self.bm.advance_instructions(1)  # execute the last STA
-                except Exception:
-                    pass
                 finally:
                     self.bm.keymatrix_release_all()
         self._resume()
-        return ok or (self.rd(A_CX) == cx and self.rd(A_CY) == cy)
+        return not blind and (ok or (self.rd(A_CX) == cx and self.rd(A_CY) == cy))
 
     def tap_action(self, name, settle=True):
         """Fire an action key EXACTLY ONCE, pressed halted at $9678 and released at $967B.
@@ -340,20 +337,9 @@ class KbdDriver:
                     self.bm.keymatrix_release_all()  # before the next scan
                     if want in flags:
                         latched = True
-                        if not settle:
-                            break  # caller settles itself (a hyperspace scan may never recur)
-                        # scans reopen after $12D0 consumes the action: this run spans the settle
-                        try:
-
-                            if self.quantized:
-                                self._run_to_scan()
-                            else:
-                                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=1.0)
-                        except Exception:
-                            pass
+                        if settle:  # scans reopen after $12D0 consumes the action
+                            self._run_to_scan()
                         break
-            except Exception as e:
-                self.log(f"    tap_action {name} stop: {type(e).__name__}")
             finally:
                 self.bm.keymatrix_release_all()
         self._resume()

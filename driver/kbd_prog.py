@@ -44,7 +44,7 @@ UNREACHABLE, OK, HYPERSPACE = 0, 1, 2
 T_BEGIN, T_END, T_NOW, T_PASS, T_VAL, T_LOG = range(1, 7)
 ARITY = {T_BEGIN: 2, T_END: 2, T_NOW: 3, T_PASS: 1, T_VAL: 2, T_LOG: 3}
 TIMERS = ("pan_h", "pan_v", "toggle", "cursor", "uturn")
-LOG_UTURN, LOG_TAP_STOP = range(2)
+LOG_UTURN = 0
 TAPS = tuple(ACTION_CODE) + ("SPACE",)
 (
     H_FAIL_OFF,
@@ -165,23 +165,10 @@ class Compiler:
         (p.bne if on else p.beq)(SCRATCH, 0, label)
 
     # ---- waits ---------------------------------------------------------------
-    def run_past_redraw(self, pc, seconds, res=None):
-        """``_run_past_redraw``: a timeout re-arms while $0CE4 bit7 is set or was at the
-        previous timeout, raises otherwise; ``res`` false once the re-arms are spent."""
-        p = self.p
-        loop, timeout, busy, spent, done = p.new(5)
-        with p.regs(1) as (n,):  # re-arms left; bit 8: plotting at the last timeout
-            p.mov(n, _SCAN_WAIT_PASSES).label(loop).run(pc, seconds, timeout)
-            if res is not None:
-                p.mov(res, 1)
-            p.jmp(done).label(timeout)
-            p.ld(SCRATCH, A_PLOT).and_(SCRATCH, 0x80).shl(SCRATCH, 1)
-            p.bne(SCRATCH, 0, busy).blt(n, 0x100, p.thrower).label(busy)
-            p.and_(n, 0xFF).sub(n, 1).beq(n, 0, spent).or_(n, SCRATCH).jmp(loop)
-            p.label(spent)
-            if res is not None:
-                p.mov(res, 0)
-            p.label(done)
+    def run_past_redraw(self, pc, seconds):
+        """``_run_past_redraw``: to ``pc`` through any redraw, ``_SCAN_WAIT_PASSES``
+        windows of ``seconds`` at most, then raise."""
+        self.p.run(pc, seconds * _SCAN_WAIT_PASSES)
 
     def run_to_scan(self, seconds=6.0):
         """``_run_to_scan``: the next gated full input scan ($9678)."""
@@ -253,9 +240,9 @@ class Compiler:
         $0CE8..$0CEB, settle to the next gated scan; up to 45 tries."""
         p = self.p
         want, (r, c) = ACTION_CODE[name], _k(name)
-        loop, hit, stop, out = p.new(4)
+        loop, hit, out = p.new(3)
         p.mov(res, 0)
-        with p.regs(1) as (n,), p.catch(stop):
+        with p.regs(1) as (n,):
             p.mov(n, 45).label(loop)
             self.run_to_scan()
             p.step()
@@ -266,10 +253,7 @@ class Compiler:
             p.clear().djnz(n, loop).jmp(out)
             p.label(hit).clear().mov(res, 1)
             if settle:
-                with p.catch(out):
-                    self.run_to_scan()
-            p.jmp(out)
-        p.label(stop).rec(T_LOG, LOG_TAP_STOP, TAPS.index(name), 0)
+                self.run_to_scan()
         p.label(out).clear()
 
     def uturn(self, s, res):
@@ -353,24 +337,28 @@ class Compiler:
 
     def fine_cursor(self, cx, cy, res):
         """``fine_cursor``: per pass one x and one y key, run to the store of the last
-        axis pressed and over it; 160 passes."""
+        axis pressed, the pitch clamp that skips it or a redraw, and over it; 160 passes,
+        none once the sights are off."""
         p = self.p
         cx, cy = cx & 0xFF, cy & 0xFF
-        loop, move, nox, right, ymove, xinc, down, fail, ok, end = p.new(10)
+        loop, move, nox, right, ymove, xinc, down, fail, off, ok, end = p.new(11)
         with self.timed("cursor"), p.regs(3) as (n, x, y):
             p.mov(n, 160).label(loop).ld(x, A_CX).ld(y, A_CY)
+            self._sflag(False, off)
             p.bne(x, cx, move).beq(y, cy, ok).label(move)
             p.beq(x, cx, nox).blt(x, cx, right).key(*_k(K_LEFT)).jmp(nox)
             p.label(right).key(*_k(K_RIGHT)).label(nox)
-            with p.catch(fail):
-                p.bne(y, cy, ymove).blt(x, cx, xinc)
-                p.run(KbdDriver.PC_CX_DEC, 1.5).step().jmp(fail)
-                p.label(xinc).run(KbdDriver.PC_CX_INC, 1.5).step().jmp(fail)
-                p.label(ymove).blt(y, cy, down).key(*_k(K_UP))
-                p.run(KbdDriver.PC_CY_DEC, 1.5).step().jmp(fail)
-                p.label(down).key(*_k(K_DOWN)).run(KbdDriver.PC_CY_INC, 1.5).step()
+            clamp = (KbdDriver.PC_CY_CLAMP, KbdDriver.PC_REDRAW)
+            p.bne(y, cy, ymove).blt(x, cx, xinc)
+            p.run(KbdDriver.PC_CX_DEC, 1.5, stops=clamp).step().jmp(fail)
+            p.label(xinc).run(KbdDriver.PC_CX_INC, 1.5, stops=clamp).step().jmp(fail)
+            p.label(ymove).blt(y, cy, down).key(*_k(K_UP))
+            p.run(KbdDriver.PC_CY_DEC, 1.5, stops=clamp).step().jmp(fail)
+            p.label(down).key(*_k(K_DOWN)).run(KbdDriver.PC_CY_INC, 1.5, stops=clamp)
+            p.step()
             p.label(fail).clear().djnz(n, loop)
             p.ld(x, A_CX).ld(y, A_CY).mov(res, 0).bne(x, cx, end).bne(y, cy, end)
+            p.jmp(ok).label(off).mov(res, 0).jmp(end)
             p.label(ok).mov(res, 1).label(end)
 
     # ---- segments ------------------------------------------------------------
@@ -481,6 +469,7 @@ def compile_move(kind, view=None, k=0, frames=0, reuse=False):
         for i, (key, step) in enumerate(zip(keys, steps)):
             if (steps[i - 1][:2] == step[:2]) if i else reuse:
                 with p.regs(1) as (a,):
+                    c.sights_set(True, a)  # a redraw ($357D) since turns them off
                     c.fine_cursor(*step[2:], a)
                     c.probe_settle()
             else:
@@ -531,6 +520,29 @@ def _facts(c):
         c.val(V_AWAY, a)
 
 
+def records(outcome):
+    """``outcome``'s outputs as ``(tag, *args)`` tuples, one per record."""
+    out, i, recs = outcome.outputs, 0, []
+    while i < len(out):
+        n = 1 + ARITY[out[i]]
+        recs.append(tuple(out[i : i + n]))
+        i += n
+    return recs
+
+
+def first_difference(a, b, context=3):
+    """Where the records of outcomes ``a`` and ``b`` first part: ``{"at": index,
+    "a": records, "b": records}`` around it, or None when they agree."""
+    ra, rb = records(a), records(b)
+    at = next((i for i, (x, y) in enumerate(zip(ra, rb)) if x != y), None)
+    if at is None:
+        if len(ra) == len(rb):
+            return None
+        at = min(len(ra), len(rb))
+    lo = max(0, at - context)
+    return {"at": at, "a": ra[lo : at + context + 1], "b": rb[lo : at + context + 1]}
+
+
 def move_facts(outcome):
     """``{fact: value}`` of a :func:`compile_move` program's outcome; ``status`` is
     ``HALT_OK`` or the refusal (``H_*``) that cut the move short."""
@@ -546,19 +558,15 @@ def move_facts(outcome):
 
 def _hyperspace_attempt(c):
     """``fire_hyperspace``'s attempt: H without a settle, then three frames at a time
-    until $0CDE bit6, 120 times or until the marker stops (``V_RES`` 1)."""
+    until $0CDE bit6, 120 times at most."""
     p = c.p
-    loop, stop, done = p.new(3)
+    loop, done = p.new(2)
     with p.regs(1) as (n,):
         c.tap_action("H", False, n)
-        c.val(V_RES, 0)
         p.mov(n, 120).label(loop)
         p.ld(SCRATCH, mm.LANDSCAPE_COMPLETE).and_(SCRATCH, 0x40).bne(SCRATCH, 0, done)
-        with p.catch(stop):
-            c.run_frames(3)
-        p.djnz(n, loop).jmp(done)
-        p.label(stop)
-        c.val(V_RES, 1)
+        c.run_frames(3)
+        p.djnz(n, loop)
         p.label(done).ld(n, mm.LANDSCAPE_COMPLETE)
         c.val(V_DONE, n)
 

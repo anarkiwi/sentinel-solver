@@ -79,8 +79,12 @@ emulated session of the same landscape (`play_player.emu_session`). Each committ
 program is also `prog.interpret`ed on VICE and its `move_facts` compared with the session's
 (`live_audit`, the entry as move 0). The first disagreement is logged, recorded as
 `divergence` and ends the run; a win counts only with VICE's own `$0CDE` bit 6
-(`landscape_done`). The run's JSON is `out/play_player_NNNN_search.json`, the AVI
-`renders/player_lsN_search.avi` ([media](media.md)).
+(`landscape_done`). Every wait in a program is for a ROM pc and is bounded in emulated time on
+both backends (PAL cycles natively, `$9630` frames on VICE, `prog._wait_frames`), so a bound
+that runs out is a hang and raises; nothing branches on one. A divergence records where the
+two programs' output records first part (`kbd_prog.first_difference`). The run's JSON is
+`out/play_player_NNNN_search.json`, the AVI `renders/player_lsN_search.avi`
+([media](media.md)).
 
 ## Tools
 
@@ -97,6 +101,9 @@ program is also `prog.interpret`ed on VICE and its `move_facts` compared with th
   game with what the entry-time sight table (`sentinel.sight_table`) says of a hop's landing
   and whether a beam kept it, and scores pruning rules on forks and frames saved against
   kept forks lost.
+* `driver.prog_trace.trace(bm, program, pcs, addrs)` interprets a program on a clone of an
+  emulated session and returns its per-frame bytes and pc arrivals, to read a stalled move
+  against the ROM.
 * `python -m driver.disasm START END... [--landscape N]` lists each hex address range of the
   in-play image through jennings' NMOS disassembler.
 * `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork

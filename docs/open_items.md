@@ -44,21 +44,7 @@ itself, so its incoming bit 0 is the previous call's own output shifted twice.
 state, started from the image, since `$0F9E`/`$1D9D`/`$1DC1` write it outside `plot_world` —
 so the call whose round-10 bit the residue tips takes the machine's interpolation branch.
 
-## 2. The driver's wall-clock timeouts are the residual load sensitivity
-
-**Wrong.** `kbd_aim` still holds host clocks in an otherwise machine-clocked driver, and a
-timeout there is retried rather than raised.
-
-**Shown by.** On VICE a monitor round-trip at real-time pace is far slower than halted, so
-host contention can push a wait past its timeout and the aim re-drives; the emulator times
-the same waits in PAL cycles and is immune. What remains is the `_RU_COMMIT` socket backstop
-and the swallowed timeouts in `_run_to_scan` and `tap_action`. A live run that diverges this
-way stops at the first `live_audit` disagreement rather than playing on.
-
-**Resolves.** `$365D` recurs every frame, so a timeout there means the game left the play
-loop — raise, do not retry.
-
-## 3. Landability filter: unproven corners
+## 2. Landability filter: unproven corners
 
 **Wrong.** Two soundness claims are handled but not proved.
 
@@ -70,7 +56,7 @@ argument, so a caller marching further must re-query with the same cap.
 
 **Resolves.** A reachability proof for the alias distance on a real board.
 
-## 4. Half the children are still forked
+## 3. Half the children are still forked
 
 **Wrong.** Bound-first expansion forks about half of all children (`stats["children"]`
 against `stats["bounded"]` in `driver.emu_suite` results). A child must be forked while its

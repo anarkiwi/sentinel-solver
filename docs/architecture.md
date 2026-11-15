@@ -459,19 +459,19 @@ game.
 | `$10B7` | `pan_viewpoint` | one keyboard pan notch: strip clear, one `plot_world` at the intermediate angle, queue the scroll | `pancost.notch_frames` | `golden_pan_cost` |
 | `$10EE` | (in `pan_viewpoint`) | horizontal scroll — 16 steps per ±8 bearing notch | `views.H_SCROLL` | `golden_pan_cost` |
 | `$1135` | (in `pan_viewpoint`) | vertical scroll — 8 steps per ±4 pitch notch | `views.V_SCROLL` | `golden_pan_cost` |
-| `$1149` | pitch limits table | clamps the pitch band to `[$CD..$FF] ∪ [$00..$35]` | `los.PITCH_BAND` | `test_landtable.py`; [3](open_items.md#3-landability-filter-unproven-corners) |
+| `$1149` | pitch limits table | clamps the pitch band to `[$CD..$FF] ∪ [$00..$35]` | `los.PITCH_BAND` | `test_landtable.py`; [2](open_items.md#2-landability-filter-unproven-corners) |
 | `$119F` | `check_for_full_player_input` | the full key scan, including the SPACE edge test |  | `test_kbd_scan_gate.py` |
-| `$11E0` | (in the input scan) | reloads the cursor auto-repeat mask `$0CC8` with `#$6B` | `views.CURSOR_REPEAT_MASK` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
-| `$11EA` | (in the input scan) | an idle full scan re-arms the action latch `$0C51` | `kbd_aim.tap_action` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
-| `$11F6` | (in the input scan) | `ASL $0CC8 / BCS` — one gated scan skipped per set mask bit | `views.CURSOR_RAMP` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$11E0` | (in the input scan) | reloads the cursor auto-repeat mask `$0CC8` with `#$6B` | `views.CURSOR_REPEAT_MASK` | `test_kbd_prog.py` |
+| `$11EA` | (in the input scan) | an idle full scan re-arms the action latch `$0C51` | `kbd_aim.tap_action` | `test_kbd_prog.py` |
+| `$11F6` | (in the input scan) | `ASL $0CC8 / BCS` — one gated scan skipped per set mask bit | `views.CURSOR_RAMP` | `test_kbd_prog.py` |
 | `$1214` | `set_busy_plotting` | sets `$0CE4` bit 7 for the duration of a redraw | `kbd_aim._run_to_scan` |  |
 | `$125A`/`$1272` | `get_random_tile_coordinate` | a `prnd` draw masked to 0..31, rejecting 31 | `landscape._random_tile_coord` | `golden_landscape` |
 | `$127C` | `update_game` | the per-pass game update |  |  |
-| `$1281` | (in `update_game`) | zeroes the action latch `$0C51` | `kbd_aim.tap_action` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$1281` | (in `update_game`) | zeroes the action latch `$0C51` | `kbd_aim.tap_action` | `test_kbd_prog.py` |
 | `$12D0` | `consider_player_action` | requires the sights active before create/absorb/transfer; dispatch + handler bookkeeping is `settlecost.HEAD_BASE` = 4600 cycles | `kbd_aim.tap_action`, `settlecost.HEAD_BASE` |  |
 | `$12E1` | (in `consider_player_action`) | `LSR $0CE5` — the first action unfreezes the enemies | `actions._mark_player_acted` |  |
-| `$134C` | `initialise_sights` | a sights-ON toggle re-centres the cursor to `$0CC6`=80 / `$0CC7`=95 | `views.SIGHTS_CENTRE`, `kbd_aim.sights_set` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
-| `$1363` | `check_for_player_input` | the ungated input scan (three callers) | `kbd_aim.ACTION_CODE` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$134C` | `initialise_sights` | a sights-ON toggle re-centres the cursor to `$0CC6`=80 / `$0CC7`=95 | `views.SIGHTS_CENTRE`, `kbd_aim.sights_set` | `test_kbd_prog.py` |
+| `$1363` | `check_for_player_input` | the ungated input scan (three callers) | `kbd_aim.ACTION_CODE` | `test_kbd_prog.py` |
 | `$139C` | action-code table | maps a key to the action code latched in `$0CE9` | `kbd_aim.ACTION_CODE` |  |
 | `$1420` | `set_palette_and_initialise_enemies` | enemy count, then placement | `landscape.generate` | `golden_landscape` |
 | `$1450` | `initialise_player_and_trees` | player slot, energy 10, start tile, the tree scatter | `landscape._initialise_player_and_trees` | `golden_landscape` |
@@ -580,12 +580,13 @@ game.
 | `$3451` | `get_random_number_between_0_and_22` | one draw, range-limited | `landscape._rnd_0_22` | `golden_landscape` |
 | `$34DE` | `play_tune` | walks `$AB50 + tune_number`; note holds count down in `$0CDF` | `settlecost.TUNE_FRAMES` (`#$19` = 96 f, `#$28` = 24 f) |  |
 | `$357D` | `play_landscape_loop` | the viewpoint redraw; a u-turn takes it with `$245B`/`$3700` skipped | `settlecost.uturn_settle_frames` |  |
+| `$359B` | (in `play_landscape_loop`) | `STA $0C5F`: every full redraw turns the sights off | `kbd_aim.PC_REDRAW` (`$359E`, past it): a cursor pass ends there and fails with the sights off | `test_kbd_prog.py` |
 | `$35A4` | load signature | `A5 0B 85` — the driver's proof the game is resident | `boot.SIG_ADDR` | `driver.dump_stage2.verify` |
 | `$35BA` | (in `play_landscape_loop`) | calls the occlusion raytrace | `projector.occlusion_visible` | tile-for-tile against the ROM `$3E80` bitmap |
 | `$35C3`/`$35C6`/`$35C9` | (in `play_landscape_loop`) | `$35C3` is the ONE `plot_world` pass; `$35C6`/`$35C9` are `plot_status_bar` `$9508`/`$98B2`, not a second pass | `projector.render_cost`, `settlecost.STATUS_9508`/`STATUS_98B2` |  |
 | `$3603` | `landscape_completed` | sets `$0CDE` bit 6 — the win | `memmap.LANDSCAPE_COMPLETE` | read back out of the machine by the driver |
 | `$3642` | viewpoint redraw entry | into `play_landscape_loop` | `kbd_aim._run_to_scan` |  |
-| `$365A`/`$365D` | (in the main loop) | the `JSR pan_viewpoint` call site and the pan-done PC | `kbd_aim.PC_PAN_DONE` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$365A`/`$365D` | (in the main loop) | the `JSR pan_viewpoint` call site and the pan-done PC | `kbd_aim.PC_PAN_DONE` | `test_kbd_prog.py` |
 | `$3682` | (in the main loop) | skips the enemy update while `$0CE5` bit 7 is set | `actions._mark_player_acted` |  |
 | `$37F2` | — | the play path's examine: the same plottables off `$3700`'s table less the camera reference `$001F`/`$00B0`/`$00B1`/`$00B2`, no trig and no object-stack walk | `projector._project`, `passcost.TAB_*` | `golden_render_cost`, cycle-exact on all 15 views |
 | `$3B00`/`$3C01` | arctan coefficient tables | reproduced closed-form, byte-exact | `relative._ARCTAN_LO`/`_HI` | closed form, byte-exact against the ROM table |
@@ -601,12 +602,13 @@ game.
 | `$937F` | `calculate_hypotenuse` | horizontal distance | `relative._calc_hypotenuse` | `golden_relative` |
 | `$9508` | `plot_status_bar` (first section) | the `$35C6` status plot; pads to fixed columns so its length breathes with the energy | `settlecost.STATUS_9508` (1946 ± f(E)) |  |
 | `$9630` | raster frame marker | `DEC $0CDF`; one `$9630`→`$9630` span is exactly one frame | `driver.clock.frames`/`run_frames` |  |
-| `$9678`/`$967B` | gated full input scan | the driver's press window | `kbd_aim._run_to_scan`, `views.TAP_FRAMES` | [2](open_items.md#2-the-drivers-wall-clock-timeouts-are-the-residual-load-sensitivity) |
+| `$9678`/`$967B` | gated full input scan | the driver's press window | `kbd_aim._run_to_scan`, `views.TAP_FRAMES` | `test_kbd_prog.py` |
 | `$98B2` | `plot_status_bar` (second section) | the `$35C9` status plot | `settlecost.STATUS_98B2` (130553 cycles, constant) |  |
 | `$9925` | `PAN_DELTA` table | `$14/$F8/$04/$F4` added before the pan's `plot_world` | `pancost.PAN_DELTA` | `golden_pan_cost` |
 | `$9939`/`$994F` | pan buffer-mode entries | vertical `A=#$00` (play window), horizontal `A=#$02` | `pancost.PAN_MODE`, `projector.BUF_WINDOW` | `golden_pan_cost` |
-| `$9958` | `move_sights` | steps cx and cy in ONE call — the cursor moves diagonally | `kbd_aim.fine_cursor` | `test_landtable.py`; [3](open_items.md#3-landability-filter-unproven-corners) |
-| `$9965`/`$9994` | (in `move_sights`) | ±1 px per gated scan; clamps cx `$10-$8F`, cy `$20-$9F` | `los.CURSOR_CX`/`CURSOR_CY` | `test_landtable.py`; [3](open_items.md#3-landability-filter-unproven-corners) |
+| `$9958` | `move_sights` | steps cx and cy in ONE call — the cursor moves diagonally | `kbd_aim.fine_cursor` | `test_landtable.py`; [2](open_items.md#2-landability-filter-unproven-corners) |
+| `$9965`/`$9994` | (in `move_sights`) | ±1 px per gated scan; clamps cx `$10-$8F`, cy `$20-$9F` | `los.CURSOR_CX`/`CURSOR_CY` | `test_landtable.py`; [2](open_items.md#2-landability-filter-unproven-corners) |
+| `$99D6` | (in `move_sights`) | a vertical edge with the pitch at its limit (`$114B`/`$114C`): `cy` reloaded, no store | `kbd_aim.PC_CY_CLAMP`: a cursor pass ends there | `test_kbd_prog.py` |
 | `$9CA0`/`$9CA1` | object vertex counts | per model type | `projector._OBJECT_MODEL` | `golden_render_cost` |
 | `$9CAB`/`$9CAC` | object polygon counts | per model type | `projector._OBJECT_MODEL` | `golden_render_cost` |
 | `$9D37` | rotation speed table | the per-enemy ±20 step, in RAM | `memmap.ROTATION_SPEED_TABLE` | `golden_landscape` |
@@ -758,7 +760,7 @@ makes the ray multi-candidate and always marched (`test_stop_cell_partition_hold
 
 **Wrap safety.** The ROM compares z as bytes, so a ray far enough above a surface aliases onto
 "equal" (`WRAP_D`). Such cells are kept as candidates unconditionally, so the answer is sound
-either way — see [open item 3](open_items.md#3-landability-filter-unproven-corners).
+either way — see [open item 2](open_items.md#2-landability-filter-unproven-corners).
 
 **Climbing rays.** The ROM rejects a look-up (`vz >= 0`, `s30` bit 7 clear) at every flat or
 object tile unless `$0C6E | $0C67` has bit 7 set; the sweeps keep `$0C6E` bit 7 clear, a

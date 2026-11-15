@@ -85,12 +85,13 @@ class Node:
         }
 
 
-def outcome_facts(outcome):
-    """:func:`kbd_prog.move_facts` of a forked move; one without a status stalled in a
-    wait, a driver fault."""
+def outcome_facts(outcome, move=None):
+    """:func:`kbd_prog.move_facts` of a forked ``move``; one without a status stalled in
+    a wait, a driver fault, raised with the records it ended on."""
     facts = kbd_prog.move_facts(outcome)
     if "status" not in facts:
-        raise RuntimeError(f"move program stalled: {outcome[:3]}")
+        tail = kbd_prog.records(outcome)[-6:]
+        raise RuntimeError(f"move {move} stalled: {outcome[:3]}, last records {tail}")
     return facts
 
 
@@ -249,7 +250,8 @@ class SearchPlayer:
             groups, run_batches([g[0] for g in groups], work)
         ):
             for j, o, twin in zip(js, outs, twins):
-                exp.done[j] = (outcome_facts(o), twin, machine_key(twin))
+                facts = outcome_facts(o, exp.programs[j][0])
+                exp.done[j] = (facts, twin, machine_key(twin))
             self.stats["children"] += len(outs)
             self.stats["frames"] += sum(o.frames for o in outs)
         self.stats["seconds"] += time.time() - t0
@@ -348,8 +350,7 @@ class SearchPlayer:
         """Play until won, ``max_actions`` moves, or no line survives; whether won."""
         root = Node(self.bm)
         if self.live is not None:
-            facts = kbd_prog.move_facts(prog.execute(self.bm.clone(), ENTRY))
-            self._mirror("entry", ENTRY, facts)
+            self._mirror("entry", ENTRY, prog.execute(self.bm.clone(), ENTRY))
         pbar = tqdm(
             total=max_actions, desc="moves", unit="move", disable=not self.progress
         )
@@ -366,25 +367,32 @@ class SearchPlayer:
                         break
         return self.won and not self.diverged
 
-    def _mirror(self, name, program, facts):
-        """Interpret ``program`` on ``live`` and audit its facts against ``facts``,
-        the session's; a disagreement is ``diverged``."""
-        got = kbd_prog.move_facts(prog.interpret(self.live, program))
+    def _mirror(self, name, program, outcome):
+        """Interpret ``program`` on ``live`` and audit its facts against ``outcome``'s,
+        the session's; a disagreement is ``diverged``, with where their records part."""
+        live = prog.interpret(self.live, program)
+        facts, got = kbd_prog.move_facts(outcome), kbd_prog.move_facts(live)
         n = len(self.trace) + (name != "entry")
         self.live_audit.append([n, name, facts, got])
         if got != facts:
             diff = {k: [facts.get(k), got.get(k)] for k in {**facts, **got}}
             diff = {k: v for k, v in diff.items() if v[0] != v[1]}
-            self.diverged = {"move": n, "name": name, "facts": diff}
+            self.diverged = {
+                "move": n,
+                "name": name,
+                "facts": diff,
+                "records": kbd_prog.first_difference(outcome, live),
+            }
             self.log(f"LIVE MISMATCH at move {n} {name}: session vs live {diff}")
 
     def _execute(self, planned):
         """Play ``planned``'s move on the session and return the new root, logging any
         difference from what the search's child did."""
         name, tile, _k = planned.move
-        facts = kbd_prog.move_facts(prog.execute(self.bm, planned.program))
+        outcome = prog.execute(self.bm, planned.program)
+        facts = kbd_prog.move_facts(outcome)
         if self.live is not None:
-            self._mirror(name, planned.program, facts)
+            self._mirror(name, planned.program, outcome)
         node = Node(self.bm, None, None, (planned.move, planned.program), facts)
         self.audit.append([len(self.trace) + 1, name, list(tile), planned.facts, facts])
         if facts != planned.facts or node.key != planned.key:
