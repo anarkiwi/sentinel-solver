@@ -208,7 +208,7 @@ def moves(board, landed, branch, exact=False):
     need = np.where(plat, 0, need)
     gain = base + BOULDER_H * need - eye
     cost = 2 * need + ROBOT_E
-    fuel = np.where(end[:, None, None], 0, board.fuel()) if end.any() else board.fuel()
+    fuel = np.where(end[:, None, None], 0, board.fuel())
     purse = energy[:, :, None]
     hop = (
         landed & stack & ((gain > 0) | plat) & (need <= MAX_BOULDERS) & (cost <= purse)
@@ -233,17 +233,11 @@ def moves(board, landed, branch, exact=False):
     mount_row, mount_at = _top_ranked(ours, (-board.z,), branch)
 
     own = board.rows
-    barren = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1))
     if exact:
-        here = plat[
-            board.rows,
-            board.x[board.rows, board.player],
-            board.y[board.rows, board.player],
-        ]
-        barren = ~gone | here
+        leave = ~gone | plat[board.rows, at_me[0][:, 0], at_me[1][:, 0]]
     else:
-        barren &= ~gone
-    away = np.flatnonzero(barren & (board.energy >= ROBOT_E))
+        leave = ~(eat.any(1) | hop.reshape(flat).any(1) | ours.any(1) | gone)
+    away = np.flatnonzero(leave & (board.energy >= ROBOT_E))
     sizes = [eat_row.size, hop_row.size, mount_row.size, own.size, away.size]
     parent = np.concatenate([eat_row, hop_row, mount_row, own, away])
     cls = np.repeat([ABSORB, HOP, MOUNT, WAIT, RELOCATE], sizes)

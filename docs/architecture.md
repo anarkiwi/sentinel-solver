@@ -744,8 +744,9 @@ previous action's (or, with `reuse`, the sights') drives the cursor only, any ot
 full aim (the ray is assumed to land; the facts tell whether it did); a refusal ends the move.
 `Prog.guard(pcs, check)` makes every wait in its block also stop before `pcs` and runs
 `check`'s ops after each wait, on both backends: a move's waits stop at `$1A05` (past
-`kill_player`'s `STA $0C4E`) and `$219B` (past the win's `STA $0CDE`) and end the move
-(`H_DIED`, or the win), so a death never runs a wait into its hang guard. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
+`kill_player`'s `STA $0C4E`), `$217D` (past the toll underflow's `STA $0CDE`) and `$219B`
+(past the win's `STA $0CDE`) and end the move (`H_DIED`, or the win), so a death never
+runs a wait into its hang guard. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
 Sentinel left), `alive` (`$0C4E` and `$0CE5` bit7 clear), `won` (`$0CDE` bit6) and `frames`.
 
 ---

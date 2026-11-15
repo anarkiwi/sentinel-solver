@@ -260,9 +260,10 @@ class SearchPlayer:
         return node
 
 
-def ply_batches(landscape, ply, width=16, depth=30, branch=3, commit=1):
+def ply_batches(landscape, ply, width=16, depth=30, branch=3, commit=1, moves=False):
     """``[(base EmuMon, [programs])]``: the :func:`prog.forks` batches of search ply
-    ``ply`` (0: the root's) from the entry to ``landscape``."""
+    ``ply`` (0: the root's) from the entry to ``landscape``; ``moves`` pairs each program
+    with its move."""
     from driver.emu import EmuMon
     from sentinel import emu
 
@@ -271,7 +272,7 @@ def ply_batches(landscape, ply, width=16, depth=30, branch=3, commit=1):
     for _ in range(ply):
         beam = player._select(player._expand(beam, cache))
     return [
-        (node.bm, [p for _m, p in programs])
+        (node.bm, programs if moves else [p for _m, p in programs])
         for node, programs in zip(beam, batches(beam, branch))
     ]
 
@@ -282,17 +283,24 @@ def main(argv=None):
     parser.add_argument("landscape", type=int)
     parser.add_argument("ply", type=int)
     parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
+    parser.add_argument("--each", action="store_true", help="time programs one by one")
     args = parser.parse_args(argv)
+    work = ply_batches(args.landscape, args.ply, moves=True, **PRESETS[args.preset])
     rows = []
-    for base, programs in tqdm(
-        ply_batches(args.landscape, args.ply, **PRESETS[args.preset]), desc="batches"
-    ):
-        t0 = time.time()
-        outs, _ = prog.forks(base, programs)
-        dt = time.time() - t0
-        frames = sum(o.frames for o in outs)
-        rows.append({"programs": len(programs), "frames": frames, "seconds": dt})
-    print(json.dumps(rows))
+    for base, programs in tqdm(work, desc="batches"):
+        jobs = [[p] for p in programs] if args.each else [programs]
+        for job in jobs:
+            fell, t0 = prog.STATS["fallback"], time.time()
+            outs, _ = prog.forks(base, [p for _m, p in job])
+            rows.append(
+                {
+                    "moves": [list(m) for m, _p in job],
+                    "frames": sum(o.frames for o in outs),
+                    "seconds": round(time.time() - t0, 3),
+                    "fallbacks": prog.STATS["fallback"] - fell,
+                }
+            )
+    print(json.dumps(rows, default=int))
     return 0
 
 

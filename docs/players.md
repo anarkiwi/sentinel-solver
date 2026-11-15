@@ -230,9 +230,9 @@ PRNG-driven landing is whatever the machine does. With the Sentinel gone the pla
 takes a hop (no boulders, toll kept, ranked first) or a mount whatever its height, and the
 relocation from the platform is the terminal hyperspace (`compile_move("finish")`). Each
 parent's expansion is memoized on its machine key and carried into the next search, so a
-replan re-expands only what the new root's beam adds. A move's waits stop at
-`kill_player`'s flag store (`$1A05`) and at the win's (`$219B`), so a death or the win
-ends the move there (`Prog.guard`).
+replan re-expands only what the new root's beam adds. A move's waits stop past the flag
+stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the win (`$219B`), so
+a death or the win ends the move there (`Prog.guard`).
 
 `python -m driver.search_player N PLY [--preset P]` builds search ply `PLY`'s fork batches
 from the entry to landscape `N` (`ply_batches`: `[(base EmuMon, [programs])]`) and times

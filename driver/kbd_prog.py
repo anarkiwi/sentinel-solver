@@ -95,7 +95,8 @@ MOVE_FACTS = {
 }
 MOVE_KEYS = {"absorb": ("A",), "mount": ("Q",)}
 KILL_PC = 0x1A05  # kill_player $1A00, past its STA $0C4E
-WIN_PC = 0x219B  # player_survived_hyperspace, past its STA $0CDE
+TOLL_PC = 0x217D  # do_hyperspace's toll underflow, past its STA $0CDE ($80)
+WIN_PC = 0x219B  # player_survived_hyperspace, past its STA $0CDE ($C0)
 
 
 def budget(steps, frames):
@@ -486,7 +487,8 @@ def compile_move(kind, view=None, k=0, frames=0, reuse=False):
     ``"finish"`` (the platform hyperspace attempt); outputs :func:`move_facts`.
     ``view`` is one view key, or one per action; an action on the bearing the previous
     one (or, with ``reuse``, the sights) stands on drives the cursor only; a wait
-    ends early on a drain death (``H_DIED``) or the win, and so does the move."""
+    ends early on a death (``H_DIED``: drained, or the hyperspace toll) or the win, and
+    so does the move."""
     keys = {"wait": (), "relocate": (), "finish": ()}.get(kind)
     keys = MOVE_KEYS.get(kind, ("B",) * k + ("R", "Q")) if keys is None else keys
     steps = view if keys and isinstance(view[0], tuple) else (view,) * len(keys)
@@ -496,10 +498,10 @@ def compile_move(kind, view=None, k=0, frames=0, reuse=False):
 
     def check(p):
         p.ld(prog.GUARD, mm.PLAYER_DIED_BY_DRAINING).bmi8(prog.GUARD, died)
-        p.ld(prog.GUARD, mm.LANDSCAPE_COMPLETE).and_(prog.GUARD, 0x40)
-        p.bne(prog.GUARD, 0, done)
+        p.ld(prog.GUARD, mm.LANDSCAPE_COMPLETE).and_(prog.GUARD, 0xC0)
+        p.beq(prog.GUARD, 0x80, died).bne(prog.GUARD, 0, done)
 
-    with p.regs(1) as (status,), p.guard((KILL_PC, WIN_PC), check):
+    with p.regs(1) as (status,), p.guard((KILL_PC, TOLL_PC, WIN_PC), check):
         p.mov(status, prog.HALT_OK)
         c.exits = (status, facts)
         if kind == "wait":
