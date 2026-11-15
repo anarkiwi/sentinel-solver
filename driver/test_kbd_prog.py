@@ -7,11 +7,12 @@ import struct
 import threading
 
 import pytest
-from vagrant_moses import Machine
+from vagrant_moses import Machine, memmap as vmm
 from vice_driver.binmon import OPCODE, BinmonError, BinmonResponse
 
 from driver import clock, kbd_prog, prog
 from driver.emu import EmuMon
+from driver.kbd_aim import KbdDriver
 from driver.kbd_prog import Compiler
 from sentinel import memmap as mm
 from sentinel.views import _Views
@@ -302,3 +303,44 @@ def test_a_clones_stop_checkpoints_are_its_own():
     mine = prog._stop_checkpoint(twin, 0x1234)
     assert prog._stop_checkpoint(bm, 0x1234) == mine
     assert bm.checkpoint_get(mine).start == twin.checkpoint_get(mine).start == 0x1234
+
+
+REDRAW = bytes.fromhex(
+    "78a9808de40ca20fa00088d0fdcad0f8"  # SEI; $0CE4 = $80; ~19k cycles of delay
+    "a9008de40ca201a00088d0fdcad0f84c1fc1"  # $0CE4 = 0; ~1k cycles; JMP *
+)
+REDRAW_AT, CLEARED, TARGET = 0xC100, 0xC115, 0xC11F
+
+
+def _redraw(plot=True):
+    """A monitor on a bare machine plotting (``$0CE4`` bit7) for a while, then idling a
+    little before reaching :data:`TARGET`; and the window that ends between the two."""
+    m = Machine(backend="native")
+    m.ram[REDRAW_AT : REDRAW_AT + len(REDRAW)] = REDRAW
+    if not plot:
+        m.ram[REDRAW_AT + 2] = 0
+    m.reset(REDRAW_AT)
+    bm, probe = EmuMon(m), EmuMon(m.clone())
+    t0 = probe.m.cycle
+    probe.run_until_pc(CLEARED, timeout=1.0)
+    cleared = probe.m.cycle - t0
+    probe.run_until_pc(TARGET, timeout=1.0)
+    window = (cleared + probe.m.cycle - t0) / 4 / vmm.PAL.clock_hz
+    return bm, window
+
+
+@pytest.mark.parametrize("plot", [True, False])
+def test_a_redraw_ending_late_in_a_window_delays_the_wait_not_stalls_it(plot):
+    bm, window = _redraw(plot)
+    c = Compiler()
+    c.run_past_redraw(TARGET, window)
+    c.p.halt(prog.HALT_OK)
+    (no, ns), (io, is_) = _both(bm, c.p)
+    assert no == io and ns == is_
+    assert no.code == (prog.HALT_OK if plot else prog.HALT_RAISE)
+    kbd = KbdDriver(bm.clone(), _quiet)
+    if plot:
+        assert kbd._run_past_redraw(TARGET, window)
+    else:
+        with pytest.raises(Exception):
+            kbd._run_past_redraw(TARGET, window)

@@ -166,17 +166,19 @@ class Compiler:
 
     # ---- waits ---------------------------------------------------------------
     def run_past_redraw(self, pc, seconds, res=None):
-        """``_run_past_redraw``: a timeout re-arms while $0CE4 bit7 is set, raises
-        otherwise; ``res`` false once the re-arms are spent."""
+        """``_run_past_redraw``: a timeout re-arms while $0CE4 bit7 is set or was at the
+        previous timeout, raises otherwise; ``res`` false once the re-arms are spent."""
         p = self.p
-        loop, timeout, done = p.new(3)
-        with p.regs(1) as (n,):
+        loop, timeout, busy, spent, done = p.new(5)
+        with p.regs(1) as (n,):  # re-arms left; bit 8: plotting at the last timeout
             p.mov(n, _SCAN_WAIT_PASSES).label(loop).run(pc, seconds, timeout)
             if res is not None:
                 p.mov(res, 1)
             p.jmp(done).label(timeout)
-            p.ld(SCRATCH, A_PLOT).and_(SCRATCH, 0x80).beq(SCRATCH, 0, p.thrower)
-            p.djnz(n, loop)
+            p.ld(SCRATCH, A_PLOT).and_(SCRATCH, 0x80).shl(SCRATCH, 1)
+            p.bne(SCRATCH, 0, busy).blt(n, 0x100, p.thrower).label(busy)
+            p.and_(n, 0xFF).sub(n, 1).beq(n, 0, spent).or_(n, SCRATCH).jmp(loop)
+            p.label(spent)
             if res is not None:
                 p.mov(res, 0)
             p.label(done)

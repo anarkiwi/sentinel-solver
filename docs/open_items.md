@@ -70,19 +70,7 @@ argument, so a caller marching further must re-query with the same cap.
 
 **Resolves.** A reachability proof for the alias distance on a real board.
 
-## 4. A meanie's hyperspace leaves the driver's loop
-
-**Wrong.** After a meanie hyperspaces the player during a move, the machine does not reach
-the main-loop pass `$363D` again in thousands of frames, though the CPU runs and later plots;
-the move's wait times out, and the search refuses the move rather than following it.
-
-**Shown by.** Landscape 9831 under the wide search, on an absorb of (28,20) from (10,6) with
-the Sentinel's meanie out: `driver.search_player.outcome_facts` sees the stalled outcome.
-
-**Resolves.** Disassemble the path from `$1720` (the meanie's return from `do_hyperspace`)
-until play resumes, and the input or state it waits on.
-
-## 5. Half the children are still forked
+## 4. Half the children are still forked
 
 **Wrong.** Bound-first expansion forks about half of all children (`stats["children"]`
 against `stats["bounded"]` in `driver.emu_suite` results). A child must be forked while its
