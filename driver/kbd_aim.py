@@ -191,7 +191,19 @@ class KbdDriver:
     def _run_pass(self):
         """Run one main-loop pass to PC_PAN_DONE ($365D): the previous notch's scroll
         loop, update_game $127C and this pass's pan_viewpoint $10B7."""
-        self.bm.run_until_pc(self.PC_PAN_DONE, timeout=_RU_COMMIT)
+        self._run_past_redraw(self.PC_PAN_DONE, _RU_COMMIT)
+
+    def _run_past_redraw(self, pc, timeout):
+        """``run_until_pc(pc)``, re-armed while a timeout finds the world being plotted
+        ($0CE4 bit7): a redraw still running delays ``pc``, it does not stall it."""
+        for _ in range(_SCAN_WAIT_PASSES):
+            try:
+                self.bm.run_until_pc(pc, timeout=timeout)
+                return True
+            except Exception:
+                if not self.rd(A_PLOT) & 0x80:
+                    raise
+        return False
 
     def _run_to_scan(self, timeout=6.0):
         """Run to the next GATED full input scan ($9678). The IRQ reaches it only with
@@ -200,14 +212,7 @@ class KbdDriver:
         expired ($966E), so a timeout while $0CE4 is set is a redraw still running, not a
         stall: re-arm. Conceding there would leak the redraw's remaining frames into
         whatever primitive runs next. A timeout with the gate OPEN is a real stall."""
-        for _ in range(_SCAN_WAIT_PASSES):
-            try:
-                self.bm.run_until_pc(self.PC_IRQ_SCAN, timeout=timeout)
-                return True
-            except Exception:
-                if not self.rd(A_PLOT) & 0x80:
-                    raise
-        return False
+        return self._run_past_redraw(self.PC_IRQ_SCAN, timeout)
 
     def _one_scan_press(self):
         """Hold SPACE for EXACTLY ONE gated full input scan ($9678->$967B), after ONE

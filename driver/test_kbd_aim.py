@@ -6,6 +6,8 @@ fake monitor backs a 64KB byte image."""
 import os
 import sys
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
@@ -42,3 +44,23 @@ def test_cur_reads_cursor_bytes(fake_bm):
     d.bm.mem[kbd_aim.A_CX] = 99
     d.bm.mem[kbd_aim.A_CY] = 43
     assert d.cur() == (99, 43)
+
+
+def test_a_wait_outlasted_by_a_redraw_is_re_armed(fake_bm):
+    """A timeout while $0CE4 bit7 says the world is being plotted is a redraw still
+    running: the wait re-arms until the pc comes; with the gate open it raises."""
+    d = _drv(fake_bm)
+    calls = []
+
+    def run_until_pc(pc, timeout):
+        calls.append(pc)
+        if len(calls) < 3:
+            raise TimeoutError(pc)
+        d.bm.mem[kbd_aim.A_PLOT] = 0
+
+    d.bm.run_until_pc = run_until_pc
+    d.bm.mem[kbd_aim.A_PLOT] = 0x80
+    assert d._run_past_redraw(0x365D, 1.0) and calls == [0x365D] * 3
+    calls.clear()
+    with pytest.raises(TimeoutError):
+        d._run_past_redraw(0x365D, 1.0)

@@ -23,6 +23,8 @@ _THREADS = {
 def play(board, out_dir, max_actions):
     """Run one board in its own process; its result JSON (and log beside it)."""
     out = os.path.join(out_dir, f"emu_{board:04d}.json")
+    if os.path.exists(out):
+        os.unlink(out)
     with open(out[:-5] + ".log", "w") as log:
         subprocess.run(
             [sys.executable, "-m", "driver.play_player", str(board), "--emu"]
@@ -33,6 +35,8 @@ def play(board, out_dir, max_actions):
             stderr=subprocess.STDOUT,
             check=False,
         )
+    if not os.path.exists(out):
+        return {"won": "error", "trace": []}  # the run raised: its log says why
     with open(out) as fh:
         return json.load(fh)
 

@@ -45,7 +45,7 @@ class MeasuringKbdDriver(kbd_aim.KbdDriver):
         notch's scroll loop, $363D->$365A update_game $127C, $365A->$365D $10B7."""
         t = [self._now()]
         for pc in (PC_PASS, PC_PAN_CALL, self.PC_PAN_DONE):
-            self.bm.run_until_pc(pc, timeout=kbd_aim._RU_COMMIT)
+            self._run_past_redraw(pc, kbd_aim._RU_COMMIT)
             t.append(self._now())
             if pc != self.PC_PAN_DONE:
                 self.bm.advance_instructions(1)
