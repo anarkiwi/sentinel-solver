@@ -8,6 +8,7 @@ enemy-clock offset ``F``; ``--diff LANDSCAPE`` lists bytes differing from ``Game
 
 import argparse
 import glob
+import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
 
@@ -57,7 +58,9 @@ def jitter(paths, offsets, workers, ticks):
     ``ticks`` decision ticks to act."""
     out = {p: [None] * len(offsets) for p in paths}
     jobs = [(p, k, ticks) for p in paths for k in offsets]
-    with ProcessPoolExecutor(workers) as pool:
+    with ProcessPoolExecutor(
+        workers, mp_context=multiprocessing.get_context("spawn")
+    ) as pool:
         for path, k, act in tqdm(
             pool.map(first_action, jobs), total=len(jobs), desc="jitter"
         ):

@@ -95,3 +95,16 @@ def test_pass_timer_splits_scroll_update_and_pan_in_raster_frames():
     label, frozen, scroll, update, pan = kbd.passes[0]
     assert (label, frozen) == ("p7", 1)
     assert (scroll, update, pan) == (round(3 + 100 / 312, 3), 0.5, 20.0)
+
+
+def test_cli_replays_jitters_and_diffs_saved_ticks(tmp_path, capsys):
+    _saved(tmp_path, bearing=None, cursor=(80, 95))
+    d = str(tmp_path)
+    assert replay_tick.main([d, "--only", "3", "--diff", str(_LS), "--ticks", "1"]) == 0
+    assert "== t0003.npz" in capsys.readouterr().out
+    assert (
+        replay_tick.main([d, "--jitter", "0", "60", "--ticks", "8", "--workers", "1"])
+        == 0
+    )
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    assert line.startswith("t0003.npz ") and line.split()[1] in ("STABLE", "FLIPS")
