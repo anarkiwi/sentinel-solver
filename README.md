@@ -32,15 +32,15 @@ python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embedda
 <!-- results:begin -->
 | landscape | enemies | offline actions | offline energy | beam actions | beam energy | live |
 |---|---|---|---|---|---|---|
-| 0 | 1 | 29 | 9 | 11 | 2 | — |
+| 0 | 1 | 29 | 8 | 10 | 1 | — |
 | 42 | 2 | 32 | 2 | 19 | 2 | **36 actions** (enemies frozen)† |
-| 60 | 7 | 43 | 0 | 21 | 3 | — |
-| 110 | 3 | 51 | 11 | 19 | 0 | — |
-| 298 | 7 | 36 | 13 | 18 | 7 | — |
-| 321 | 7 | 28 | 2 | 18 | 1 | — |
-| 335 | 7 | 60 | 23 | 34 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
-| 373 | 7 | 32 | 2 | 12 (not won) | 1 | — |
-| 1442 | 8 | 45 | 18 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| 60 | 7 | 40 | 5 | 21 | 1 | — |
+| 110 | 3 | 49 | 9 | 19 | 2 | — |
+| 298 | 7 | 36 | 15 | 18 | 3 | — |
+| 321 | 7 | 28 | 2 | 21 | 2 | — |
+| 335 | 7 | 48 | 1 | 33 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
+| 373 | 7 | 57 | 19 | 17 (not won) | 1 | — |
+| 1442 | 8 | 41 | 17 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
 
 † Live run recorded against an older model: its trace digest is unrecorded or differs from the current offline trace for that board.
 

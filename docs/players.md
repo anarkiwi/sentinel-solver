@@ -26,7 +26,10 @@ that cannot help while you ARE being drained.
 
 **A gap does not need forecasting.** `enemies.step` is byte-exact, so instead of predicting
 when a cone arrives, clone the state, run it forward over the action's real duration and
-look (`_drained_over`).
+look (`_drained_over`). On the emulated game (`play_player --emu`, `driver.emu_phase`) the
+clone is the machine itself: the action is done on a fork through the real keyboard driver and
+its outcome read off, so the lookahead takes exactly the game's time
+([architecture](architecture.md#the-emulated-game-sentinelemupy-driveremupy)).
 
 **Height buys freedom, and nothing else does.** Measured over every stance on ls335:
 

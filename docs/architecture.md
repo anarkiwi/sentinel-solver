@@ -643,6 +643,25 @@ image from `emu.boot()`.
 | `keymatrix_set/release_all/tap` | the CIA 1 matrix, row = PA line, col = PB line; a fixed tap releases `frames · 19656` cycles after the press |
 | timeouts | `timeout` seconds of PAL cycles, then `BinmonError`; a stop at another checkpoint also raises |
 
+**The lookahead runs on the emulator** (`driver/emu_phase.py`). `play_player --emu` plays
+`EmuPhase`, a `LivePhase` whose forks are machine clones (`EmuMon.clone()`: `Machine.clone()`
+plus every checkpoint, count, owed boundary test and held tap) carrying the keyboard driver's
+committed bearing, so a forked action takes the game's own time and effects:
+
+| question | answered by |
+|---|---|
+| is there a gap for this action (`_gap`, `_cap_gap`) | `_rehearse`: the same `_fire`s on a fork; drained when energy differs from the steps' own costs and refunds, or the body is lost |
+| is the body under fire (`_drained_over`) | the sightline gate, then a fork idling the frames on its machine |
+| does a hop or a mount land (`_probe_verdicts`, `_mount_holds`) | a fork plays the hop's creates and transfer, then the first absorb `_refuel` would take (else one quantum), and must be alive |
+| which option or tied climb (`_arbitrate`, `_settle_tie`) | forks playing the fixed ladder, a rollout adopting each rehearsed fork instead of replaying it |
+
+Every fork goes through `_fork_jobs`, run in input order; rehearsals, idles and landings are
+memoized on a digest of the RAM, CPU registers, cycle, monitor state and committed bearing.
+Waits are `_wait`: `clock.run_frames` on the session's machine (real time on VICE). View
+selection still ranks aims on the model, which advances no clock on this path. Each real step
+records its rehearsal beside what the machine then did in `lookahead_audit`; `python -m
+driver.emu_suite` plays the suite boards in parallel processes and tabulates the two.
+
 A VICE run and an emulated run of the same command agree row for row in the action trace
 and every audit; only a wait that expires can split them, since VICE times waits in host
 seconds and the emulator in PAL cycles. `python -m driver.compare_runs A.json

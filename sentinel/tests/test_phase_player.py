@@ -50,6 +50,43 @@ def test_waiting_is_refused_while_under_fire():
     assert not player._wait_for_gap(600.0)
 
 
+def test_waiting_for_a_gap_spends_world_time_through_wait():
+    """Every quantum waited is the player's own ``_wait``, so a backend whose clock is
+    elsewhere (the live machine) advances that clock and not the model's."""
+    player = _player()
+    waited, asks = [], iter((False, False, True))
+    player._under_fire = lambda: False
+    player._wait = waited.append
+    before = player.st.clone()
+    assert player._wait_for(lambda: next(asks))
+    assert waited == [phase_player.WAIT_QUANTUM] * 2
+    assert player.waited == 2 * phase_player.WAIT_QUANTUM
+    assert bytes(player.st.mem) == bytes(before.mem)  # the model clock did not move
+
+
+def test_the_simulators_wait_advances_its_world():
+    player, ref = _player(), _player()
+    player._wait(phase_player.WAIT_QUANTUM)
+    enemies.advance_frames(ref.st, phase_player.WAIT_QUANTUM)
+    assert bytes(player.st.mem) == bytes(ref.st.mem)
+    assert player.frames == phase_player.WAIT_QUANTUM
+
+
+def test_fork_jobs_run_each_job_on_its_own_fork_in_order():
+    player = _player()
+
+    def boom(_twin):
+        raise ValueError("x")
+
+    def spend(twin):
+        twin.st.energy -= 1
+        return twin.st.energy
+
+    got = player._fork_jobs([spend, boom, spend])
+    assert got[0] == got[2] == player.st.energy - 1  # independent forks, not one
+    assert isinstance(got[1], phase_player.fleet.Failure)
+
+
 def test_the_sentinel_is_not_taken_without_the_endgame_banked():
     """$1B91 refuses every absorb once slot 0 empties, so the finish must be paid for
     before the Sentinel dies, not after."""
@@ -227,3 +264,12 @@ def test_ls0_is_won():
     assert won and actions.won(player.st)
     assert not enemies.enemy_slots(player.st)
     assert not actions.player_dead(player.st)
+
+
+def test_a_fork_whose_body_is_lost_scores_as_lost():
+    """A death the game has already reset away (a fresh board, full purse) must not
+    score as a live body: the score asks the player, not the bytes."""
+    player = _player()
+    alive = PhasePlayer._score(player)
+    player._lost = lambda: True
+    assert alive[0] and not PhasePlayer._score(player)[0]

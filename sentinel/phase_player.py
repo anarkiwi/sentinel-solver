@@ -57,6 +57,10 @@ class PhasePlayer(BasePlayer):
         """
         if not self._exposures(self.st, self.st.player):
             return False
+        return self._idle_drains(frames)
+
+    def _idle_drains(self, frames):
+        """Whether a copy of the world idled ``frames`` loses energy or the body."""
         probe = self.st.clone()
         before = probe.energy
         enemies.advance_frames(probe, int(frames))
@@ -67,7 +71,11 @@ class PhasePlayer(BasePlayer):
         return self._drained_over(WAIT_QUANTUM)
 
     def _wait_for_gap(self, frames):
-        """Idle until ``frames`` of quiet are available; False if none is.
+        """Idle until ``frames`` of quiet are available; False if none is."""
+        return self._wait_for(lambda: not self._drained_over(frames))
+
+    def _wait_for(self, quiet):
+        """Idle until ``quiet()`` holds; False if it does not within ``horizon``.
 
         Idling is free only while unexposed.  Once a cone is on the body, waiting is
         the one thing that cannot help -- every quantum is a drain -- so the caller is
@@ -75,15 +83,14 @@ class PhasePlayer(BasePlayer):
         """
         spent = 0
         while spent < self.horizon:
-            if not self._drained_over(frames):
+            if quiet():
                 return True
             if self._under_fire():
                 return False
-            enemies.advance_frames(self.st, WAIT_QUANTUM)
-            self.frames += WAIT_QUANTUM
+            self._wait(WAIT_QUANTUM)
             self.waited += WAIT_QUANTUM
             spent += WAIT_QUANTUM
-            if actions.player_dead(self.st) or self.st.energy <= 0:
+            if self._lost() or self.st.energy <= 0:
                 return False
         return False
 
@@ -121,6 +128,18 @@ class PhasePlayer(BasePlayer):
             return []
         return [lambda v=v: self._span(v, view, tile) for v in verbs]
 
+    def _gap(self, verb, tile, view):
+        """A zero-argument test, for :meth:`_wait_for`, of whether ``verb`` fired on
+        ``tile`` from ``view`` at that moment leaves the body undrained."""
+        frames = self._span(verb, view, tile)
+        return lambda: not self._drained_over(frames)
+
+    def _cap_gap(self, tile, view):
+        """:meth:`_gap` for capping ``tile`` with a robot and transferring up into it."""
+        projector.prefetch(self._span_calls(tile, ("robot", "transfer"), view))
+        frames = self._span("robot", view, tile) + self._span("transfer", view, tile)
+        return lambda: not self._drained_over(frames)
+
     def _views_now(self):
         return _Views(self.st)
 
@@ -134,7 +153,7 @@ class PhasePlayer(BasePlayer):
         view = views.get(tile, band=band)
         if view is None or self.st.energy - cost < 0:
             return False
-        if not self._wait_for_gap(self._span(verb, view, tile)):
+        if not self._wait_for(self._gap(verb, tile, view)):
             if not self._under_fire():
                 return False  # no gap and no pressure: this action is not worth it
         return self._fire(verb, tile, view)
@@ -161,22 +180,28 @@ class PhasePlayer(BasePlayer):
         """How well a rollout ended, worst to best, on facts rather than weights."""
         st = player.st
         return (
-            not actions.player_dead(st) and st.energy > 0,
+            not player._lost() and st.energy > 0,
             -len(enemies.enemy_slots(st)),
             round(st.eye_z(), 3),
             st.energy,
         )
 
-    def _try(self, name):
-        """The score of ``name`` played out on a fork, or None if it did not move."""
-        twin = self._fork()
+    def _try(self, twin, name):
+        """The score of ``name`` played out on the fork ``twin``, or None if it did not
+        move."""
         if not getattr(twin, name)(_Views(twin.st)):
             return None
         for _ in range(ARBITRATE_ACTIONS):
-            if actions.player_dead(twin.st) or actions.won(twin.st):
+            if twin._lost() or actions.won(twin.st):
                 break
             twin._tick()
         return self._score(twin)
+
+    def _fork_jobs(self, jobs):
+        """Results of ``jobs``, each a callable run on its own fresh :meth:`_fork`, in
+        input order, a raise as a :class:`fleet.Failure`: the one place forks are
+        evaluated, in lockstep here so their pricing queries batch."""
+        return fleet.run([lambda job=job: job(self._fork()) for job in jobs])
 
     def _arbitrate(self, options):
         """Run each option on a fork for a few ticks and take the one that ends best.
@@ -187,7 +212,9 @@ class PhasePlayer(BasePlayer):
         """
         if self.rollout:
             return False
-        scored = fleet.run([lambda name=name: self._try(name) for name in options])
+        scored = self._fork_jobs(
+            [lambda twin, n=name: self._try(twin, n) for name in options]
+        )
         best = None
         for name, score in zip(options, scored):
             if score is not None and not isinstance(score, fleet.Failure):
@@ -481,15 +508,14 @@ class PhasePlayer(BasePlayer):
         plays the fixed ladder, which is a whole board in seconds, and ties are rare.
         """
 
-        for cand in tied:
-            twin = self._fork()
-            try:
-                if not twin._build_and_mount(_Views(twin.st), cand[1], cand[2]):
-                    continue
-                twin.run(max_actions=ROLLOUT_ACTIONS)
-            except Exception:  # pylint: disable=broad-except
-                continue
-            if actions.won(twin.st):
+        def wins(twin, cand):
+            if not twin._build_and_mount(_Views(twin.st), cand[1], cand[2]):
+                return False
+            twin.run(max_actions=ROLLOUT_ACTIONS)
+            return actions.won(twin.st)
+
+        for cand in tied:  # one at a time: the first winner ends the search
+            if self._fork_jobs([lambda twin, c=cand: wins(twin, c)])[0] is True:
                 return cand[1:]
         return tied[0][1:]
 
@@ -591,11 +617,7 @@ class PhasePlayer(BasePlayer):
         cap_view = views.get(tile, band=True)
         if cap_view is None:
             return False
-        projector.prefetch(self._span_calls(tile, ("robot", "transfer"), cap_view))
-        cap_span = self._span("robot", cap_view, tile) + self._span(
-            "transfer", cap_view, tile
-        )
-        if not self._wait_for_gap(cap_span) and not self._under_fire():
+        if not self._wait_for(self._cap_gap(tile, cap_view)) and not self._under_fire():
             return False  # do not buy a cap we cannot climb onto
         if not self._do(
             "robot", tile, views, mm.ENERGY_IN_OBJECTS[mm.T_ROBOT], band=True
@@ -680,8 +702,7 @@ class PhasePlayer(BasePlayer):
             want = 2 * mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
             if self.st.energy < want and self._refuel(views, want):
                 return
-            enemies.advance_frames(self.st, WAIT_QUANTUM)
-            self.frames += WAIT_QUANTUM
+            self._wait(WAIT_QUANTUM)
             return
         if self._strike(views):  # phase 2: convert whenever a kill is on
             return
@@ -697,8 +718,7 @@ class PhasePlayer(BasePlayer):
                     return
         if self._relocate(views):  # nothing here to do at all: move, do not idle
             return
-        enemies.advance_frames(self.st, WAIT_QUANTUM)
-        self.frames += WAIT_QUANTUM
+        self._wait(WAIT_QUANTUM)
 
 
 def main(argv=None):

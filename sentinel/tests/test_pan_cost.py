@@ -14,7 +14,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from sentinel import landscape, objmodel, pancost, projector
+from sentinel import landscape, objmodel, pancost, projector, settlecost
 from sentinel.tests import oracle
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_pan_cost.json")
@@ -139,12 +139,12 @@ def test_pan_notch_cost_matches_the_measured_plot():
     errors = []
     for key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)
-        want_clear = rec["clear_cycles"] / projector.FRAME_CYCLES
+        want_clear = rec["clear_cycles"] / settlecost.SETTLE_FG
         got_clear = pancost.CLEAR_FRAMES[0 if pancost.PAN_MODE[d] else 1]
         assert got_clear == pytest.approx(want_clear, abs=1.0), f"{key} clear"
         errors.append(
             pancost.notch_frames(state, d, ph, pv)
-            - rec["cycles"] / projector.FRAME_CYCLES
+            - rec["cycles"] / settlecost.SETTLE_FG
         )
     rms = math.sqrt(statistics.fmean(e * e for e in errors))
     median = statistics.median(abs(e) for e in errors)
@@ -164,7 +164,7 @@ def test_derived_notch_beats_the_flat_base_it_replaced():
     meas, pred = [], []
     for _key, state, h, v, d, rec in _rows():
         ph, pv = _plot_angles(h, v, d)
-        meas.append(rec["cycles"] / projector.FRAME_CYCLES)
+        meas.append(rec["cycles"] / settlecost.SETTLE_FG)
         pred.append(pancost.notch_frames(state, d, ph, pv))
     assert max(meas) > 10 * min(meas), "sweep does not span the swing it claims to"
     best_flat = statistics.fmean(meas)  # the rms-optimal flat constant

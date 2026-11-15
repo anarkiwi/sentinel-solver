@@ -7,6 +7,7 @@ stops before that boundary's checkpoint test, which runs on the next resume.
 """
 
 import contextlib
+import copy
 import dataclasses
 
 import numpy as np
@@ -41,6 +42,19 @@ class EmuMon:
         self._hits = set()
         self._tap = None  # (release cycle, keys) of a TAP_MODE_FIXED chord
         machine.set_trap(self._trap, set())
+
+    def clone(self):
+        """An independent monitor on ``machine.clone()`` carrying every checkpoint and
+        count, the owed boundary test and a held tap, so both run identically from here.
+        """
+        twin = copy.copy(self)
+        twin.m = self.m.clone()
+        twin._cps = {n: dataclasses.replace(cp) for n, cp in self._cps.items()}
+        twin._run_cp = dict(self._run_cp)
+        twin._hits = set(self._hits)
+        twin.m.set_trap(twin._trap, set())
+        twin._watch()
+        return twin
 
     def connect(self, *_a, **_kw):
         """No socket to open."""

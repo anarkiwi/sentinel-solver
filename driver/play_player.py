@@ -14,6 +14,7 @@ import time
 
 from driver import core, sentinel_state as gs
 from driver.emu import EmuMon
+from driver.emu_phase import EmuPhase
 from driver.live_player import LiveGreedy, LivePhase
 from sentinel import emu
 
@@ -22,7 +23,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _make_player(args, session, log, result):
     if args.player == "phase":
-        return LivePhase(session, log, result, ticks_dir=args.ticks)
+        cls = EmuPhase if args.emu else LivePhase
+        return cls(session, log, result, ticks_dir=args.ticks)
     return LiveGreedy(session, log, result, ticks_dir=args.ticks)
 
 
@@ -77,7 +79,7 @@ def main(argv=None):
 
     def play_fn(session):
         lp = _make_player(args, session, log, result)
-        won = lp.run(max_actions=args.max_actions)
+        won = lp.run(max_actions=args.max_actions, progress=True)
         result["won"] = bool(won and lp.ex.won())
         result["trace"] = [list(r) for r in lp.trace]
         result["final_energy"] = lp.st.energy

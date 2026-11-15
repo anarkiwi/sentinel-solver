@@ -155,20 +155,25 @@ class LiveMixin:
         self.step_no = 0
         self.acted = False
         self.life_lost = None
+        self.audits = True  # price and record every step's charged-vs-measured frames
 
     def _observe(self):
+        """:meth:`_refresh` at a decision tick, saving the tick when ``ticks_dir``."""
+        self._refresh()
+        if self.ticks_dir:
+            save_tick(self.ticks_dir, self.tick_no, self)
+            self.tick_no += 1
+
+    def _refresh(self):
         """Snapshot live memory and LEAVE THE CPU HALTED: think time is a tooling
-        artifact, so the world advances only under real input (pans/actions),
-        already priced by the cost model.  Death is the drain flag or a silent
-        landscape auto-reset ($0CE5 re-frozen after we acted), NOT $0CDE bit7."""
+        artifact, so the world advances only under real input (pans/actions) and
+        deliberate waits.  Death is the drain flag or a silent landscape auto-reset
+        ($0CE5 re-frozen after we acted), NOT $0CDE bit7."""
         with self.bm.halted():
             mem = core.live_image(self.bm)
         self.st = State.from_mem(mem)
         self.g.state = self.st
         self._sync_aim_state()
-        if self.ticks_dir:
-            save_tick(self.ticks_dir, self.tick_no, self)
-            self.tick_no += 1
         if self.acted and self.st.mem[mm.PLAYER_NOT_ACTED] & 0x80:
             self.life_lost = "died (landscape auto-reset observed)"
 
@@ -185,6 +190,9 @@ class LiveMixin:
         self.last_bearing = self.kbd.committed_bearing() if on else None
         self.cursor = [int(mem[kbd_aim.A_CX]), int(mem[kbd_aim.A_CY])]
 
+    def _lost(self):
+        return bool(self.life_lost) or super()._lost()
+
     def _dead(self):
         if self.st.mem[mm.PLAYER_DIED_BY_DRAINING] & 0x80:
             self.life_lost = "drained at zero energy"
@@ -199,15 +207,19 @@ class LiveMixin:
         the player's think time out of the live world -- the real world moves only
         when ``_fire``/``_wait`` drive the keyboard."""
 
-    def _wait(self):
+    def _wait(self, frames=playerbase.WAIT_FRAMES):
         """A deliberate wait spends REAL world time, FRAME-EXACT: step the $9630
-        per-frame marker ``WAIT_FRAMES`` times, leaving the CPU halted.  charged ==
-        measured now holds by construction whatever the warp state, so ``wait_audit``
-        is a regression pin; a stalled marker raises instead of being waited out."""
-        want = playerbase.WAIT_FRAMES
-        got = clock.run_frames(self.bm, want)
-        self.result.setdefault("wait_audit", []).append([self.step_no, want, got])
-        self.live_log(f"    [clock] wait: charged={want} measured={got} (exact frames)")
+        per-frame marker ``frames`` times, leaving the CPU halted, and re-read the
+        world.  charged == measured holds by construction whatever the warp state, so
+        ``wait_audit`` is a regression pin; a stalled marker raises instead of being
+        waited out."""
+        got = clock.run_frames(self.bm, frames)
+        if self.audits:
+            self.result.setdefault("wait_audit", []).append([self.step_no, frames, got])
+            self.live_log(
+                f"    [clock] wait: charged={frames} measured={got} (exact frames)"
+            )
+        self._refresh()
 
     def _drive_transfer_aim(self, tile, view):
         return drive_transfer_aim(self.kbd, tile, view, self.live_log)
@@ -241,13 +253,25 @@ class LiveMixin:
             return False  # never act on a silently-reset board (race with _observe)
         if pverb == "create":
             stp["min_energy"] = mm.ENERGY_IN_OBJECTS[otype] + self._reserve()
+        out = sx.perform_step(
+            self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
+        )
+        if self.audits:
+            self._audit_step(pverb, tile, view, whole_f0)
+        self.acted = True
+        self._observe()
+        ok = out in ("ok", "diverge")  # diverge: primary effect landed, world moved
+        if ok:
+            self._log(verb, tile)
+        return ok
+
+    def _audit_step(self, pverb, tile, view, whole_f0):
+        """Record the step just performed: its charged aim and settle (the model's
+        prices) against the exact frames the machine spent."""
         aim_charged = self._step_aim_frames(pverb, view)
         # View-aware transfer settle: scene-dependent projector replot, not flat 47.
         settle_charged = self._settle(pverb, view, self._settle_eye(pverb, tile))
         charged = aim_charged + settle_charged
-        out = sx.perform_step(
-            self.ex, self.kbd, f"p{self.step_no}", stp, self.live_log, self.result
-        )
         whole_exact = self.ex.frames() - whole_f0  # exact, wrap-free aim+settle
         sa = self.result.get("settle_audit") or []
         lbl = f"p{self.step_no}"
@@ -283,12 +307,6 @@ class LiveMixin:
             f"    [clock] p{self.step_no} {pverb}: charged={round(charged)} "
             f"measured={whole_exact} (exact frames)"
         )
-        self.acted = True
-        self._observe()
-        ok = out in ("ok", "diverge")  # diverge: primary effect landed, world moved
-        if ok:
-            self._log(verb, tile)
-        return ok
 
     def _hyperspace(self):
         """Platform win: the verified multi-attempt primitive. Escape: ONE tap,

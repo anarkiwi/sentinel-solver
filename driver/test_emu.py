@@ -155,3 +155,21 @@ def test_lifecycle_calls_are_noops(bm):
     with bm.halted():
         assert bm.auto_resume is False
     assert bm.auto_resume is True
+
+
+def test_a_clone_runs_identically_and_independently(bm):
+    """A clone carries the checkpoints and their counts, then diverges only by what
+    is done to it: the original does not see the clone's run."""
+    cp = bm.checkpoint_set(INC, silent=True).checknum
+    bm.run_until_pc(JMP, timeout=0.01)
+    twin = bm.clone()
+    for mon in (bm, twin):
+        for _ in range(3):
+            mon.run_until_pc(INC, timeout=0.01)
+            mon.run_until_pc(JMP, timeout=0.01)
+    assert twin.m.cycle == bm.m.cycle and twin.m.ram[COUNTER] == bm.m.ram[COUNTER]
+    assert twin.checkpoint_get(cp).hit_count == bm.checkpoint_get(cp).hit_count == 3
+    twin.run_until_pc(INC, timeout=0.01)
+    twin.checkpoint_toggle(cp, False)
+    assert twin.m.cycle > bm.m.cycle and bm.checkpoint_get(cp).enabled
+    assert bm.checkpoint_get(cp).hit_count == 3

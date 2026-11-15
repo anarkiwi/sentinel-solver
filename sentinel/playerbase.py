@@ -7,6 +7,7 @@ import os
 
 import numpy as np
 from numba import njit
+from tqdm import tqdm
 
 from sentinel import (
     actioncost,
@@ -571,6 +572,10 @@ class BasePlayer:
         enemies.advance_frames(self.st, frames, plotting=plotting)
         self.frames += frames
 
+    def _wait(self, frames=WAIT_FRAMES):
+        """Idle ``frames``; the live driver overrides with real time."""
+        self._advance(frames)
+
     def _advance_phases(self, phases):
         """Advance a sequence of ``(frames, plotting)`` segments in order."""
         for frames, plotting in phases:
@@ -1049,16 +1054,24 @@ class BasePlayer:
         """Refresh the observed state at tick start (the live driver re-reads
         game memory here; the simulator's state is already live)."""
 
+    def _lost(self):
+        """Whether the body is gone, side-effect free; the live driver adds a death
+        that the game has already reset away."""
+        return actions.player_dead(self.st)
+
     def _dead(self):
         """Whether the player is dead; the live driver refines the ambiguous
         $0CDE bit7 (set by ANY survived hyperspace, not only a meanie kill)."""
         return actions.player_dead(self.st)
 
     # ------------------------------------------------------------- decisions
-    def run(self, max_actions=300):
-        """Play until won, dead, or `max_actions` decision ticks."""
-        for _ in range(max_actions):
+    def run(self, max_actions=300, progress=False):
+        """Play until won, dead, or `max_actions` decision ticks; ``progress`` shows a
+        tqdm bar of ticks with the action count and energy."""
+        ticks = tqdm(range(max_actions), unit="tick", disable=not progress)
+        for _ in ticks:
             self._observe()
+            ticks.set_postfix(actions=len(self.trace), E=self.st.energy, refresh=False)
             if actions.won(self.st):
                 return True
             if self._dead():
