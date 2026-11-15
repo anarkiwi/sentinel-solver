@@ -1,6 +1,8 @@
 """The search core: move-to-program mapping, selection per machine state, fork
 expansion against sequential execution, and a played line against its plan."""
 
+import json
+
 import pytest
 
 from driver import kbd_prog, prog, search_player as sp
@@ -178,3 +180,47 @@ def test_the_search_player_needs_the_emulator():
 
     with pytest.raises(SystemExit):
         play_player.main(["0", "--player", "search"])
+
+
+def _children(bm, branch=1):
+    player = sp.SearchPlayer(bm.clone(), 2, 1, branch, log=[].append)
+    root = sp.Node(player.bm)
+    return player, root, player._expand([root], {})
+
+
+@oracle
+def test_an_executed_move_that_lands_elsewhere_than_planned_is_reported(session):
+    player, _root, kids = _children(session.bm)
+    planned = next(n for n in kids if n.move[0] == "wait")
+    planned.facts = {**planned.facts, "energy": planned.facts["energy"] + 1}
+    logged = []
+    player.log = logged.append
+    player._execute(planned)
+    assert player.audit[0][3] != player.audit[0][4] and "!=" in logged[0]
+
+
+@oracle
+def test_an_executed_relocation_records_where_the_body_landed(session):
+    player, _root, kids = _children(session.bm)
+    planned = next(n for n in kids if n.move[0] == "relocate")
+    player._execute(planned)
+    st = sp._state(player.bm)
+    assert player.trace[0][1] == "relocate"
+    assert tuple(player.trace[0][2]) == tuple(map(int, st.player_xy()))
+    assert sp.machine_key(player.bm) == planned.key
+
+
+@oracle
+def test_a_search_with_no_surviving_child_stops(session, monkeypatch):
+    logged = []
+    player = sp.SearchPlayer(session.bm.clone(), 2, 2, 1, log=logged.append)
+    monkeypatch.setattr(player, "_select", lambda kids: [])
+    assert not player.run(3) and not player.trace
+    assert logged == ["search: no surviving move"]
+
+
+@oracle
+def test_the_workload_cli_times_each_program_of_a_ply(capsys):
+    assert sp.main(["0", "0", "--preset", "narrow", "--each"]) == 0
+    rows = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rows and all(len(r["moves"]) == 1 and r["frames"] > 0 for r in rows)

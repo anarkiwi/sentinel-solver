@@ -234,6 +234,33 @@ replan re-expands only what the new root's beam adds. A move's waits stop past t
 stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the win (`$219B`), so
 a death or the win ends the move there (`Prog.guard`).
 
+### Results
+
+The ten suite boards with `python -m driver.emu_suite --player search --preset P --jobs 3`
+(`--tabulate --out-dir DIR` re-reads a run): won, actions, final energy and wall seconds per
+board; `audit` is executed moves whose facts equal the planned child's; `cores` is CPU over
+wall time during expansions. `EmuPhase` is `python -m driver.emu_suite` (the phase player
+on the emulator, ten jobs).
+
+| board | wide (16/30/3, commit 10) | narrow (4/12/2, commit 1) | EmuPhase |
+|---|---|---|---|
+| 0 | won 10, E0, 37 s | won 10, E0, 23 s | won 17, E1, 177 s |
+| 42 | won 16, E1, 61 s | won 16, E1, 37 s | lost 18, E0 |
+| 60 | won 21, E3, 89 s | won 21, E3, 69 s | won 34, E0, 321 s |
+| 110 | won 17, E2, 71 s | won 18, E2, 34 s | won 93, E6, 974 s |
+| 298 | won 18, E6, 129 s | won 18, E5, 102 s | won 30, E1, 346 s |
+| 321 | won 17, E2, 108 s | won 17, E1, 61 s | won 52, E4, 302 s |
+| 335 | won 26, E1, 174 s | won 26, E1, 83 s | lost 25, E0 |
+| 373 | won 16, E0, 85 s | lost 73, E0 | lost 11, E0 |
+| 1442 | won 18, E5, 126 s | won 18, E5, 77 s | won 29, E3, 402 s |
+| 9716 | won 26, E5, 78 s | won 26, E5, 64 s | lost 15, E2 |
+| suite | **10/10**, 6:02 wall, 1897 % CPU | 9/10, 3:40 wall, 938 % CPU | 6/10 |
+
+Every executed move's facts and machine state equal its planned child's (audit 100 % on
+every board), and a repeated run reproduces each trace and audit exactly. The narrow
+preset's ls373 line stays at eye 7.875 (absorbs, waits, one relocation) until every child
+dies.
+
 `python -m driver.search_player N PLY [--preset P]` builds search ply `PLY`'s fork batches
 from the entry to landscape `N` (`ply_batches`: `[(base EmuMon, [programs])]`) and times
 each `prog.forks`, a reproducible workload for profiling. `python -m driver.emu_suite
