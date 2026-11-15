@@ -26,30 +26,35 @@ SLOTS = np.arange(mm.NUM_SLOTS)
 
 def lexicographic(fields):
     """The search objective ``(alive, keys)``: a row lives while the player does; among
-    the living the order is won, fewer enemies, higher eye, more energy -- the first key
-    most significant, larger better."""
+    the living the order is won, fewer enemies, on the platform, unseen by any enemy, higher
+    eye, more energy --
+    the first key most significant, larger better."""
     return fields["alive"] == 1, (
         fields["won"],
         -fields["enemies"],
+        fields["home"],
+        -fields["seen"],
         fields["eye"],
         fields["energy"],
     )
 
 
 def best_case(st, name, tile, k=0):
-    """An upper bound on :func:`lexicographic`'s keys ``(won, -enemies, eye, energy)`` once
-    ``name`` on ``tile`` (``k`` boulders for a hop) is played from ``st``, or None where
-    none is known; a drain only lowers energy, and the eye follows from the move."""
+    """An upper bound on :func:`lexicographic`'s keys ``(won, -enemies, home, -seen, eye,
+    energy)`` once ``name`` on ``tile`` (``k`` boulders for a hop) is played from ``st``,
+    or None where none is known; a drain only lowers energy, any move may end unseen."""
     me = st.player
     eye = st.obj_z_height[me] * 256 + st.obj_z_frac[me]
     foes = sum(st.obj_type[s] in mm.ENEMY_TYPES for s in st.occupied_slots())
     energy = st.energy
+    home = int(tuple(st.player_xy()) == tuple(st.platform_xy))
+    there = int(tile is not None and tuple(tile) == tuple(st.platform_xy))
     if name == "wait":
-        return 0, -foes, eye, energy
+        return 0, -foes, home, 0, eye, energy
     if name == "relocate":
         toll = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
         top = (st.obj_z_height[me] + 1) * 256 + 0xE0
-        return None if energy < toll else (0, -foes, top, energy - toll)
+        return None if energy < toll else (0, -foes, 1, 0, top, energy - toll)
     if name not in ("absorb", "mount", "hop"):
         return None
     stack = _stack(st, tile)
@@ -58,19 +63,33 @@ def best_case(st, name, tile, k=0):
             return None
         gain = max(mm.ENERGY_IN_OBJECTS[st.obj_type[s]] for s in stack)
         foes -= any(st.obj_type[s] in mm.ENEMY_TYPES for s in stack)
-        return 0, -foes, eye, min(mm.ENERGY_MASK, energy + gain)
+        return 0, -foes, home, 0, eye, min(mm.ENERGY_MASK, energy + gain)
     if name == "mount":
         if not stack or st.obj_type[stack[0]] != mm.T_ROBOT:
             return None
         top = stack[0]
-        return 0, -foes, st.obj_z_height[top] * 256 + st.obj_z_frac[top], energy
+        return (
+            0,
+            -foes,
+            there,
+            0,
+            st.obj_z_height[top] * 256 + st.obj_z_frac[top],
+            energy,
+        )
     twin = st.clone()
     slot = None
     for otype in (mm.T_BOULDER,) * int(k) + (mm.T_ROBOT,):
         slot = actions.create(twin, otype, tile)
         if slot is None:
             return None
-    return 0, -foes, twin.obj_z_height[slot] * 256 + twin.obj_z_frac[slot], twin.energy
+    return (
+        0,
+        -foes,
+        there,
+        0,
+        twin.obj_z_height[slot] * 256 + twin.obj_z_frac[slot],
+        twin.energy,
+    )
 
 
 def _stack(st, tile):

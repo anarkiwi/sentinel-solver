@@ -30,9 +30,9 @@ python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embe
 <!-- results:begin -->
 | landscape | enemies | search actions | search energy | live |
 |---|---|---|---|---|
-| 0 | 1 | 10 | 0 | — |
+| 0 | 1 | 11 | 0 | — |
 | 42 | 2 | 16 | 1 | **36 actions** (enemies frozen)† |
-| 60 | 7 | 21 | 3 | — |
+| 60 | 7 | 20 | 3 | — |
 | 110 | 3 | 17 | 2 | — |
 | 298 | 7 | 18 | 6 | — |
 | 321 | 7 | 17 | 2 | — |

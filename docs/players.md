@@ -58,9 +58,18 @@ the flag stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the
 ## The objective
 
 `moves.lexicographic`: a child lives while the player does (a win counts as alive); among the
-living the order is won, fewer enemies, higher eye, more energy, the first key most
-significant. `keep_best` breaks ties to fewer frames, then the lower position, so the order is
-total.
+living the order is won, fewer enemies, home, unseen, higher eye, more energy, the first key
+most significant. `keep_best` breaks ties to fewer frames, then the lower position, so the order
+is total. Both new keys are ROM facts read at the end of the move:
+
+| key | read from | why it outranks the eye |
+|---|---|---|
+| home | the player's tile equals the platform's (`$0C19`/`$0C1A`), `do_hyperspace`'s own win test at `$2184` | with the Sentinel gone the platform is a hyperspace from the win, wherever it stands against the eye |
+| unseen | the exposure bar `$0C4F` (`set_bar_state $194D`): bit 7 fully seen, drained; bit 6 partly seen, where an enemy spawns a meanie | a line under drain loses energy however high it stands, and a meanie's hyperspace lands where the PRNG puts it |
+
+A move a meanie hyperspaces mid-way stops in a wait that times out (`HALT_RAISE`, no facts);
+`search_player.outcome_facts` refuses it (`H_HYPERSPACE`) when a meanie is out (`$0CA0` top bit
+clear) before or after the move, and raises otherwise.
 
 ## Live in VICE
 

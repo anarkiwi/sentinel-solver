@@ -23,6 +23,7 @@ PLATFORM_Y = 0x0C1A  # tile y of the Sentinel's platform
 FOV_WIDTH = 0x0C68  # enemy horizontal FOV width, reloaded to $14 each scan ($16F2)
 PLAYER_HAS_HYPERSPACED = 0x0CDE  # bit7 set on hyperspace ($216B); bit6 == complete
 LANDSCAPE_COMPLETE = 0x0CDE  # bit6 set by landscape_completed $3603 on a win
+EXPOSURE_BAR = 0x0C4F  # set_bar_state $194D: bit7 fully seen, bit6 partly
 PLAYER_DIED_BY_DRAINING = 0x0C4E  # bit7 set by kill_player $1A00 (drain at 0 energy)
 
 # ---- the object arrays (64 slots each) ------------------------------------

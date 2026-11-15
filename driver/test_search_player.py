@@ -2,6 +2,7 @@
 expansion against sequential execution, and a played line against its plan."""
 
 import json
+import types
 
 import pytest
 
@@ -13,7 +14,7 @@ from sentinel.game import Game
 oracle = pytest.mark.oracle
 
 
-def _facts(eye=0, energy=5, alive=1, won=0, frames=10, enemies=3):
+def _facts(eye=0, energy=5, alive=1, won=0, frames=10, enemies=3, seen=0, away=1):
     return {
         "status": prog.HALT_OK,
         "energy": energy,
@@ -24,6 +25,8 @@ def _facts(eye=0, energy=5, alive=1, won=0, frames=10, enemies=3):
         "alive": alive,
         "won": won,
         "frames": frames,
+        "seen": seen,
+        "away": away,
     }
 
 
@@ -41,8 +44,12 @@ def test_select_keeps_the_best_child_of_each_machine_state_and_drops_the_dead():
         sp.Node(None, "s3", facts=_facts(eye=5)),
         sp.Node(None, "s4", facts=_facts(eye=1, alive=0, won=1)),
         sp.Node(None, "s5", facts=_facts(eye=5, enemies=2)),
+        sp.Node(None, "s6", facts=_facts(eye=13, seen=1)),
+        sp.Node(None, "s7", facts=_facts(eye=0, seen=1, away=0, enemies=2)),
     ]
-    assert [kids.index(n) for n in player._select(kids)] == [4, 5, 1]
+    assert [kids.index(n) for n in player._select(kids)] == [4, 7, 5]
+    player.width = 6
+    assert [kids.index(n) for n in player._select(kids)] == [4, 7, 5, 1, 3, 6]
     assert not player._select([])
 
 
@@ -305,7 +312,7 @@ def test_every_root_childs_outcome_is_within_its_best_case(session):
         got = sp.key_of(sp.Node(None, "k", facts=facts))
         assert got <= bound, (move, got, bound)
         if move[0] in ("hop", "mount", "absorb", "wait"):
-            assert got[2] == bound[2], move
+            assert got[4] == bound[4], move
         seen.add(move[0])
     assert {"hop", "absorb", "wait", "relocate"} <= seen
 
@@ -315,14 +322,14 @@ def test_a_best_case_reads_the_move():
     st = game.state
     me, eye = st.player, st.obj_z_height[st.player] * 256 + st.obj_z_frac[st.player]
     foes = -sum(st.obj_type[s] in mm.ENEMY_TYPES for s in st.occupied_slots())
-    assert bp.best_case(st, "wait", None) == (0, foes, eye, st.energy)
+    assert bp.best_case(st, "wait", None) == (0, foes, 0, 0, eye, st.energy)
     relocated = bp.best_case(st, "relocate", None)
-    assert relocated[3] == st.energy - 3
-    assert relocated[2] == (st.obj_z_height[me] + 1) * 256 + 0xE0
+    assert relocated[5] == st.energy - 3
+    assert relocated[4] == (st.obj_z_height[me] + 1) * 256 + 0xE0
     assert bp.best_case(st, "finish", None) is None
     sentinel = st.slot_of_type(mm.T_SENTINEL)
     took = bp.best_case(st, "absorb", st.tile_of(sentinel))
-    assert took[1] == foes + 1 and took[3] == min(63, st.energy + 4)
+    assert took[1] == foes + 1 and took[5] == min(63, st.energy + 4)
     assert bp.best_case(st, "mount", st.tile_of(sentinel)) is None
     assert bp.best_case(st, "absorb", (0, 0)) is None or st.tile_of(me) == (0, 0)
     poor = st.clone()
@@ -350,3 +357,19 @@ def test_bound_first_beams_equal_the_beams_of_forking_every_child():
     assert full == lazy and every["violations"] == []
     assert bounded["children"] + bounded["bounded"] == every["children"]
     assert bounded["bounded"] > 0
+
+
+def _machine(meanie=0x80):
+    ram = bytearray(0x10000)
+    ram[mm.ENEMIES_MEANIE_OBJECT : mm.ENEMIES_MEANIE_OBJECT + 8] = [0x80] * 8
+    ram[mm.ENEMIES_MEANIE_OBJECT + 3] = meanie
+    return types.SimpleNamespace(m=types.SimpleNamespace(ram=ram))
+
+
+def test_a_stalled_move_is_refused_only_with_a_meanie_out():
+    stalled = prog.Outcome("halt", prog.HALT_RAISE, 1000, ())
+    calm, hunted = _machine(), _machine(0x22)
+    assert sp.outcome_facts(hunted, stalled, calm)["status"] == kbd_prog.H_HYPERSPACE
+    assert sp.outcome_facts(calm, stalled, hunted)["status"] == kbd_prog.H_HYPERSPACE
+    with pytest.raises(RuntimeError):
+        sp.outcome_facts(calm, stalled, calm)
