@@ -62,7 +62,11 @@ def build(path=oracle.IMG, log=print):
     """Fetch, boot and write the oracle image to ``path``; returns ``path``."""
     from sentinel import emu
 
-    image = bytes(emu.boot().ram)
+    return write(bytes(emu.boot().ram), path, log)
+
+
+def write(image, path=oracle.IMG, log=print):
+    """Write the title machine's RAM ``image`` to ``path`` atomically; returns ``path``."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".part", "wb") as f:
         f.write(image)
