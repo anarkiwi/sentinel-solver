@@ -114,13 +114,13 @@ two programs' output records first part (`kbd_prog.first_difference`). The run's
 
 ## Results
 
-`python -m driver.emu_suite --out docs/results/search.json --readme` plays the ten suite
-boards (0 42 60 110 298 321 335 373 1442 9716) and regenerates the README results table from
+`python -m driver.emu_suite --out docs/results/search.json --readme` plays the twelve suite
+boards (0 42 60 110 298 321 335 373 1442 9716 9795 9950; the last three are the hardest in
+`out/hardest_128.txt`) and regenerates the README results table from
 `docs/results/search.json` and the live runs in `docs/results/live.json`. The README table is
 the record; it is not repeated here.
 
 ## Retired players
 
 The phase, greedy and beam players planned on a hand-written world clock (an enemy and frame
-model of the ROM) and were retired with it. The live ls335 and ls1442 phase-player wins in
-`docs/media/` came from them; their `docs/results/live.json` rows carry `player: phase`.
+model of the ROM) and were retired with it, their live results with them.

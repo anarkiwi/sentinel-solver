@@ -1,42 +1,38 @@
 [
  {
   "landscape": 42,
-  "player": "phase",
-  "mode": "frozen",
-  "actions": 36,
-  "energy": null,
-  "media": null
+  "actions": 16,
+  "energy": 1,
+  "media": "docs/media/ls42_search_win.png"
  },
  {
   "landscape": 335,
-  "player": "phase",
-  "mode": "live",
-  "actions": 66,
-  "energy": 25,
-  "media": "docs/media/ls335_phase_win.png"
- },
- {
-  "landscape": 1442,
-  "player": "phase",
-  "mode": "live",
-  "actions": 29,
-  "energy": 5,
-  "media": "docs/media/ls1442_phase_win.png"
- },
- {
-  "landscape": 335,
-  "player": "search",
-  "mode": "live",
   "actions": 26,
   "energy": 1,
   "media": "docs/media/ls335_search_win.png"
  },
  {
+  "landscape": 1442,
+  "actions": 18,
+  "energy": 5,
+  "media": "docs/media/ls1442_search_win.png"
+ },
+ {
   "landscape": 9716,
-  "player": "search",
-  "mode": "live",
   "actions": 26,
   "energy": 5,
   "media": "docs/media/ls9716_search_win.png"
+ },
+ {
+  "landscape": 9795,
+  "actions": 48,
+  "energy": 2,
+  "media": "docs/media/ls9795_search_win.png"
+ },
+ {
+  "landscape": 9950,
+  "actions": 25,
+  "energy": 6,
+  "media": "docs/media/ls9950_search_win.png"
  }
 ]

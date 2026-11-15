@@ -31,17 +31,17 @@ python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embe
 | landscape | enemies | search actions | search energy | live |
 |---|---|---|---|---|
 | 0 | 1 | 11 | 0 | — |
-| 42 | 2 | 16 | 1 | **36 actions** (enemies frozen)† |
+| 42 | 2 | 16 | 1 | [**16 actions**, energy 1](docs/media/ls42_search_win.png) |
 | 60 | 7 | 20 | 3 | — |
 | 110 | 3 | 17 | 2 | — |
 | 298 | 7 | 18 | 6 | — |
 | 321 | 7 | 17 | 2 | — |
-| 335 | 7 | 26 | 1 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions**, energy 1](docs/media/ls335_search_win.png) |
+| 335 | 7 | 26 | 1 | [**26 actions**, energy 1](docs/media/ls335_search_win.png) |
 | 373 | 7 | 16 | 0 | — |
-| 1442 | 8 | 18 | 5 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
+| 1442 | 8 | 18 | 5 | [**18 actions**, energy 5](docs/media/ls1442_search_win.png) |
 | 9716 | 8 | 26 | 5 | [**26 actions**, energy 5](docs/media/ls9716_search_win.png) |
-
-† Played by the phase player, since retired; its media are kept.
+| 9795 | 8 | 48 | 2 | [**48 actions**, energy 2](docs/media/ls9795_search_win.png) |
+| 9950 | 8 | 25 | 6 | [**25 actions**, energy 6](docs/media/ls9950_search_win.png) |
 
 Regenerate with `python -m driver.emu_suite --out docs/results/search.json --readme`.
 <!-- results:end -->

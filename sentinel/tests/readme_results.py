@@ -16,9 +16,6 @@ README = os.path.join(ROOT, "README.md")
 BEGIN = "<!-- results:begin -->"
 END = "<!-- results:end -->"
 COMMAND = "python -m driver.emu_suite --out docs/results/search.json --readme"
-MODES = {"live": "", "frozen": " (enemies frozen)"}
-PLAYERS = ("search", "phase")
-RETIRED = "† Played by the phase player, since retired; its media are kept."
 
 
 def load(path):
@@ -28,15 +25,11 @@ def load(path):
 
 
 def live_cell(runs):
-    """The live column for one board's runs; a retired player's run is marked."""
+    """The live column for one board's live search runs, each linking its media."""
     cells = []
     for run in runs:
-        text = f"**{run['actions']} actions**{MODES[run['mode']]}"
-        if run["energy"] is not None:
-            text += f", energy {run['energy']}"
-        if run["media"]:
-            text = f"[{text}]({run['media']})"
-        cells.append(text + ("" if run["player"] == "search" else "†"))
+        text = f"**{run['actions']} actions**, energy {run['energy']}"
+        cells.append(f"[{text}]({run['media']})" if run["media"] else text)
     return "<br>".join(cells) or "—"
 
 
@@ -50,10 +43,7 @@ def render(search, live):
         won = "" if rec["won"] else " (not won)"
         cells = [key, str(rec["enemies"]), f"{rec['actions']}{won}", str(rec["energy"])]
         rows.append("| " + " | ".join(cells + [live_cell(runs)]) + " |")
-    text = "\n".join(rows) + "\n"
-    if any(r["player"] != "search" for r in live):
-        text += f"\n{RETIRED}\n"
-    return text + f"\nRegenerate with `{COMMAND}`.\n"
+    return "\n".join(rows) + f"\n\nRegenerate with `{COMMAND}`.\n"
 
 
 def block(search, live):
