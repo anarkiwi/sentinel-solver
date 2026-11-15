@@ -28,6 +28,7 @@ PRESETS = {
 }
 CPUS = len(os.sched_getaffinity(0))
 FIELDS = ("alive", "won", "enemies", "eye", "energy")
+ENTRY = kbd_prog.compile_move("wait")  # no wait: the facts as the machine stands
 
 
 def machine_key(bm):
@@ -144,12 +145,19 @@ def run_batches(parents, work):
 class SearchPlayer:
     """The search core on an ``EmuMon`` session; ``run`` plays by receding-horizon beam
     search.  ``trace`` rows are ``[frames, move, tile, energy, eye]``, ``audit`` rows
-    ``[move no, move, tile, planned facts, executed facts]``."""
+    ``[move no, move, tile, planned facts, executed facts]``.
 
-    def __init__(self, bm, width=16, depth=30, branch=3, commit=1, log=print):
-        self.bm, self.log = bm, log
+    With ``live`` (a BinMon on the same game, VICE) every move is also interpreted
+    there; ``live_audit`` rows are ``[move no, move, session facts, live facts]``,
+    move 0 the entry, and the first disagreement (``diverged``) ends the run."""
+
+    def __init__(
+        self, bm, width=16, depth=30, branch=3, commit=1, log=print, live=None
+    ):
+        self.bm, self.log, self.live = bm, log, live
         self.width, self.depth, self.branch, self.commit = width, depth, branch, commit
-        self.trace, self.audit = [], []
+        self.trace, self.audit, self.live_audit = [], [], []
+        self.diverged = None
         self.won, self.frames = False, 0
         self.stats = {"children": 0, "frames": 0, "seconds": 0.0, "cpu_seconds": 0.0}
         self._cache = {}
@@ -221,8 +229,11 @@ class SearchPlayer:
     def run(self, max_actions=120):
         """Play until won, ``max_actions`` moves, or no line survives; whether won."""
         root = Node(self.bm)
+        if self.live is not None:
+            facts = kbd_prog.move_facts(prog.execute(self.bm.clone(), ENTRY))
+            self._mirror("entry", ENTRY, facts)
         with tqdm(total=max_actions, desc="moves", unit="move") as progress:
-            while len(self.trace) < max_actions and not self.won:
+            while len(self.trace) < max_actions and not self.won and not self.diverged:
                 line = self.search(root, f"move {len(self.trace) + 1}").line()
                 if not line:
                     self.log("search: no surviving move")
@@ -230,15 +241,29 @@ class SearchPlayer:
                 for planned in line[: self.commit]:
                     root = self._execute(planned)
                     progress.update(1)
-                    if self.won or len(self.trace) >= max_actions:
+                    if self.won or self.diverged or len(self.trace) >= max_actions:
                         break
-        return self.won
+        return self.won and not self.diverged
+
+    def _mirror(self, name, program, facts):
+        """Interpret ``program`` on ``live`` and audit its facts against ``facts``,
+        the session's; a disagreement is ``diverged``."""
+        got = kbd_prog.move_facts(prog.interpret(self.live, program))
+        n = len(self.trace) + (name != "entry")
+        self.live_audit.append([n, name, facts, got])
+        if got != facts:
+            diff = {k: [facts.get(k), got.get(k)] for k in {**facts, **got}}
+            diff = {k: v for k, v in diff.items() if v[0] != v[1]}
+            self.diverged = {"move": n, "name": name, "facts": diff}
+            self.log(f"LIVE MISMATCH at move {n} {name}: session vs live {diff}")
 
     def _execute(self, planned):
         """Play ``planned``'s move on the session and return the new root, logging any
         difference from what the search's child did."""
         name, tile, _k = planned.move
         facts = kbd_prog.move_facts(prog.execute(self.bm, planned.program))
+        if self.live is not None:
+            self._mirror(name, planned.program, facts)
         node = Node(self.bm, None, None, (planned.move, planned.program), facts)
         self.audit.append([len(self.trace) + 1, name, list(tile), planned.facts, facts])
         if facts != planned.facts or node.key != planned.key:

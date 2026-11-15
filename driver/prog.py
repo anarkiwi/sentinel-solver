@@ -7,9 +7,11 @@ call by call over any BinMon, :func:`execute` natively on an ``EmuMon``'s machin
 """
 
 import contextlib
+import struct
+import time
 
 from vagrant_moses.program import Program, R, Reg, run_forks
-from vice_driver.binmon import BinmonError
+from vice_driver.binmon import OPCODE, BinmonError
 
 from driver import clock
 from driver.emu import EmuMon, cycles
@@ -19,6 +21,7 @@ SCRATCH = R[11]  # immediate staging for :meth:`Prog.rec`; R0-R10 are allocatabl
 GUARD = R[14]  # :meth:`Prog.guard`'s checks
 _T0, _T1, _LAST = R[12], R[13], R[15]  # lowering only: wait start/elapsed, last run op
 _LAST_STEP, _LAST_RUN = 1, 2
+_EVENT, _CHECKPOINT_INFO = 0xFFFFFFFF, 0x11  # binmon unsolicited request id, event
 _RAISE = "__raise__"
 _FALLBACK = "__fallback__"
 _OPS = frozenset(
@@ -217,14 +220,15 @@ def _wait(bm, pc, seconds, stops=()):
     ``stops``; the frame marker through the persistent stop checkpoint, as
     :func:`clock.run_frames` waits for it."""
     if stops:
-        cps = [_stop_checkpoint(bm, at) for at in stops]
+        if bm.registers_get()[3] == pc:
+            return
+        frame = pc == clock.FRAME_PC
+        cps = [clock.stop_checkpoint(bm) if frame else _stop_checkpoint(bm, pc)]
+        cps += [_stop_checkpoint(bm, at) for at in stops]
         for cp in cps:
             bm.checkpoint_toggle(cp, True)
         try:
-            _wait(bm, pc, seconds)
-        except BinmonError:
-            if bm.registers_get()[3] not in stops:
-                raise
+            wait_any(bm, cps, seconds)
         finally:
             for cp in cps:
                 bm.checkpoint_toggle(cp, False)
@@ -240,6 +244,34 @@ def _wait(bm, pc, seconds, stops=()):
         bm.wait_for_checkpoint(cp, timeout=seconds)
     finally:
         bm.checkpoint_toggle(cp, False)
+
+
+def wait_any(bm, checknums, timeout):
+    """Resume ``bm`` until any of the enabled stop checkpoints ``checknums`` hits;
+    the ones that did. A stop elsewhere or a spent ``timeout`` raises ``BinmonError``.
+    """
+    if isinstance(bm, EmuMon):
+        return bm.wait_for_checkpoints(checknums, timeout)
+    want, hits = set(checknums), set()
+    with bm._lock:
+        old = bm._sock.gettimeout()
+        bm._sock.settimeout(timeout)
+        try:
+            bm._send(OPCODE.EXIT, b"", bm._next_req())
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                resp = bm._read_response()
+                if resp.req_id != _EVENT:
+                    continue
+                if resp.opcode == _CHECKPOINT_INFO and len(resp.body) >= 5:
+                    num = struct.unpack("<I", resp.body[:4])[0]
+                    if resp.body[4] and num in want:
+                        hits.add(num)
+                elif resp.opcode == OPCODE.STOPPED and hits:
+                    return hits
+        finally:
+            bm._sock.settimeout(old)
+    raise BinmonError(f"wait_any({sorted(want)}) timed out")
 
 
 def _stop_checkpoint(bm, pc):

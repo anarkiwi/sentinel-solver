@@ -71,6 +71,10 @@ def test_render_marks_stale_live_rows():
     assert out.count("†") == 3
     assert "**6 actions** (enemies frozen)†" in out
     assert "[**5 actions**, energy 4](m.png)†" in out
+    search = {**runs[1], "mode": "search", "digest": None}
+    assert "[**5 actions** (search player), energy 4](m.png)<br>" in rr.render(
+        off, [search, fresh[0]]
+    )
     assert f"`{REGEN}`" in out
 
 

@@ -4,7 +4,8 @@ against the CSDb release on vagrant-moses (no AVI).
 
 The live-execution machinery lives in :mod:`driver.live_player`; this is the
 shared runner.  ``--player {greedy,phase,search}`` selects ``LiveGreedy``/``LivePhase``
-or, on the emulator, :class:`driver.search_player.SearchPlayer`.
+or :class:`driver.search_player.SearchPlayer`, which plans on an emulated session and,
+live, plays each move on VICE too (``live_audit``).
 """
 
 import argparse
@@ -17,7 +18,7 @@ from driver.emu import EmuMon
 from driver.emu_phase import EmuPhase
 from driver.live_player import LiveGreedy, LivePhase
 from driver.search_player import PRESETS, SearchPlayer
-from sentinel import emu
+from sentinel import emu, memmap as mm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -69,10 +70,9 @@ def main(argv=None):
         help="directory to save every observed tick's live image (driver.replay_tick)",
     )
     args = parser.parse_args(argv)
-    if args.player == "search" and not args.emu:
-        parser.error("--player search plans on the emulator: add --emu")
     digits = f"{args.landscape:04d}"
-    video = args.video or f"player_ls{args.landscape}_win.avi"
+    win = "search" if args.player == "search" else "win"
+    video = args.video or f"player_ls{args.landscape}_{win}.avi"
     tap = os.path.join(ROOT, "sentinel-gold.tap")
     renders = os.path.join(ROOT, "renders")
     result = {
@@ -87,12 +87,26 @@ def main(argv=None):
 
     def search_fn(session):
         knobs = {k: getattr(args, k) or v for k, v in PRESETS[args.preset].items()}
-        sp = SearchPlayer(session.bm, log=log, **knobs)
+        live = None if args.emu else session.bm
+        plan = session if args.emu else emu_session(args.landscape, log)
+        sp = SearchPlayer(plan.bm, log=log, live=live, **knobs)
         result["search"] = dict(knobs)
-        result["won"] = sp.run(args.max_actions)
         result["trace"], result["lookahead_audit"] = sp.trace, sp.audit
-        result["final_energy"] = sp.trace[-1][3] if sp.trace else None
-        result["search"]["stats"] = sp.stats
+        if live is not None:
+            result["live_audit"] = sp.live_audit
+        try:
+            result["won"] = sp.run(args.max_actions)
+        finally:
+            result["final_energy"] = sp.trace[-1][3] if sp.trace else None
+            result["search"]["stats"] = sp.stats
+            if live is not None:
+                result["divergence"] = sp.diverged
+                with live.halted():
+                    done = live.mem_get(mm.LANDSCAPE_COMPLETE, mm.LANDSCAPE_COMPLETE)
+                result["landscape_done"] = done[0]
+                result["won"] = bool(result.get("won") and done[0] & 0x40)
+                agree = sum(r[2] == r[3] for r in sp.live_audit)
+                log(f"live audit: {agree}/{len(sp.live_audit)} rows agree")
         log(f"play loop done: won={result['won']} actions={len(sp.trace)}")
 
     def play_fn(session):
@@ -116,7 +130,9 @@ def main(argv=None):
         core.boot_and_play(tap, renders, digits, video, log, play_fn, result)
         ok, size, frames, msg = core.validate_avi(result.get("video", ""))
     result["avi"] = {"ok": ok, "bytes": size, "frames": frames, "msg": msg}
-    suffix = "_emu" if args.emu else ""
+    suffix = ("_emu" if args.emu else "") + (
+        "_search" if args.player == "search" else ""
+    )
     out_path = args.out or os.path.join(
         ROOT, "out", f"play_player_{digits}{suffix}.json"
     )

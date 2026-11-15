@@ -26,6 +26,7 @@ python -m sentinel.phase_player 335     # offline, prints the action trace
 python -m driver.play_player 335        # live in VICE, records an AVI
 python -m driver.play_player 335 --emu  # the same stack on the emulated release (vagrant-moses)
 python -m driver.play_player 335 --emu --player search  # beam search on the emulator, line played open loop
+python -m driver.play_player 335 --player search        # the same search, each move also played live in VICE
 python -m driver.instrument 42          # race the model against the ROM, frame for frame
 python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embeddable APNG
 ```
@@ -39,7 +40,7 @@ python -m driver.avi2apng renders/player_ls335_win.avi   # the AVI as an embedda
 | 110 | 3 | 49 | 9 | 19 | 2 | — |
 | 298 | 7 | 36 | 15 | 18 | 3 | — |
 | 321 | 7 | 28 | 2 | 21 | 2 | — |
-| 335 | 7 | 48 | 1 | 33 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)† |
+| 335 | 7 | 48 | 1 | 33 | 2 | [**66 actions**, energy 25](docs/media/ls335_phase_win.png)†<br>[**26 actions** (search player), energy 1](docs/media/ls335_search_win.png) |
 | 373 | 7 | 57 | 19 | 17 (not won) | 1 | — |
 | 1442 | 8 | 41 | 17 | 19 | 2 | [**29 actions**, energy 5](docs/media/ls1442_phase_win.png)† |
 

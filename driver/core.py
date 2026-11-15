@@ -379,7 +379,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
             log(f"boot try {boot_try}: container/boot error: {type(e).__name__}: {e}")
             if boot_try == 0:
                 traceback.print_exc()
-            if result.get("actions"):
+            if result.get("actions") or result.get("trace"):
                 result["divergence"] = result.get("divergence") or f"mid-run drop: {e}"
                 return result
             time.sleep(2)  # sleep-ok: container relaunch backoff, no machine to poll

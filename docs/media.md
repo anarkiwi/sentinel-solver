@@ -10,6 +10,9 @@ python -m driver.avi2apng renders/player_ls1442_win.avi \
     -o docs/media/ls1442_phase_win.png --fps 12 --speed 2
 ```
 
+`docs/media/ls9716_search_win.png` and `ls335_search_win.png` are the search player's
+live wins (`renders/player_lsN_search.avi`, same flags).
+
 `--fps` decides which source frames survive; `--speed` only shortens the delays on the
 ones that did, so raising it costs no detail. The two compose: the run above samples at
 12.5 fps and plays it back at 25.

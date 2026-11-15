@@ -664,7 +664,9 @@ driver.emu_suite` plays the suite boards in parallel processes and tabulates the
 
 `play_player --emu --player search` plays `driver/search_player.py` instead: a beam whose
 children are driver programs expanded by `prog.forks`, its line played open loop and audited
-([players](players.md#the-search-player)).
+([players](players.md#the-search-player)). Without `--emu` the search still plans on an
+emulated session while every committed move is also interpreted on VICE, each move's facts
+compared (`live_audit`) and the first disagreement ending the run.
 
 A VICE run and an emulated run of the same command agree row for row in the action trace
 and every audit; only a wait that expires can split them, since VICE times waits in host
@@ -746,7 +748,10 @@ full aim (the ray is assumed to land; the facts tell whether it did); a refusal 
 `check`'s ops after each wait, on both backends: a move's waits stop at `$1A05` (past
 `kill_player`'s `STA $0C4E`), `$217D` (past the toll underflow's `STA $0CDE`) and `$219B`
 (past the win's `STA $0CDE`) and end the move (`H_DIED`, or the win), so a death never
-runs a wait into its hang guard. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
+runs a wait into its hang guard. Interpreted, a guarded wait is one resume over the wait's
+own stop checkpoint and the guard pcs' (`prog.wait_any`: `EmuMon.wait_for_checkpoints`, or
+the binmon event stream on VICE), so on VICE too a guard stop returns at once instead of
+waiting out the host timeout. `move_facts` decodes `status`, `energy`, `slot`, `z`, `z_frac`, `enemies` (sentries and
 Sentinel left), `alive` (`$0C4E` and `$0CE5` bit7 clear), `won` (`$0CDE` bit6) and `frames`.
 
 ---

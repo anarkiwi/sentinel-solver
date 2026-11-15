@@ -47,12 +47,14 @@ class EmuMon:
 
     def clone(self, machine=None):
         """An independent monitor on ``machine`` (default ``self.m.clone()``) carrying
-        every checkpoint and count, the owed boundary test and a held tap, so both run
-        identically from here."""
+        every checkpoint and count, the checkpoint caches kept on it, the owed boundary
+        test and a held tap, so both run identically from here."""
         twin = copy.copy(self)
         twin.m = self.m.clone() if machine is None else machine
+        for name, value in vars(self).items():
+            if isinstance(value, dict):  # checkpoint caches callers keep here too
+                setattr(twin, name, dict(value))
         twin._cps = {n: dataclasses.replace(cp) for n, cp in self._cps.items()}
-        twin._run_cp = dict(self._run_cp)
         twin._hits = set(self._hits)
         twin.m.set_trap(twin._trap, set())
         twin._watch()
@@ -187,8 +189,16 @@ class EmuMon:
             self.checkpoint_toggle(cp.checknum, False)
 
     def wait_for_checkpoint(self, checknum, timeout):
-        if checknum not in self._resume(cycles(timeout)):
-            raise BinmonError(f"checkpoint #{checknum} not hit: stopped elsewhere")
+        self.wait_for_checkpoints((checknum,), timeout)
+
+    def wait_for_checkpoints(self, checknums, timeout):
+        """Resume until any of ``checknums`` hits; the ones that did."""
+        hits = self._resume(cycles(timeout)) & set(checknums)
+        if not hits:
+            raise BinmonError(
+                f"checkpoints {sorted(checknums)} not hit: stopped elsewhere"
+            )
+        return hits
 
     # ---- checkpoints ---------------------------------------------------------
     def checkpoint_set(

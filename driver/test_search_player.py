@@ -175,11 +175,75 @@ def test_a_ply_workload_is_one_batch_per_beam_row():
         assert all(o.code != prog.HALT_FALLBACK for o in outs)
 
 
-def test_the_search_player_needs_the_emulator():
-    from driver import play_player
+@oracle
+def test_a_live_mirror_of_the_same_game_agrees_on_every_move():
+    from driver.play_player import emu_session
 
-    with pytest.raises(SystemExit):
-        play_player.main(["0", "--player", "search"])
+    live = emu_session(0, lambda _msg: None).bm
+    player = sp.SearchPlayer(emu_session(0, lambda _m: None).bm, 3, 3, 2, live=live)
+    logged = []
+    player.log = logged.append
+    assert player.run(3) == player.won
+    assert [r[:2] for r in player.live_audit][:1] == [[0, "entry"]]
+    assert [r[0] for r in player.live_audit] == list(range(4)) and not logged
+    assert all(a == b for _n, _m, a, b in player.live_audit) and not player.diverged
+    assert sp.machine_key(live) == sp.machine_key(player.bm)
+
+
+@oracle
+def test_a_live_mirror_that_disagrees_is_reported_and_stops_the_run(monkeypatch):
+    from driver.play_player import emu_session
+
+    live = emu_session(0, lambda _msg: None).bm
+    logged = []
+    player = sp.SearchPlayer(
+        emu_session(0, lambda _m: None).bm, 3, 3, 2, 3, logged.append, live
+    )
+    search = player.search
+
+    def tampered(root, desc):
+        best = search(root, desc)
+        live.m.ram[mm.PLAYER_ENERGY] ^= 1
+        return best
+
+    monkeypatch.setattr(player, "search", tampered)
+    assert not player.run(5)
+    assert len(player.trace) == 1 and len(player.live_audit) == 2
+    assert player.diverged["move"] == 1 and "energy" in player.diverged["facts"]
+    assert logged and logged[-1].startswith("LIVE MISMATCH at move 1")
+
+
+@oracle
+def test_a_live_mirror_that_differs_at_entry_commits_nothing():
+    from driver.play_player import emu_session
+
+    live = emu_session(0, lambda _msg: None).bm
+    live.m.ram[mm.PLAYER_ENERGY] ^= 1
+    player = sp.SearchPlayer(
+        emu_session(0, lambda _m: None).bm, live=live, log=[].append
+    )
+    assert not player.run(3) and not player.trace
+    assert player.diverged["name"] == "entry"
+
+
+@oracle
+def test_the_live_search_records_its_mirror_audit_and_the_rom_win_flag(
+    tmp_path, monkeypatch
+):
+    from driver import core, play_player
+
+    def boot_and_play(_tap, _renders, digits, _video, log, play_fn, result):
+        play_fn(play_player.emu_session(int(digits), log))
+        result["video"] = "none.avi"
+        return result
+
+    monkeypatch.setattr(core, "boot_and_play", boot_and_play)
+    out = tmp_path / "run.json"
+    args = "0 --player search --width 2 --depth 2 --branch 1 --max-actions 2 --out"
+    assert play_player.main(args.split() + [str(out)]) == 1
+    run = json.loads(out.read_text())
+    assert [r[0] for r in run["live_audit"]] == [0, 1, 2] and run["divergence"] is None
+    assert run["landscape_done"] == 0 and run["won"] is False
 
 
 def _children(bm, branch=1):

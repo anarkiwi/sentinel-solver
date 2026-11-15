@@ -3,9 +3,12 @@ keyboard primitive and step segment equals the interactive driver on the emulate
 """
 
 import hashlib
+import struct
+import threading
 
 import pytest
 from vagrant_moses import Machine
+from vice_driver.binmon import OPCODE, BinmonError, BinmonResponse
 
 from driver import clock, kbd_prog, prog, sentinel_execute as sx
 from driver.emu import EmuMon
@@ -384,3 +387,66 @@ def test_a_guarded_wait_stops_before_a_guard_pc_on_both_backends():
     before = stopped.m.ram[0xC000]
     assert prog.execute(stopped, p).outputs == ((before + 1) & 0xFF,)
     assert stopped.m.mpu.pc == 0x9633
+
+
+class _Wire:
+    """BinMon's socket side: the EXIT it was sent and the events then queued."""
+
+    def __init__(self, events):
+        self._lock = threading.Lock()
+        self._sock = self
+        self.events, self.sent, self.timeout = list(events), [], None
+
+    def gettimeout(self):
+        return self.timeout
+
+    def settimeout(self, t):
+        self.timeout = t
+
+    def _next_req(self):
+        return 7
+
+    def _send(self, opcode, body, req):
+        self.sent.append((opcode, body, req))
+
+    def _read_response(self):
+        if not self.events:
+            raise BinmonError("socket timed out")
+        return self.events.pop(0)
+
+
+def _event(opcode, body=b"", req=0xFFFFFFFF):
+    return BinmonResponse(opcode=opcode, err=0, req_id=req, body=body)
+
+
+def _hit(num, hit=1):
+    return _event(0x11, struct.pack("<IB", num, hit) + bytes(18))
+
+
+def test_a_binmon_wait_returns_at_the_stop_of_any_of_its_checkpoints():
+    stopped = _event(OPCODE.STOPPED)
+    wire = _Wire([_event(0xAA, req=7), stopped, _hit(9), _hit(3, 0), _hit(4), stopped])
+    assert prog.wait_any(wire, (3, 4), 2.0) == {4}
+    assert wire.sent == [(OPCODE.EXIT, b"", 7)] and wire.timeout is None
+    with pytest.raises(BinmonError):
+        prog.wait_any(_Wire([_hit(9), stopped]), (3, 4), 2.0)
+
+
+def test_an_emumon_wait_on_checkpoints_that_never_hit_raises():
+    bm = _toy()
+    here = bm.checkpoint_set(clock.FRAME_PC, stop_when_hit=True).checknum
+    there = bm.checkpoint_set(0x1234, stop_when_hit=True).checknum
+    assert prog.wait_any(bm, (there, here), 1.0) == {here}
+    bm.advance_instructions(1)
+    with pytest.raises(BinmonError, match="stopped elsewhere"):
+        prog.wait_any(bm, (there,), 1.0)
+
+
+def test_a_clones_stop_checkpoints_are_its_own():
+    bm = _toy()
+    shared = prog._stop_checkpoint(bm, 0x9633)
+    twin = bm.clone()
+    assert prog._stop_checkpoint(twin, 0x9633) == shared
+    mine = prog._stop_checkpoint(twin, 0x1234)
+    assert prog._stop_checkpoint(bm, 0x1234) == mine
+    assert bm.checkpoint_get(mine).start == twin.checkpoint_get(mine).start == 0x1234
