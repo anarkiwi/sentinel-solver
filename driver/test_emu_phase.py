@@ -1,6 +1,8 @@
 """The emulated phase player's lookahead runs on machine clones: a rehearsal predicts
 the real action exactly, leaves the real machine alone, and waits spend machine time."""
 
+import json
+
 import pytest
 
 from driver import core, emu_phase, emu_suite
@@ -150,7 +152,9 @@ def test_the_suite_table_sets_each_run_beside_its_offline_record(tmp_path, monke
     lines = list(
         emu_suite.rows({7: run}, {"7": {"won": True, "actions": 5, "energy": 2}})
     )
-    assert lines[1].split() == "7 True 3 4 9.5 1/2 | True 5 2".split()
+    assert lines[1].split() == "7 True 3 4 9.5 1/2 - | True 5 2".split()
+    run["search"] = {"stats": {"seconds": 2.0, "cpu_seconds": 7.0}}
+    assert list(emu_suite.rows({7: run}, {}))[1].split()[6] == "3.5"
 
     def fake_run(cmd, **_kw):
         if cmd[3] == "1":
@@ -160,3 +164,11 @@ def test_the_suite_table_sets_each_run_beside_its_offline_record(tmp_path, monke
     monkeypatch.setattr(emu_suite.subprocess, "run", fake_run)
     assert emu_suite.play(1, str(tmp_path), 5) == {"won": False, "trace": []}
     assert emu_suite.play(2, str(tmp_path), 5)["won"] == "error"
+
+
+def test_the_suite_tabulates_saved_results_without_playing(tmp_path, capsys):
+    run = {"won": True, "trace": [[0]] * 2, "final_energy": 1, "wall_seconds": 3.0}
+    (tmp_path / "emu_0007.json").write_text(json.dumps(run))
+    assert emu_suite.main(["7", "8", "--tabulate", "--out-dir", str(tmp_path)]) == 0
+    table = capsys.readouterr().out.splitlines()
+    assert [line.split()[0] for line in table[1:]] == ["7"]

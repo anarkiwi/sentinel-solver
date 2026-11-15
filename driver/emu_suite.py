@@ -47,16 +47,20 @@ def play(board, out_dir, max_actions, extra=()):
 
 def rows(results, offline):
     """One line per board: the emulated run beside the offline record."""
-    yield "board  won    actions  energy  wall_s  audit  | offline won actions energy"
+    yield (
+        "board  won    actions  energy  wall_s  audit  cores | offline won actions energy"
+    )
     for board, res in sorted(results.items()):
         off = offline.get(str(board), {})
         audit = res.get("lookahead_audit", [])
         same = sum(a[3] == a[4] for a in audit)
+        stats = res.get("search", {}).get("stats", {})
+        cores = stats.get("cpu_seconds", 0) / stats["seconds"] if stats else None
         yield (
             f"{board:5d}  {str(res.get('won')):5s}  {len(res.get('trace', [])):7d}  "
             f"{res.get('final_energy')!s:6s}  {res.get('wall_seconds')!s:6s}  "
-            f"{same}/{len(audit):<3d} | {off.get('won')!s:5s} {off.get('actions')!s:7s} "
-            f"{off.get('energy')}"
+            f"{same}/{len(audit):<3d}  {'-' if cores is None else f'{cores:.1f}':5s} | "
+            f"{off.get('won')!s:5s} {off.get('actions')!s:7s} {off.get('energy')}"
         )
 
 
@@ -68,11 +72,21 @@ def main(argv=None):
     parser.add_argument("--out-dir", default=os.path.join(ROOT, "out", "logs", "emu"))
     parser.add_argument("--player", choices=("phase", "search"), default="phase")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="wide")
+    parser.add_argument(
+        "--tabulate", action="store_true", help="tabulate --out-dir's results, no play"
+    )
     args, extra = parser.parse_known_args(argv)
     extra = ["--player", args.player, "--preset", args.preset] + extra
     os.makedirs(args.out_dir, exist_ok=True)
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+    if args.tabulate:
+        for board in args.boards:
+            path = os.path.join(args.out_dir, f"emu_{board:04d}.json")
+            if os.path.exists(path):
+                with open(path) as fh:
+                    results[board] = json.load(fh)
+        args.boards = []
+    with concurrent.futures.ThreadPoolExecutor(max(1, args.jobs)) as pool:
         futures = {
             pool.submit(play, b, args.out_dir, args.max_actions, extra): b
             for b in args.boards
