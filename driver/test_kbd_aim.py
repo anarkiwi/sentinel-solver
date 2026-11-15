@@ -46,21 +46,19 @@ def test_cur_reads_cursor_bytes(fake_bm):
     assert d.cur() == (99, 43)
 
 
-def test_a_wait_outlasted_by_a_redraw_is_re_armed(fake_bm):
-    """A timeout while $0CE4 bit7 says the world is being plotted is a redraw still
-    running: the wait re-arms until the pc comes; with the gate open it raises."""
+def test_a_wait_through_a_redraw_is_one_wait_and_its_timeout_raises(fake_bm):
+    """A redraw delays the pc, it does not stall it: one wait of every pass's window,
+    and a wait that still times out raises."""
     d = _drv(fake_bm)
     calls = []
 
     def run_until_pc(pc, timeout):
-        calls.append(pc)
-        if len(calls) < 3:
+        calls.append((pc, timeout))
+        if len(calls) > 1:
             raise TimeoutError(pc)
-        d.bm.mem[kbd_aim.A_PLOT] = 0
 
     d.bm.run_until_pc = run_until_pc
-    d.bm.mem[kbd_aim.A_PLOT] = 0x80
-    assert d._run_past_redraw(0x365D, 1.0) and calls == [0x365D] * 3
-    calls.clear()
+    assert d._run_past_redraw(0x365D, 1.0)
+    assert calls == [(0x365D, 1.0 * kbd_aim._SCAN_WAIT_PASSES)]
     with pytest.raises(TimeoutError):
         d._run_past_redraw(0x365D, 1.0)

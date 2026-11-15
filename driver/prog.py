@@ -15,6 +15,7 @@ from vice_driver.binmon import OPCODE, BinmonError
 
 from driver import clock
 from driver.emu import EmuMon, cycles
+from sentinel.passcost import PAL_FRAME_CYCLES
 
 HALT_OK, HALT_RAISE, HALT_FALLBACK = 0, 1, 0xFFFF
 SCRATCH = R[11]  # immediate staging for :meth:`Prog.rec`; R0-R10 are allocatable
@@ -47,6 +48,7 @@ _BRANCH = {
     "bge": lambda x, y: x >= y,
 }
 STATS = {"native": 0, "fallback": 0, "interpreted": 0}
+BACKSTOP = 30.0  # host seconds a VICE may go without reaching any stop: a dead VICE
 
 
 class Outcome(tuple):
@@ -136,16 +138,19 @@ class Prog:
         finally:
             self._guard = None
 
-    def run(self, pc, seconds, on_timeout=None):
-        """``run_until_pc(pc, timeout=seconds)``: nothing when the CPU is about to
-        execute ``pc`` already; a timeout branches to ``on_timeout``."""
+    def run(self, pc, seconds, on_timeout=None, stops=()):
+        """``run_until_pc(pc, timeout=seconds)``, ending early before any of ``stops``:
+        nothing when the CPU is about to execute ``pc`` already; a timeout branches to
+        ``on_timeout``."""
         self.pcs.add(pc)
-        stops, check = self._guard or ((), None)
-        self._emit("run", pc, seconds, on_timeout or self.thrower, stops)
+        guards, check = self._guard or ((), None)
+        self._emit(
+            "run", pc, seconds, on_timeout or self.thrower, tuple(stops) + guards
+        )
         if check is not None:
             self._guard = None
             check(self)
-            self._guard = (stops, check)
+            self._guard = (guards, check)
         return self
 
     def step(self):
@@ -216,9 +221,12 @@ class Prog:
 
 
 def _wait(bm, pc, seconds, stops=()):
-    """One timed wait over BinMon (``run_until_pc``), ending early before any of
-    ``stops``; the frame marker through the persistent stop checkpoint, as
-    :func:`clock.run_frames` waits for it."""
+    """One wait (``run_until_pc``) of at most ``seconds`` of EMULATED time, ending early
+    before any of ``stops``: on VICE counted in frames at the $9630 stop checkpoint, so
+    both backends bound it alike; the frame marker itself through that checkpoint."""
+    if not isinstance(bm, EmuMon):
+        _wait_frames(bm, pc, -(-cycles(seconds) // PAL_FRAME_CYCLES), stops)
+        return
     if stops:
         if bm.registers_get()[3] == pc:
             return
@@ -244,6 +252,28 @@ def _wait(bm, pc, seconds, stops=()):
         bm.wait_for_checkpoint(cp, timeout=seconds)
     finally:
         bm.checkpoint_toggle(cp, False)
+
+
+def _wait_frames(bm, pc, limit, stops=()):
+    """Resume VICE until it is about to execute ``pc`` or any of ``stops``, raising after
+    ``limit`` frames; each $9630 stop between counts one, then steps off the marker. A
+    VICE that stops answering raises after :data:`BACKSTOP` host seconds."""
+    if bm.registers_get()[3] == pc:
+        return
+    marker = clock.stop_checkpoint(bm)
+    ends = {marker if pc == clock.FRAME_PC else _stop_checkpoint(bm, pc)}
+    ends |= {_stop_checkpoint(bm, at) for at in stops}
+    for cp in ends | {marker}:
+        bm.checkpoint_toggle(cp, True)
+    try:
+        for _ in range(limit):
+            if wait_any(bm, ends | {marker}, BACKSTOP) & ends:
+                return
+            bm.advance_instructions(1)
+        raise BinmonError(f"${pc:04x} not reached in {limit} frames")
+    finally:
+        for cp in ends | {marker}:
+            bm.checkpoint_toggle(cp, False)
 
 
 def wait_any(bm, checknums, timeout):

@@ -312,13 +312,11 @@ REDRAW = bytes.fromhex(
 REDRAW_AT, CLEARED, TARGET = 0xC100, 0xC115, 0xC11F
 
 
-def _redraw(plot=True):
+def _redraw():
     """A monitor on a bare machine plotting (``$0CE4`` bit7) for a while, then idling a
-    little before reaching :data:`TARGET`; and the window that ends between the two."""
+    little before reaching :data:`TARGET`; and a window shorter than the plot."""
     m = Machine(backend="native")
     m.ram[REDRAW_AT : REDRAW_AT + len(REDRAW)] = REDRAW
-    if not plot:
-        m.ram[REDRAW_AT + 2] = 0
     m.reset(REDRAW_AT)
     bm, probe = EmuMon(m), EmuMon(m.clone())
     t0 = probe.m.cycle
@@ -329,18 +327,64 @@ def _redraw(plot=True):
     return bm, window
 
 
-@pytest.mark.parametrize("plot", [True, False])
-def test_a_redraw_ending_late_in_a_window_delays_the_wait_not_stalls_it(plot):
-    bm, window = _redraw(plot)
+@pytest.mark.parametrize("target", [TARGET, 0x1234])
+def test_a_redraw_longer_than_a_window_delays_the_wait_and_only_a_hang_raises(target):
+    bm, window = _redraw()
     c = Compiler()
-    c.run_past_redraw(TARGET, window)
+    c.run_past_redraw(target, window)
     c.p.halt(prog.HALT_OK)
     (no, ns), (io, is_) = _both(bm, c.p)
     assert no == io and ns == is_
-    assert no.code == (prog.HALT_OK if plot else prog.HALT_RAISE)
+    assert no.code == (prog.HALT_OK if target == TARGET else prog.HALT_RAISE)
     kbd = KbdDriver(bm.clone(), _quiet)
-    if plot:
-        assert kbd._run_past_redraw(TARGET, window)
+    if target == TARGET:
+        assert kbd._run_past_redraw(target, window)
     else:
-        with pytest.raises(Exception):
-            kbd._run_past_redraw(TARGET, window)
+        with pytest.raises(BinmonError):
+            kbd._run_past_redraw(target, window)
+
+
+def test_a_frame_counted_wait_ends_at_its_pc_or_a_stop_else_raises_after_its_frames():
+    bm = _toy()
+    f0 = clock.frames(bm)
+    prog._wait_frames(bm, 0x9633, 4)
+    assert bm.m.mpu.pc == 0x9633 and clock.frames(bm) - f0 <= 1
+    prog._wait_frames(bm, 0x1234, 4, stops=(0x9633,))
+    assert bm.m.mpu.pc == 0x9633
+    f0 = clock.frames(bm)
+    with pytest.raises(BinmonError, match="not reached in 4 frames"):
+        prog._wait_frames(bm, 0x1234, 4)
+    assert clock.frames(bm) - f0 == 4
+    prog._wait_frames(bm, clock.FRAME_PC, 4)
+    assert bm.m.mpu.pc == clock.FRAME_PC
+
+
+def test_two_outcomes_part_at_their_first_differing_record():
+    def outcome(*outs):
+        return prog.Outcome("halt", prog.HALT_OK, 0, outs)
+
+    a = outcome(kbd_prog.T_NOW, 5, 1, 2, kbd_prog.T_PASS, 0, kbd_prog.T_VAL, 3, 9)
+    b = outcome(kbd_prog.T_NOW, 5, 1, 2, kbd_prog.T_PASS, 0, kbd_prog.T_VAL, 3, 8)
+    assert kbd_prog.records(a) == [(3, 5, 1, 2), (4, 0), (5, 3, 9)]
+    parted = kbd_prog.first_difference(a, b, context=1)
+    assert parted == {"at": 2, "a": [(4, 0), (5, 3, 9)], "b": [(4, 0), (5, 3, 8)]}
+    assert kbd_prog.first_difference(a, a) is None
+    assert kbd_prog.first_difference(a, outcome(kbd_prog.T_PASS, 0))["at"] == 0
+    assert kbd_prog.first_difference(a, outcome(*a.outputs[:6]))["at"] == 2
+
+
+def test_every_wait_in_a_guard_keeps_its_guard_pcs_beside_its_own_stops():
+    """A guard check after the first wait must not drop the guard from later ones."""
+    p = prog.Prog(BUDGET)
+    hit, done = p.new(2)
+
+    def check(q):
+        q.ld(prog.GUARD, 0xC000).bne(prog.GUARD, 0, hit)
+
+    with p.guard((0x9633,), check):
+        p.run(0x9630, 1.0, stops=(0x4321,))
+        p.mov(R[0], 1).run(0x1234, 1.0, stops=(0x4321,))
+    p.jmp(done).label(hit).halt(6).label(done).halt(5)
+    assert all(op[4] == (0x4321, 0x9633) for op in p.code if op[0] == "run")
+    (no, ns), (io, is_) = _both(_toy(), p)
+    assert no == io and ns == is_ and no.code == 6

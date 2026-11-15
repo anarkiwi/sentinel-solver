@@ -216,6 +216,13 @@ def test_a_live_mirror_that_disagrees_is_reported_and_stops_the_run(monkeypatch)
     assert not player.run(5)
     assert len(player.trace) == 1 and len(player.live_audit) == 2
     assert player.diverged["move"] == 1 and "energy" in player.diverged["facts"]
+    parted = player.diverged["records"]
+    at = parted["at"] - max(0, parted["at"] - 3)
+    assert (
+        parted["a"][at][:2]
+        == parted["b"][at][:2]
+        == (kbd_prog.T_VAL, kbd_prog.V_ENERGY)
+    )
     assert logged and logged[-1].startswith("LIVE MISMATCH at move 1")
 
 
