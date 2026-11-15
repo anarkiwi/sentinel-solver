@@ -728,10 +728,9 @@ Each reduces to a ROM routine cited above.
 | Query | ROM | Module |
 |-------|-----|--------|
 | LOS(observer, target) — true facet surfaces + the look-up rule | `$1CDD` | `los.check_for_line_of_sight_to_tile`, `los_jit` |
-| Buildable/absorbable/transferable set, and the view that lands a tile | sights sweep | `los.landable_views` / `landable_view`, gated by `aim.gate` |
-| Aim cost (cursor + body pan, u-turn-aware) | `move_sights $9958`, `$10EE`/`$1135` | `aimcost`, `playerbase._aim_frames` |
-| Per-action world advance | `$1335`/`$0C50` | `actioncost`, `playerbase._settle` |
-| Any-rotation exposure, gaze distance, ticks-until-seen, drain-over-window, meanie safety | [§6](#6-enemies) | `threat` |
+| Buildable/absorbable/transferable set, and the view that lands a tile | sights sweep | `los.landable_sweep_with_centres`, `views` |
+| Aim cost (cursor + body pan, u-turn-aware) | `move_sights $9958`, `$10EE`/`$1135` | `aimcost`, `views.aim_table` |
+| Whether the player sees a tile | [§6](#6-enemies) | `threat.player_sees_tile` |
 
 LOS is the workhorse — it gates every action and every enemy sighting, so it must
 be fast. Two mechanics drive routing and are easy to model wrongly:

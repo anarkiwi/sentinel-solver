@@ -352,7 +352,7 @@ the oracle image from `emu.boot()`.
 |---|---|
 | `run_until_pc(pc, timeout)` | returns at once when already at `pc`; else a stop-on-hit checkpoint, so the CPU stops **before** executing `pc` |
 | `advance_instructions(n)` | `n` decodes; the step test precedes the checkpoint test, so a step ending on a checkpointed pc counts and stops there only on the next resume |
-| `checkpoint_set/get/toggle/delete`, `wait_for_checkpoint(s)` | exec checkpoints with `hit_count`; a silent one only counts (`clock.FRAME_PC`) |
+| `checkpoint_set/get/toggle`, `wait_for_checkpoint(s)` | exec checkpoints with `hit_count`; a silent one only counts (`clock.FRAME_PC`) |
 | `mem_get(…, bank)` | bank 0: the CPU view through `$01`; `"io"`: RAM with the I/O page peeked side-effect free; `"ram"` |
 | `keymatrix_set/release_all/tap` | the CIA 1 matrix, row = PA line, col = PB line; a fixed tap releases `frames · 19656` cycles after the press |
 | timeouts | `timeout` seconds of PAL cycles, then `BinmonError`; a stop at another checkpoint also raises |
@@ -394,12 +394,12 @@ interactive driver's exact semantics: the same keys, PCs, retry bounds, stop poi
 frames. `kbd_prog.Compiler` holds one compiler method per `kbd_aim` primitive.
 
 A `Prog` is the vagrant-moses op set plus one extension, the timed wait `run(pc, seconds,
-on_timeout)` (`run_until_pc` with its timeout), with `catch` blocks standing for the driver's
-`try/except`. Three entry points execute the same `Prog`:
+stops)` (`run_until_pc` with its timeout, ending early before any of `stops`); a wait that
+times out halts the program with `HALT_RAISE`. Three entry points execute the same `Prog`:
 
 | backend | how | timeouts |
 |---|---|---|
-| `prog.interpret(bm, p)` | call by call over any BinMon: VICE, or `EmuMon` | exact: a raise branches to the op's handler |
+| `prog.interpret(bm, p)` | call by call over any BinMon: VICE, or `EmuMon` | exact: a timed-out wait halts with `HALT_RAISE` |
 | `prog.execute(emumon, p)` | `machine.run_program` on the native lowering | each wait checks its elapsed cycles; past its timeout the program is replayed by `interpret` from a clone taken before it |
 | `prog.forks(emumon, ps)` | one `vagrant_moses.run_forks` batch, `keep=True`: one `EmuMon` per fork | as `execute`, per fork |
 

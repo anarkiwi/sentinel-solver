@@ -12,7 +12,6 @@ NUM_SLOTS = 64  # the object arrays are 64 entries each
 MEM_SIZE = 0x10000  # full 64 KB address space
 
 # ---- scalars --------------------------------------------------------------
-OBJECT_EXPOSURE = 0x0014  # $0014: enemy can-see exposure ($80 base/full, $40 head only)
 PLAYER_OBJECT = 0x000B  # index of the player's object slot
 CURSOR = 0x0090  # which enemy slot update_enemies processes this round (7->0)
 MAX_ENEMIES = 0x0C07  # maximum_number_of_enemies
@@ -21,7 +20,6 @@ PLAYER_ENERGY = 0x0C0A  # player_energy, masked AND #$3F by set_player_energy $2
 PLATFORM_X = 0x0C19  # tile x of the Sentinel's platform
 PLATFORM_Y = 0x0C1A  # tile y of the Sentinel's platform
 FOV_WIDTH = 0x0C68  # enemy horizontal FOV width, reloaded to $14 each scan ($16F2)
-PLAYER_HAS_HYPERSPACED = 0x0CDE  # bit7 set on hyperspace ($216B); bit6 == complete
 LANDSCAPE_COMPLETE = 0x0CDE  # bit6 set by landscape_completed $3603 on a win
 EXPOSURE_BAR = 0x0C4F  # set_bar_state $194D: bit7 fully seen, bit6 partly
 PLAYER_DIED_BY_DRAINING = 0x0C4E  # bit7 set by kill_player $1A00 (drain at 0 energy)
@@ -40,18 +38,7 @@ OBJECTS_TYPE = 0x0A40  # 0..6 (see TYPES)
 TILES_TABLE = 0x0400  # $0400-$07FF, 32x32, interleaved (calculate_tile_address)
 
 # ---- per-enemy phase arrays (8 entries each) ------------------------------
-ENEMIES_DRAINING_COOLDOWN = 0x0C20  # $0C20
-ENEMIES_ROTATION_COOLDOWN = 0x0C28  # $0C28
 ENEMIES_UPDATE_COOLDOWN = 0x0C30  # $0C30
-ENEMIES_MEANIE_SEARCH_OBJECT = 0x0C80  # $0C80
-ENEMIES_ENERGY_TO_DISCHARGE = 0x0C88  # $0C88
-ENEMY_BELOW_Z = 0x0C06  # $0C06: height ceiling for player/tree placement below enemies
-ENEMIES_FAILED_MEANIE_MEMORY = 0x0C90  # $0C90
-ENEMIES_MEANIE_ATTEMPT_SCANS = 0x0C98  # $0C98
-ENEMIES_MEANIE_OBJECT = 0x0CA0  # $0CA0 (top bit set == no meanie)
-ENEMIES_TARGETED_OBJECT = 0x0CA8  # $0CA8
-ENEMIES_TARGETED_OBJECT_EXPOSURE = 0x0CB0  # $0CB0 (top bit == fully visible)
-ENEMIES_CONSIDERING_MEANIE = 0x0CB8  # $0CB8
 ROTATION_SPEED_TABLE = 0x9D37  # per-enemy rotation step (+$14 / $EC), indexed by slot
 
 # ---- enemy-update scalars -------------------------------------------------
@@ -59,35 +46,21 @@ COOLDOWN_GATE = 0x0C50  # $0C50 gates update_enemy_cooldowns (1-in-3 cadence)
 # The running game ticks cooldowns ONCE PER FRAME (raster $9663 / scroll $3684, mutually
 # exclusive via $0CD8) through this integer Bresenham accumulator: $130C does $1335 += $CD
 # and only falls through to update_enemy_cooldowns ($1317) on carry (205/256).  Suppressed
-# until the player's first action ($0CE5).  NOT touched by the isolated-routine oracle
-# (which calls $1317 directly), so it is the cadence the 1:1 sim step never modelled.
-COOLDOWN_BRESENHAM = 0x1335  # $130C running accumulator ($1335)
+# until the player's first action ($0CE5).
 COOLDOWN_BRESENHAM_STEP = 0xCD  # $1310 ADC #$CD
 PLAYER_NOT_ACTED = 0x0CE5  # bit7 set until the player's first action ($12E1 clears it)
 # $9A51 is its only writer: $3577 stores $80 before play_landscape_loop $357D, $117E stores 0 for generation and the preview, so it is $80 for the whole of play.  $283D reads it to pick the plot_world examine ($2845's trig, or $37F2's table read), $95FA the raster split chain.
 PLAY_DISPLAY_FLAG = 0x9AF6
 FURTHEST_ROW_HINT = 0x0C48  # $26CD seeds $27D7's first column from it, $26D9 stores the furthest row's own start back: plot_world's only carry between passes
 TARGETED_OBJECT_SLOT = 0x0C58  # $0C58 slot the LOS march recognises
-FOV_RELATIVE_H_ANGLE = 0x0C57  # object_relative_h_angle_high (bearing + $0A)
-TARGETED_OBJECT_IN_LOS = 0x0C56  # march sets bit7 when the ray reaches the target
-TREE_IN_LOS = 0x0CDD  # march sets bit7 when a non-target tree lay in the sightline
-TREE_IN_LOS_TO_HEAD = 0x0C76  # bit6 == a tree lay in the LOS to a robot's head ($17B7)
 
 # ---- the PRNG state -------------------------------------------------------
 PRND_STATE = 0x0C7B  # 5-byte LFSR state $0C7B-$0C7F (prnd $31CA)
 
 # ---- sound voices: $963D JSR $FFC2 runs the $8ED1 note tick every frame ----
 SOUND_NOTE_TIMER = 0x8E86  # $8E86..$8E88: frames left of this note ($80 == voice idle)
-SOUND_NOTE_LENGTH = 0x8E8E  # $8E8E..$8E90: the gate timer a new note reloads
-SOUND_GATE_TIMER = 0x8E92  # $8E92..$8E94: frames left before the voice is silenced
 SOUND_VOICE_FLAG = 0x8E96  # $8E96..$8E98: bit7 == the voice is off ($8EF8 sets it)
 SOUND_VOICE_IDLE = 0x80  # the resting note timer, MEASURED at landscape entry
-SOUND_TABLE = 0xAC00  # start_tune $3470 -> $8DB4: eight descriptor bytes a tune
-SOUND_LENGTHS = 0x8EC1  # $8E44: the gate reload, indexed by descriptor byte 3's nibble
-SOUND_VOICE_ON = 0x8EBE  # $8E72: the effect pointer a gated tune puts in $8E96,X
-SOUND_ROTATE = 0  # $1805/$1728: the turn a rotation and a meanie's own turn play
-SOUND_MEANIE = 1
-SOUND_DRAIN = 5  # $1A1D LDA #$05
 
 # ---- object types ---------------------------------------------------------
 T_ROBOT = 0  # also the player synthoid
@@ -123,24 +96,6 @@ ENERGY_IN_OBJECTS = {
     T_PLATFORM: 0,
 }
 ENERGY_MASK = 0x3F  # set_player_energy $2148 AND #$3F
-
-# object_screen_half_angle $2112: half the angle an object subtends, the $209B size term.
-OBJECT_SCREEN_HALF_ANGLE = {
-    T_ROBOT: 0x3E,
-    T_SENTRY: 0x46,
-    T_TREE: 0x72,
-    T_BOULDER: 0x7A,
-    T_MEANIE: 0x4A,
-    T_SENTINEL: 0x4E,
-    T_PLATFORM: 0xC1,
-}
-OBJECT_SIZE_FLOOR = 0x0CD4  # a pending size the next $209B takes as a minimum
-
-# update_object_on_screen $1F9F points the camera at the strip it replots and puts it
-# back at $2003/$2008, so $09C0,X carries the shift for as long as $2625 runs.
-CAMERA_OBJECT = 0x006E  # $1FC2/$2625 LDX $6E: the slot whose $09C0/$0140 is the camera
-CAMERA_SAVED = 0x211A  # $1FD5 keeps that slot's own bearing over the shift
-CAMERA_REF_LO = 0x001F  # $1FD0 the camera's half column, zeroed again at $2003
 
 # A tiles_table byte >= OBJECT_TILE holds an object index in its low 6 bits;
 # below it the byte is (height<<4)|slope terrain.

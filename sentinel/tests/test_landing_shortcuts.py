@@ -50,16 +50,6 @@ def _boards(new_state):
     ]
 
 
-def _stop_args(st, slot, eye_z):
-    return (
-        int(st.obj_x[slot]),
-        int(st.obj_y[slot]),
-        lt.seed_z(st, slot, eye_z),
-        lt.MAX_STEPS,
-        lt.RADIUS,
-    )
-
-
 def _minima(rays, tiles, keep, drive, n):
     """Per claim group the least-key ray: ``{group: ray}`` of ``keep``'s consumer."""
     if keep == "first":

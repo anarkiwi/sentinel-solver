@@ -28,17 +28,6 @@ def test_sights_live_on_reads_flag_bit7(fake_bm):
     assert d.sights_live_on() is False
 
 
-def test_committed_bearing_lifecycle(fake_bm):
-    d = _drv(fake_bm)
-    assert d.committed_bearing() is None
-    d.set_bearing(0x60, 0xF5)
-    assert d.committed_bearing() == (0x60, 0xF5)
-    d.set_bearing(0x160, 0x1F5)  # masked to a byte each
-    assert d.committed_bearing() == (0x60, 0xF5)
-    d.clear_bearing()
-    assert d.committed_bearing() is None
-
-
 def test_cur_reads_cursor_bytes(fake_bm):
     d = _drv(fake_bm)
     d.bm.mem[kbd_aim.A_CX] = 99

@@ -81,19 +81,6 @@ WEIGHT = {
     "HYP_TAIL": _w(2, 2),  # $9398/$939A LSR/ROR zp + $93A1/$93A7 STA zp
 }
 
-# The $95E9 raster-IRQ body's own writes; the $8ED1 tick and $9659 gate are charged apart.
-IRQ_BODY_WRITES = {
-    "$95E9": _w(8),  # three PHA, $95F2 STA $D019, $9607/$960D/$9615/$961B
-    "$9630": _w(0, 2),  # DEC $0CDF then, $9633 BPL falling through, INC $0CDF
-    "$963A": _w(1, 1),  # JSR $FFC5 + $8F0E STA $8E85; three idle voices write none
-    "$9678": _w(0, 1),  # JSR $119F
-    "$119F": _w(5, 3),  # $11A1/$11D6/$11E2/$11EC/$121F + its three $0F62/$1363 JSRs
-    "$1363": _w(4, 15),  # $1367 STA $0CE8,X four times + the $1370 JSR fifteen
-    "$0F62": _w(17, 17),  # per scan call: $0F63 PHA and the $FFF4 JSR
-    "$8CF9": _w(51),  # per scan: $8CFC/$8D01/$8D0D strobe the CIA1 keyboard matrix
-}
-WEIGHT["IRQ_BODY"] = sum(IRQ_BODY_WRITES.values())
-
 
 def pack(name):
     """``passcost.<name>`` with the write weight of its own run packed above it."""

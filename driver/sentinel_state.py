@@ -151,10 +151,6 @@ class GameState:
                 return o
         return None
 
-    def objects_at(self, x, y):
-        """Every decoded object standing on tile (x, y)."""
-        return [o for o in self.objects if o.x == x and o.y == y]
-
     @property
     def player(self):
         return self.object_by_slot(self.player_slot)

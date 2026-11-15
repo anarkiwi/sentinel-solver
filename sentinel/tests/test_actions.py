@@ -10,7 +10,6 @@ import os
 
 from sentinel.state import State
 from sentinel import actions, energy, memmap as mm
-from sentinel.terrain import set_tile_byte
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden_actions.json")
 
@@ -91,31 +90,6 @@ def test_robot_faces_player():
     slot = actions.create(state, mm.T_ROBOT, (6, 6))
     assert slot is not None
     assert state.obj_h_angle[slot] == (0x40 ^ 0x80)
-
-
-def _empty_state():
-    state = State.from_mem(bytearray(0x10000))
-    for s in range(mm.NUM_SLOTS):
-        state.obj_flags[s] = 0x80  # all slots empty; terrain is bare flat height 0
-    state.mem[mm.PRND_STATE] = 0x01  # non-degenerate PRNG for hyperspace placement
-    return state
-
-
-def _player_on_platform(state, px=8, py=8):
-    """Slot $3F platform at (px, py) with a player robot (slot 5) stacked on it."""
-    state.obj_flags[0x3F] = 0x00
-    state.obj_type[0x3F] = mm.T_PLATFORM
-    state.obj_x[0x3F], state.obj_y[0x3F] = px, py
-    state.obj_z_height[0x3F], state.obj_z_frac[0x3F] = 0, 0xE0
-    set_tile_byte(state, px, py, mm.OBJECT_TILE | 0x3F)
-    state.mem[mm.PLATFORM_X], state.mem[mm.PLATFORM_Y] = px, py
-    player = 5
-    state.obj_flags[player] = 0x40 | 0x3F
-    state.obj_type[player] = mm.T_ROBOT
-    state.obj_x[player], state.obj_y[player] = px, py
-    state.obj_z_height[player], state.obj_z_frac[player] = 1, 0xE0
-    state.player = player
-    return player
 
 
 def test_creates_match_rom():

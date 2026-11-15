@@ -12,7 +12,6 @@ SHORT_IRQ_WRAP = 1  # the one entry a frame whose $9603 BPL wraps the split inde
 
 SHORT_IRQS_PER_FRAME = 4  # the $9589 table 35 D5 AD 85 5D, less the $9593 full entry
 SHORT_IRQ_FRAME = SHORT_IRQS_PER_FRAME * SHORT_IRQ + SHORT_IRQ_WRAP  # 477, exact live
-IRQ_BODY = 2385  # 7 entry + $95E9 81 + $9630..$969A 2275 + the RTI tail 22: counted
 
 
 SEE_SLOT_EMPTY = 40  # $1887 exit at $1893
@@ -212,32 +211,6 @@ OBJ_SKIP_OTHER = 13  # + $1EA0 LDA #$C0 2 + STA $0060 3, less 1
 OBJ_GHOL_LOOP = 9  # $1EA4 LDA 4 + CMP #$40 2 + BCS taken 3: another stack level
 OBJ_GHOL_RTS = 18  # + $1EAB LDA 4 + RTS 6, less 1
 
-
-# $1F9F update_object_on_screen: no screen span, no replot -- see relative.py $209B.
-REDRAW_CALL = 6  # $1F9F JSR $209B
-REDRAW_NONE = 23  # $1FA2 BCS $1F93 taken 3 + the $1F93 flag reset and RTS 20
-REDRAW_PLOT_ENTRY = 2  # $1FA2 BCS not taken; $1FA4 on is projector.strip_replot_frames
-SPAN_HEAD = 6  # $209B LDY $91 3 + CPY $0B 3
-SPAN_PLAYER = 12  # $209F BEQ $2110 taken 4, page crossed, + $2110 SEC/RTS 8
-SPAN_ANGLES = 8  # ... BEQ not taken 2 + $20A1 JSR $8401 6
-SPAN_SIZE = 33  # $20A4..$20BB: the $2112 half-angle, the $0CD4 floor, the JSR $933D
-SPAN_SIZE_FLOOR = 3  # $0CD4 is larger: BCS not taken 2 + $20B1 LDA $0CD4 4, less 3
-SPAN_LEFT = 12  # $20BE..$20C4: bearing - half-angle, low byte
-SPAN_LEFT_HI = 7  # $20C6 LDA $0C57 4 + SBC $8B 3
-SPAN_LEFT_NEG = 7  # $20CB BPL nt 2 + LDA #0 2 + $20CF BEQ $20D8 taken 3: clip to 0
-SPAN_LEFT_POS = 12  # ... BPL taken 3 + $20D1 ASL $74 / ROL A / CMP #$28 9
-SPAN_OFF_RIGHT = 12  # $20D6 BCS $2110 taken 4, page crossed, + SEC/RTS 8
-SPAN_LEFT_ONSCREEN = 2  # ... BCS not taken
-SPAN_LEFT_OK = 8  # $20D8/$20DB: the left column into $0C62 and $211C
-SPAN_RIGHT = 12  # $20DE..$20E4: bearing + half-angle, low byte
-SPAN_RIGHT_HI = 7  # $20E6 LDA $0C57 4 + ADC $8B 3
-SPAN_BEHIND = 12  # $20EB BMI $2110 taken 4, page crossed, + SEC/RTS 8
-SPAN_RIGHT_OK = 11  # ... BMI not taken 2 + $20ED ASL $74 / ROL A / CMP #$28 9
-SPAN_WIDTH_CLIP = 1  # $20F2 BCC not taken 2 + $20F4 LDA #$27 2, less the taken 3
-SPAN_WIDTH = 21  # $20F2 BCC taken 3 + $20F6..$2100: right + 1 - left into $0C6A/$211B
-SPAN_ZERO_WIDTH = 11  # $2103 BEQ $2110 taken 3 + SEC/RTS 8
-SPAN_VISIBLE = 19  # ... BEQ nt 2 + $2105 CMP/BCC 5 + $210B STA $0C69 4 + CLC/RTS 8
-SPAN_WIDTH_CAP = 1  # $2107 BCC not taken 2 + $2109 LDA #$14 2, less the taken 3
 
 # $283D picks the examine off $9AF6, the play-display flag: $3577 sets it $80 for the whole play loop and $117E (reset_game_state) clears it for generation and the preview; $9A51 is its only writer.
 EXAM_ENTRY_TRIG = 7  # $283D BIT $9AF6 4 + $2840 BPL $2845 taken 3

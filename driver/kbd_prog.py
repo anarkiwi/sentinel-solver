@@ -45,7 +45,6 @@ T_BEGIN, T_END, T_NOW, T_PASS, T_VAL, T_LOG = range(1, 7)
 ARITY = {T_BEGIN: 2, T_END: 2, T_NOW: 3, T_PASS: 1, T_VAL: 2, T_LOG: 3}
 TIMERS = ("pan_h", "pan_v", "toggle", "cursor", "uturn")
 LOG_UTURN = 0
-TAPS = tuple(ACTION_CODE) + ("SPACE",)
 (
     H_FAIL_OFF,
     H_HYPERSPACE,
@@ -362,21 +361,6 @@ class Compiler:
             p.label(ok).mov(res, 1).label(end)
 
     # ---- segments ------------------------------------------------------------
-    def drive_to(self, view, fail):
-        """``drive_to`` up to its ``ok``: to ``fail`` unless sights off, both pans,
-        sights on and the cursor all landed; a hyperspace stops at once."""
-        p = self.p
-        with p.regs(2) as (okh, okv):
-            self.sights_set(False, okh)
-            p.beq(okh, 0, fail)
-            self.coarse_hv(view, okh, okv)
-            p.beq(okh, HYPERSPACE, fail).beq(okv, HYPERSPACE, fail)
-            with p.regs(2) as (oks, okc):
-                self.sights_set(True, oks)
-                self.fine_cursor(*view["cursor"], okc)
-                p.bne(okh, OK, fail).bne(okv, OK, fail)
-                p.beq(oks, 0, fail).beq(okc, 0, fail)
-
     def aim(self, view):
         """``perform_step``'s full aim: sights off, pans, the angles read sights-off,
         sights on, cursor, the probe's settle and the cursor read, halting on each

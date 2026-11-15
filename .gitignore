@@ -11,15 +11,12 @@
 *.vsf
 __pycache__/
 *.pyc
-/out/*.pkl
 /out/*.log
 
 # VICE runtime home (cache/config/local)
 /.vice-home/
 /out/*.json
 /out/*.jsonl
-# stance-graph sweeps: a pure function of the tile map, rebuilt in ~40 s
-/out/stancegraph/
 # landscape atlas state cache: generated boards, keyed by generator signature
 /out/atlas/
 # atlas ranking sweep parts and rendered boards: regenerated from the cache
@@ -38,7 +35,3 @@ sentinel/tests/*.tmp
 # CSDb release cache (copyrighted, fetched by sentinel.tests.csdb)
 /out/csdb/
 /out/logs/
-/out/ckpt/
-/out/live_ticks/
-/out/emu_ticks/
-/out/vice_ref/
