@@ -37,11 +37,11 @@ python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embe
 | 298 | 7 | 18 | 6 | — |
 | 321 | 7 | 17 | 2 | — |
 | 335 | 7 | 26 | 1 | [**26 actions**, energy 1](docs/media/ls335_search_win.png) |
-| 373 | 7 | 16 | 0 | — |
+| 373 | 7 | 17 | 0 | — |
 | 1442 | 8 | 18 | 5 | [**18 actions**, energy 5](docs/media/ls1442_search_win.png) |
-| 9716 | 8 | 26 | 5 | [**26 actions**, energy 5](docs/media/ls9716_search_win.png) |
-| 9795 | 8 | 48 | 2 | [**48 actions**, energy 2](docs/media/ls9795_search_win.png) |
-| 9950 | 8 | 25 | 6 | [**25 actions**, energy 6](docs/media/ls9950_search_win.png) |
+| 9716 | 8 | 26 | 2 | [**26 actions**, energy 5](docs/media/ls9716_search_win.png) |
+| 9795 | 8 | 51 | 2 | [**48 actions**, energy 2](docs/media/ls9795_search_win.png) |
+| 9950 | 8 | 25 | 3 | [**25 actions**, energy 6](docs/media/ls9950_search_win.png) |
 
 Regenerate with `python -m driver.emu_suite --out docs/results/search.json --readme`.
 <!-- results:end -->

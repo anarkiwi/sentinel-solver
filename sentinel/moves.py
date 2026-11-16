@@ -26,12 +26,13 @@ SLOTS = np.arange(mm.NUM_SLOTS)
 
 def lexicographic(fields):
     """The search objective ``(alive, keys)``: a row lives while the player does; among
-    the living the order is won, fewer enemies, on the platform, unseen by any enemy, higher
-    eye, more energy --
+    the living the order is won, fewer enemies, fewer enemies summed over the line's moves
+    (taken sooner), on the platform, unseen by any enemy, higher eye, more energy --
     the first key most significant, larger better."""
     return fields["alive"] == 1, (
         fields["won"],
         -fields["enemies"],
+        -fields["area"],
         fields["home"],
         -fields["seen"],
         fields["eye"],

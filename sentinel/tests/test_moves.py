@@ -39,23 +39,24 @@ def test_keep_best_is_empty_safe_and_width_bounded():
     assert len(bp.keep_best(ident, [np.arange(5)], np.zeros(5), 3)) == 3
 
 
-def test_the_objective_ranks_won_enemies_home_unseen_eye_then_energy():
+def test_the_objective_ranks_won_enemies_sooner_home_unseen_eye_then_energy():
     fields = {
-        "alive": np.array([1, 0, 1, 1, 1, 1]),
-        "won": np.array([0, 0, 0, 1, 0, 0]),
-        "enemies": np.array([2, 1, 1, 3, 1, 1]),
-        "home": np.array([0, 0, 0, 0, 0, 1]),
-        "seen": np.array([0, 0, 1, 1, 0, 1]),
-        "eye": np.array([9, 9, 9, 0, 3, 0]),
-        "energy": np.array([4, 4, 4, 0, 4, 0]),
+        "alive": np.array([1, 0, 1, 1, 1, 1, 1]),
+        "won": np.array([0, 0, 0, 1, 0, 0, 0]),
+        "enemies": np.array([2, 1, 1, 3, 1, 1, 1]),
+        "area": np.array([9, 9, 9, 9, 9, 9, 8]),
+        "home": np.array([0, 0, 0, 0, 0, 1, 0]),
+        "seen": np.array([0, 0, 1, 1, 0, 1, 1]),
+        "eye": np.array([9, 9, 9, 0, 3, 0, 0]),
+        "energy": np.array([4, 4, 4, 0, 4, 0, 0]),
     }
     alive, keys = bp.lexicographic(fields)
-    assert alive.tolist() == [True, False, True, True, True, True]
+    assert alive.tolist() == [True, False, True, True, True, True, True]
     live = np.flatnonzero(alive)
     got = bp.keep_best(
-        np.arange(5)[:, None], [np.asarray(k)[live] for k in keys], np.zeros(5), 5
+        np.arange(6)[:, None], [np.asarray(k)[live] for k in keys], np.zeros(6), 6
     )
-    assert live[got].tolist() == [3, 5, 4, 2, 0]
+    assert live[got].tolist() == [3, 6, 5, 4, 2, 0]
 
 
 def _moves(st, branch=2, landed=None):
