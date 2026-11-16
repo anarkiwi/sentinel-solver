@@ -30,18 +30,18 @@ python -m driver.avi2apng renders/player_ls335_search.avi   # the AVI as an embe
 <!-- results:begin -->
 | landscape | enemies | search actions | search energy | live |
 |---|---|---|---|---|
-| 0 | 1 | 11 | 0 | — |
+| 0 | 1 | 10 | 0 | — |
 | 42 | 2 | 16 | 1 | [**16 actions**, energy 1](docs/media/ls42_search_win.png) |
-| 60 | 7 | 20 | 3 | — |
+| 60 | 7 | 21 | 4 | — |
 | 110 | 3 | 17 | 2 | — |
-| 298 | 7 | 18 | 6 | — |
+| 298 | 7 | 18 | 7 | — |
 | 321 | 7 | 17 | 2 | — |
 | 335 | 7 | 26 | 1 | [**26 actions**, energy 1](docs/media/ls335_search_win.png) |
-| 373 | 7 | 17 | 0 | — |
+| 373 | 7 | 16 | 1 | — |
 | 1442 | 8 | 18 | 5 | [**18 actions**, energy 5](docs/media/ls1442_search_win.png) |
-| 9716 | 8 | 26 | 2 | [**26 actions**, energy 2](docs/media/ls9716_search_win.png) |
-| 9795 | 8 | 51 | 2 | [**51 actions**, energy 2](docs/media/ls9795_search_win.png) |
-| 9950 | 8 | 25 | 3 | [**25 actions**, energy 3](docs/media/ls9950_search_win.png) |
+| 9716 | 8 | 26 | 4 | [**26 actions**, energy 2](docs/media/ls9716_search_win.png) |
+| 9795 | 8 | 40 | 2 | [**51 actions**, energy 2](docs/media/ls9795_search_win.png) |
+| 9950 | 8 | 25 | 4 | [**25 actions**, energy 3](docs/media/ls9950_search_win.png) |
 
 Regenerate with `python -m driver.emu_suite --out docs/results/search.json --readme`.
 <!-- results:end -->

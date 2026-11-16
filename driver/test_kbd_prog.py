@@ -10,7 +10,7 @@ import pytest
 from vagrant_moses import Machine, memmap as vmm
 from vice_driver.binmon import OPCODE, BinmonError, BinmonResponse
 
-from driver import clock, kbd_prog, prog
+from driver import clock, kbd_prog, prog, prog_trace
 from driver.emu import EmuMon
 from driver.kbd_aim import KbdDriver
 from driver.kbd_prog import Compiler
@@ -400,3 +400,28 @@ def test_a_frame_wait_calls_each_watched_pc_without_counting_it_a_frame(monkeypa
     with pytest.raises(BinmonError, match="not reached in 3 frames"):
         prog._wait_frames(bm, 0x1234, 3)
     assert clock.frames(bm) - f0 == 3 and set(seen) == {0x9633} and len(seen) in (2, 3)
+
+
+@oracle
+def test_a_pan_begun_inside_a_pass_takes_one_notch_like_the_interactive_driver(session):
+    """A key pressed after the pass began ($363D) moves on that pass's own pan call."""
+    inside = session.bm.clone()
+    inside.run_until_pc(0x1289, timeout=1.0)  # update_game idling, past $363D
+    me = State.from_mem(bytes(inside.mem_get(0, 0xFFFF))).player
+    h = inside.mem_get(mm.OBJECTS_H_ANGLE + me, mm.OBJECTS_H_ANGLE + me)[0]
+    c = Compiler()
+    with c.p.regs(1) as (res,):
+        c.coarse_h((h + 8) & 0xFF, res)
+        c.p.out(res)
+    c.p.halt(prog.HALT_OK)
+    out, _rows, events = prog_trace.trace(inside, c.p, pcs=(0x365A,))
+    assert out.outputs[-1] == kbd_prog.OK and len(events) == 1
+    compiled = inside.clone()
+    prog.execute(compiled, c.p)
+    reference = inside.clone()
+    assert KbdDriver(reference, _quiet, quantized=True).coarse_h(h + 8) == "ok"
+    for bm in (compiled, reference):
+        assert (
+            bm.mem_get(mm.OBJECTS_H_ANGLE + me, mm.OBJECTS_H_ANGLE + me)[0]
+            == (h + 8) & 0xFF
+        )
