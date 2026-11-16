@@ -173,3 +173,33 @@ def test_a_clone_runs_identically_and_independently(bm):
     twin.checkpoint_toggle(cp, False)
     assert twin.m.cycle > bm.m.cycle and bm.checkpoint_get(cp).enabled
     assert bm.checkpoint_get(cp).hit_count == 3
+
+
+RASTER_IRQ = bytes(  # $1200: raster IRQ on, CLI, spin; $1300: ack, RTI
+    (0xA9, 0x01, 0x8D, 0x1A, 0xD0, 0x58, 0x4C, 0x06, 0x12)
+)
+ACK = bytes((0xA9, 0xFF, 0x8D, 0x19, 0xD0, 0x40))
+
+
+def _irq_machine():
+    m = Machine()
+    m.ram[0x1200 : 0x1200 + len(RASTER_IRQ)] = RASTER_IRQ
+    m.ram[0x1300 : 0x1300 + len(ACK)] = ACK
+    m.ram[0xFFFE], m.ram[0xFFFF] = 0x00, 0x13
+    m.reset(0x1200)
+    m.run(m.cycle + 4 * PAL_FRAME_CYCLES)
+    return m
+
+
+def test_every_machine_taken_starts_with_an_empty_event_log():
+    m = _irq_machine()
+    logged = len(m.events)
+    assert logged
+    bm = emu.EmuMon(m.clone())
+    assert not bm.m.events and len(m.events) == logged
+    bm.m.run(bm.m.cycle + 4 * PAL_FRAME_CYCLES)
+    assert bm.m.events
+    twin = bm.clone()
+    assert not twin.m.events and bm.m.events
+    bm.adopt(m)
+    assert not m.events

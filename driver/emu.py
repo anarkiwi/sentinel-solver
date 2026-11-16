@@ -30,7 +30,8 @@ def cycles(seconds):
 class EmuMon:
     """BinMon over a vagrant-moses ``Machine``, whose trap it owns.
 
-    Every stop leaves the CPU about to execute the instruction at ``pc``."""
+    Every stop leaves the CPU about to execute the instruction at ``pc``. The machine's
+    unread ``events`` log is emptied on every machine taken, so forks do not copy it."""
 
     def __init__(self, machine):
         self.m = machine
@@ -43,6 +44,7 @@ class EmuMon:
         self._parked = False  # stopped at a decode, by a step or a checkpoint
         self._hits = set()
         self._tap = None  # (release cycle, keys) of a TAP_MODE_FIXED chord
+        machine.clear_events()
         machine.set_trap(self._trap, set())
 
     def clone(self, machine=None):
@@ -56,6 +58,7 @@ class EmuMon:
                 setattr(twin, name, dict(value))
         twin._cps = {n: dataclasses.replace(cp) for n, cp in self._cps.items()}
         twin._hits = set(self._hits)
+        twin.m.clear_events()
         twin.m.set_trap(twin._trap, set())
         twin._watch()
         return twin
@@ -63,6 +66,7 @@ class EmuMon:
     def adopt(self, machine):
         """Run on ``machine`` from here (a clone of this one's), under this trap."""
         self.m = machine
+        machine.clear_events()
         machine.set_trap(self._trap, set())
         self._watch()
 
