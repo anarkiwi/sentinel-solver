@@ -124,6 +124,9 @@ def move_program(st, kind, k, steps):
     return name, kbd_prog.compile_move(name, view, int(k), 0, _reuse(st, steps[0]))
 
 
+SWAPPABLE = {"absorb", "wait"}
+
+
 def batches(parents, branch):
     """Per parent ``Node``, its ``[(move, program)]``, ``move`` ``(name, tile, k)``."""
     states = [_state(n.bm) for n in parents]
@@ -254,6 +257,7 @@ class SearchPlayer:
         self.stats = {
             "children": 0,
             "bounded": 0,
+            "swaps": 0,
             "frames": 0,
             "seconds": 0.0,
             "cpu_seconds": 0.0,
@@ -393,12 +397,61 @@ class SearchPlayer:
                 if not line:
                     self.log("search: no surviving move")
                     break
-                for planned in line[: self.commit]:
+                for planned in self.tighten(line, self.commit)[: self.commit]:
                     root = self._execute(planned)
                     progress.update(1)
                     if self.won or self.diverged or len(self.trace) >= max_actions:
                         break
         return self.won and not self.diverged
+
+    def tighten(self, line, commit):
+        """The planned ``line`` with adjacent absorbs and waits among its first ``commit``
+        moves swapped while the line up to the next hyperspace after them (whose landing
+        is the PRNG's), replayed on a fork, ends no worse in key in fewer frames; a swapped
+        line stops at that hyperspace, to be searched again from where it lands."""
+        moves = [n.move for n in line]
+        dice = [k for k, m in enumerate(moves) if m[0] in ("relocate", "finish")]
+        limit, best, swapped = min(commit, len(moves)), None, False
+        i = 0
+        while i < limit - 1:
+            pair = moves[i : i + 2]
+            if pair[0] == pair[1] or {m[0] for m in pair} - SWAPPABLE:
+                i += 1
+                continue
+            span = next((k for k in dice if k > i + 1), len(moves))
+            base = self.replay(moves[:span], best[:i] if best else ())
+            got = base and self.replay(
+                moves[:i] + pair[::-1] + moves[i + 2 : span], base[:i]
+            )
+            better = got and key_of(got[-1]) >= key_of(base[-1])
+            if better and got[-1].frames < base[-1].frames:
+                moves = moves[:i] + pair[::-1] + moves[i + 2 : span]
+                best, swapped, limit = got, True, min(limit, span)
+                self.stats["swaps"] += 1
+                i = max(i - 1, 0)
+            else:
+                best = base or best
+                i += 1
+        return best if swapped else line
+
+    def replay(self, moves, prefix=()):
+        """The nodes ``moves`` reach from the session on a fork, resumed after ``prefix``
+        (nodes of an earlier replay of the same first moves), each program built where its
+        move starts; None if one is not generated there or is refused."""
+        parent = prefix[-1] if prefix else Node(self.bm.clone())
+        nodes = list(prefix)
+        for move in moves[len(prefix) :]:
+            bm = parent.bm.clone()
+            (work,) = batches([parent], mm.NUM_SLOTS)
+            program = next((p for m, p in work if m == move), None)
+            if program is None:
+                return None
+            facts = outcome_facts(prog.execute(bm, program), move)
+            if facts["status"] != prog.HALT_OK:
+                return None
+            parent = Node(bm, None, parent, (move, program), facts)
+            nodes.append(parent)
+        return nodes
 
     def _mirror(self, name, program, outcome):
         """Interpret ``program`` on ``live`` and audit its facts against ``outcome``'s,
