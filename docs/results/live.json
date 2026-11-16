@@ -20,19 +20,19 @@
  {
   "landscape": 9716,
   "actions": 26,
-  "energy": 2,
+  "energy": 3,
   "media": "docs/media/ls9716_search_win.png"
  },
  {
   "landscape": 9795,
-  "actions": 51,
+  "actions": 45,
   "energy": 2,
   "media": "docs/media/ls9795_search_win.png"
  },
  {
   "landscape": 9950,
   "actions": 25,
-  "energy": 3,
+  "energy": 4,
   "media": "docs/media/ls9950_search_win.png"
  }
 ]
