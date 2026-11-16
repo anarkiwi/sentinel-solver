@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from vice_driver import BinMon, DiskMount, ViceContainer, keys
 from vice_driver.binmon import TAP_MODE_FIXED
 from sentinel import memmap as mm
-from driver import boot, clock
+from driver import boot, clock, crt as crt_mod
 from driver import sentinel_state as gs
 
 # ---- live RAM addresses (the ROM's object-array + sights layout) -------------
@@ -218,11 +218,14 @@ class GameSession:
         self.video_host = video_host
 
 
-def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, result):
+def boot_and_play(
+    tap, renders_host, typed_digits, video_name, log, play_fn, result, crt=False
+):
     """Boot asid-vice into ``typed_digits``' landscape, optionally record, and run ``play_fn``.
 
     Owns container lifecycle, boot retries, binmon connect (bridge IP), menu navigation with
-    the cached snapshot, the in-play check and video start/stop. ``result`` accumulates
+    the cached snapshot, the in-play check and video start/stop (``crt``: VICE's
+    CRT-filtered frames at 720p, :mod:`driver.crt`, for the AVI). ``result`` accumulates
     ``play_fn(session)``'s output; a mid-run drop after real actions is returned, not retried.
     """
     if not os.path.exists(tap):
@@ -232,6 +235,8 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
     landscape = landscape_from_digits(typed_digits)
     log(f"LIVE replanning mode: landscape {landscape}")
     os.makedirs(renders_host, exist_ok=True)
+    if crt:
+        video_name = os.path.splitext(video_name)[0] + "_crt.mp4"
     video_host = os.path.join(renders_host, video_name)
     result.setdefault("video", video_host)
     if os.path.exists(video_host):
@@ -252,6 +257,7 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
             warp=True,
             silent=True,
             binmon_port=boot.HOST_BINMON_PORT,
+            extra_args=crt_mod.ARGS if crt else [],
         )
         t_start = time.time()
         try:
@@ -299,7 +305,10 @@ def boot_and_play(tap, renders_host, typed_digits, video_name, log, play_fn, res
                 if record:
                     log(f"-- starting AVI recording -> {video_host} --")
                     try:
-                        bm.video_record(f"/renders/{video_name}")
+                        if crt:
+                            crt_mod.start(bm, f"/renders/{video_name}")
+                        else:
+                            bm.video_record(f"/renders/{video_name}")
                     except Exception as e:
                         log(f"  video_record failed: {e}")
                     time.sleep(1.0)  # sleep-ok: VICE AVI encoder start, not the CPU

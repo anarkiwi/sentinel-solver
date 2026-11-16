@@ -11,7 +11,7 @@ import struct
 import time
 
 from vagrant_moses.program import Program, R, Reg, run_forks
-from vice_driver.binmon import OPCODE, BinmonError
+from vice_driver.binmon import CHECK_EXEC, OPCODE, BinmonError
 
 from driver import clock
 from driver.emu import EmuMon, cycles
@@ -49,6 +49,7 @@ _BRANCH = {
 }
 STATS = {"native": 0, "fallback": 0, "interpreted": 0}
 BACKSTOP = 30.0  # host seconds a VICE may go without reaching any stop: a dead VICE
+WATCH = {}  # (op, addr) -> callback(bm): a VICE wait stops on it, calls it, runs on
 
 
 class Outcome(tuple):
@@ -236,23 +237,31 @@ def _wait(bm, pc, seconds, stops=()):
 
 def _wait_frames(bm, pc, limit, stops=()):
     """Resume VICE until it is about to execute ``pc`` or any of ``stops``, raising after
-    ``limit`` frames; each $9630 stop between counts one, then steps off the marker. A
-    VICE that stops answering raises after :data:`BACKSTOP` host seconds."""
+    ``limit`` frames; each $9630 stop between counts one, a :data:`WATCH` hit calls its
+    callback, and either is stepped off. A VICE that stops answering raises after
+    :data:`BACKSTOP` host seconds."""
     if bm.registers_get()[3] == pc:
         return
     marker = clock.stop_checkpoint(bm)
     ends = {marker if pc == clock.FRAME_PC else _stop_checkpoint(bm, pc)}
     ends |= {_stop_checkpoint(bm, at) for at in stops}
-    for cp in ends | {marker}:
+    watch = {_stop_checkpoint(bm, at, op): call for (op, at), call in WATCH.items()}
+    every = ends | {marker} | set(watch)
+    for cp in every:
         bm.checkpoint_toggle(cp, True)
     try:
-        for _ in range(limit):
-            if wait_any(bm, ends | {marker}, BACKSTOP) & ends:
+        frames = 0
+        while frames < limit:
+            hits = wait_any(bm, every, BACKSTOP)
+            if hits & ends:
                 return
+            for cp in hits & set(watch):
+                watch[cp](bm)
+            frames += marker in hits
             bm.advance_instructions(1)
         raise BinmonError(f"${pc:04x} not reached in {limit} frames")
     finally:
-        for cp in ends | {marker}:
+        for cp in every:
             bm.checkpoint_toggle(cp, False)
 
 
@@ -284,12 +293,14 @@ def wait_any(bm, checknums, timeout):
     raise BinmonError(f"wait_any({sorted(want)}) timed out")
 
 
-def _stop_checkpoint(bm, pc):
-    """checknum of a persistent, disabled stop-on-hit checkpoint at ``pc`` on ``bm``."""
+def _stop_checkpoint(bm, addr, op=CHECK_EXEC):
+    """checknum of a persistent, disabled stop-on-hit checkpoint on ``bm``: on executing
+    ``addr``, or with ``op`` ``CHECK_STORE`` on a write to it."""
     cps = bm.__dict__.setdefault("_prog_stops", {})
-    if pc not in cps:
-        cps[pc] = bm.checkpoint_set(pc, stop_when_hit=True, enabled=False).checknum
-    return cps[pc]
+    if (addr, op) not in cps:
+        cp = bm.checkpoint_set(addr, op=op, stop_when_hit=True, enabled=False)
+        cps[addr, op] = cp.checknum
+    return cps[addr, op]
 
 
 def interpret(bm, prog):

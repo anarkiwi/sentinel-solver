@@ -27,8 +27,6 @@ from driver.kbd_aim import (
     K_RIGHT,
     K_UP,
     K_UTURN,
-    PC_PAN_CALL,
-    PC_PASS,
     _PAN_MAX_FRAMES,
     _PAN_STALL_FRAMES,
     _RU_COMMIT,
@@ -199,15 +197,12 @@ class Compiler:
         p.ldio(SCRATCH, 0xD011).out(SCRATCH).ldio(SCRATCH, 0xD012).out(SCRATCH)
 
     def run_pass(self):
-        """``_run_pass``: one main-loop pass to $365D split at its ROM boundaries, with the
-        frozen flag."""
+        """``_run_pass``: to the next $365D, the pass in progress if any, with the frozen
+        flag."""
         p = self.p
         self.now()
-        for pc in (PC_PASS, PC_PAN_CALL, KbdDriver.PC_PAN_DONE):
-            self.run_past_redraw(pc, _RU_COMMIT)
-            self.now()
-            if pc != KbdDriver.PC_PAN_DONE:
-                p.step()
+        self.run_past_redraw(KbdDriver.PC_PAN_DONE, _RU_COMMIT)
+        self.now()
         p.rec(T_PASS).ld(SCRATCH, mm.PLAYER_NOT_ACTED).shr(SCRATCH, 7).out(SCRATCH)
 
     # ---- primitives ----------------------------------------------------------

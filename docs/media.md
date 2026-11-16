@@ -14,20 +14,19 @@ python -m driver.avi2apng renders/player_ls9716_search.avi \
 `docs/media/lsN_search_win.png` are the search player's live wins, one per row of
 `docs/results/live.json`.
 
-`--fps` decides which source frames survive; `--speed` only shortens the delays on the
-ones that did, so raising it costs no detail. The two compose: the run above samples at
-12.5 fps and plays it back at 25.
+## CRT at 720p
 
-| flag | default | effect |
-|---|---|---|
-| `--fps` | 12 | decimate to this rate; `0` keeps every frame |
-| `--speed` | 1 | playback multiple of real time; `2` runs it twice over |
-| `--scale` | 1 | integer nearest-neighbour upscale |
-| `--hud-rows` | 6 | rows of status strip a blanked viewport keeps drawing |
-| `--min-blank-run` | 1 | blank runs shorter than this are kept |
-| `--loops` | 0 | `0` loops forever |
-| `--no-crop` | off | keep the border instead of the picture |
-| `--max-frames` | 0 | stop decoding after N source frames |
+The ZMBV driver encodes VICE's palette-indexed screen before rendering, so it carries no
+CRT emulation. `--crt` uses asid-vice's rendered recording instead (`driver.crt`):
+
+```bash
+python -m driver.play_player 9795 --crt       # -> renders/player_ls9795_search_crt.mp4
+```
+
+| | how |
+|---|---|
+| frames | `VIDEO_RECORD` action 2: every emulated frame after VICE's render filter (`-VICIIfilter 1`), scaled to 720 lines at the true pixel aspect (952×720 for the PAL canvas), H.264 at the machine's refresh rate; a halted machine records nothing, so search pauses cost no frames |
+| blanks | a redraw blanks the viewport by giving all its colour sources one colour (`$8643` with A = 6 at `$358D`: `$D022`/`$D023`, screen RAM, colour RAM, `$D021` last); a store watchpoint on `$D021` (`prog.WATCH`) pauses the recording while `$D021`–`$D023` are one colour and resumes once the landscape's scheme is back |
 
 ## Dropping the blanks
 
