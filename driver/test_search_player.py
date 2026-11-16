@@ -242,23 +242,27 @@ def test_a_live_mirror_that_differs_at_entry_commits_nothing():
 
 
 @oracle
+@pytest.mark.parametrize("crt", [False, True])
 def test_the_live_search_records_its_mirror_audit_and_the_rom_win_flag(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, crt
 ):
-    from driver import core, play_player
+    from driver import core, play_player, prog
 
-    def boot_and_play(_tap, _renders, digits, _video, log, play_fn, result):
+    def boot_and_play(_tap, _renders, digits, _video, log, play_fn, result, crt):
+        result["crt"] = crt
+        monkeypatch.setattr(core, "validate_avi", lambda _p: (False, 0, 0, "none"))
         play_fn(play_player.emu_session(int(digits), log))
-        result["video"] = "none.avi"
+        result["video"] = str(tmp_path / "none")
         return result
 
     monkeypatch.setattr(core, "boot_and_play", boot_and_play)
     out = tmp_path / "run.json"
-    args = "0 --width 2 --depth 2 --branch 1 --max-actions 2 --out"
-    assert play_player.main(args.split() + [str(out)]) == 1
+    args = "0 --width 2 --depth 2 --branch 1 --max-actions 2" + " --crt" * crt
+    assert play_player.main(args.split() + ["--out", str(out)]) == 1
+    assert not prog.WATCH
     run = json.loads(out.read_text())
     assert [r[0] for r in run["live_audit"]] == [0, 1, 2] and run["divergence"] is None
-    assert run["landscape_done"] == 0 and run["won"] is False
+    assert run["landscape_done"] == 0 and run["won"] is False and run["crt"] is crt
 
 
 def _children(bm, branch=1):

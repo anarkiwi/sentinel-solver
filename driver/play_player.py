@@ -11,7 +11,7 @@ import json
 import os
 import time
 
-from driver import core, sentinel_state as gs
+from driver import core, crt, prog, sentinel_state as gs
 from driver.emu import EmuMon
 from driver.search_player import PRESETS, SearchPlayer
 from sentinel import emu, memmap as mm
@@ -51,6 +51,11 @@ def main(argv=None):
         help="play the CSDb release on vagrant-moses (sentinel.emu) instead of VICE",
     )
     parser.add_argument("--out", default=None, help="result JSON path")
+    parser.add_argument(
+        "--crt",
+        action="store_true",
+        help="record VICE's CRT-filtered frames at 720p (driver.crt) instead of the AVI",
+    )
     args = parser.parse_args(argv)
     digits = f"{args.landscape:04d}"
     video = args.video or f"player_ls{args.landscape}_search.avi"
@@ -72,9 +77,12 @@ def main(argv=None):
         result["trace"], result["lookahead_audit"] = sp.trace, sp.audit
         if live is not None:
             result["live_audit"] = sp.live_audit
+        if args.crt:
+            prog.WATCH.update(crt.WATCH)
         try:
             result["won"] = sp.run(args.max_actions)
         finally:
+            prog.WATCH.clear()
             result["final_energy"] = sp.trace[-1][3] if sp.trace else None
             result["frames"] = sp.frames
             result["search"]["stats"] = sp.stats
@@ -94,8 +102,18 @@ def main(argv=None):
         result["wall_seconds"] = round(time.time() - t_start, 1)
         ok, size, frames, msg = True, 0, 0, "emu"
     else:
-        core.boot_and_play(tap, renders, digits, video, log, play_fn, result)
-        ok, size, frames, msg = core.validate_avi(result.get("video", ""))
+        core.boot_and_play(
+            tap, renders, digits, video, log, play_fn, result, crt=args.crt
+        )
+        if args.crt:
+            size = (
+                os.path.getsize(result["video"])
+                if os.path.exists(result["video"])
+                else 0
+            )
+            ok, frames, msg = size > 0, 0, "crt"
+        else:
+            ok, size, frames, msg = core.validate_avi(result.get("video", ""))
     result["avi"] = {"ok": ok, "bytes": size, "frames": frames, "msg": msg}
     suffix = "_emu_search" if args.emu else "_search"
     out_path = args.out or os.path.join(

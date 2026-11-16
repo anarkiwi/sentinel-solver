@@ -380,3 +380,23 @@ def test_every_wait_in_a_guard_keeps_its_guard_pcs_beside_its_own_stops():
     assert all(op[3] == (0x4321, 0x9633) for op in p.code if op[0] == "run")
     (no, ns), (io, is_) = _both(_toy(), p)
     assert no == io and ns == is_ and no.code == 6
+
+
+WATCH_LOOP = bytes.fromhex(
+    "78ee00c0ee01c04c3096"
+)  # SEI; INC $C000; INC $C001; JMP $9630
+
+
+def test_a_frame_wait_calls_each_watched_pc_without_counting_it_a_frame(monkeypatch):
+    m = Machine(backend="native")
+    m.ram[clock.FRAME_PC - 1 : clock.FRAME_PC - 1 + len(WATCH_LOOP)] = WATCH_LOOP
+    m.reset(clock.FRAME_PC - 1)
+    bm = EmuMon(m)
+    clock.frames(bm)
+    seen = []
+    watch = {(prog.CHECK_EXEC, 0x9633): lambda b: seen.append(b.m.mpu.pc)}
+    monkeypatch.setattr(prog, "WATCH", watch)
+    f0 = clock.frames(bm)
+    with pytest.raises(BinmonError, match="not reached in 3 frames"):
+        prog._wait_frames(bm, 0x1234, 3)
+    assert clock.frames(bm) - f0 == 3 and set(seen) == {0x9633} and len(seen) in (2, 3)
