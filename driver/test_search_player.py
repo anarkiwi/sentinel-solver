@@ -404,3 +404,24 @@ def test_an_enemy_taken_sooner_bounds_the_line_better():
     early = sp.Node(None, "a", parent, facts={**_facts(enemies=1)})
     late = sp.Node(None, "b", parent, facts={**_facts(enemies=2)})
     assert early.area == 8 and late.area == 9 and sp.key_of(early) > sp.key_of(late)
+
+
+OPENING_9795 = [("relocate", (9, 18), 0), ("hop", (5, 25), 1)]
+TREE, SHELL = ("absorb", (4, 27), 0), ("absorb", (6, 26), 0)
+
+
+@oracle
+def test_a_committed_plan_takes_the_cheaper_order_of_two_absorbs():
+    from driver.play_player import emu_session
+
+    player = sp.SearchPlayer(emu_session(9795, lambda _m: None).bm, log=print)
+    slow = player.replay(OPENING_9795 + [TREE, SHELL])
+    tight = player.tighten(slow, 4)
+    assert [n.move for n in tight] == OPENING_9795 + [SHELL, TREE]
+    assert tight[-1].frames < slow[-1].frames and player.stats["swaps"] == 1
+    assert sp.key_of(tight[-1]) >= sp.key_of(slow[-1])
+    assert player.replay(OPENING_9795 + [("absorb", (0, 0), 0)]) is None
+    assert [n.move for n in player.tighten(tight[:2], 2)] == OPENING_9795
+    assert [n.move for n in player.tighten(slow, 3)] == [n.move for n in slow]
+    assert player.tighten(slow[:1], 4) == slow[:1]
+    assert player.stats["swaps"] == 1

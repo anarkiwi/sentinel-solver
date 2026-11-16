@@ -41,10 +41,10 @@
  },
  "321": {
   "actions": 17,
-  "digest": "82ea37b257a84594a9789058d7e97176c1d2317764c1b126f139a18c04f83ab9",
+  "digest": "05510c193bedcb7f3edd3679a1e6a1a5a47e4b54968bf7e1b45d6a3608c76019",
   "enemies": 7,
   "energy": 2,
-  "frames": 8837,
+  "frames": 8651,
   "landscape": 321,
   "preset": "wide",
   "won": true
@@ -91,20 +91,20 @@
  },
  "9716": {
   "actions": 26,
-  "digest": "1f1bda91832adec43b92b31103dc10d15454f92284ec76bc11e40d503009708c",
+  "digest": "875742deaf381b9cfdbbb170256fca81890beb1e0044c8d88c80437ccfe6af67",
   "enemies": 8,
-  "energy": 4,
-  "frames": 13247,
+  "energy": 3,
+  "frames": 12947,
   "landscape": 9716,
   "preset": "wide",
   "won": true
  },
  "9795": {
-  "actions": 40,
-  "digest": "fc1869c02b3880902a418ca3d998da9fbd695c133512c522bf4b1cdfaaa901ae",
+  "actions": 45,
+  "digest": "75021982d9a461fae6ba43b8f3770038bedd3cf05e7a3a5d1dd5a338eedea567",
   "enemies": 8,
   "energy": 2,
-  "frames": 19498,
+  "frames": 16055,
   "landscape": 9795,
   "preset": "wide",
   "won": true
