@@ -75,6 +75,14 @@ def test_board_columns_match_the_state():
     assert board.fuel().shape == (1, mm.N, mm.N) and board.fuel().max() > 0
 
 
+def _robot_eye(st, tile, boulders):
+    """The eye of a robot built on ``tile`` over ``boulders`` boulders."""
+    twin, slot = st.clone(), None
+    for otype in (mm.T_BOULDER,) * max(boulders, 0) + (mm.T_ROBOT,):
+        slot = actions.create(twin, otype, tile)
+    return twin.eye_z(slot)
+
+
 def test_each_class_is_capped_by_branch_and_one_wait_stands_on_the_player():
     st = Game.typed(42).state
     landed = _Views(st).landed()
@@ -83,7 +91,10 @@ def test_each_class_is_capped_by_branch_and_one_wait_stands_on_the_player():
     assert (kind == bp.WAIT).sum() == 1 and (got["parent"] == 0).all()
     assert (np.bincount(kind, minlength=5)[:3] <= 2).all()
     hop = kind == bp.HOP
-    assert hop.any() and (k[hop] <= bp.MAX_BOULDERS).all()
+    assert hop.any()
+    for at, n in zip(tile[hop], k[hop]):
+        eyes = [_robot_eye(st, (at // mm.N, at % mm.N), m) for m in (n - 1, n)]
+        assert eyes[1] > st.eye_z() and (n == 0 or eyes[0] <= st.eye_z())
     here = st.player_xy()[0] * mm.N + st.player_xy()[1]
     assert tile[kind == bp.WAIT][0] == here and here not in tile[kind < bp.WAIT]
     assert all(landed[t // mm.N, t % mm.N] for t in tile[kind == bp.ABSORB])

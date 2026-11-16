@@ -13,7 +13,6 @@ from sentinel.views import BOULDER_H, EYE_EPS, ROBOT_EYE, _Landings, _Views
 ABSORB, HOP, MOUNT, WAIT, RELOCATE = range(5)
 KINDS = ("absorb", "hop", "mount", "wait", "hyperspace")
 WAIT_QUANTUM = 60  # frames one wait move idles
-MAX_BOULDERS = 3
 REACH = 10
 ROBOT_E = mm.ENERGY_IN_OBJECTS[mm.T_ROBOT]
 VALUE = np.zeros(8, dtype=np.int64)
@@ -238,9 +237,7 @@ def moves(board, landed, branch):
     cost = 2 * need + ROBOT_E
     fuel = np.where(end[:, None, None], 0, board.fuel())
     purse = energy[:, :, None]
-    hop = (
-        landed & stack & ((gain > 0) | plat) & (need <= MAX_BOULDERS) & (cost <= purse)
-    )
+    hop = landed & stack & ((gain > 0) | plat) & (cost <= purse)
     hop &= (purse - cost > 0) & ((purse - cost >= ROBOT_E) | (fuel > 0))
     flat = (board.n, -1)
     rank = (~plat, -(gain / cost), -fuel)
