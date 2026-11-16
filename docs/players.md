@@ -58,19 +58,21 @@ the flag stores of `kill_player` (`$1A05`), the toll underflow (`$217D`) and the
 ## The objective
 
 `moves.lexicographic`: a child lives while the player does (a win counts as alive); among the
-living the order is won, fewer enemies, home, unseen, higher eye, more energy, the first key
-most significant. `keep_best` breaks ties to fewer frames, then the lower position, so the order
-is total. Both new keys are ROM facts read at the end of the move:
+living the order is won, fewer enemies, fewer enemy-moves, home, unseen, higher eye, more
+energy, the first key most significant. `keep_best` breaks ties to fewer frames, then the lower
+position, so the order is total.
 
 | key | read from | why it outranks the eye |
 |---|---|---|
+| enemy-moves | `Node.area`: the enemies left after each move of the line, summed | an enemy taken sooner counts less at every move after, so the lines that clear enemies first win; before any is in reach every line ties and the climb decides |
 | home | the player's tile equals the platform's (`$0C19`/`$0C1A`), `do_hyperspace`'s own win test at `$2184` | with the Sentinel gone the platform is a hyperspace from the win, wherever it stands against the eye |
 | unseen | the exposure bar `$0C4F` (`set_bar_state $194D`): bit 7 fully seen, drained; bit 6 partly seen, where an enemy spawns a meanie | a line under drain loses energy however high it stands, and a meanie's hyperspace lands where the PRNG puts it |
 
-A move a meanie hyperspaces mid-way ends as the pan loop sees the body change
-(`H_HYPERSPACE`), a refused move; the redraw it waits out can end late in a wait's window,
-so `run_past_redraw` re-arms on a window that began plotting. A program that still halts
-without facts stalled in a wait, and `search_player.outcome_facts` raises.
+Every beam node at a ply has made as many moves, so the sums compare like with like; a move's
+bound adds its best-case enemies left to its parent's sum (`search_player.line_bound`). A move
+a meanie hyperspaces mid-way ends as the pan loop sees the body change (`H_HYPERSPACE`), a
+refused move. A program that halts without facts stalled in a wait, and
+`search_player.outcome_facts` raises.
 
 ## Live in VICE
 
@@ -104,6 +106,9 @@ two programs' output records first part (`kbd_prog.first_difference`). The run's
 * `driver.prog_trace.trace(bm, program, pcs, addrs)` interprets a program on a clone of an
   emulated session and returns its per-frame bytes and pc arrivals, to read a stalled move
   against the ROM.
+* `python -m driver.trajectory N [--preset P] [--out out/traj]` plays a search game and
+  saves the RAM at entry and after every move (`traj_NNNN.npz`, `trajectory.load`), to study
+  the states of won games.
 * `python -m driver.disasm START END... [--landscape N]` lists each hex address range of the
   in-play image through jennings' NMOS disassembler.
 * `python -m driver.search_player N PLY [--preset P] [--each]` builds search ply `PLY`'s fork

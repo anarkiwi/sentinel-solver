@@ -314,13 +314,13 @@ def test_every_root_childs_outcome_is_within_its_best_case(session):
     seen = set()
     for (move, _program), out in zip(work, outs):
         facts = kbd_prog.move_facts(out)
-        bound = bp.best_case(st, *move)
+        bound = sp.line_bound(root, bp.best_case(st, *move))
         if facts["status"] != prog.HALT_OK or bound is None:
             continue
-        got = sp.key_of(sp.Node(None, "k", facts=facts))
+        got = sp.key_of(sp.Node(None, "k", root, facts=facts))
         assert got <= bound, (move, got, bound)
         if move[0] in ("hop", "mount", "absorb", "wait"):
-            assert got[4] == bound[4], move
+            assert got[5] == bound[5], move
         seen.add(move[0])
     assert {"hop", "absorb", "wait", "relocate"} <= seen
 
@@ -381,11 +381,22 @@ def _job(bound, parent_frames, move="hop"):
 
 
 def test_a_pending_child_may_displace_the_cut_only_above_it_or_tied_and_no_slower():
-    cut = ((0, -1, 0, 0, 2048, 5), 300)
+    move = (0, -1, 0, 0, 2048, 5)
+    cut = (sp.line_bound(sp.Node(None, "p"), move), 300)
     assert sp.may_displace(_job(None, 900), cut)
     assert sp.may_displace(_job((0, -1, 0, 0, 2048, 6), 900), cut)
     assert not sp.may_displace(_job((0, -1, 0, 0, 2048, 4), 0), cut)
-    assert sp.may_displace(_job(cut[0], 299), cut)
-    assert not sp.may_displace(_job(cut[0], 300), cut)
-    assert sp.may_displace(_job(cut[0], 300 - WAIT_QUANTUM, "wait"), cut)
-    assert not sp.may_displace(_job(cut[0], 301 - WAIT_QUANTUM, "wait"), cut)
+    assert sp.may_displace(_job(move, 299), cut)
+    assert not sp.may_displace(_job(move, 300), cut)
+    assert sp.may_displace(_job(move, 300 - WAIT_QUANTUM, "wait"), cut)
+    assert not sp.may_displace(_job(move, 301 - WAIT_QUANTUM, "wait"), cut)
+
+
+def test_an_enemy_taken_sooner_bounds_the_line_better():
+    parent = sp.Node(None, "p")
+    parent.area = 7
+    assert sp.line_bound(parent, (0, -2, 0, 0, 9, 4)) == (0, -2, -9, 0, 0, 9, 4)
+    assert sp.line_bound(parent, None) is None
+    early = sp.Node(None, "a", parent, facts={**_facts(enemies=1)})
+    late = sp.Node(None, "b", parent, facts={**_facts(enemies=2)})
+    assert early.area == 8 and late.area == 9 and sp.key_of(early) > sp.key_of(late)

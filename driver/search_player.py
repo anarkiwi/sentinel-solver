@@ -27,7 +27,7 @@ PRESETS = {
     "narrow": {"width": 4, "depth": 12, "branch": 2, "commit": 1},
 }
 CPUS = len(os.sched_getaffinity(0))
-FIELDS = ("alive", "won", "enemies", "home", "seen", "eye", "energy")
+FIELDS = ("alive", "won", "enemies", "area", "home", "seen", "eye", "energy")
 ENTRY = kbd_prog.compile_move("wait")  # no wait: the facts as the machine stands
 
 
@@ -52,16 +52,18 @@ def identity(keys):
 
 
 class Node:
-    """A machine state on a line: its monitor and key, and the move and facts that
-    reached it from ``parent``."""
+    """A machine state on a line: its monitor and key, the move and facts that reached
+    it from ``parent``, its frames and ``area``: the enemies left after each move of the
+    line, summed, so an enemy taken sooner counts less at every move after."""
 
-    __slots__ = ("bm", "key", "parent", "move", "program", "facts", "frames")
+    __slots__ = ("bm", "key", "parent", "move", "program", "facts", "frames", "area")
 
     def __init__(self, bm, key=None, parent=None, move=None, facts=None):
         self.bm, self.key = bm, machine_key(bm) if key is None else key
         self.parent, self.facts = parent, facts
         self.move, self.program = move if move else (None, None)
         self.frames = (parent.frames if parent else 0) + (facts or {}).get("frames", 0)
+        self.area = (parent.area if parent else 0) + (facts or {}).get("enemies", 0)
 
     def line(self):
         """The nodes from the root's child down to this one."""
@@ -78,6 +80,7 @@ class Node:
             "alive": int(f["alive"] or f["won"]),
             "won": f["won"],
             "enemies": f["enemies"],
+            "area": self.area,
             "home": int(f["away"] == 0),
             "seen": int(f["seen"] != 0),
             "eye": f["z"] * 256 + f["z_frac"],
@@ -163,13 +166,29 @@ def _named(move):
 def key_of(node):
     """:func:`bp.lexicographic`'s keys of ``node`` as a tuple, larger better."""
     f = node.fields()
-    return f["won"], -f["enemies"], f["home"], -f["seen"], f["eye"], f["energy"]
+    return (
+        f["won"],
+        -f["enemies"],
+        -f["area"],
+        f["home"],
+        -f["seen"],
+        f["eye"],
+        f["energy"],
+    )
+
+
+def line_bound(parent, bound):
+    """:func:`bp.best_case`'s ``bound`` of a move from ``parent`` as a :func:`key_of`
+    bound: its enemies left added to the parent's ``area``."""
+    if bound is None:
+        return None
+    return bound[:2] + (bound[1] - parent.area,) + bound[2:]
 
 
 def kid_bound(node):
     """The bound its parent's expansion priced ``node``'s move at."""
     st = _state(node.parent.bm)
-    return bp.best_case(st, *_named(node.move))
+    return line_bound(node.parent, bp.best_case(st, *_named(node.move)))
 
 
 def may_displace(job, cut):
@@ -179,7 +198,7 @@ def may_displace(job, cut):
     The kept set only improves as children arrive, so a job this rejects stays rejected.
     """
     parent, exp, j = job
-    bound = exp.bounds[j]
+    bound = line_bound(parent, exp.bounds[j])
     if bound is None or bound > cut[0]:
         return True
     least = WAIT_QUANTUM if exp.programs[j][0][0] == "wait" else 1
@@ -304,7 +323,7 @@ class SearchPlayer:
         expansions = self._expansions(beam, cache)
         pending = sorted(
             ((n, e, j) for n, e in expansions for j in e.pending()),
-            key=lambda job: _order(job[1].bounds[job[2]]),
+            key=lambda job: _order(line_bound(job[0], job[1].bounds[job[2]])),
         )
         while True:
             picked = self._select(self._kids(expansions))
