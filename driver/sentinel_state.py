@@ -3,7 +3,7 @@
 
 :func:`read_game_state` turns a ``MemorySource`` snapshot into a :class:`GameState`: the
 de-interleaved vertex height/slope grid, the object list and the scalar play variables.
-``Py65Source`` wraps a whole address-space image; ``ViceSource`` reads a live monitor.
+``ImageSource`` wraps a whole address-space image; ``ViceSource`` reads a live monitor.
 """
 
 import sys
@@ -57,7 +57,7 @@ class MemorySource:
         return self.read(addr, 1)[0]
 
 
-class Py65Source(MemorySource):
+class ImageSource(MemorySource):
     """Wrap a flat whole-address-space memory image (bytes/bytearray)."""
 
     def __init__(self, mem):
@@ -235,10 +235,10 @@ def read_game_state(source: MemorySource) -> GameState:
 
 def verify_entry(bm, landscape, log=print):
     """Confirm the live board matches the standalone generator for ``landscape``
-    (:meth:`Py65Source.from_landscape`). Returns ``(matched, total)`` object
+    (:meth:`ImageSource.from_landscape`). Returns ``(matched, total)`` object
     position/type counts, or ``None`` if the reference could not be generated."""
     try:
-        ref = read_game_state(Py65Source.from_landscape(landscape))
+        ref = read_game_state(ImageSource.from_landscape(landscape))
     except Exception as e:  # generator unavailable (no simulator import, bad seed)
         log(f"  (entry ref unavailable: {e})")
         return None
